@@ -1,0 +1,56 @@
+name: Bug report
+description: Report reproducible incorrect Helix behavior without sharing secrets or private server data.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not use this form for security vulnerabilities. Follow the [private security policy](https://github.com/Riqqqque/Helix/security/policy) instead. Remove credentials, tokens, private hostnames, addresses, paths, logs, and game data that should not be public."
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Give the smallest safe sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Helix version or revision
+    validations:
+      required: true
+  - type: input
+    id: run_method
+    attributes:
+      label: Install or run method
+      description: For example, source build, local release bundle, or another exact command.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the OS release and architecture, plus the browser and version for UI issues. For a game integration, include exact game, loader, Java, and dependency versions.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Paste only the smallest relevant, redacted log or error text. Check paths and command lines for private data before submitting.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed secrets and private server or personal data.
+          required: true
+        - label: This is not a vulnerability report requiring private disclosure.
+          required: true

@@ -1,0 +1,264 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust workspace (${{ matrix.toolchain }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [1.88.0, stable]
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        if: matrix.toolchain == 'stable'
+        run: cargo fmt --all -- --check
+
+      - name: Build workspace
+        run: cargo build --locked --workspace --all-targets
+
+      - name: Run Clippy
+        if: matrix.toolchain == 'stable'
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked --workspace --all-targets --all-features
+
+      - name: Check packaging shell syntax
+        if: matrix.toolchain == 'stable'
+        run: >-
+          bash -n
+          scripts/package-common.sh
+          scripts/install-local.sh
+          scripts/rollback-local.sh
+          scripts/uninstall-local.sh
+          scripts/build-release.sh
+          scripts/test-linux-package.sh
+
+      - name: Run ShellCheck
+        if: matrix.toolchain == 'stable'
+        run: >-
+          shellcheck -x
+          scripts/package-common.sh
+          scripts/install-local.sh
+          scripts/rollback-local.sh
+          scripts/uninstall-local.sh
+          scripts/build-release.sh
+          scripts/test-linux-package.sh
+
+      - name: Check packaging PowerShell syntax
+        if: matrix.toolchain == 'stable'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          $path = (Resolve-Path -LiteralPath 'scripts/build-release.ps1').Path
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $path,
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+
+  security:
+    name: Supply-chain and secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      CARGO_INSTALL_ROOT: ${{ github.workspace }}/target/tools
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_CHECKSUMS_SHA256: 061476c21adaf5441516f96f185c1a4706a83cd6329b9b38762271b3d4a52fae
+      GITLEAKS_LINUX_X64_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - name: Check out full source history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.88.0
+
+      - name: Install pinned Rust security tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cargo install --locked --root "$CARGO_INSTALL_ROOT" --version 0.22.2 cargo-audit
+          cargo install --locked --root "$CARGO_INSTALL_ROOT" --version 0.20.2 cargo-deny
+          printf '%s\n' "$CARGO_INSTALL_ROOT/bin" >> "$GITHUB_PATH"
+
+      - name: Verify Rust dependencies
+        run: |
+          test "$(cargo-audit --version)" = "cargo-audit 0.22.2"
+          test "$(cargo-deny --version)" = "cargo-deny 0.20.2"
+          cargo audit --deny warnings
+          cargo deny check
+
+      - name: Download and verify Gitleaks
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tool_dir="target/tools/gitleaks-${GITLEAKS_VERSION}"
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          checksums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          release_url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+
+          mkdir -p "$tool_dir"
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 \
+            --output "$tool_dir/$checksums" "$release_url/$checksums"
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 \
+            --output "$tool_dir/$archive" "$release_url/$archive"
+
+          printf '%s  %s\n' "$GITLEAKS_CHECKSUMS_SHA256" "$checksums" \
+            | (cd "$tool_dir" && sha256sum --check --strict -)
+          grep --fixed-strings --line-regexp \
+            "$GITLEAKS_LINUX_X64_SHA256  $archive" "$tool_dir/$checksums"
+          printf '%s  %s\n' "$GITLEAKS_LINUX_X64_SHA256" "$archive" \
+            | (cd "$tool_dir" && sha256sum --check --strict -)
+
+          tar -xzf "$tool_dir/$archive" -C "$tool_dir" gitleaks
+          test "$("$tool_dir/gitleaks" version)" = "$GITLEAKS_VERSION"
+
+      - name: Scan current checkout for secrets
+        shell: bash
+        run: >-
+          target/tools/gitleaks-${GITLEAKS_VERSION}/gitleaks dir .
+          --config .gitleaks.toml
+          --redact=100
+          --no-banner
+          --no-color
+
+      - name: Scan full Git history for secrets
+        shell: bash
+        run: >-
+          target/tools/gitleaks-${GITLEAKS_VERSION}/gitleaks git .
+          --config .gitleaks.toml
+          --log-opts="--all"
+          --redact=100
+          --no-banner
+          --no-color
+
+  frontend:
+    name: Frontend workspace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.12.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
+
+  linux-package:
+    name: Ubuntu systemd package lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.12.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build checked release bundle
+        run: ./scripts/build-release.sh
+
+      - name: Verify archive and extract bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -d '' -t archives < <(
+            find target/helix-release -maxdepth 1 -type f -name 'helix-*.tar.gz' -print0
+          )
+          test "${#archives[@]}" -eq 1
+          archive="${archives[0]}"
+          (cd "$(dirname "$archive")" && sha256sum --check --strict "$(basename "$archive").sha256")
+          extract_root="$RUNNER_TEMP/helix-release"
+          mkdir -p "$extract_root"
+          tar -xzf "$archive" -C "$extract_root"
+          mapfile -d '' -t extracted_entries < <(
+            find "$extract_root" -mindepth 1 -maxdepth 1 -print0
+          )
+          test "${#extracted_entries[@]}" -eq 1
+          bundle="${extracted_entries[0]}"
+          test -d "$bundle" && test ! -L "$bundle"
+          test "$(basename "$bundle")" = "$(basename "$archive" .tar.gz)"
+          printf 'bundle=%s\n' "$bundle" >> "$GITHUB_OUTPUT"
+
+      - name: Exercise real systemd lifecycle
+        env:
+          HELIX_EPHEMERAL_SYSTEM_TEST: github-actions-clean-runner
+        run: >-
+          sudo --preserve-env=HELIX_EPHEMERAL_SYSTEM_TEST
+          ./scripts/test-linux-package.sh
+          "${{ steps.bundle.outputs.bundle }}"

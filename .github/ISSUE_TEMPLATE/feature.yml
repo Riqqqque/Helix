@@ -1,0 +1,38 @@
+name: Feature proposal
+description: Propose a focused, measurable Helix capability.
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or operator problem should Helix solve?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior, not only a preferred implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Safety, recovery, and idle cost
+      description: What can fail, what data changes, how would it recover, and what should it cost while unused?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Compatibility evidence
+      description: For a platform or game feature, link current official documentation and give exact versions.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This proposal does not require Helix to become a general-purpose root command runner.
+          required: true

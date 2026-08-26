@@ -1,0 +1,23 @@
+[package]
+name = "helix-secrets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+chacha20poly1305.workspace = true
+getrandom.workspace = true
+helix-state.workspace = true
+secrecy.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
