@@ -7,7 +7,8 @@ import {
   formatPercent,
   formatTimestamp,
 } from './format';
-import { t } from './i18n';
+import { focusOnMount } from './focus';
+import { t, type TranslationId } from './i18n';
 import {
   dashboardSectionForHash,
   type DashboardSectionId,
@@ -46,6 +47,14 @@ interface DashboardData {
 }
 
 const REFRESH_INTERVAL_MS = 30_000;
+
+const dashboardSectionLabelIds = {
+  overview: 'dashboard.nav.overview',
+  health: 'dashboard.nav.health',
+  host: 'dashboard.nav.host',
+  storage: 'dashboard.nav.storage',
+  network: 'dashboard.nav.network',
+} as const satisfies Record<DashboardSectionId, TranslationId>;
 
 function createLoadingResource<T>(): ResourceState<T> {
   return { data: null, phase: 'loading', error: null };
@@ -487,7 +496,7 @@ function MetricCard({
       : Math.min(100, Math.max(0, percentage));
 
   return (
-    <article class={`metric-card${unavailable ? ' metric-card--unavailable' : ''}`}>
+    <div class={`metric-card${unavailable ? ' metric-card--unavailable' : ''}`}>
       <span class="metric-card__label">{label}</span>
       {loading ? (
         <LoadingMetric />
@@ -509,7 +518,7 @@ function MetricCard({
           )}
         </>
       )}
-    </article>
+    </div>
   );
 }
 
@@ -771,7 +780,7 @@ function StorageMountCard({ mount, index }: { mount: StorageMountSnapshot; index
 
   return (
     <li class="discovery-card">
-      <article>
+      <div class="discovery-card__content">
         <header class="discovery-card__header">
           <div>
             <strong title={title}>{title}</strong>
@@ -840,7 +849,7 @@ function StorageMountCard({ mount, index }: { mount: StorageMountSnapshot; index
             </dd>
           </div>
         </dl>
-      </article>
+      </div>
     </li>
   );
 }
@@ -961,7 +970,7 @@ export function NetworkPanel({ overview }: { overview: ResourceState<SystemOverv
         <ul class="discovery-list">
           {network.interfaces.map((networkInterface) => (
             <li class="discovery-card" key={networkInterface.name}>
-              <article>
+              <div class="discovery-card__content">
                 <header class="discovery-card__header">
                   <div>
                     <strong>{networkInterface.name}</strong>
@@ -996,7 +1005,7 @@ export function NetworkPanel({ overview }: { overview: ResourceState<SystemOverv
                     </ul>
                   )}
                 </div>
-              </article>
+              </div>
             </li>
           ))}
         </ul>
@@ -1054,7 +1063,7 @@ export function Dashboard({
             <div class="topbar__context">
               <span class="topbar__host">{hostLabel}</span>
               <span class="topbar__separator" aria-hidden="true">/</span>
-              <span>{t('dashboard.nav.overview')}</span>
+              <span>{t(dashboardSectionLabelIds[activeSection])}</span>
             </div>
             <div class="topbar__actions">
               <span class="user-chip" title={t('dashboard.signedInAs', user.loginName)}>
@@ -1099,13 +1108,18 @@ export function Dashboard({
             <section class="hero" id="overview" aria-labelledby="overview-title">
               <div class="hero__copy">
                 <span class="eyebrow">{t('dashboard.hero.eyebrow')}</span>
-                <h1 id="overview-title">
+                <h1 id="overview-title" ref={focusOnMount} tabIndex={-1}>
                   {t('dashboard.hero.titleBefore')}
                   <span> {t('dashboard.hero.titleAfter')}</span>
                 </h1>
                 <p>{t('dashboard.hero.detail')}</p>
               </div>
-              <div class="hero__status-card">
+              <div
+                class="hero__status-card"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
                 <div class="hero__status-topline">
                   <span class="eyebrow">{t('dashboard.hero.currentStatus')}</span>
                   <span class="pulse-mark" aria-hidden="true" />
