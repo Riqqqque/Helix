@@ -51,7 +51,7 @@ pub fn validate_static_root(root: &Path) -> Result<(), StaticRootError> {
         if !cfg!(test) {
             validate_unix_ancestors(root, expected_uid, None)?;
         }
-        return validate_entry(root, expected_uid);
+        validate_entry(root, expected_uid)
     }
 
     #[cfg(not(unix))]
