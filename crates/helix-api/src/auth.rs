@@ -1304,7 +1304,7 @@ mod tests {
 
     #[test]
     fn mismatched_bootstrap_token_is_rejected_before_password_hashing() {
-        let temporary = tempfile::tempdir().expect("temporary state directory");
+        let temporary = crate::private_test_directory("temporary state directory");
         let databases = DatabaseSet::open_for_daemon(temporary.path()).expect("open databases");
         let active = OpaqueToken::generate().expect("active bootstrap token");
         let active_hash = active.verification_hash(TokenDomain::Bootstrap);

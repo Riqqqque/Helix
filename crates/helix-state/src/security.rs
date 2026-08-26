@@ -1953,7 +1953,7 @@ mod tests {
     }
 
     fn open_databases() -> (tempfile::TempDir, DatabaseSet) {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("open databases");
         (temp, databases)
     }
@@ -3614,7 +3614,7 @@ mod tests {
 
     #[test]
     fn v1_to_current_migration_creates_verified_v1_snapshot() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         create_state_at_version_one(temp.path());
 
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("migrate state");
@@ -3642,7 +3642,7 @@ mod tests {
 
     #[test]
     fn v3_audit_rows_are_counted_and_preserved_across_the_v4_migration() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         create_state_at_version_three_with_audit(temp.path());
 
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("migrate v3 state");
@@ -3682,7 +3682,7 @@ mod tests {
 
     #[test]
     fn nonempty_v0_database_is_snapshotted_before_foundational_migration() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let state_dir = temp.path().join("state");
         ensure_data_directory(temp.path()).expect("data directory");
         ensure_data_directory(&state_dir).expect("state directory");
