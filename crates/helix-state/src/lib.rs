@@ -2632,10 +2632,11 @@ mod tests {
         reset_online_backup_invocations_for_test();
 
         fail_next_migration_for_test(3);
-        assert!(matches!(
-            DatabaseSet::open_for_daemon(temp.path()),
-            Err(StateError::Sqlite(rusqlite::Error::ExecuteReturnedResults))
-        ));
+        match DatabaseSet::open_for_daemon(temp.path()) {
+            Err(StateError::Sqlite(rusqlite::Error::ExecuteReturnedResults)) => {}
+            Err(error) => panic!("unexpected recovery result: {error:?}"),
+            Ok(_) => panic!("migration unexpectedly succeeded"),
+        }
         assert_eq!(online_backup_invocations_for_test(), 1);
         assert!(!partial.exists());
         assert!(!invalid_partial.exists());
