@@ -24,7 +24,7 @@ binary or package release yet.
   contracts.
 - Hardened systemd, local bundle, checksum-verifying installer, rollback
   scaffolding, and pinned CI/security tooling. One scoped Ubuntu 24.04 systemd
-  package lifecycle passed for commit `6868b36`.
+  package lifecycle passed for commit `fdbbc0a`.
 
 ### Changed
 

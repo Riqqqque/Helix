@@ -26,7 +26,7 @@ must be handled as one explicit exposure boundary.
 ## Exact target-host validation
 
 One GitHub-hosted Ubuntu 24.04 systemd lifecycle passed for commit
-[`6868b36`](https://github.com/Riqqqque/Helix/commit/6868b36abbd1a16665565753953abbdf1dfda148).
+[`fdbbc0a`](https://github.com/Riqqqque/Helix/commit/fdbbc0aeb7b353069c74fe5186d1d48fd65b66ca).
 It covered the declared Rust toolchains, archive verification, fresh install,
 owner claim, protected authentication/API flows, selected ownership/modes and
 unit hardening, forced-crash restart, clean stop/start, full doctor, verified

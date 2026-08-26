@@ -37,7 +37,7 @@ The current build is a real, compiled dashboard foundation rather than a mock UI
 - a responsive Preact interface with System, Midnight, OLED, and Light themes;
 - scripts for a checksummed Linux bundle, transactional package-file install,
   rollback, and conservative data-preserving uninstall. One scoped Ubuntu 24.04
-  systemd lifecycle passed for commit [`6868b36`](https://github.com/Riqqqque/Helix/commit/6868b36abbd1a16665565753953abbdf1dfda148),
+  systemd lifecycle passed for commit [`fdbbc0a`](https://github.com/Riqqqque/Helix/commit/fdbbc0aeb7b353069c74fe5186d1d48fd65b66ca),
   but the broader support matrix remains open and these are not a supported
   installer.
 
