@@ -67,7 +67,7 @@ used Rust 1.88.0 on the same target.
 - `cargo +1.88.0 test --locked --workspace --all-targets --all-features`
 - `npm run check` and `npm audit --audit-level=moderate` in `frontend`
 
-The settled suite contains 153 target-conditioned Rust tests on Windows, 159 on
+The settled suite contains 154 target-conditioned Rust tests on Windows, 160 on
 hosted Ubuntu, and 48 frontend tests. The final fresh Windows release-binary flow
 passed setup, owner claim, login, protected reads, CSRF
 rotation, cookie-only rejection, logout/revocation, generic login failure,
@@ -79,12 +79,13 @@ An additional optimized live run passed 10,000 authenticated health requests, a
 512-request transport-overload burst, 128 silent-connection pressure with
 deadline recovery, ten idle minutes, forced termination, same-state restart,
 full doctor, verified online backup, and persisted token/password canaries. The
-new header-deadline regression passed 200 optimized repetitions; the malformed
-and oversized JSON boundary regression passed 100. Oversized HTTP/1 headers also
-have focused rejection coverage at the configured connection-buffer ceiling.
+two HTTP-server regressions passed 400 optimized executions across 200
+repetitions; the malformed and oversized JSON boundary regression passed 100.
+A deterministic lifecycle regression also covers an HTTP drain completing in
+the same scheduler turn as its shutdown announcement.
 
-Current release artifacts measured 7,575,040 bytes for `helixd.exe`, 2,853,376
-bytes for `helixctl.exe`, and 10,428,416 bytes combined. The compiled frontend
+Current release artifacts measured 7,579,648 bytes for `helixd.exe`, 2,853,376
+bytes for `helixctl.exe`, and 10,433,024 bytes combined. The compiled frontend
 measured 91,782 bytes raw, 24,796 bytes gzip, and 21,872 bytes Brotli. These
 Windows values are non-reference.
 

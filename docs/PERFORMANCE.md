@@ -81,9 +81,9 @@ comparison.
 
 | Measurement | Result | Conditions and limits |
 | --- | ---: | --- |
-| `helixd.exe` | 7,575,040 bytes (7.22 MiB) | Current release build, all workspace features |
+| `helixd.exe` | 7,579,648 bytes (7.23 MiB) | Current release build, all workspace features |
 | `helixctl.exe` | 2,853,376 bytes (2.72 MiB) | Current release build, all workspace features |
-| Combined release binaries | 10,428,416 bytes (9.95 MiB) | Current Windows PE files; not Linux installed size |
+| Combined release binaries | 10,433,024 bytes (9.95 MiB) | Current Windows PE files; not Linux installed size |
 | Compiled frontend | 91,782 bytes raw; 24,796 gzip; 21,872 Brotli | Current source-alpha HTML, CSS, and JavaScript for the authenticated base route |
 | First daemon readiness | 563.4 ms | One sample on a new data root after `helixctl setup-token` initialized state; includes `Start-Process` and a 25 ms polling interval, so it is neither the 30-run warm p95 nor a pure cold-schema result |
 | `/healthz` | p50 0.202 ms; p95 0.283 ms; p99 0.322 ms | 1,000 sequential requests through one .NET `HttpClient`, release daemon, loopback |
