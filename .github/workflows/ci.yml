@@ -256,6 +256,17 @@ jobs:
           test "$(basename "$bundle")" = "$(basename "$archive" .tar.gz)"
           printf 'bundle=%s\n' "$bundle" >> "$GITHUB_OUTPUT"
 
+      - name: Normalize hosted-runner asset ancestor
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # GitHub's Ubuntu image currently exposes /usr/share as 0777. Restore
+          # the normal distro baseline instead of weakening Helix's preflight.
+          test -d /usr/share && test ! -L /usr/share
+          test "$(stat -c '%u:%g' /usr/share)" = "0:0"
+          sudo chmod 0755 /usr/share
+          test "$(stat -c '%U:%G:%a' /usr/share)" = "root:root:755"
+
       - name: Exercise real systemd lifecycle
         env:
           HELIX_EPHEMERAL_SYSTEM_TEST: github-actions-clean-runner
