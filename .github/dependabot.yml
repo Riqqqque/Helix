@@ -10,6 +10,11 @@ updates:
         update-types:
           - patch
           - minor
+    # sysinfo 0.39+ requires Rust 1.95; Helix currently promises Rust 1.88.
+    ignore:
+      - dependency-name: sysinfo
+        versions:
+          - ">= 0.39.0"
 
   - package-ecosystem: npm
     directory: /frontend

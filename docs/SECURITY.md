@@ -12,12 +12,13 @@ not a complete or independently audited security boundary.
 The secret-store foundation is not wired to production master-key delivery,
 rotation, recovery, daemon startup, or HTTP authorization. There is no
 implemented privileged broker, extension sandbox, update verifier, or archive
-parser. Existing unit, API, and Windows release-binary coverage is not an
-independent or target-Linux security assessment. Runtime configuration currently
-rejects every non-loopback listen address. Remote binding remains unavailable
-until all authentication and remote-access gates exist. Nothing in this
-document is a claim that the current repository is safe to expose to a network
-or trust with production data.
+parser. Existing unit, API, Windows release-binary coverage, and one scoped
+Ubuntu 24.04 package/systemd lifecycle are not an independent or comprehensive
+target-Linux security assessment. Runtime configuration currently rejects every
+non-loopback listen address. Remote binding remains unavailable until all
+authentication and remote-access gates exist. Nothing in this document is a
+claim that the current repository is safe to expose to a network or trust with
+production data.
 
 Helix may call a control "implemented" only when its code path, failure path,
 tests, and deployment configuration are linked from `PROGRESS.md`. It may call a
@@ -207,9 +208,11 @@ audited and covered by positive and negative tests.
 ## Planned privilege boundary
 
 The current `helixd` runs unprivileged and is restricted to loopback. Its
-dedicated systemd service identity and sandbox still require Ubuntu package
-validation. It has no implemented API for rebooting the host, managing services,
-modifying package state, or browsing unrestricted user files.
+dedicated systemd service identity and selected sandbox properties passed one
+scoped Ubuntu 24.04 package lifecycle. Broader supported-host, configuration,
+permission, and fault matrices remain open. It has no implemented API for
+rebooting the host, managing services, modifying package state, or browsing
+unrestricted user files.
 
 `helix-privd` does not exist yet. The intended design is a small, separately
 packaged root broker, preferably activated by a systemd Unix socket. It would
@@ -389,7 +392,8 @@ Before public recommendation, automated and manual testing must cover:
   backup corruption, and recovery drills on supported Ubuntu releases.
 
 The packaged release gate remains closed while any required control is merely
-documented, mocked, waived without rationale, or tested only on Windows.
+documented, mocked, waived without rationale, or covered only by Windows or one
+scoped hosted lifecycle.
 
 ## External assumptions to revalidate
 

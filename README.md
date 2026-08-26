@@ -36,8 +36,10 @@ The current build is a real, compiled dashboard foundation rather than a mock UI
   commands;
 - a responsive Preact interface with System, Midnight, OLED, and Light themes;
 - scripts for a checksummed Linux bundle, transactional package-file install,
-  rollback, and conservative data-preserving uninstall. Those scripts have not
-  passed the required Ubuntu lifecycle matrix and are not a supported installer.
+  rollback, and conservative data-preserving uninstall. One scoped Ubuntu 24.04
+  systemd lifecycle passed for commit [`6868b36`](https://github.com/Riqqqque/Helix/commit/6868b36abbd1a16665565753953abbdf1dfda148),
+  but the broader support matrix remains open and these are not a supported
+  installer.
 
 Not implemented yet: remote access, TLS/proxy trust, MFA, host mutation, service
 or game management, file management, restore, Vault, Genome, Strands, and the
@@ -64,6 +66,10 @@ operations belong behind a narrow typed broker—not a general root shell.
 
 There is no supported installer or binary release yet. The only current trial
 path is a source build with disposable data on a machine you control.
+
+The commands below are maintainer/developer notes for evaluating the current
+source. They do not grant a license or create a supported distribution path; see
+[Project and legal status](#project-and-legal-status).
 
 Prerequisites:
 
@@ -102,6 +108,10 @@ Open `http://127.0.0.1:8080`, paste the one-time token, and create the owner.
 The token is displayed once and expires after 15 minutes. Never paste it into an
 issue, log, screenshot, or shell history shared with someone else.
 
+On later runs with the same data directory, start `helixd` directly;
+`setup-token` is only for an unclaimed installation. Press `Ctrl+C` in the daemon
+terminal for a clean source-preview shutdown.
+
 On Windows PowerShell, the equivalent launch uses resolved absolute paths:
 
 ```powershell
@@ -115,8 +125,8 @@ $webRoot = (Resolve-Path 'frontend\dist').Path
   --web-root $webRoot
 ```
 
-This source-run path is for an isolated preview. The packaged Ubuntu lifecycle
-and its current validation status are documented in
+This source-run path is for an isolated preview. The exact scope and limits of
+the hosted Ubuntu package evidence are documented in
 [Installation](docs/INSTALLATION.md).
 
 ## Engineering promises
@@ -154,8 +164,9 @@ Start here depending on what you need:
   [project wiki](https://github.com/Riqqqque/Helix/wiki)
 - **What is genuinely finished?** [Progress](PROGRESS.md)
 - **What should be built next?** [Next work](NEXT.md) and [Roadmap](ROADMAP.md)
-- **How do I contribute?** [Contributing](CONTRIBUTING.md) and
-  [Development](docs/DEVELOPMENT.md)
+- **How can I help?** [Contribution policy](CONTRIBUTING.md) and
+  [Development](docs/DEVELOPMENT.md). Code contributions are paused until a
+  license is selected; reports, design discussion, and review remain welcome.
 - **How are releases gated?** [Release process](docs/RELEASING.md)
 - **How is data protected?** [Security model](docs/SECURITY.md),
   [Storage](docs/STORAGE.md), and [Recovery](docs/RECOVERY.md)

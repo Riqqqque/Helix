@@ -391,4 +391,4 @@ preserved_installation="$(
 )"
 [[ "$preserved_installation" == "$installation_before" ]] || fail "uninstall did not preserve readable critical state"
 
-printf 'Linux package lifecycle passed: install, owner claim, protected API, CSRF rotation, logout/login, full doctor, verified backup, tamper rejection, repeat install, rollback, and data-preserving uninstall.\n'
+printf 'Linux package lifecycle passed: install, owner claim, protected API, CSRF rotation, logout/login, full doctor, verified backup, modified-bundle manifest rejection, repeat install, rollback, and data-preserving uninstall.\n'

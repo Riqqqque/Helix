@@ -29,9 +29,14 @@ The workspace currently declares:
 - Node.js 22.12 or newer for frontend development only;
 - npm scripts in `frontend/package.json`.
 
-The committed Cargo and frontend lockfiles, once present, are the dependency source of truth. Use the project-declared versions rather than adding global tools or silently upgrading dependencies. Node.js is never a production runtime dependency.
+The committed `Cargo.lock` and `frontend/package-lock.json` are the dependency
+sources of truth. Use the project-declared versions rather than adding global
+tools or silently upgrading dependencies. Node.js is never a production runtime
+dependency.
 
-Useful optional local tools include `cargo-audit` and `cargo-deny`. CI should run them once their policy files are committed. Do not install system-wide tools on another contributor's machine without permission.
+CI runs pinned `cargo-audit` and `cargo-deny` versions against the committed
+policy. They remain optional for local development. Do not install system-wide
+tools on another contributor's machine without permission.
 
 ## Workspace layout
 
@@ -59,7 +64,7 @@ From the repository root:
 cargo check --locked --workspace --all-targets --all-features
 
 Set-Location frontend
-npm ci
+npm ci --no-audit --no-fund
 npm run check
 npm audit --audit-level=moderate
 ```
@@ -88,7 +93,7 @@ Run the frontend suite:
 
 ```powershell
 Set-Location frontend
-npm ci
+npm ci --no-audit --no-fund
 npm run check
 npm audit --audit-level=moderate
 ```

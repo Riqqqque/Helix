@@ -144,7 +144,8 @@ Exit criteria include traversal, symlink-race, mount-replacement, decompression-
 
 **Status: NOT STARTED**
 
-- local critical-state snapshots using SQLite's online-backup interface;
+- integrate the existing verified database-only critical-state snapshot
+  primitive into Vault catalogs, retention, and restore workflows;
 - filesystem backup plans with consistency hooks;
 - local and second-disk Vault destinations;
 - schedules, retention, pre-change backup hooks, manifests, and checksums;
@@ -337,7 +338,9 @@ Remote nodes may be considered only after stable identifiers, protocols, permiss
    idle polling cost when no dashboard is connected.
 4. Persist versioned Lattice layouts and complete formal accessibility and
    representative mobile review of the authenticated dashboard.
-5. Define bounded Chronicle retention before any remote exposure, then perform
-   the independent authentication and deployment-boundary review.
+5. Expand Chronicle beyond bounded authentication/session retention to broader
+   operator events, export, holds, tamper evidence, and off-host forwarding
+   before remote exposure, then perform the independent authentication and
+   deployment-boundary review.
 
 If Linux validation infrastructure is unavailable, continue portable implementation and tests, mark Linux-dependent gates **BLOCKED** or **IMPLEMENTED — UNVALIDATED**, and leave exact reproduction steps in `NEXT.md`.

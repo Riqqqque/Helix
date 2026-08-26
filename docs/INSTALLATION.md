@@ -2,7 +2,11 @@
 
 ## Current status
 
-The checksummed local release-bundle lifecycle is **IMPLEMENTED — UNVALIDATED**. It includes transactional package-file install/upgrade, explicit package-file rollback, and conservative uninstall scripts. It has only received parser-level checks on the Windows development host, so it is not yet a supported production installer.
+The checksummed local release-bundle lifecycle is **SCOPED LIFECYCLE TESTED — PUBLIC SUPPORT BLOCKED**. It includes transactional package-file install/upgrade, explicit package-file rollback, and conservative uninstall scripts. It is not a supported production installer.
+
+Ubuntu 24.04 GitHub Actions passed the declared Rust 1.88/stable builds and one scoped systemd package lifecycle in [CI run 32955305554](https://github.com/Riqqqque/Helix/actions/runs/32955305554) for commit [`6868b36`](https://github.com/Riqqqque/Helix/commit/6868b36abbd1a16665565753953abbdf1dfda148). The lifecycle covered archive verification, fresh install, owner claim, protected API and authentication flows, selected file modes and unit hardening, forced-crash restart, clean stop/start, full doctor, verified state backup, secret-redaction canaries, modified-bundle manifest rejection, repeat install, explicit package-file rollback, and data-preserving uninstall.
+
+This is not clean-VM, cross-version-upgrade, schema-downgrade, complete fault-injection, low-disk/power-loss, reference-performance, platform-support, signed-release, or supported-installer evidence. CI first verified the hosted runner's `/usr/share` ancestor was root-owned with its unusual `0777` mode, then normalized it to the conventional root-owned `0755` baseline so Helix's production path checks ran unchanged.
 
 Do not use development binaries as a production installation, and do not publish a one-line installer until clean-install, upgrade, rollback, uninstall, permission, interruption, and fault-injection tests pass on supported Ubuntu releases. The bundle checksum detects accidental or local bundle modification; it is not a signature or proof of publisher authenticity.
 
@@ -87,6 +91,11 @@ An installation must not expose an unclaimed administrator form to every client 
 7. revoke the bootstrap capability atomically;
 8. refuse further bootstrap attempts unless an explicit local recovery procedure resets setup.
 
+The current package automates steps 1–4 and starts the loopback-only setup
+surface. The current owner flow consumes the token atomically. Bind/TLS selection
+and recovery-material creation in steps 5–6 are planned, not current installer
+behavior.
+
 Until TLS, the remote authentication/cookie boundary, and trusted-proxy behavior
 are implemented and independently validated, runtime configuration enforces
 loopback-only access. Remote setup is not implemented. A local tunnel may be
@@ -97,9 +106,14 @@ The setup flow detects host facts but does not install Docker, Java, Wine, Steam
 
 ## Local bundle lifecycle
 
-Status: **IMPLEMENTED — UNVALIDATED**.
+Status: **SCOPED LIFECYCLE TESTED — PUBLIC SUPPORT BLOCKED**.
 
 Builds created by `scripts/build-release.sh` include `install-local.sh`, `rollback-local.sh`, `uninstall-local.sh`, and their shared `package-common.sh`. Every regular payload file, including these scripts, is listed in the bundle's `SHA256SUMS`. These are local tools; they do not download remote code and make no signature claim.
+
+> [!CAUTION]
+> These scripts write fixed paths under `/usr`, `/etc`, and `/var`, create the
+> `helix` system account and group, and manage `helixd.service`. Until installation
+> is supported, run them only on an isolated disposable Ubuntu test host.
 
 From an extracted release bundle:
 
@@ -159,7 +173,7 @@ For security-conscious users, releases should also publish direct package URLs, 
 
 ## Configuration
 
-Production configuration is read from `/etc/helix/helix.toml` by default and is
+Packaged configuration is read from `/etc/helix/helix.toml` by default and is
 limited to 64 KiB before parsing. Environment overrides are limited to
 documented deployment needs and must not provide a hidden second configuration
 language. Secret values should use protected files or the secret store rather
@@ -230,4 +244,4 @@ Before publishing installation support, test on clean virtual machines for each 
 - port conflict and bind failure;
 - reverse-proxy and direct-TLS modes when supported.
 
-The current Windows development host cannot validate systemd state transitions, `flock` contention, Linux ownership and mode enforcement, sibling rename behavior, interruption recovery, low-disk handling, or injected failures at every post-stop step. It also cannot validate cgroup v2, Debian packaging, or reference resource usage. Clean Ubuntu/systemd virtual machines are required before changing the local lifecycle from **IMPLEMENTED — UNVALIDATED** or marking installation support as tested.
+The current Windows development host cannot validate systemd state transitions, `flock` contention, Linux ownership and mode enforcement, sibling rename behavior, interruption recovery, low-disk handling, or injected failures at every post-stop step. One GitHub-hosted Ubuntu 24.04 run covers the scoped lifecycle named above, but it does not validate every interruption/fault boundary, cgroup behavior, Debian packaging, clean-host variation, or reference resource usage. Clean Ubuntu/systemd virtual machines are required before marking installation support as available.

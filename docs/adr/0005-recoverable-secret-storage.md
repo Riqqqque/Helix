@@ -166,11 +166,13 @@ artifacts, and a verified SQLite backup. State tests cover a verified v2
 snapshot before v3 migration, refusal to migrate an invalid v2 source, and
 startup rejection when required v3 semantics are removed.
 
-The development host currently has Rust 1.94.1, not a 1.88 toolchain. Declared
-dependency MSRVs were inspected, but an actual Rust 1.88 build remains a CI or
-separate-toolchain validation gate.
+The Windows development host passed the workspace check and 152-test suite with
+both Rust 1.94.1 and the declared Rust 1.88.0 minimum. Hosted Ubuntu 24.04 also
+passed the target-conditioned suite with Rust 1.88.0 and stable.
 
-Windows results do not validate Ubuntu filesystem ownership/modes, systemd
-credential availability or lifetime, core-dump policy, package upgrades,
-service restart behavior, power-loss durability, disk-full behavior, or a real
-backup/recovery drill. Those remain Linux release gates.
+One scoped hosted Ubuntu package lifecycle validated selected filesystem modes,
+the dedicated systemd identity and hardening, forced-crash restart, clean
+stop/start, and a verified database-only backup. It did not validate production
+master-key delivery, systemd credential availability/lifetime, core-dump policy,
+cross-version package or schema upgrades, power-loss durability, disk-full
+behavior, or backup restore. Those broader Linux release gates remain open.
