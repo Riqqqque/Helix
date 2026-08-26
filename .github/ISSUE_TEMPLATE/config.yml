@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private vulnerability report
+    url: https://github.com/Riqqqque/Helix/security/advisories/new
+    about: Report security issues privately. Never publish exploit details or secrets in an issue.
+  - name: Questions and design discussion
+    url: https://github.com/Riqqqque/Helix/discussions
+    about: Ask for help or discuss an idea that is not yet a reproducible bug.

@@ -1,0 +1,23 @@
+[package]
+name = "helixctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap.workspace = true
+helix-auth.workspace = true
+helix-config.workspace = true
+helix-core.workspace = true
+helix-state.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
