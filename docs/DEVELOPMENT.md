@@ -47,6 +47,7 @@ tools on another contributor's machine without permission.
 | `crates/helix-config` | Typed process configuration and path policy |
 | `crates/helix-state` | Critical SQLite state, repositories, migrations, and integrity operations |
 | `crates/helix-secrets` | Portable authenticated-encryption and master-key boundary for recoverable secrets |
+| `crates/helix-strand-kit` | Development-only Strand project scaffolding and preview manifest validation |
 | `crates/helix-system` | Narrow read-only host discovery and metrics adapters |
 | `crates/helix-api` | Versioned HTTP contracts, routing, and middleware |
 | `crates/helixd` | Daemon composition and lifecycle |
@@ -141,6 +142,24 @@ flows require exact Host and Origin handling, so `npm run dev` is currently for
 static-shell work only. Run `npm run build` and serve `frontend/dist` through
 `helixd` for production-like setup, login, session, and host-data testing. Do
 not weaken the daemon's production request boundary for development convenience.
+
+## Strand project tooling
+
+Preview Strand authoring is intentionally independent of daemon configuration
+and state:
+
+```powershell
+cargo run --locked -p helixctl -- strand new system-health --name "System Health"
+cargo run --locked -p helixctl -- strand check system-health
+```
+
+The generated project is metadata-first and cannot be installed or run. The
+validator is still a real trust-boundary parser: it is strict, size-bounded,
+non-executing, and returns a failure status for malformed metadata. Read
+[Building a Strand](STRAND-DEVELOPMENT.md) before changing the preview schema.
+Do not add a Wasm runtime, native plugin loader, host call, or install path as a
+developer convenience; those changes belong to the sequenced Strand security
+phase.
 
 ## Rust conventions
 

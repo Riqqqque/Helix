@@ -16,5 +16,6 @@ backup/restore, game execution, versioned game Sequences, Minecraft and other
 first-class integrations, portable Genome recovery, remote Vault targets,
 isolated Strands, and final hardening.
 
-None of those names is a support claim. Check `PROGRESS.md` before relying on a
-feature.
+Preview Strand scaffolding and manifest validation exist, but no Strand can be
+installed or executed. None of the roadmap names is a support claim. Check
+`PROGRESS.md` before relying on a feature.

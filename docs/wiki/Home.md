@@ -9,10 +9,12 @@ daemon, recoverable local state, and independently managed workloads.
 ## Start here
 
 - [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started)
+- [How Helix Works](https://github.com/Riqqqque/Helix/wiki/How-Helix-Works)
 - [Architecture](https://github.com/Riqqqque/Helix/wiki/Architecture)
 - [Security and Recovery](https://github.com/Riqqqque/Helix/wiki/Security-and-Recovery)
 - [Development and Testing](https://github.com/Riqqqque/Helix/wiki/Development-and-Testing)
 - [Game Hosting and Capacity](https://github.com/Riqqqque/Helix/wiki/Game-Hosting-and-Capacity)
+- [Building Strands](https://github.com/Riqqqque/Helix/wiki/Building-Strands)
 - [Roadmap and Status](https://github.com/Riqqqque/Helix/wiki/Roadmap-and-Status)
 
 ## Current working surface
@@ -24,13 +26,15 @@ daemon, recoverable local state, and independently managed workloads.
 - durable critical SQLite state and a separate replaceable metrics database;
 - local `status`, `doctor`, `ready`, `setup-token`, and verified `backup-state`
   CLI operations;
+- development-only `strand new` and `strand check` project tooling that never
+  executes extension code;
 - responsive System, Midnight, OLED, and Light dashboard themes;
 - Linux package install, rollback, and data-preserving uninstall tooling that is
   covered by one scoped Ubuntu 24.04 systemd lifecycle but not supported for use.
 
 Host mutation, remote access, games, services, files, restore, Vault, Genome,
-Strands, and automation remain future work. The dashboard does not show fake
-successful controls for those unfinished capabilities.
+Strand installation/execution, and automation remain future work. The dashboard
+does not show fake successful controls for those unfinished capabilities.
 
 Helix will manage game processes but will not run their simulation ticks or
 player traffic. Each game and host determines real player capacity; Helix's

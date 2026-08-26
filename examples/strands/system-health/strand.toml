@@ -1,0 +1,26 @@
+# This is a manifest-only reference for the Strand Kit preview.
+schema = "helix.strand/preview-1"
+id = "b893d568-327d-4b6e-b0b6-0b7a58e0c852"
+slug = "system-health"
+name = "System Health"
+version = "0.1.0"
+description = "Shows a bounded summary of host health."
+license = "AGPL-3.0-or-later"
+publisher = "Helix example"
+kind = "portable"
+capabilities = [
+  { name = "helix:metrics.read", reason = "Read the selected node's bounded health summary.", optional = false },
+]
+
+[compatibility]
+helix = ">=0.1.0-alpha.1, <0.2.0"
+host_api = "preview-1"
+
+[limits]
+memory_mib = 32
+timeout_ms = 1000
+concurrent_calls = 2
+queue_depth = 32
+storage_mib = 16
+outbound_requests_per_minute = 0
+log_kib_per_minute = 64

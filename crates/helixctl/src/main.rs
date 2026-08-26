@@ -1,10 +1,13 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use helix_auth::{OpaqueToken, TokenDomain};
 use helix_config::{ConfigOverrides, RuntimeConfig};
 use helix_core::unix_timestamp_ms;
 use helix_state::{
     BackupOutcome, BootstrapInstallOutcome, BootstrapTokenHash, DatabaseSet, MetricsDatabaseReader,
     PragmaReport, StateDatabaseReader,
+};
+use helix_strand_kit::{
+    ScaffoldOptions, StrandKind, ValidatedManifest, scaffold_strand, validate_strand_project,
 };
 use std::{
     error::Error,
@@ -61,6 +64,60 @@ enum Command {
         #[arg(value_name = "DESTINATION")]
         destination: PathBuf,
     },
+    /// Create and validate development-preview Strand projects.
+    #[command(visible_alias = "strands")]
+    Strand {
+        #[command(subcommand)]
+        command: StrandCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum StrandCommand {
+    /// Create a safe manifest-first Strand project without overwriting anything.
+    #[command(visible_alias = "init")]
+    New {
+        /// Lowercase package slug, for example system-health.
+        #[arg(value_name = "SLUG")]
+        slug: String,
+        /// Friendly display name. Defaults to a title-cased slug.
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Publisher shown during future package review.
+        #[arg(long, default_value = "Local developer", value_name = "PUBLISHER")]
+        publisher: String,
+        /// SPDX license expression for the Strand package.
+        #[arg(long, default_value = "AGPL-3.0-or-later", value_name = "LICENSE")]
+        license: String,
+        /// Preview package class.
+        #[arg(long, value_enum, default_value_t = StrandTemplate::Portable)]
+        kind: StrandTemplate,
+        /// New package directory. Defaults to the slug in the current directory.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
+    /// Strictly validate a preview strand.toml without executing any code.
+    #[command(visible_alias = "validate")]
+    Check {
+        /// Strand directory or direct path to strand.toml.
+        #[arg(default_value = ".", value_name = "PATH")]
+        path: PathBuf,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum StrandTemplate {
+    Portable,
+    UiOnly,
+}
+
+impl From<StrandTemplate> for StrandKind {
+    fn from(value: StrandTemplate) -> Self {
+        match value {
+            StrandTemplate::Portable => Self::Portable,
+            StrandTemplate::UiOnly => Self::UiOnly,
+        }
+    }
 }
 
 fn main() {
@@ -71,16 +128,33 @@ fn main() {
 }
 
 fn run() -> Result<(), DynError> {
-    let args = Args::parse();
+    let Args {
+        config,
+        data_dir,
+        command,
+    } = Args::parse();
+    let command = match command {
+        Command::Strand { command } => {
+            if config.is_some() || data_dir.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Strand project commands do not use --config or --data-dir; remove those administrative options",
+                )
+                .into());
+            }
+            return run_strand_command(command);
+        }
+        command => command,
+    };
     let config = RuntimeConfig::load(
-        args.config.as_deref(),
+        config.as_deref(),
         ConfigOverrides {
-            data_dir: args.data_dir,
+            data_dir,
             ..ConfigOverrides::default()
         },
     )?;
 
-    match args.command {
+    match command {
         Command::SetupToken => {
             ensure_setup_token_unprivileged()?;
             install_setup_token(&config.data_dir, &mut io::stdout())?;
@@ -111,8 +185,90 @@ fn run() -> Result<(), DynError> {
                 );
             }
         }
+        Command::Strand { .. } => unreachable!("Strand commands return before config loading"),
     }
     Ok(())
+}
+
+fn run_strand_command(command: StrandCommand) -> Result<(), DynError> {
+    match command {
+        StrandCommand::New {
+            slug,
+            name,
+            publisher,
+            license,
+            kind,
+            output,
+        } => {
+            let destination = output.unwrap_or_else(|| PathBuf::from(&slug));
+            let mut options = ScaffoldOptions::new(destination, slug, kind.into());
+            options.name = name;
+            options.publisher = publisher;
+            options.license = license;
+            let created = scaffold_strand(&options)?;
+            println!(
+                "Created Strand project at {}",
+                created
+                    .root
+                    .canonicalize()
+                    .unwrap_or(created.root.clone())
+                    .display()
+            );
+            print_strand_summary(&created.manifest);
+            println!();
+            println!(
+                "Next: edit strand.toml, then run helixctl strand check {}",
+                created.root.display()
+            );
+            println!("Preview only: Helix cannot install or run Strands yet.");
+        }
+        StrandCommand::Check { path } => {
+            let manifest = validate_strand_project(&path)?;
+            println!("Strand manifest is valid (development preview)");
+            print_strand_summary(&manifest);
+            println!("Execution status: not installable or runnable in this Helix version");
+        }
+    }
+    Ok(())
+}
+
+fn print_strand_summary(manifest: &ValidatedManifest) {
+    println!("  Name: {} ({})", manifest.name, manifest.slug);
+    println!("  ID: {}", manifest.id);
+    println!("  Version: {}", manifest.version);
+    println!("  Kind: {}", manifest.kind);
+    println!("  Publisher: {}", manifest.publisher);
+    println!("  License: {}", manifest.license);
+    println!("  Helix range: {}", manifest.helix_compatibility);
+    if manifest.capabilities.is_empty() {
+        println!("  Capabilities: none (deny by default)");
+    } else {
+        println!("  Capabilities: {} requested", manifest.capabilities.len());
+        for capability in &manifest.capabilities {
+            let requirement = if capability.optional {
+                "optional"
+            } else {
+                "required"
+            };
+            println!(
+                "    - {} ({requirement}): {}",
+                capability.name, capability.reason
+            );
+        }
+    }
+    println!(
+        "  Ceilings: {} MiB memory, {} ms/call, {} concurrent calls, queue {}",
+        manifest.limits.memory_mib,
+        manifest.limits.timeout_ms,
+        manifest.limits.concurrent_calls,
+        manifest.limits.queue_depth
+    );
+    println!(
+        "  Storage/network/log: {} MiB, {} requests/min, {} KiB/min",
+        manifest.limits.storage_mib,
+        manifest.limits.outbound_requests_per_minute,
+        manifest.limits.log_kib_per_minute
+    );
 }
 
 #[derive(Clone, Copy)]

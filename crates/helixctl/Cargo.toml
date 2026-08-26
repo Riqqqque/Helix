@@ -13,6 +13,7 @@ helix-auth.workspace = true
 helix-config.workspace = true
 helix-core.workspace = true
 helix-state.workspace = true
+helix-strand-kit.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true

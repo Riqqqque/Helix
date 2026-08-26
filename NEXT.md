@@ -17,7 +17,9 @@ the highest-value work that does not pretend the blocked Linux gates passed:
    representative-device checks;
 5. design Chronicle export, holds, hash chaining, and off-host forwarding
    without weakening the fixed local retention boundary;
-6. rerun the full portable suite and update this file after each boundary lands.
+6. keep the Strand Kit preview manifest-only until the Phase 12 permission,
+   audit, job, package-provenance, SDK, and sandbox boundaries are ready;
+7. rerun the full portable suite and update this file after each boundary lands.
 
 Do not reopen remote binding as part of these items. TLS, proxy trust, cookie
 policy, MFA, rate-limit field testing, and an independent authentication review

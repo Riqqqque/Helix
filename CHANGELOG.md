@@ -7,7 +7,7 @@ binary or package release yet.
 
 ### Added
 
-- Founding nine-crate Rust workspace with typed configuration, separate
+- Ten-crate Rust workspace with typed configuration, separate
   critical-state and replaceable-metrics SQLite domains, a versioned HTTP API,
   and a local administration CLI.
 - Race-safe local owner enrollment, Argon2id login, bounded and revocable
@@ -29,6 +29,9 @@ binary or package release yet.
   source link, and a checksummed license in release bundles.
 - A game-hosting capacity contract separating game/player performance from
   Helix control-plane bounds, resource admission, and required load evidence.
+- A non-executing Strand Kit preview with atomic no-overwrite project
+  scaffolding, strict bounded manifest validation, CLI summaries, a checked
+  reference project, and an author guide.
 
 ### Changed
 

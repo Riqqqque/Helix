@@ -58,7 +58,12 @@ It must not execute arbitrary commands, deserialize untrusted native plugins, pe
 
 ### `helixctl`
 
-`helixctl` is an on-demand administrative client. It presents status, setup, diagnostics, backup, recovery, import/export, repair, and update operations. It should use the same domain operations and authorization policy as the API wherever possible. Possession of a local binary is not itself authorization.
+`helixctl` is an on-demand administrative client. It presents status, setup,
+diagnostics, backup, recovery, import/export, repair, and update operations. It
+also exposes installation-independent developer commands such as preview Strand
+scaffolding and validation. Administrative commands should use the same domain
+operations and authorization policy as the API wherever possible. Possession of
+a local binary is not itself authorization.
 
 Offline recovery commands may need direct file access. Those commands must be explicit, require the daemon to be stopped when necessary, create forensic copies before destructive repair, and state which invariants they temporarily bypass.
 
@@ -106,6 +111,7 @@ The foundation workspace uses these crates:
 | `helix-config` | Typed process configuration, validation, defaults, and filesystem path policy | Runtime state or arbitrary environment access throughout the codebase |
 | `helix-state` | Critical SQLite schema, migrations, repositories, transaction boundaries, and integrity checks | HTTP concerns, host polling, game files |
 | `helix-secrets` | Redacted master-key credentials, authenticated record envelopes, and closure-only plaintext access over `helix-state` | Credential provisioning, HTTP responses, config/env/CLI key loading, rotation orchestration |
+| `helix-strand-kit` | Non-executing preview project scaffolding, strict manifest parsing, and author-facing validation summaries | Package installation, signature trust, capability grants, host calls, sandboxing, or extension execution |
 | `helix-system` | Narrow read-only Linux host discovery and metric snapshots | Privileged mutation, persistent polling loops, policy decisions |
 | `helix-api` | Versioned HTTP contracts, routing, extraction, middleware, and response mapping | Direct SQL strings, root operations, business invariants defined only in handlers |
 | `helixd` | Dependency wiring, process lifecycle, task supervision, graceful shutdown, and asset serving | Reusable domain logic |

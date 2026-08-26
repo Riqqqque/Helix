@@ -89,16 +89,18 @@ Rust binaries used the checked-in release profile with thin LTO and stripped
 symbols. This snapshot predates the first commit, so its identity is the
 founding working tree rather than a reviewable Git revision.
 
-The binary-size rows were refreshed after the `toml` dependency update and the
-frontend-size row after the committed accessibility pass. Runtime rows remain
+The binary-size rows were refreshed after the Strand Kit preview landed. The
+daemon remained at the same measured size; the on-demand CLI grew by 330,752
+bytes for strict TOML/SemVer validation and safe scaffolding. The frontend-size
+row follows the committed accessibility/performance pass. Runtime rows remain
 the original founding snapshot, so this table is not a single-revision
 comparison.
 
 | Measurement | Result | Conditions and limits |
 | --- | ---: | --- |
 | `helixd.exe` | 7,579,648 bytes (7.23 MiB) | Current release build, all workspace features |
-| `helixctl.exe` | 2,853,376 bytes (2.72 MiB) | Current release build, all workspace features |
-| Combined release binaries | 10,433,024 bytes (9.95 MiB) | Current Windows PE files; not Linux installed size |
+| `helixctl.exe` | 3,184,128 bytes (3.04 MiB) | Current release build with on-demand Strand project tooling; no resident process cost |
+| Combined release binaries | 10,763,776 bytes (10.26 MiB) | Current Windows PE files; not Linux installed size |
 | Compiled frontend | 92,350 bytes raw; 24,951 gzip; 22,056 Brotli | Current source-alpha HTML, CSS, and JavaScript for the first route; the build-enforced limits are 76,800 gzip bytes total and 40,960 gzip bytes of JavaScript |
 | Setup-status API | p50 0.21 ms; p95 0.30 ms; p99 0.34 ms | 500 sequential requests through one persistent .NET `HttpClient`; current release daemon, disposable unclaimed state |
 | Brotli first-route delivery | HTML 257 bytes at p95 0.29 ms; JavaScript 16,656 bytes at p95 0.31 ms; CSS 5,143 bytes at p95 0.31 ms | 250 sequential requests per asset through the same client; network timing includes reading the complete compressed body |

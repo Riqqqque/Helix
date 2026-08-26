@@ -78,6 +78,11 @@ The initial workspace contains:
 - `helixd`: dependency wiring, task supervision, process lifecycle, and static asset delivery;
 - `helixctl`: CLI parsing and administrative presentation.
 
+The later `helix-strand-kit` library contains only non-executing preview
+scaffolding and bounded manifest validation used by `helixctl`. It is not the
+planned `helix-strandd` process, does not start the extension-runtime phase, and
+must not gain package installation, host calls, or sandbox responsibilities.
+
 Dependencies flow inward toward `helix-core` and remain acyclic. Domain invariants do not live only in Axum handlers, SQL triggers, or frontend code.
 
 `helix-system` is deliberately read-only. It does not manage services, packages, firewalls, users, mounts, or cgroups. It returns requested typed snapshots and does not start a permanent polling loop when constructed. Mutations that require authority cross the future broker boundary.
