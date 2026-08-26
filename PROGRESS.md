@@ -33,7 +33,7 @@ independent recovery do not.
 | Replaceable metrics | TESTED | Separate WAL/NORMAL database, corruption preservation/recreation, and degradation without critical-state loss have portable tests. Published forensic-set count/retention, disk-full, read-only mount, and sustained-retention policy/tests remain; persistent metric writers are not enabled yet. |
 | Daemon lifecycle | TESTED | Loopback listener, structured logging, API/static composition, exclusive writer lease, recovery-before-cleanup ordering, tracked blocking-task drain, and clean-marker ordering have focused tests. A live Windows run covered forced-stop recovery and clean Ctrl+C. One scoped Ubuntu package run verified systemd identity/hardening, forced-crash restart, and clean stop/start; broader signal, watchdog, and injected-fault matrices remain open. |
 | CLI | TESTED | Read-only status/doctor, verified state-only online backup, absolute-deadline readiness, and lease-protected one-time setup-token creation are implemented and passed a release-binary flow. Repair and restore commands do not exist yet. |
-| HTTP foundation | TESTED | Versioned API, JSON API fallback, SPA fallback, restrictive headers, request IDs, compression, body/timeout limits, strict loopback Host validation, global concurrency bounds, and single-flight host sampling have service tests on Windows and hosted Ubuntu. Network-socket flood and broader supported-host matrices remain. |
+| HTTP foundation | TESTED | Versioned API, JSON API fallback, SPA fallback, restrictive headers, request IDs, compression, typed body-limit errors, request timeouts, strict loopback Host validation, global concurrency bounds, a 10-second HTTP/1 header deadline, fail-fast transport overload, and single-flight host sampling have service tests on Windows and hosted Ubuntu. A live Windows run covered 10,000 authenticated requests, a 512-request burst, and 128 silent sockets; broader supported-host matrices remain. |
 | Host overview | TESTED | Real hostname, OS, architecture, kernel, uptime, CPU, memory, swap, storage, and cumulative network counters are collected on demand. Windows live data rendered two mounts and two interfaces; a scoped Ubuntu package run returned an authenticated overview with a logical CPU count and explicit storage/network availability states. An unlabeled volume is represented as an explicit text omission rather than invalid empty text. Supported-host correctness and reference-performance matrices remain. |
 | Frontend | TESTED | The compiled Preact/Vite UI uses real protected APIs, honest degraded states, visibility-aware polling, semantic native meters, explicit transition focus, visible forced-colors focus, reduced-motion support, responsive layouts, and System/Midnight/OLED/Light themes. Live Windows browser checks passed login, reload-to-login CSRF behavior, sign-out, desktop OLED, and a 320-pixel layout with no horizontal overflow or console errors. Formal screen-reader and representative-device review remain. |
 | CI and dependency policy | TESTED | Actions and tool versions are pinned. Ubuntu 24.04 GitHub Actions passed Rust stable, the declared Rust 1.88 MSRV, frontend checks, pinned Rust advisory/license/source policy, current/full-history secret scans, CodeQL, and the scoped package lifecycle for commit `fdbbc0a`. This does not establish clean-host or platform support. |
@@ -67,7 +67,7 @@ used Rust 1.88.0 on the same target.
 - `cargo +1.88.0 test --locked --workspace --all-targets --all-features`
 - `npm run check` and `npm audit --audit-level=moderate` in `frontend`
 
-The settled suite contains 152 target-conditioned Rust tests on Windows, 158 on
+The settled suite contains 153 target-conditioned Rust tests on Windows, 159 on
 hosted Ubuntu, and 48 frontend tests. The final fresh Windows release-binary flow
 passed setup, owner claim, login, protected reads, CSRF
 rotation, cookie-only rejection, logout/revocation, generic login failure,
@@ -75,8 +75,16 @@ progressive delay, CLI ready/status/full-doctor/backup, 1,500 latency requests,
 real storage/network collection, and a ten-file canary scan with zero secret
 leaks.
 
-Current release artifacts measured 7,564,800 bytes for `helixd.exe`, 2,853,376
-bytes for `helixctl.exe`, and 10,418,176 bytes combined. The compiled frontend
+An additional optimized live run passed 10,000 authenticated health requests, a
+512-request transport-overload burst, 128 silent-connection pressure with
+deadline recovery, ten idle minutes, forced termination, same-state restart,
+full doctor, verified online backup, and persisted token/password canaries. The
+new header-deadline regression passed 200 optimized repetitions; the malformed
+and oversized JSON boundary regression passed 100. Oversized HTTP/1 headers also
+have focused rejection coverage at the configured connection-buffer ceiling.
+
+Current release artifacts measured 7,575,040 bytes for `helixd.exe`, 2,853,376
+bytes for `helixctl.exe`, and 10,428,416 bytes combined. The compiled frontend
 measured 91,782 bytes raw, 24,796 bytes gzip, and 21,872 bytes Brotli. These
 Windows values are non-reference.
 

@@ -439,6 +439,7 @@ pub(crate) enum ApiError {
     InvalidOrigin,
     LoginRejected,
     NotFound,
+    PayloadTooLarge,
     PasswordWorkersBusy,
     SessionMaintenance,
     ServiceUnavailable,
@@ -559,6 +560,14 @@ impl IntoResponse for ApiError {
                 ApiProblem {
                     code: "api_route_not_found",
                     message: "The requested API route does not exist.",
+                },
+                None,
+            ),
+            Self::PayloadTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                ApiProblem {
+                    code: "payload_too_large",
+                    message: "The request body exceeds the configured limit.",
                 },
                 None,
             ),
@@ -1186,6 +1195,27 @@ mod tests {
                 .status(),
             StatusCode::FORBIDDEN
         );
+
+        let oversized = HttpRequest::builder()
+            .method("POST")
+            .uri("/api/v1/auth/login")
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::CONTENT_TYPE, "application/json")
+            .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 41000))))
+            .body(Body::from(format!(
+                r#"{{"loginName":"nobody","password":"{}"}}"#,
+                "x".repeat(API_BODY_LIMIT_BYTES)
+            )))
+            .expect("request");
+        let oversized = context
+            .app
+            .clone()
+            .oneshot(oversized)
+            .await
+            .expect("response");
+        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(response_json(oversized).await["code"], "payload_too_large");
 
         let malformed = HttpRequest::builder()
             .method("POST")

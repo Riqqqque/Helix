@@ -81,9 +81,9 @@ comparison.
 
 | Measurement | Result | Conditions and limits |
 | --- | ---: | --- |
-| `helixd.exe` | 7,564,800 bytes (7.21 MiB) | Current release build, all workspace features |
+| `helixd.exe` | 7,575,040 bytes (7.22 MiB) | Current release build, all workspace features |
 | `helixctl.exe` | 2,853,376 bytes (2.72 MiB) | Current release build, all workspace features |
-| Combined release binaries | 10,418,176 bytes (9.94 MiB) | Current Windows PE files; not Linux installed size |
+| Combined release binaries | 10,428,416 bytes (9.95 MiB) | Current Windows PE files; not Linux installed size |
 | Compiled frontend | 91,782 bytes raw; 24,796 gzip; 21,872 Brotli | Current source-alpha HTML, CSS, and JavaScript for the authenticated base route |
 | First daemon readiness | 563.4 ms | One sample on a new data root after `helixctl setup-token` initialized state; includes `Start-Process` and a 25 ms polling interval, so it is neither the 30-run warm p95 nor a pure cold-schema result |
 | `/healthz` | p50 0.202 ms; p95 0.283 ms; p99 0.322 ms | 1,000 sequential requests through one .NET `HttpClient`, release daemon, loopback |
@@ -103,6 +103,30 @@ claim. The startup number is not comparable to either required startup protocol.
 Ubuntu installed size, proportional RSS, CPU wakeups, repeated startup,
 authenticated SQLite reads/writes, dashboard timing, and durability-preserving
 database latency remain **BLOCKED**.
+
+### Extended Windows transport and recovery soak — 2026-08-26
+
+A second non-reference run used the same Windows toolchain and a release daemon
+from the working tree after the HTTP transport hardening. It created a
+disposable installation and owner, exercised the compiled UI/API boundary, and
+deleted all state and logs after the secret-canary scan. These results are
+diagnostic evidence, not a retained benchmark artifact or an Ubuntu baseline.
+
+| Measurement | Result | Conditions and limits |
+| --- | ---: | --- |
+| Authenticated `/api/v1/health` | p50 0.31 ms; p95 0.44 ms; p99 0.50 ms | 10,000 sequential requests after owner setup through one .NET `HttpClient`; all 10,000 returned `200` in 3.58 seconds |
+| 512-request burst | 0.05 seconds | 384 `200`, 125 explicit `503`, and 3 immediate transport failures at the hard ceiling; no client-deadline cancellation |
+| Silent-connection pressure | Bounded overload and recovery passed | 128 silent sockets produced a prompt `503` for new work; a new liveness connection returned `204` after the 10-second request-header deadline expired the silent sockets |
+| Post-stress idle CPU | 0 ms reported over 600.09 seconds | Windows process CPU counter stayed below its reporting resolution; this did not measure wakeups or context switches |
+| Post-stress working set | 25.37 MiB start/maximum; 22.19 MiB end | Ten idle minutes after sequential, burst, and silent-connection stress; no browser requests or optional modules |
+| Post-stress private bytes | 18.24 MiB start/maximum; 13.96 MiB end | Same ten-minute interval; the decline after load is evidence against retained growth in this run, not a leak proof |
+| Forced-termination recovery | Passed | Same-state restart, authenticated health, full SQLite doctor, verified 249,856-byte online backup, unclean-shutdown log marker, and token/password canary scan |
+
+The burst deliberately exceeds the 128 full-connection limit. A small number of
+immediate transport failures is acceptable at that hard boundary; the important
+regression is a request waiting indefinitely behind idle keep-alive or silent
+connections. The bounded `503` path and 10-second header deadline prevent that
+failure mode without removing the connection cap.
 
 ## Regression policy
 

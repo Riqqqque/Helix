@@ -1,13 +1,12 @@
-mod bounded_listener;
+mod http_server;
 
-use axum::serve::ListenerExt;
-use bounded_listener::{BoundedTcpListener, MAX_CONCURRENT_CONNECTIONS};
 use clap::Parser;
 use helix_api::ApiState;
 use helix_config::{ConfigOverrides, RuntimeConfig};
 use helix_core::DatabaseStatus;
 use helix_state::{DatabaseSet, MetricsOpenOutcome, StateDatabase, StateError};
 use helix_system::HostSampler;
+use http_server::{MAX_CONCURRENT_CONNECTIONS, REQUEST_HEADER_TIMEOUT};
 use std::{
     error::Error,
     future::Future,
@@ -102,15 +101,11 @@ async fn main() -> Result<(), DynError> {
     let blocking_tasks = api_state.blocking_task_tracker();
     let app = helix_api::router(api_state, config.web_root)?;
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
-    let listener = BoundedTcpListener::new(listener, MAX_CONCURRENT_CONNECTIONS).tap_io(|stream| {
-        if let Err(error) = stream.set_nodelay(true) {
-            warn!(%error, "could not enable TCP_NODELAY on an accepted connection");
-        }
-    });
 
     info!(
         listen = %config.listen,
         maximum_connections = MAX_CONCURRENT_CONNECTIONS,
+        request_header_timeout_seconds = REQUEST_HEADER_TIMEOUT.as_secs(),
         version = helix_core::VERSION,
         "Helix is ready"
     );
@@ -120,11 +115,7 @@ async fn main() -> Result<(), DynError> {
         shutdown_signal().await;
         shutdown_started_tx.send_replace(Some(Instant::now()));
     };
-    let server = axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(announce_shutdown);
+    let server = http_server::serve(listener, app, announce_shutdown);
     let mut server = Box::pin(std::future::IntoFuture::into_future(server));
     let shutdown_started_at = tokio::select! {
         biased;
