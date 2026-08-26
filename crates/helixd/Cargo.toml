@@ -14,7 +14,10 @@ helix-config.workspace = true
 helix-core.workspace = true
 helix-state.workspace = true
 helix-system.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 tokio.workspace = true
+tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

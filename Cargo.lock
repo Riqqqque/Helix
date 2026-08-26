@@ -712,8 +712,11 @@ dependencies = [
  "helix-core",
  "helix-state",
  "helix-system",
+ "hyper",
+ "hyper-util",
  "rustix",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

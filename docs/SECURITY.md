@@ -5,7 +5,10 @@
 This is the founding security design. The current foundation does set a
 loopback-only default, strict TOML parsing, bounded API bodies/timeouts, request
 IDs, a restrictive initial CSP and related response headers, and distinct
-SQLite durability domains. The owner/session foundation and portable
+SQLite durability domains. HTTP/1 headers have a 10-second completion deadline
+and a 32 KiB connection-buffer ceiling; full connections and short overload
+responses use separate bounded pools so a silent local connection flood expires
+and excess work fails fast. The owner/session foundation and portable
 recoverable-secret store now have focused unit tests. These are useful defenses,
 not a complete or independently audited security boundary.
 

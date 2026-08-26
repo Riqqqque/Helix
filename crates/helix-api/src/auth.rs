@@ -443,7 +443,7 @@ async fn setup_owner(
     body: Result<Json<OwnerSetupRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     validate_post_headers(&headers)?;
-    let Json(request) = body.map_err(|_| ApiError::InvalidJson)?;
+    let Json(request) = body.map_err(map_json_rejection)?;
     let reservation = state
         .attempt_limiter
         .reserve_setup(peer.ip())
@@ -599,7 +599,7 @@ async fn login(
     body: Result<Json<LoginRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     validate_post_headers(&headers)?;
-    let Json(request) = body.map_err(|_| ApiError::InvalidJson)?;
+    let Json(request) = body.map_err(map_json_rejection)?;
     let reservation = state
         .attempt_limiter
         .reserve_login(peer.ip(), &request.login_name)
@@ -789,7 +789,7 @@ async fn rotate_csrf(
     body: Result<Json<EmptyRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     validate_post_headers(&headers)?;
-    let Json(EmptyRequest {}) = body.map_err(|_| ApiError::InvalidJson)?;
+    let Json(EmptyRequest {}) = body.map_err(map_json_rejection)?;
     authenticate(&state, &headers, SessionAuthorization::Authenticated, true).await?;
     let session_hash = session_hash_from_headers(&headers)?;
     let expected_csrf_hash = csrf_hash_from_headers(&headers)?;
@@ -836,7 +836,7 @@ async fn logout(
     body: Result<Json<EmptyRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     validate_post_headers(&headers)?;
-    let Json(EmptyRequest {}) = body.map_err(|_| ApiError::InvalidJson)?;
+    let Json(EmptyRequest {}) = body.map_err(map_json_rejection)?;
     let authenticated =
         authenticate(&state, &headers, SessionAuthorization::Authenticated, true).await?;
     let session_hash = session_hash_from_headers(&headers)?;
@@ -1072,6 +1072,14 @@ fn validate_post_headers(headers: &HeaderMap) -> Result<(), ApiError> {
         }
     }
     Ok(())
+}
+
+fn map_json_rejection(rejection: JsonRejection) -> ApiError {
+    if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        ApiError::PayloadTooLarge
+    } else {
+        ApiError::InvalidJson
+    }
 }
 
 fn single_header(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {

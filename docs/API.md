@@ -121,7 +121,16 @@ Cursors are opaque, bounded, and scoped to the query. Offset pagination may be u
 
 ## Health endpoints
 
-The current unversioned `GET /healthz` route is the package supervisor endpoint. It returns `204 No Content`, performs no database or host sampling, and must not fail solely because an optional module is degraded. Version, dependency state, paths, and host details are deliberately absent.
+The current unversioned `GET /healthz` route is the package supervisor endpoint. Under normal transport admission it returns `204 No Content`, performs no database or host sampling, and must not fail solely because an optional module is degraded. Version, dependency state, paths, and host details are deliberately absent.
+
+`/healthz` bypasses the application-request semaphore but not the bounded HTTP
+transport. The current daemon admits 128 full connections, requires each HTTP/1
+request header to complete within 10 seconds, caps the HTTP/1 connection buffer
+at 32 KiB, and reserves 32 short-lived responders for a bodyless `503 Service
+Unavailable` with `Retry-After: 1` when the full-connection limit is reached.
+Connections beyond both bounded pools may close without an HTTP response.
+Supervisors and clients must retry transport overload rather than confuse it
+with an optional-module health failure.
 
 `GET /api/v1/health` reports detailed readiness and degraded dependencies only to a session authorized for `system.view` with its current CSRF proof. If deployment needs separate liveness and readiness semantics, add explicit probes and package tests instead of changing the meaning of `/healthz` silently.
 
@@ -239,6 +248,9 @@ Expected status classes include:
 
 Every boundary uses typed structures and explicit limits. In particular:
 
+- current JSON API request bodies are limited to 16 KiB; an over-limit body
+  returns `413` with code `payload_too_large`, while malformed JSON or the wrong
+  typed shape returns `400` with code `invalid_json`;
 - paths are resource-relative identifiers, not arbitrary host paths;
 - uploads enforce byte, file-count, expansion-ratio, and time limits;
 - archive extraction rejects traversal, absolute paths, special files, and unsafe links;

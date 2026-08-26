@@ -34,6 +34,13 @@ helix-core = { path = "crates/helix-core" }
 helix-secrets = { path = "crates/helix-secrets" }
 helix-state = { path = "crates/helix-state" }
 helix-system = { path = "crates/helix-system" }
+hyper = { version = "1.11.0", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1.20", default-features = false, features = [
+  "http1",
+  "server",
+  "service",
+  "tokio",
+] }
 mime = "0.3.17"
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
 secrecy = { version = "=0.10.3", default-features = false }
