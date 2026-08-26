@@ -13,6 +13,7 @@ use std::{
     io,
     net::SocketAddr,
     path::{Path, PathBuf},
+    pin::Pin,
     process,
     sync::Arc,
     time::Duration,
@@ -117,26 +118,28 @@ async fn main() -> Result<(), DynError> {
     };
     let server = http_server::serve(listener, app, announce_shutdown);
     let mut server = Box::pin(std::future::IntoFuture::into_future(server));
-    let shutdown_started_at = tokio::select! {
-        biased;
-        result = wait_for_shutdown_start(&mut shutdown_started_rx) => result?,
-        result = &mut server => {
-            result?;
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "HTTP server stopped before a shutdown signal",
-            ).into());
-        }
-    };
+    let (shutdown_started_at, http_already_drained) =
+        wait_for_shutdown_start_or_http_completion(&mut shutdown_started_rx, server.as_mut())
+            .await?;
     let shutdown_deadline = shutdown_started_at + GRACEFUL_SHUTDOWN_TIMEOUT;
-    match drain_and_mark_clean(
-        &mut server,
-        blocking_tasks.wait_idle(),
-        shutdown_deadline,
-        databases.state(),
-    )
-    .await
-    {
+    let shutdown_result = if http_already_drained {
+        drain_and_mark_clean(
+            std::future::ready(Ok(())),
+            blocking_tasks.wait_idle(),
+            shutdown_deadline,
+            databases.state(),
+        )
+        .await
+    } else {
+        drain_and_mark_clean(
+            &mut server,
+            blocking_tasks.wait_idle(),
+            shutdown_deadline,
+            databases.state(),
+        )
+        .await
+    };
+    match shutdown_result {
         Ok(()) => {}
         Err(ShutdownCompletionError::Http(error)) => return Err(error.into()),
         Err(ShutdownCompletionError::Marker(error)) => return Err(error.into()),
@@ -150,6 +153,30 @@ async fn main() -> Result<(), DynError> {
     }
     info!("Helix stopped cleanly");
     Ok(())
+}
+
+async fn wait_for_shutdown_start_or_http_completion<H>(
+    receiver: &mut watch::Receiver<Option<Instant>>,
+    http_server: Pin<&mut H>,
+) -> Result<(Instant, bool), io::Error>
+where
+    H: Future<Output = io::Result<()>>,
+{
+    tokio::select! {
+        biased;
+        result = wait_for_shutdown_start(receiver) => {
+            return result.map(|started_at| (started_at, false));
+        }
+        result = http_server => result?,
+    }
+
+    let Some(started_at) = *receiver.borrow_and_update() else {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "HTTP server stopped before a shutdown signal",
+        ));
+    };
+    Ok((started_at, true))
 }
 
 async fn wait_for_shutdown_start(
@@ -450,6 +477,25 @@ mod tests {
         .await
         .expect("complete shutdown");
         assert_eq!(state.marks.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn completed_http_drain_still_observes_its_shutdown_announcement() {
+        let announced_at = Instant::now();
+        let (announcement_tx, mut announcement_rx) = watch::channel(None);
+        let http_server = async move {
+            announcement_tx.send_replace(Some(announced_at));
+            Ok::<(), io::Error>(())
+        };
+        tokio::pin!(http_server);
+
+        let (observed_at, already_drained) =
+            wait_for_shutdown_start_or_http_completion(&mut announcement_rx, http_server.as_mut())
+                .await
+                .expect("published shutdown remains observable");
+
+        assert_eq!(observed_at, announced_at);
+        assert!(already_drained);
     }
 
     #[tokio::test]
