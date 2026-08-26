@@ -26,6 +26,12 @@ updates:
         update-types:
           - patch
           - minor
+    # typescript-eslint 8.68 supports TypeScript below 6.1; upgrade majors as a
+    # reviewed frontend-toolchain change instead of an isolated Dependabot bump.
+    ignore:
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
