@@ -2,11 +2,15 @@
 
 ## Status
 
-Strands are a design only. No Strand manifest, registry, host API, Wasm runtime,
-sidecar protocol, capability store, UI isolation, signature verifier, or
-resource limiter has been implemented. The base daemon must not gain a Wasm
-runtime dependency until a real Strand requires it and measurements justify the
-selected host.
+The non-executing Strand Kit preview can scaffold and strictly validate
+`helix.strand/preview-1` project metadata. It provides no registry, stable
+installable manifest, host API, Wasm runtime, sidecar protocol, capability
+store, UI isolation, signature verifier, or resource limiter. Helix cannot
+install or run a Strand.
+
+The base daemon must not gain a Wasm runtime dependency until a real Strand
+requires it and measurements justify the selected host. The author workflow and
+preview format are documented in [Building a Strand](STRAND-DEVELOPMENT.md).
 
 A Strand extends Helix through a versioned, capability-limited boundary. It is
 not a Rust dynamic library loaded into `helixd`, a route to arbitrary root, or a
@@ -259,7 +263,13 @@ documentation.
 
 ## Required verification
 
-The Strand feature remains unavailable in production builds until tests cover:
+The preview validator currently covers strict known fields, canonical identity,
+Semantic Versioning, bounded compatibility, capability names/reasons,
+duplicates, resource ceilings, oversized manifests, atomic scaffold creation,
+no-overwrite behavior, configuration-independent CLI use, and the checked
+reference manifest. It never executes package code.
+
+The Strand runtime remains unavailable in production builds until tests cover:
 
 - manifest/signature/version parsing, unknown required fields, and hostile size
   limits with an independent fixture corpus;

@@ -18,21 +18,23 @@ recovery-fault, restore, signing, and reference-performance matrices. Helix is n
 ready for production, public-network exposure, or a packaged public release.
 
 No game integration, backup restore, privileged host mutation, update channel,
-Genome import/export, or Strand runtime is supported. A portable encrypted
-secret-record boundary exists, but production master-key delivery, rotation, and
-independent recovery do not.
+Genome import/export, or Strand runtime is supported. Non-executing preview
+Strand project scaffolding and validation exist. A portable encrypted
+secret-record boundary exists, but production master-key delivery, rotation,
+and independent recovery do not.
 
 ## Phase 0 — Foundation
 
 | Area | Status | Current evidence and limits |
 | --- | --- | --- |
 | Repository and architecture | TESTED | Architecture, storage, security, recovery, Genome, Sequence, Strand, backup, API, installation, development, roadmap, game-host capacity, ADR, and public-repository documents exist and were reviewed against the founding directive. The repository and package manifests record `AGPL-3.0-or-later`. |
-| Rust workspace | TESTED | Nine founding crates compile on Windows and hosted Ubuntu with locked dependencies. Formatting, Clippy warnings-as-errors, tests, release builds, Rust stable, and the declared Rust 1.88 MSRV pass. Clean supported-host and additional architecture validation remain open. |
+| Rust workspace | TESTED | Ten workspace crates compile on Windows and hosted Ubuntu with locked dependencies. Formatting, Clippy warnings-as-errors, tests, release builds, Rust stable, and the declared Rust 1.88 MSRV pass. Clean supported-host and additional architecture validation remain open. |
 | Configuration | TESTED | Strict typed TOML, explicit overrides, loopback-only policy, absolute roots, and canonical disjoint state/static roots have adversarial coverage. One packaged Ubuntu run exercised the installed configuration path; broader ownership and replacement-race matrices remain target-host gates. |
 | Critical state | TESTED | SQLite WAL/FULL policy, schema versions 1–4, stable installation/node identity, integrity and semantic checks, unclean marker, online snapshots, process lease, private-file checks, and read-only CLI paths have portable tests. Migration retries reuse only a fully verified source/version/target/SHA-bound rollback snapshot; changed sources get a new snapshot, altered aliases fail closed, and at most 16 legacy partials are reconciled per open. One scoped Ubuntu package run passed full doctor, verified database-only backup, and selected ownership/mode checks; complete Unix race and fault matrices remain open. |
 | Replaceable metrics | TESTED | Separate WAL/NORMAL database, corruption preservation/recreation, and degradation without critical-state loss have portable tests. Published forensic-set count/retention, disk-full, read-only mount, and sustained-retention policy/tests remain; persistent metric writers are not enabled yet. |
 | Daemon lifecycle | TESTED | Loopback listener, structured logging, API/static composition, exclusive writer lease, recovery-before-cleanup ordering, tracked blocking-task drain, and clean-marker ordering have focused tests. A live Windows run covered forced-stop recovery and clean Ctrl+C. One scoped Ubuntu package run verified systemd identity/hardening, forced-crash restart, and clean stop/start; broader signal, watchdog, and injected-fault matrices remain open. |
-| CLI | TESTED | Read-only status/doctor, verified state-only online backup, absolute-deadline readiness, and lease-protected one-time setup-token creation are implemented and passed a release-binary flow. Repair and restore commands do not exist yet. |
+| CLI | TESTED | Read-only status/doctor, verified state-only online backup, absolute-deadline readiness, lease-protected one-time setup-token creation, and installation-independent Strand scaffold/check commands are implemented. The administrative path passed a release-binary flow; the Strand path has unit and subprocess coverage. Repair and restore commands do not exist yet. |
+| Strand author tooling | TESTED | `helix-strand-kit` stages no-overwrite projects, emits zero-capability preview manifests, and validates size, UTF-8, strict fields, UUID/slug identity, Semantic Versions/ranges, permission reasons/duplicates, and resource ceilings without executing code. Concurrent creation publishes exactly once; the checked reference manifest and malformed CLI flows pass. The normal `helixd` dependency tree contains neither the kit nor its SemVer/tempfile dependencies. There is no stable installable package format, SDK, host, grant store, sandbox, signature verification, or runtime. |
 | HTTP foundation | TESTED | Versioned API, JSON API fallback, SPA fallback, restrictive headers, request IDs, compression, typed body-limit errors, request timeouts, strict loopback Host validation, global concurrency bounds, a 10-second HTTP/1 header deadline, fail-fast transport overload, and single-flight host sampling have service tests on Windows and hosted Ubuntu. A live Windows run covered 10,000 authenticated requests, a 512-request burst, and 128 silent sockets; broader supported-host matrices remain. |
 | Host overview | TESTED | Real hostname, OS, architecture, kernel, uptime, CPU, memory, swap, storage, and cumulative network counters are collected on demand. Windows live data rendered two mounts and two interfaces; a scoped Ubuntu package run returned an authenticated overview with a logical CPU count and explicit storage/network availability states. An unlabeled volume is represented as an explicit text omission rather than invalid empty text. Supported-host correctness and reference-performance matrices remain. |
 | Frontend | TESTED | The compiled Preact/Vite UI uses real protected APIs, honest degraded states, visibility-aware polling, native non-repeat submission controls, semantic native meters, explicit transition focus, visible forced-colors focus, reduced-motion support, responsive layouts, and System/Midnight/OLED/Light themes. The build now fails above the 75 KiB initial gzip or 40 KiB initial JavaScript gzip budgets. Live Windows browser checks passed login, reload-to-login CSRF behavior, sign-out, desktop OLED, and a 320-pixel layout with no horizontal overflow or console errors. Formal screen-reader and representative-device review remain. |
@@ -67,7 +69,7 @@ used Rust 1.88.0 on the same target.
 - `cargo +1.88.0 test --locked --workspace --all-targets --all-features`
 - `npm run check` and `npm audit --audit-level=moderate` in `frontend`
 
-The settled suite contains 154 target-conditioned Rust tests on Windows, 160 on
+The settled suite contains 167 target-conditioned Rust tests on Windows, 173 on
 hosted Ubuntu, 50 Vitest tests, and 3 Node asset-budget tests. The final fresh
 Windows release-binary flow passed setup, owner claim, login, protected reads, CSRF
 rotation, cookie-only rejection, logout/revocation, generic login failure,
@@ -84,8 +86,8 @@ repetitions; the malformed and oversized JSON boundary regression passed 100.
 A deterministic lifecycle regression also covers an HTTP drain completing in
 the same scheduler turn as its shutdown announcement.
 
-Current release artifacts measured 7,579,648 bytes for `helixd.exe`, 2,853,376
-bytes for `helixctl.exe`, and 10,433,024 bytes combined. The compiled frontend
+Current release artifacts measured 7,579,648 bytes for `helixd.exe`, 3,184,128
+bytes for `helixctl.exe`, and 10,763,776 bytes combined. The compiled frontend
 measured 92,350 bytes raw, 24,951 bytes gzip, and 22,056 bytes Brotli. The
 production build now rejects more than 76,800 initial gzip bytes or 40,960
 initial JavaScript gzip bytes. These Windows values are non-reference.

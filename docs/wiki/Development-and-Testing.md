@@ -29,6 +29,17 @@ variation, cross-version upgrade, low-disk, power-loss, restore, game, signing,
 or reference-performance behavior. Claims must name the exact platform and test
 that supports them.
 
+## Preview Strand projects
+
+```text
+helixctl strand new system-health --name "System Health"
+helixctl strand check system-health
+```
+
+These commands create and validate metadata without a daemon, Helix database,
+or extension runtime. They do not make the project installable. See
+[Building Strands](https://github.com/Riqqqque/Helix/wiki/Building-Strands).
+
 See [Development](https://github.com/Riqqqque/Helix/blob/main/docs/DEVELOPMENT.md),
 [Contributing](https://github.com/Riqqqque/Helix/blob/main/CONTRIBUTING.md), and
 [Performance](https://github.com/Riqqqque/Helix/blob/main/docs/PERFORMANCE.md).

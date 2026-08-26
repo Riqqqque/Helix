@@ -33,7 +33,7 @@ The current build is a real, compiled dashboard foundation rather than a mock UI
 - migration snapshots, integrity checks, unclean-shutdown detection, verified
   online state backup, and an exclusive daemon lease;
 - `helixctl` `status`, `doctor`, `ready`, `setup-token`, and `backup-state`
-  commands;
+  commands, plus development-only `strand new` and `strand check` tooling;
 - a responsive Preact interface with System, Midnight, OLED, and Light themes;
 - scripts for a checksummed Linux bundle, transactional package-file install,
   rollback, and conservative data-preserving uninstall. One scoped Ubuntu 24.04
@@ -42,9 +42,9 @@ The current build is a real, compiled dashboard foundation rather than a mock UI
   installer.
 
 Not implemented yet: remote access, TLS/proxy trust, MFA, host mutation, service
-or game management, file management, restore, Vault, Genome, Strands, and the
-broader automation roadmap. Helix never renders a successful fake control for an
-unfinished backend.
+or game management, file management, restore, Vault, Genome, Strand
+installation/execution, and the broader automation roadmap. Helix never renders
+a successful fake control for an unfinished backend.
 
 ## How it fits together
 
@@ -62,6 +62,9 @@ flowchart LR
 systemd units, so restarting the dashboard must not stop a game. Future privileged
 operations belong behind a narrow typed broker—not a general root shell.
 
+Read [How Helix works](docs/HOW-HELIX-WORKS.md) for the plain-language request
+flow, process boundaries, data model, future pieces, and product appeal.
+
 ## What controls player capacity
 
 Helix will manage game servers, but it will not execute game ticks or sit in the
@@ -75,6 +78,27 @@ Game hosting is not implemented yet, so there is no honest player-count claim
 today. The required one-player-to-high-cardinality design and the load evidence
 needed before making one are documented in
 [Game hosting capacity](docs/GAME-HOSTING-CAPACITY.md).
+
+## Make a Strand
+
+A Strand is Helix's modular extension unit. The current Strand Kit can create
+and strictly check a manifest-first project without a daemon or initialized
+installation:
+
+```text
+helixctl strand new system-health --name "System Health" --publisher "Your name"
+helixctl strand check system-health
+```
+
+The scaffold starts with no permissions, bounded resource requests, a permanent
+UUID, Semantic Versioning, and an explicit Helix compatibility range. It is
+staged and validated before publication and never overwrites an existing path.
+
+This is developer tooling, not a runtime claim: Helix cannot install or execute
+Strands yet. The optional sandbox host and stable SDK wait for the required
+permission, job, audit, and isolation work. See
+[Building a Strand](docs/STRAND-DEVELOPMENT.md) and the
+[checked reference project](examples/strands/system-health).
 
 ## Try the development preview
 
@@ -167,6 +191,7 @@ protocol are in [Performance](docs/PERFORMANCE.md).
 | `crates/helix-state` | Critical SQLite state, migrations, backups, and integrity |
 | `crates/helix-auth` | Identity, password, and opaque-token primitives |
 | `crates/helix-secrets` | Portable encrypted-record boundary; production key delivery remains gated |
+| `crates/helix-strand-kit` | Non-executing preview Strand scaffolding and strict manifest validation |
 | `crates/helix-system` | Bounded read-only host discovery |
 | `frontend` | Preact, TypeScript, styling, tests, and compiled assets |
 | `packaging` / `scripts` | systemd assets and checked local bundle lifecycle |
@@ -176,10 +201,12 @@ Start here depending on what you need:
 
 - **I want the short guided version.** [Guided docs](docs/wiki/Home.md) and the
   [project wiki](https://github.com/Riqqqque/Helix/wiki)
+- **How does the whole app work?** [How Helix works](docs/HOW-HELIX-WORKS.md)
 - **What is genuinely finished?** [Progress](PROGRESS.md)
 - **What should be built next?** [Next work](NEXT.md) and [Roadmap](ROADMAP.md)
 - **How can I help?** [Contribution policy](CONTRIBUTING.md) and
   [Development](docs/DEVELOPMENT.md)
+- **How do I make an extension?** [Building a Strand](docs/STRAND-DEVELOPMENT.md)
 - **What can Helix do for player capacity?**
   [Game hosting capacity](docs/GAME-HOSTING-CAPACITY.md)
 - **How are releases gated?** [Release process](docs/RELEASING.md)

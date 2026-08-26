@@ -59,7 +59,7 @@ Release hardening
 Build the smallest real Helix application and the contracts that prevent later rewrites:
 
 - public-repository structure and contribution documents;
-- Rust workspace with `helix-core`, `helix-auth`, `helix-config`, `helix-state`, `helix-secrets`, `helix-system`, `helix-api`, `helixd`, and `helixctl`;
+- Rust workspace with `helix-core`, `helix-auth`, `helix-config`, `helix-state`, `helix-secrets`, `helix-strand-kit`, `helix-system`, `helix-api`, `helixd`, and `helixctl`;
 - lightweight frontend workspace compiled to static assets;
 - architecture, storage, security, performance, recovery, API, Sequence, Strand, Genome, and operational documentation;
 - typed configuration and production/development path policy;
@@ -277,6 +277,11 @@ A remote upload is not disaster recovery until a restore drill succeeds.
 ## Phase 12 — Strands
 
 **Status: NOT STARTED**
+
+A non-executing `preview-1` authoring tool can scaffold and validate package
+metadata. It intentionally does not count as starting the runtime phase: the
+format is not installable, the host API is not stable, and no extension code is
+loaded.
 
 - versioned manifest and SDK;
 - capability declaration, review, grant, revocation, and audit;

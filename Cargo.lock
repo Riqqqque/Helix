@@ -681,6 +681,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "helix-strand-kit"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "rustix",
+ "semver",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "uuid",
+]
+
+[[package]]
 name = "helix-system"
 version = "0.1.0-alpha.1"
 dependencies = [
@@ -697,6 +710,7 @@ dependencies = [
  "helix-config",
  "helix-core",
  "helix-state",
+ "helix-strand-kit",
  "rustix",
  "tempfile",
 ]
@@ -1129,6 +1143,12 @@ checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
 dependencies = [
  "zeroize",
 ]
+
+[[package]]
+name = "semver"
+version = "1.0.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "serde"
