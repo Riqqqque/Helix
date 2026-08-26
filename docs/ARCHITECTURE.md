@@ -88,6 +88,13 @@ The broker must not trust validation performed only by `helixd`.
 
 Game servers and adopted services are separate systemd units. Helix records their definitions and observes systemd as the runtime authority. Unit names and paths derive from stable identifiers, never user-controlled display names. Restart policy and crash-loop protection are part of each workload definition.
 
+Helix is outside the game's simulation and player network path. Hosting detail
+is demand-loaded through bounded pages and streams; no dashboard viewer means no
+per-player polling, retained fanout queue, or telemetry writer. Resource changes
+stay inside an operator-approved host/instance envelope. The complete capacity
+contract and evidence boundary are in
+[Game Hosting Capacity](GAME-HOSTING-CAPACITY.md).
+
 ## Crate boundaries
 
 The foundation workspace uses these crates:

@@ -172,8 +172,15 @@ Exit criteria:
 - durable install/update/control jobs and incompatible-operation locks;
 - crash-loop protection and evidence-based “why did it stop?” diagnostics;
 - adoption workflow that inspects and backs up before changing an existing service.
+- host-wide admission control and operator-approved CPU, memory, I/O, and disk
+  headroom envelopes;
+- bounded, paginated instance/player/log surfaces and backpressured event
+  delivery as specified in
+  [the game-hosting capacity contract](docs/GAME-HOSTING-CAPACITY.md).
 
-First prove the lifecycle with a simple non-game fixture. Do not use a synthetic fixture as proof that a real game is supported.
+First prove the lifecycle with a simple non-game fixture. Do not use a synthetic
+fixture as proof that a real game is supported. Synthetic high-cardinality tests
+prove only that Helix stays bounded; game capacity requires real load evidence.
 
 ## Phase 6 — Sequence engine
 

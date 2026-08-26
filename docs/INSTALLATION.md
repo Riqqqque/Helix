@@ -108,7 +108,11 @@ The setup flow detects host facts but does not install Docker, Java, Wine, Steam
 
 Status: **SCOPED LIFECYCLE TESTED — PUBLIC SUPPORT BLOCKED**.
 
-Builds created by `scripts/build-release.sh` include `install-local.sh`, `rollback-local.sh`, `uninstall-local.sh`, and their shared `package-common.sh`. Every regular payload file, including these scripts, is listed in the bundle's `SHA256SUMS`. These are local tools; they do not download remote code and make no signature claim.
+Builds created by `scripts/build-release.sh` include the project `LICENSE`,
+`install-local.sh`, `rollback-local.sh`, `uninstall-local.sh`, and their
+shared `package-common.sh`. Every regular payload file, including the license
+and these scripts, is listed in the bundle's `SHA256SUMS`. These are local
+tools; they do not download remote code and make no signature claim.
 
 > [!CAUTION]
 > These scripts write fixed paths under `/usr`, `/etc`, and `/var`, create the

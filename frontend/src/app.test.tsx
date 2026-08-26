@@ -121,6 +121,15 @@ describe('dashboard accessibility semantics', () => {
     expect(markup).toMatch(
       /<h1(?=[^>]*\bid="overview-title")(?=[^>]*\btabindex="-1")[^>]*>/u,
     );
+    expect(markup).toContain('>Source &amp; license</a>');
+  });
+
+  it('natively disables refresh while the initial request is in flight', () => {
+    const markup = renderDashboard();
+    const refreshButton = markup.match(/<button(?=[^>]*\bclass="refresh-button")[^>]*>/u)?.[0];
+
+    expect(refreshButton).toContain('disabled');
+    expect(refreshButton).toContain('aria-busy="true"');
   });
 
   it('does not turn metric and discovery cards into repeated landmarks', () => {
@@ -136,5 +145,45 @@ describe('dashboard accessibility semantics', () => {
     expect(dashboardMarkup).not.toContain('<article');
     expect(discoveryMarkup.match(/class="discovery-card"/gu)).toHaveLength(2);
     expect(discoveryMarkup).not.toContain('<article');
+  });
+
+  it('renders every bounded host-discovery entry at the API ceiling', () => {
+    const baseMount = readyOverview.data.storage.mounts[0]!;
+    const baseInterface = readyOverview.data.network.interfaces[0]!;
+    const boundaryOverview = {
+      ...readyOverview,
+      data: {
+        ...readyOverview.data,
+        storage: {
+          ...readyOverview.data.storage,
+          mounts: Array.from({ length: 64 }, (_, index) => ({
+            ...baseMount,
+            name: `disk-${index}`,
+            mountPoint: `/srv/game-${index}`,
+          })),
+        },
+        network: {
+          ...readyOverview.data.network,
+          interfaces: Array.from({ length: 64 }, (_, interfaceIndex) => ({
+            ...baseInterface,
+            name: `game-net-${interfaceIndex}`,
+            addresses: Array.from({ length: 4 }, (_, addressIndex) => ({
+              address: `192.0.${interfaceIndex}.${addressIndex + 1}`,
+              prefixLength: 24,
+            })),
+          })),
+        },
+      },
+    };
+
+    const markup = render(
+      <>
+        <StoragePanel overview={boundaryOverview} />
+        <NetworkPanel overview={boundaryOverview} />
+      </>,
+    );
+
+    expect(markup.match(/class="discovery-card"/gu)).toHaveLength(128);
+    expect(markup.match(/192\.0\.\d+\.\d+\/24/gu)).toHaveLength(256);
   });
 });

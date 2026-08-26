@@ -13,6 +13,7 @@ import {
   dashboardSectionForHash,
   type DashboardSectionId,
 } from './navigation';
+import { PROJECT_SOURCE_URL } from './project';
 import {
   applyThemePreference,
   readThemePreference,
@@ -312,11 +313,11 @@ function Brand() {
 
 function Sidebar({
   status,
-  activeSection,
 }: {
   status: ReturnType<typeof dashboardStatus>;
-  activeSection: DashboardSectionId;
 }) {
+  const activeSection = useActiveSection();
+
   return (
     <aside class="sidebar">
       <Brand />
@@ -397,7 +398,19 @@ function ThemeSelector({
   );
 }
 
-function MobileNavigation({ activeSection }: { activeSection: DashboardSectionId }) {
+function DashboardThemeSelector() {
+  const [theme, setTheme] = useTheme();
+  return <ThemeSelector theme={theme} onChange={setTheme} />;
+}
+
+function CurrentSectionLabel() {
+  const activeSection = useActiveSection();
+  return <span>{t(dashboardSectionLabelIds[activeSection])}</span>;
+}
+
+function MobileNavigation() {
+  const activeSection = useActiveSection();
+
   return (
     <nav class="mobile-nav" aria-label={t('dashboard.navigation')}>
       <a
@@ -1029,10 +1042,8 @@ export function Dashboard({
 }: DashboardProps) {
   const { health, overview, refresh, isRefreshing } =
     useDashboardData(csrfToken, onSessionExpired);
-  const [theme, setTheme] = useTheme();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
-  const activeSection = useActiveSection();
   const status = dashboardStatus(health);
   const hostLabel = overview.data?.hostname ?? t('dashboard.localServer');
 
@@ -1054,7 +1065,7 @@ export function Dashboard({
     <>
       <a class="skip-link" href="#main-content">{t('dashboard.skipToMain')}</a>
       <div class="app-shell">
-        <Sidebar status={status} activeSection={activeSection} />
+        <Sidebar status={status} />
         <div class="workspace">
           <header class="topbar">
             <div class="topbar__mobile-brand">
@@ -1063,16 +1074,17 @@ export function Dashboard({
             <div class="topbar__context">
               <span class="topbar__host">{hostLabel}</span>
               <span class="topbar__separator" aria-hidden="true">/</span>
-              <span>{t(dashboardSectionLabelIds[activeSection])}</span>
+              <CurrentSectionLabel />
             </div>
             <div class="topbar__actions">
               <span class="user-chip" title={t('dashboard.signedInAs', user.loginName)}>
                 {user.displayName}
               </span>
-              <ThemeSelector theme={theme} onChange={setTheme} />
+              <DashboardThemeSelector />
               <button
                 class="refresh-button"
                 type="button"
+                disabled={isRefreshing}
                 onClick={() => void refresh()}
                 aria-busy={isRefreshing}
                 aria-disabled={isRefreshing}
@@ -1085,6 +1097,7 @@ export function Dashboard({
               <button
                 class="logout-button"
                 type="button"
+                disabled={isLoggingOut}
                 onClick={() => void handleLogout()}
                 aria-busy={isLoggingOut}
                 aria-disabled={isLoggingOut}
@@ -1102,7 +1115,7 @@ export function Dashboard({
               {logoutError}
             </div>
           )}
-          <MobileNavigation activeSection={activeSection} />
+          <MobileNavigation />
 
           <main id="main-content" tabIndex={-1}>
             <section class="hero" id="overview" aria-labelledby="overview-title">
@@ -1153,7 +1166,17 @@ export function Dashboard({
 
           <footer>
             <span>{t('dashboard.footer.phase')}</span>
-            <span>{t('dashboard.footer.localFirst')}</span>
+            <span>
+              {t('dashboard.footer.localFirst')} ·{' '}
+              <a
+                class="source-link"
+                href={PROJECT_SOURCE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {t('common.sourceAndLicense')}
+              </a>
+            </span>
           </footer>
         </div>
       </div>

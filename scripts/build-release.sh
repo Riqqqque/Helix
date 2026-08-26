@@ -119,6 +119,7 @@ install -m 0644 "$repo_root/scripts/package-common.sh" "$bundle_dir/package-comm
 install -m 0755 "$repo_root/scripts/install-local.sh" "$bundle_dir/install-local.sh"
 install -m 0755 "$repo_root/scripts/rollback-local.sh" "$bundle_dir/rollback-local.sh"
 install -m 0755 "$repo_root/scripts/uninstall-local.sh" "$bundle_dir/uninstall-local.sh"
+install -m 0644 "$repo_root/LICENSE" "$bundle_dir/LICENSE"
 
 unsafe_bundle_entry="$(find "$bundle_dir" -xdev ! -type d ! -type f -print -quit)"
 [[ -z "$unsafe_bundle_entry" ]] ||

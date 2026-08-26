@@ -12,7 +12,7 @@
   <a href="https://github.com/Riqqqque/Helix/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/Riqqqque/Helix/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-f0c76a">
   <img alt="Rust MSRV: 1.88" src="https://img.shields.io/badge/rust-1.88%2B-71e6a3">
-  <img alt="License: not selected" src="https://img.shields.io/badge/license-not%20selected-8d99aa">
+  <a href="LICENSE"><img alt="License: AGPL-3.0-or-later" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-71e6a3"></a>
 </p>
 
 > [!CAUTION]
@@ -62,14 +62,28 @@ flowchart LR
 systemd units, so restarting the dashboard must not stop a game. Future privileged
 operations belong behind a narrow typed broker—not a general root shell.
 
+## What controls player capacity
+
+Helix will manage game servers, but it will not execute game ticks or sit in the
+player network path. Real player capacity depends on the exact game, server
+build, plugins or mods, world, hardware, and configuration. Helix's job is to
+keep its own overhead bounded, apply operator-approved systemd/cgroup resource
+envelopes, schedule expensive work fairly, and avoid loading every player or log
+line at once.
+
+Game hosting is not implemented yet, so there is no honest player-count claim
+today. The required one-player-to-high-cardinality design and the load evidence
+needed before making one are documented in
+[Game hosting capacity](docs/GAME-HOSTING-CAPACITY.md).
+
 ## Try the development preview
 
 There is no supported installer or binary release yet. The only current trial
 path is a source build with disposable data on a machine you control.
 
 The commands below are maintainer/developer notes for evaluating the current
-source. They do not grant a license or create a supported distribution path; see
-[Project and legal status](#project-and-legal-status).
+source. The project license does not make this an endorsed distribution or a
+supported production path; see [Project and legal status](#project-and-legal-status).
 
 Prerequisites:
 
@@ -165,8 +179,9 @@ Start here depending on what you need:
 - **What is genuinely finished?** [Progress](PROGRESS.md)
 - **What should be built next?** [Next work](NEXT.md) and [Roadmap](ROADMAP.md)
 - **How can I help?** [Contribution policy](CONTRIBUTING.md) and
-  [Development](docs/DEVELOPMENT.md). Code contributions are paused until a
-  license is selected; reports, design discussion, and review remain welcome.
+  [Development](docs/DEVELOPMENT.md)
+- **What can Helix do for player capacity?**
+  [Game hosting capacity](docs/GAME-HOSTING-CAPACITY.md)
 - **How are releases gated?** [Release process](docs/RELEASING.md)
 - **How is data protected?** [Security model](docs/SECURITY.md),
   [Storage](docs/STORAGE.md), and [Recovery](docs/RECOVERY.md)
@@ -179,6 +194,7 @@ The current source is versioned as `0.1.0-alpha.1`. Public source availability
 does not mean production support, stable compatibility, or a completed security
 review.
 
-No license has been selected. Until the owner makes that legal choice, the
-absence of a license means no permission to copy, modify, or redistribute the
-source is granted by default.
+Copyright © 2026 Rique. Helix is free software licensed under the
+[GNU Affero General Public License v3.0 or later](LICENSE). If you modify Helix
+and let users interact with that modified version over a network, the license
+requires offering those users the corresponding source under the same terms.

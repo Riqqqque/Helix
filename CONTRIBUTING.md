@@ -2,9 +2,10 @@
 
 Helix is early-stage systems software. Small, well-tested changes are more useful than broad feature scaffolding, and a green build does not by itself make a runtime, game, backup, or security claim true.
 
-External code contributions are paused until the repository owner selects and
-documents project and contribution licensing terms. Bug reports, design
-discussion, and review feedback remain welcome.
+Code, documentation, tests, design discussion, and review feedback are welcome.
+By submitting a contribution, you agree to license it under
+`AGPL-3.0-or-later`, the same terms as the project. You must have the right to
+submit it and must identify copied or adapted work and its license.
 
 ## Before starting
 

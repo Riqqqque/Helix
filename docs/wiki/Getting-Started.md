@@ -9,7 +9,7 @@ binary release yet; this page builds a development preview from source.
 You need Rust 1.88 or newer, Node.js 22.12 or newer, npm, and a current browser.
 
 These commands are maintainer/developer notes for evaluating the current source.
-They do not grant a license or create a supported distribution path.
+The AGPL license does not make this a supported distribution or production path.
 
 ## Build
 

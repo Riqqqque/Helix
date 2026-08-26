@@ -99,8 +99,6 @@ Phase 0 remains **BLOCKED**, not complete, until that matrix passes.
 
 ## Pending owner decisions
 
-- Select a repository license before granting redistribution rights or
-  publishing a packaged release.
 - Choose initial supported Ubuntu releases and architectures only after
   clean-host testing.
 - Choose release-signing identities and the key-compromise recovery procedure.
