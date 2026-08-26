@@ -19,7 +19,7 @@ Shell changes also run Bash syntax checks and ShellCheck. The checked-in CI
 workflow is configured to build with the declared Rust 1.88 minimum and stable
 Rust, scan dependencies and secrets, and exercise the package lifecycle on
 Ubuntu 24.04 with systemd. For commit
-[`6868b36`](https://github.com/Riqqqque/Helix/commit/6868b36abbd1a16665565753953abbdf1dfda148),
+[`fdbbc0a`](https://github.com/Riqqqque/Helix/commit/fdbbc0aeb7b353069c74fe5186d1d48fd65b66ca),
 the hosted run passed 158 target-conditioned Rust tests, the frontend and
 supply-chain gates, CodeQL, and one scoped install/authentication/restart/backup/
 modified-bundle-rejection/reinstall/rollback/uninstall lifecycle.

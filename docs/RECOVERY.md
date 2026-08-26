@@ -10,7 +10,7 @@ system. They have portable unit/integration coverage plus one Windows
 release-binary forced-stop recovery and clean Ctrl+C run. One scoped Ubuntu 24.04
 package lifecycle also passed forced-crash systemd restart, clean stop/start,
 full doctor, verified database-only backup, explicit package-file rollback, and
-data-preserving uninstall for commit `6868b36`. Complete Linux fault, database
+data-preserving uninstall for commit `fdbbc0a`. Complete Linux fault, database
 restore, disk-full, power-loss, and fresh-machine recovery evidence is still
 absent.
 
