@@ -111,6 +111,12 @@ helix_cleanup_transients
 recovery_armed=0
 trap - EXIT HUP INT TERM
 
+# Remove the package parent only when it became empty. A pre-existing directory
+# with administrator-managed content is deliberately preserved.
+if [[ -d /usr/share/helix && ! -L /usr/share/helix ]]; then
+  rmdir -- /usr/share/helix 2>/dev/null || true
+fi
+
 printf 'Removed Helix package files.\n'
 printf 'Preserved configuration, service account, state, cache, instances, backups, and rollback material.\n'
 printf 'Recovery snapshot: %s\n' "$uninstall_snapshot_id"
