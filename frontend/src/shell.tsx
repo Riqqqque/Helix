@@ -18,6 +18,7 @@ import {
 import { Dashboard } from './app';
 import { focusOnMount } from './focus';
 import { t } from './i18n';
+import { PROJECT_SOURCE_URL } from './project';
 import {
   applyThemePreference,
   readThemePreference,
@@ -78,23 +79,33 @@ function AuthFrame({ children }: { children: ComponentChildren }) {
       <a class="skip-link" href="#main-content">{t('auth.skipToForm')}</a>
       <header class="auth-page__header">
         <AuthBrand />
-        <label class="theme-selector">
-          <span class="sr-only">{t('common.colorTheme')}</span>
-          <span class="theme-selector__swatch" aria-hidden="true" />
-          <select
-            value={theme}
-            onChange={(event) =>
-              setTheme(event.currentTarget.value as ThemePreference)
-            }
-            aria-label={t('common.colorTheme')}
+        <div class="auth-page__actions">
+          <a
+            class="source-link"
+            href={PROJECT_SOURCE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
           >
-            {themeOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {t(option.labelId)}
-              </option>
-            ))}
-          </select>
-        </label>
+            {t('common.source')}
+          </a>
+          <label class="theme-selector">
+            <span class="sr-only">{t('common.colorTheme')}</span>
+            <span class="theme-selector__swatch" aria-hidden="true" />
+            <select
+              value={theme}
+              onChange={(event) =>
+                setTheme(event.currentTarget.value as ThemePreference)
+              }
+              aria-label={t('common.colorTheme')}
+            >
+              {themeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {t(option.labelId)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </header>
       <div class="auth-page__glow" aria-hidden="true" />
       {children}
@@ -294,6 +305,7 @@ function SetupView({
           <button
             class="primary-button"
             type="submit"
+            disabled={submitting}
             aria-busy={submitting}
             aria-disabled={submitting}
           >
@@ -378,6 +390,7 @@ function LoginView({
           <button
             class="primary-button"
             type="submit"
+            disabled={submitting}
             aria-busy={submitting}
             aria-disabled={submitting}
           >

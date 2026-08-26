@@ -57,6 +57,21 @@ Use loopback and a release build. Report response-size and p50/p95/p99 for minim
 
 Record raw, gzip, and Brotli sizes by artifact and route. Measure first content, usable interaction, route changes, long-task count, and memory on desktop and a representative mobile viewport. A fast synthetic build does not replace live keyboard, responsive, reduced-motion, and error-state checks.
 
+The production frontend build enforces the 75 KiB initial gzip and 40 KiB
+initial JavaScript gzip budgets. It counts the HTML plus same-origin scripts,
+stylesheets, and preload assets required by the first route. Optional lazy
+routes remain outside the initial JavaScript total and need their own recorded
+route sizes.
+
+### Game hosting
+
+Player capacity is measured by each exact game integration; Helix is not the
+simulation or packet-processing runtime. Helix performance evidence must instead
+show no disabled idle cost, bounded/paginated high-cardinality interfaces,
+backpressure under slow consumers, fair job scheduling, independent workload
+lifetime, and incremental control-plane CPU/RSS/latency under real game load.
+See [Game Hosting Capacity](GAME-HOSTING-CAPACITY.md).
+
 ### SQLite
 
 Measure ordinary reads, durable critical writes, metrics batches, checkpoints, online snapshots, and migrations against realistic database sizes. Keep critical `synchronous=FULL`; metrics and critical state remain separate result sets.
@@ -84,7 +99,11 @@ comparison.
 | `helixd.exe` | 7,579,648 bytes (7.23 MiB) | Current release build, all workspace features |
 | `helixctl.exe` | 2,853,376 bytes (2.72 MiB) | Current release build, all workspace features |
 | Combined release binaries | 10,433,024 bytes (9.95 MiB) | Current Windows PE files; not Linux installed size |
-| Compiled frontend | 91,782 bytes raw; 24,796 gzip; 21,872 Brotli | Current source-alpha HTML, CSS, and JavaScript for the authenticated base route |
+| Compiled frontend | 92,350 bytes raw; 24,951 gzip; 22,056 Brotli | Current source-alpha HTML, CSS, and JavaScript for the first route; the build-enforced limits are 76,800 gzip bytes total and 40,960 gzip bytes of JavaScript |
+| Setup-status API | p50 0.21 ms; p95 0.30 ms; p99 0.34 ms | 500 sequential requests through one persistent .NET `HttpClient`; current release daemon, disposable unclaimed state |
+| Brotli first-route delivery | HTML 257 bytes at p95 0.29 ms; JavaScript 16,656 bytes at p95 0.31 ms; CSS 5,143 bytes at p95 0.31 ms | 250 sequential requests per asset through the same client; network timing includes reading the complete compressed body |
+| Theme interaction | p50 7 ms; p95 9 ms; p99 9 ms; maximum 10 ms | 100 real select actions in the in-app Chromium browser on the compiled unclaimed route; browser-control round-trip is included |
+| Bounded discovery render | 2 ms reported by Vitest | One server-side render containing 64 storage mounts, 64 interfaces, and 256 addresses; this is a regression fixture, not browser paint evidence |
 | First daemon readiness | 563.4 ms | One sample on a new data root after `helixctl setup-token` initialized state; includes `Start-Process` and a 25 ms polling interval, so it is neither the 30-run warm p95 nor a pure cold-schema result |
 | `/healthz` | p50 0.202 ms; p95 0.283 ms; p99 0.322 ms | 1,000 sequential requests through one .NET `HttpClient`, release daemon, loopback |
 | Authenticated `/api/v1/health` | p50 0.280 ms; p95 0.374 ms; p99 0.405 ms | 500 sequential requests with a valid cookie and CSRF proof through the same client |
@@ -130,7 +149,9 @@ failure mode without removing the connection cap.
 
 ## Regression policy
 
-- Release validation records binary and frontend sizes; CI artifact/size reporting remains to be implemented before it can act as a regression gate.
+- Release validation records binary and frontend sizes. The frontend production
+  build is a hard initial-transfer/JavaScript size gate; binary size remains a
+  recorded review gate rather than a build failure.
 - A change that adds a background task must include its disabled and enabled cost.
 - A dependency that materially changes startup, RSS, binary size, or initial bundle size needs justification.
 - A result outside a budget blocks the relevant milestone until fixed or documented as a deliberate exception.

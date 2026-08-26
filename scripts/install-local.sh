@@ -65,6 +65,7 @@ fi
 bundle_dir="$(realpath -e -- "$bundle_dir")"
 
 required_files=(
+  LICENSE
   bin/helixd
   bin/helixctl
   web/index.html

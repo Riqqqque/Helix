@@ -10,5 +10,8 @@ describe('authentication shell accessibility', () => {
     expect(markup).toMatch(
       /<main(?=[^>]*\bid="main-content")(?=[^>]*\btabindex="-1")[^>]*>/u,
     );
+    expect(markup).toContain(
+      'href="https://github.com/Riqqqque/Helix" target="_blank" rel="noopener noreferrer"',
+    );
   });
 });

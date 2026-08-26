@@ -2,6 +2,8 @@ type Message = string | ((...args: never[]) => string);
 
 const englishMessages = {
   'common.colorTheme': 'Color theme',
+  'common.source': 'Source',
+  'common.sourceAndLicense': 'Source & license',
   'common.tryAgain': 'Try again',
   'theme.system': 'System',
   'theme.midnight': 'Midnight',

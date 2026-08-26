@@ -25,6 +25,10 @@ binary or package release yet.
 - Hardened systemd, local bundle, checksum-verifying installer, rollback
   scaffolding, and pinned CI/security tooling. One scoped Ubuntu 24.04 systemd
   package lifecycle passed for commit `fdbbc0a`.
+- GNU AGPL v3-or-later project licensing, matching Rust/npm metadata, a visible
+  source link, and a checksummed license in release bundles.
+- A game-hosting capacity contract separating game/player performance from
+  Helix control-plane bounds, resource admission, and required load evidence.
 
 ### Changed
 
@@ -46,6 +50,10 @@ binary or package release yet.
   follows the active section.
 - Updated `toml` to 1.1.4 while retaining Rust 1.88 compatibility and removing
   the duplicate `winnow` 0.7 dependency.
+- Theme and section-navigation state now rerender only their small controls;
+  setup, login, refresh, and logout use native non-repeat disabled states.
+- Frontend production builds now fail above 75 KiB initial gzip or 40 KiB
+  initial JavaScript gzip, with focused parser and boundary tests.
 
 ### Security
 

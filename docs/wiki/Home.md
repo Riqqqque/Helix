@@ -12,6 +12,7 @@ daemon, recoverable local state, and independently managed workloads.
 - [Architecture](https://github.com/Riqqqque/Helix/wiki/Architecture)
 - [Security and Recovery](https://github.com/Riqqqque/Helix/wiki/Security-and-Recovery)
 - [Development and Testing](https://github.com/Riqqqque/Helix/wiki/Development-and-Testing)
+- [Game Hosting and Capacity](https://github.com/Riqqqque/Helix/wiki/Game-Hosting-and-Capacity)
 - [Roadmap and Status](https://github.com/Riqqqque/Helix/wiki/Roadmap-and-Status)
 
 ## Current working surface
@@ -30,6 +31,11 @@ daemon, recoverable local state, and independently managed workloads.
 Host mutation, remote access, games, services, files, restore, Vault, Genome,
 Strands, and automation remain future work. The dashboard does not show fake
 successful controls for those unfinished capabilities.
+
+Helix will manage game processes but will not run their simulation ticks or
+player traffic. Each game and host determines real player capacity; Helix's
+responsibility is bounded control-plane overhead, resource admission, and
+responsive paginated views.
 
 The authoritative evidence is always
 [`PROGRESS.md`](https://github.com/Riqqqque/Helix/blob/main/PROGRESS.md).

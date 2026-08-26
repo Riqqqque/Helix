@@ -30,6 +30,7 @@ bundle_dir="$(readlink -e -- "$bundle_input")"
   fail "bundle path must already be canonical"
 
 for required in \
+  LICENSE \
   SHA256SUMS \
   bin/helixd \
   bin/helixctl \

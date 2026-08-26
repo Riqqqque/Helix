@@ -26,7 +26,7 @@ independent recovery do not.
 
 | Area | Status | Current evidence and limits |
 | --- | --- | --- |
-| Repository and architecture | TESTED | Architecture, storage, security, recovery, Genome, Sequence, Strand, backup, API, installation, development, roadmap, ADR, and public-repository documents exist and were reviewed against the founding directive. Legal license selection remains open. |
+| Repository and architecture | TESTED | Architecture, storage, security, recovery, Genome, Sequence, Strand, backup, API, installation, development, roadmap, game-host capacity, ADR, and public-repository documents exist and were reviewed against the founding directive. The repository and package manifests record `AGPL-3.0-or-later`. |
 | Rust workspace | TESTED | Nine founding crates compile on Windows and hosted Ubuntu with locked dependencies. Formatting, Clippy warnings-as-errors, tests, release builds, Rust stable, and the declared Rust 1.88 MSRV pass. Clean supported-host and additional architecture validation remain open. |
 | Configuration | TESTED | Strict typed TOML, explicit overrides, loopback-only policy, absolute roots, and canonical disjoint state/static roots have adversarial coverage. One packaged Ubuntu run exercised the installed configuration path; broader ownership and replacement-race matrices remain target-host gates. |
 | Critical state | TESTED | SQLite WAL/FULL policy, schema versions 1–4, stable installation/node identity, integrity and semantic checks, unclean marker, online snapshots, process lease, private-file checks, and read-only CLI paths have portable tests. Migration retries reuse only a fully verified source/version/target/SHA-bound rollback snapshot; changed sources get a new snapshot, altered aliases fail closed, and at most 16 legacy partials are reconciled per open. One scoped Ubuntu package run passed full doctor, verified database-only backup, and selected ownership/mode checks; complete Unix race and fault matrices remain open. |
@@ -35,7 +35,7 @@ independent recovery do not.
 | CLI | TESTED | Read-only status/doctor, verified state-only online backup, absolute-deadline readiness, and lease-protected one-time setup-token creation are implemented and passed a release-binary flow. Repair and restore commands do not exist yet. |
 | HTTP foundation | TESTED | Versioned API, JSON API fallback, SPA fallback, restrictive headers, request IDs, compression, typed body-limit errors, request timeouts, strict loopback Host validation, global concurrency bounds, a 10-second HTTP/1 header deadline, fail-fast transport overload, and single-flight host sampling have service tests on Windows and hosted Ubuntu. A live Windows run covered 10,000 authenticated requests, a 512-request burst, and 128 silent sockets; broader supported-host matrices remain. |
 | Host overview | TESTED | Real hostname, OS, architecture, kernel, uptime, CPU, memory, swap, storage, and cumulative network counters are collected on demand. Windows live data rendered two mounts and two interfaces; a scoped Ubuntu package run returned an authenticated overview with a logical CPU count and explicit storage/network availability states. An unlabeled volume is represented as an explicit text omission rather than invalid empty text. Supported-host correctness and reference-performance matrices remain. |
-| Frontend | TESTED | The compiled Preact/Vite UI uses real protected APIs, honest degraded states, visibility-aware polling, semantic native meters, explicit transition focus, visible forced-colors focus, reduced-motion support, responsive layouts, and System/Midnight/OLED/Light themes. Live Windows browser checks passed login, reload-to-login CSRF behavior, sign-out, desktop OLED, and a 320-pixel layout with no horizontal overflow or console errors. Formal screen-reader and representative-device review remain. |
+| Frontend | TESTED | The compiled Preact/Vite UI uses real protected APIs, honest degraded states, visibility-aware polling, native non-repeat submission controls, semantic native meters, explicit transition focus, visible forced-colors focus, reduced-motion support, responsive layouts, and System/Midnight/OLED/Light themes. The build now fails above the 75 KiB initial gzip or 40 KiB initial JavaScript gzip budgets. Live Windows browser checks passed login, reload-to-login CSRF behavior, sign-out, desktop OLED, and a 320-pixel layout with no horizontal overflow or console errors. Formal screen-reader and representative-device review remain. |
 | CI and dependency policy | TESTED | Actions and tool versions are pinned. Ubuntu 24.04 GitHub Actions passed Rust stable, the declared Rust 1.88 MSRV, frontend checks, pinned Rust advisory/license/source policy, current/full-history secret scans, CodeQL, and the scoped package lifecycle for commit `fdbbc0a`. This does not establish clean-host or platform support. |
 | Packaging and installer | TESTED | Hardened systemd/sysusers/tmpfiles fixtures, checksum-producing Linux bundles, transactional package-file install/rollback, and conservative data-preserving uninstall exist. One scoped Ubuntu 24.04 lifecycle passed archive verification, fresh install, owner claim, protected API/authentication flows, selected file modes and unit hardening, forced-crash restart, clean stop/start, full doctor, verified backup, modified-bundle manifest rejection, repeat install, explicit rollback, and data-preserving uninstall. Public package support remains blocked; artifacts are unsigned and must not be attached to a release. |
 | Performance baseline | BLOCKED | A non-reference Windows development snapshot is recorded in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Required Ubuntu RSS, ten-minute idle CPU, repeated startup, API/SQLite latency, and installed-size measurements remain unavailable. |
@@ -68,8 +68,8 @@ used Rust 1.88.0 on the same target.
 - `npm run check` and `npm audit --audit-level=moderate` in `frontend`
 
 The settled suite contains 154 target-conditioned Rust tests on Windows, 160 on
-hosted Ubuntu, and 48 frontend tests. The final fresh Windows release-binary flow
-passed setup, owner claim, login, protected reads, CSRF
+hosted Ubuntu, 50 Vitest tests, and 3 Node asset-budget tests. The final fresh
+Windows release-binary flow passed setup, owner claim, login, protected reads, CSRF
 rotation, cookie-only rejection, logout/revocation, generic login failure,
 progressive delay, CLI ready/status/full-doctor/backup, 1,500 latency requests,
 real storage/network collection, and a ten-file canary scan with zero secret
@@ -86,8 +86,9 @@ the same scheduler turn as its shutdown announcement.
 
 Current release artifacts measured 7,579,648 bytes for `helixd.exe`, 2,853,376
 bytes for `helixctl.exe`, and 10,433,024 bytes combined. The compiled frontend
-measured 91,782 bytes raw, 24,796 bytes gzip, and 21,872 bytes Brotli. These
-Windows values are non-reference.
+measured 92,350 bytes raw, 24,951 bytes gzip, and 22,056 bytes Brotli. The
+production build now rejects more than 76,800 initial gzip bytes or 40,960
+initial JavaScript gzip bytes. These Windows values are non-reference.
 
 For commit [`fdbbc0a`](https://github.com/Riqqqque/Helix/commit/fdbbc0aeb7b353069c74fe5186d1d48fd65b66ca),
 Ubuntu 24.04 GitHub Actions passed Rust 1.88/stable, the 158-test

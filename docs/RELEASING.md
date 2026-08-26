@@ -7,7 +7,8 @@ green build, or public repository is not by itself a supported release.
 
 Before creating a tag or GitHub release:
 
-1. select and record a project license;
+1. verify the `AGPL-3.0-or-later` license text and manifest metadata are present
+   in the exact release tree;
 2. start from a clean, reviewed commit with a green protected CI run;
 3. pass the full Rust and frontend suites using locked dependencies;
 4. pass RustSec, dependency-policy, npm, secret, and shell analysis;
