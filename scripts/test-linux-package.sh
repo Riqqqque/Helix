@@ -92,8 +92,11 @@ csrf_response="$test_root/csrf.json"
 login_payload="$test_root/login-request.json"
 login_response="$test_root/login.json"
 
-"$bundle_dir/install-local.sh" --bundle "$bundle_dir" >"$install_log" 2>&1 ||
-  fail "fresh installation failed; the restricted installer log was not printed because it contains a setup token"
+if ! "$bundle_dir/install-local.sh" --bundle "$bundle_dir" >"$install_log" 2>&1; then
+  printf 'Redacted installer log follows:\n' >&2
+  sed -E '/^[A-Za-z0-9_-]{43}$/c\[REDACTED SETUP TOKEN]' "$install_log" >&2
+  fail "fresh installation failed"
+fi
 
 mapfile -t setup_tokens < <(grep -E '^[A-Za-z0-9_-]{43}$' "$install_log")
 [[ "${#setup_tokens[@]}" -eq 1 ]] ||
