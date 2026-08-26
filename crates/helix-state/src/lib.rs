@@ -3,6 +3,19 @@
 mod secrets;
 mod security;
 
+#[cfg(test)]
+pub(crate) fn private_test_directory(description: &str) -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap_or_else(|error| panic!("{description}: {error}"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .unwrap_or_else(|error| panic!("secure {description}: {error}"));
+    }
+    directory
+}
+
 use fs2::FileExt;
 use helix_core::unix_timestamp_ms;
 use rusqlite::{Connection, ErrorCode, MAIN_DB, OpenFlags, OptionalExtension, params};
@@ -2383,7 +2396,7 @@ mod tests {
 
     #[test]
     fn state_and_metrics_use_distinct_verified_durability() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("open databases");
         let state = databases.state().pragma_report().expect("state pragmas");
         let metrics = databases
@@ -2404,7 +2417,7 @@ mod tests {
 
     #[test]
     fn installation_identity_survives_reopen() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let first_id = {
             let databases = DatabaseSet::open_for_daemon(temp.path()).expect("first open");
             databases.state().installation_id().to_owned()
@@ -2416,7 +2429,7 @@ mod tests {
 
     #[test]
     fn unclean_shutdown_is_detected_on_next_runtime_start() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         {
             let databases = DatabaseSet::open_for_daemon(temp.path()).expect("first open");
             assert!(!databases.state().begin_runtime().expect("first start"));
@@ -2428,7 +2441,7 @@ mod tests {
 
     #[test]
     fn online_backup_is_verified_and_never_overwritten() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("open databases");
         let destination = temp.path().join("backups").join("state.db");
 
@@ -2448,7 +2461,7 @@ mod tests {
 
     #[test]
     fn published_backup_cleanup_is_retried_and_residue_is_a_success_outcome() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("open databases");
         let transient_destination = temp.path().join("transient-cleanup.db");
         fail_published_backup_cleanup_for_test(1);
@@ -2486,7 +2499,7 @@ mod tests {
 
     #[test]
     fn failed_migration_reuses_verified_identical_source_snapshot() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         create_state_at_version_two(temp.path());
         reset_online_backup_invocations_for_test();
 
@@ -2554,7 +2567,7 @@ mod tests {
 
     #[test]
     fn altered_aliased_snapshot_is_rejected_without_recopying_or_deletion() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         create_state_at_version_two(temp.path());
         reset_online_backup_invocations_for_test();
 
@@ -2590,7 +2603,7 @@ mod tests {
 
     #[test]
     fn stranded_legacy_backup_partial_is_published_and_bounded() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         create_state_at_version_two(temp.path());
         let backup_dir = temp.path().join("state").join("migration-backups");
         ensure_data_directory(&backup_dir).expect("migration backup directory");
@@ -2641,7 +2654,7 @@ mod tests {
 
     #[test]
     fn corrupt_metrics_are_preserved_and_recreated() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         {
             let databases = DatabaseSet::open_for_daemon(temp.path()).expect("open databases");
             assert!(matches!(
@@ -2675,7 +2688,7 @@ mod tests {
 
     #[test]
     fn interrupted_metrics_forensic_move_reconciles_the_complete_component_set() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         ensure_data_directory(temp.path()).expect("metrics directory");
         let metrics_path = temp.path().join("helix-metrics.db");
         let wal_path = with_suffix(&metrics_path, "-wal");
@@ -2733,7 +2746,7 @@ mod tests {
 
     #[test]
     fn unstarted_metrics_forensic_manifest_write_is_safely_retried() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         ensure_data_directory(temp.path()).expect("metrics directory");
         let metrics_path = temp.path().join("helix-metrics.db");
         write_private_test_file(&metrics_path, b"corrupt-main");
@@ -2760,7 +2773,7 @@ mod tests {
     #[test]
     fn metrics_forensic_manifest_preserves_partial_sidecar_sets_exactly() {
         for (wal_present, shm_present) in [(true, false), (false, true), (false, false)] {
-            let temp = tempfile::tempdir().expect("temporary directory");
+            let temp = crate::private_test_directory("temporary directory");
             ensure_data_directory(temp.path()).expect("metrics directory");
             let metrics_path = temp.path().join("helix-metrics.db");
             write_private_test_file(&metrics_path, b"corrupt-main");
@@ -2794,7 +2807,7 @@ mod tests {
 
     #[test]
     fn interrupted_metrics_preservation_degrades_only_metrics_then_recovers() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         drop(DatabaseSet::open_for_daemon(temp.path()).expect("initialize databases"));
         let metrics_path = temp.path().join("metrics").join("helix-metrics.db");
         fs::write(&metrics_path, b"interrupted corrupt metrics").expect("corrupt metrics file");
@@ -2833,7 +2846,7 @@ mod tests {
 
     #[test]
     fn daemon_lease_rejects_a_second_writer_until_release() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let first = DatabaseSet::open_for_daemon(temp.path()).expect("first daemon");
 
         assert!(matches!(
@@ -2847,7 +2860,7 @@ mod tests {
 
     #[test]
     fn unsupported_metrics_schema_does_not_block_critical_state() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let metrics_path = {
             let databases =
                 DatabaseSet::open_for_daemon(temp.path()).expect("initialize databases");
@@ -2877,7 +2890,7 @@ mod tests {
 
     #[test]
     fn invalid_metrics_directory_does_not_block_critical_state() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         fs::write(temp.path().join("metrics"), b"not a directory")
             .expect("create invalid metrics path");
 
@@ -2898,7 +2911,7 @@ mod tests {
 
     #[test]
     fn read_only_state_access_works_while_daemon_holds_lease() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("daemon databases");
         let expected_id = databases.state().installation_id().to_owned();
         let reader = StateDatabaseReader::open(temp.path()).expect("read-only state");
@@ -2918,7 +2931,7 @@ mod tests {
 
     #[test]
     fn state_reader_backup_does_not_require_metrics() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         drop(DatabaseSet::open_for_daemon(temp.path()).expect("initialize databases"));
         let metrics_path = temp.path().join("metrics").join("helix-metrics.db");
         fs::write(&metrics_path, b"broken metrics").expect("break metrics");
@@ -2977,7 +2990,7 @@ mod tests {
     fn direct_database_symlinks_are_rejected() {
         use std::os::unix::fs::symlink;
 
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         drop(DatabaseSet::open_for_daemon(temp.path()).expect("initialize databases"));
         let database = temp.path().join("state").join("helix-state.db");
         let real_database = temp.path().join("state").join("real-state.db");
@@ -2996,7 +3009,7 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         for suffix in ["-wal", "-shm"] {
-            let temp = tempfile::tempdir().expect("temporary directory");
+            let temp = crate::private_test_directory("temporary directory");
             drop(DatabaseSet::open_for_daemon(temp.path()).expect("initialize databases"));
             let database = temp.path().join("state").join("helix-state.db");
             let sidecar = with_suffix(&database, suffix);
@@ -3016,7 +3029,7 @@ mod tests {
     fn unsafe_existing_private_directory_mode_is_rejected() {
         use std::os::unix::fs::PermissionsExt;
 
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let state_dir = temp.path().join("state");
         fs::create_dir(&state_dir).expect("create state directory");
         fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o755))

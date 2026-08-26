@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn v2_to_current_migration_creates_a_verified_v2_snapshot_and_v3_secret_schema() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let installation_id = create_state_at_version_two(temp.path());
 
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("migrate to current");
@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn invalid_v2_state_is_not_migrated_or_published_as_a_snapshot() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         create_state_at_version_two(temp.path());
         let state_path = temp.path().join("state").join("helix-state.db");
         let connection = Connection::open(&state_path).expect("open v2 state");
@@ -747,7 +747,7 @@ mod tests {
             "DROP TRIGGER master_key_versions_identity_immutable;",
             "DELETE FROM schema_migrations WHERE version = 3;",
         ] {
-            let temp = tempfile::tempdir().expect("temporary directory");
+            let temp = crate::private_test_directory("temporary directory");
             let databases = DatabaseSet::open_for_daemon(temp.path()).expect("initialize state");
             let state_path = databases.state().path().to_path_buf();
             drop(databases);
@@ -769,7 +769,7 @@ mod tests {
 
     #[test]
     fn state_boundary_rejects_unrepresentable_key_versions_and_secret_identity() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = crate::private_test_directory("temporary directory");
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("initialize state");
         let key_id = Uuid::new_v4().hyphenated().to_string();
         assert!(matches!(

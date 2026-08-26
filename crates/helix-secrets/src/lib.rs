@@ -843,8 +843,21 @@ mod tests {
     use rusqlite::{Connection, params};
     use std::{collections::HashSet, fs, path::Path};
 
+    fn private_test_directory(description: &str) -> tempfile::TempDir {
+        let directory =
+            tempfile::tempdir().unwrap_or_else(|error| panic!("{description}: {error}"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                .unwrap_or_else(|error| panic!("secure {description}: {error}"));
+        }
+        directory
+    }
+
     fn setup() -> (tempfile::TempDir, DatabaseSet, MasterKeyCredential) {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_test_directory("temporary directory");
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("open databases");
         let installation_id =
             Uuid::parse_str(databases.state().installation_id()).expect("installation identifier");

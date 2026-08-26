@@ -503,6 +503,19 @@ mod tests {
         },
     };
 
+    fn private_test_directory(description: &str) -> tempfile::TempDir {
+        let directory =
+            tempfile::tempdir().unwrap_or_else(|error| panic!("{description}: {error}"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                .unwrap_or_else(|error| panic!("secure {description}: {error}"));
+        }
+        directory
+    }
+
     #[test]
     fn readiness_response_validation_is_strict_and_bounded() {
         let liveness = READINESS_PROBES[0];
@@ -581,7 +594,7 @@ mod tests {
 
     #[test]
     fn setup_token_initializes_state_and_never_echoes_a_replaced_token() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_test_directory("temporary directory");
         let mut first_output = Vec::new();
         install_setup_token(temp.path(), &mut first_output).expect("first setup token");
         let first_text = String::from_utf8(first_output).expect("UTF-8 output");
@@ -610,7 +623,7 @@ mod tests {
 
     #[test]
     fn state_backup_does_not_open_or_recover_broken_metrics() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_test_directory("temporary directory");
         drop(DatabaseSet::open_for_daemon(temp.path()).expect("initialize databases"));
         let metrics_path = temp.path().join("metrics").join("helix-metrics.db");
         fs::write(&metrics_path, b"not a SQLite database").expect("break metrics database");

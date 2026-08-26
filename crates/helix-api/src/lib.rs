@@ -636,6 +636,19 @@ impl IntoResponse for ApiError {
 }
 
 #[cfg(test)]
+fn private_test_directory(description: &str) -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap_or_else(|error| panic!("{description}: {error}"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .unwrap_or_else(|error| panic!("secure {description}: {error}"));
+    }
+    directory
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use axum::{body::to_bytes, extract::ConnectInfo, http::Request as HttpRequest};
@@ -668,7 +681,7 @@ mod tests {
         metrics: DatabaseStatus,
         modify: impl FnOnce(ApiState) -> ApiState,
     ) -> TestApp {
-        let data = tempfile::tempdir().expect("temporary data directory");
+        let data = private_test_directory("temporary data directory");
         let web = tempfile::tempdir().expect("temporary web directory");
         std::fs::create_dir(web.path().join("assets")).expect("create assets");
         std::fs::write(web.path().join("index.html"), "SPA INDEX").expect("write index");
