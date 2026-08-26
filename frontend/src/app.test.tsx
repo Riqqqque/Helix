@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import render from 'preact-render-to-string';
 import { Dashboard, HostPanel, NetworkPanel, StoragePanel } from './app';
 
@@ -7,6 +7,77 @@ const unavailableOverview = {
   phase: 'error' as const,
   error: 'Review probe failed.',
 };
+
+const readyOverview = {
+  data: {
+    hostname: 'helix-node',
+    operatingSystem: 'Linux',
+    architecture: 'x86_64',
+    kernelVersion: '6.17.0',
+    uptimeSeconds: 90,
+    cpu: { usagePercent: 12.5, logicalCores: 8 },
+    memory: {
+      totalBytes: 8_589_934_592,
+      usedBytes: 2_147_483_648,
+      availableBytes: 6_442_450_944,
+    },
+    swap: { totalBytes: 0, usedBytes: 0 },
+    storage: {
+      availability: 'available' as const,
+      mounts: [
+        {
+          name: 'nvme0n1p2',
+          fileSystem: 'ext4',
+          mountPoint: '/',
+          totalBytes: 1_099_511_627_776n,
+          availableBytes: 824_633_720_832n,
+          usedBytes: 274_877_906_944n,
+          readOnly: false,
+          removable: false,
+        },
+      ],
+      omittedMounts: 0,
+      omittedTextFields: 0,
+    },
+    network: {
+      availability: 'available' as const,
+      interfaces: [
+        {
+          name: 'enp1s0',
+          addresses: [{ address: '192.0.2.10', prefixLength: 24 }],
+          totalReceivedBytes: 8_589_934_592n,
+          totalTransmittedBytes: 2_147_483_648n,
+          mtuBytes: 1_500n,
+        },
+      ],
+      omittedInterfaces: 0,
+      omittedAddresses: 0,
+    },
+    collectedAtUnixMs: 1_788_000_000_000,
+  },
+  phase: 'ready' as const,
+  error: null,
+};
+
+const dashboardProps = {
+  user: {
+    id: '019c7714-3b77-44d1-9866-e1f484aae2ab',
+    loginName: 'rique.owner',
+    displayName: 'Rique',
+    capabilities: ['system.view'],
+  },
+  csrfToken: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+  onSessionExpired: () => undefined,
+  onLogout: () => Promise.resolve(),
+};
+
+function renderDashboard(): string {
+  return render(<Dashboard {...dashboardProps} />);
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('dashboard panel failure states', () => {
   it('keeps host, storage, and network failure copy attached to the right panel', () => {
@@ -24,20 +95,46 @@ describe('dashboard panel failure states', () => {
 
 describe('dashboard navigation accessibility', () => {
   it('marks the current fragment in both responsive navigation surfaces', () => {
-    const markup = render(
-      <Dashboard
-        user={{
-          id: '019c7714-3b77-44d1-9866-e1f484aae2ab',
-          loginName: 'rique.owner',
-          displayName: 'Rique',
-          capabilities: ['system.view'],
-        }}
-        csrfToken="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        onSessionExpired={() => undefined}
-        onLogout={() => Promise.resolve()}
-      />,
-    );
+    const markup = renderDashboard();
 
     expect(markup.match(/aria-current="location"/gu)).toHaveLength(2);
+  });
+
+  it('keeps the topbar context synchronized with the URL fragment', () => {
+    vi.stubGlobal('window', { location: { hash: '#network' } });
+
+    const markup = renderDashboard();
+    const context = markup.match(/<div class="topbar__context">.*?<\/div>/u)?.[0];
+
+    expect(context).toContain('<span>Network</span>');
+    expect(context).not.toContain('<span>Overview</span>');
+  });
+});
+
+describe('dashboard accessibility semantics', () => {
+  it('exposes one atomic live status and a focusable entry heading', () => {
+    const markup = renderDashboard();
+
+    expect(markup).toMatch(
+      /<div(?=[^>]*\bclass="hero__status-card")(?=[^>]*\brole="status")(?=[^>]*\baria-live="polite")(?=[^>]*\baria-atomic="true")[^>]*>/u,
+    );
+    expect(markup).toMatch(
+      /<h1(?=[^>]*\bid="overview-title")(?=[^>]*\btabindex="-1")[^>]*>/u,
+    );
+  });
+
+  it('does not turn metric and discovery cards into repeated landmarks', () => {
+    const dashboardMarkup = renderDashboard();
+    const discoveryMarkup = render(
+      <>
+        <StoragePanel overview={readyOverview} />
+        <NetworkPanel overview={readyOverview} />
+      </>,
+    );
+
+    expect(dashboardMarkup.match(/class="metric-card(?: |")/gu)).toHaveLength(4);
+    expect(dashboardMarkup).not.toContain('<article');
+    expect(discoveryMarkup.match(/class="discovery-card"/gu)).toHaveLength(2);
+    expect(discoveryMarkup).not.toContain('<article');
   });
 });

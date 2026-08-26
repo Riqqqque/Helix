@@ -16,6 +16,7 @@ import {
   setupOwner,
 } from './api';
 import { Dashboard } from './app';
+import { focusOnMount } from './focus';
 import { t } from './i18n';
 import {
   applyThemePreference,
@@ -119,7 +120,7 @@ function ErrorView({ message, onRetry }: { message: string; onRetry: () => void 
     <AuthFrame>
       <section class="auth-card auth-card--status" id="auth-card">
         <span class="eyebrow">{t('auth.unavailable.eyebrow')}</span>
-        <h1>{t('auth.unavailable.title')}</h1>
+        <h1 ref={focusOnMount} tabIndex={-1}>{t('auth.unavailable.title')}</h1>
         <p role="alert">{message}</p>
         <button class="primary-button" type="button" onClick={onRetry}>
           {t('common.tryAgain')}
@@ -166,7 +167,6 @@ function SetupView({
     });
     if (validationError !== null) {
       setError(t(validationError));
-      clearSecrets();
       return;
     }
 
@@ -182,6 +182,7 @@ function SetupView({
       onAuthenticated(session);
     } catch (requestError) {
       if (requestError instanceof ApiError && requestError.status === 409) {
+        clearSecrets();
         try {
           await onSetupConflict();
         } catch (recoveryError) {
@@ -191,7 +192,6 @@ function SetupView({
         setError(errorMessage(requestError));
       }
     } finally {
-      clearSecrets();
       setSubmitting(false);
     }
   };
@@ -201,7 +201,9 @@ function SetupView({
       <section class="auth-card" id="auth-card" aria-labelledby="setup-title">
         <div class="auth-card__heading">
           <span class="eyebrow">{t('auth.setup.eyebrow')}</span>
-          <h1 id="setup-title">{t('auth.setup.title')}</h1>
+          <h1 id="setup-title" ref={focusOnMount} tabIndex={-1}>
+            {t('auth.setup.title')}
+          </h1>
           <p>
             {t('auth.setup.instructionsBeforeCommand')}{' '}
             <code>helixctl setup-token</code>{' '}

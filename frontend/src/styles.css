@@ -644,7 +644,6 @@ a {
   border-radius: 0.62rem;
   background: var(--surface-solid);
   color: var(--text);
-  outline: none;
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
@@ -1071,7 +1070,7 @@ main {
   background: var(--surface-soft);
 }
 
-.discovery-card article {
+.discovery-card__content {
   min-width: 0;
   padding: 0.9rem;
 }
