@@ -2625,8 +2625,7 @@ mod tests {
             .backup(MAIN_DB, &partial, None)
             .expect("create stranded backup partial");
         drop(source);
-        fs::write(&invalid_partial, b"incomplete SQLite backup")
-            .expect("invalid legacy partial file");
+        write_private_test_file(&invalid_partial, b"incomplete SQLite backup");
         assert!(partial.is_file());
         assert!(invalid_partial.is_file());
         reset_online_backup_invocations_for_test();
