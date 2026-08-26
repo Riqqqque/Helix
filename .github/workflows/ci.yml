@@ -155,7 +155,7 @@ jobs:
       - name: Scan current checkout for secrets
         shell: bash
         run: >-
-          target/tools/gitleaks-${GITLEAKS_VERSION}/gitleaks dir .
+          "target/tools/gitleaks-${GITLEAKS_VERSION}/gitleaks" dir .
           --config .gitleaks.toml
           --redact=100
           --no-banner
@@ -164,7 +164,7 @@ jobs:
       - name: Scan full Git history for secrets
         shell: bash
         run: >-
-          target/tools/gitleaks-${GITLEAKS_VERSION}/gitleaks git .
+          "target/tools/gitleaks-${GITLEAKS_VERSION}/gitleaks" git .
           --config .gitleaks.toml
           --log-opts="--all"
           --redact=100

@@ -23,7 +23,8 @@ binary or package release yet.
 - Recovery, storage, security, architecture, API, packaging, and extension
   contracts.
 - Hardened systemd, local bundle, checksum-verifying installer, rollback
-  scaffolding, and pinned CI/security tooling for later Ubuntu validation.
+  scaffolding, and pinned CI/security tooling. One scoped Ubuntu 24.04 systemd
+  package lifecycle passed for commit `6868b36`.
 
 ### Changed
 
@@ -38,6 +39,13 @@ binary or package release yet.
   of breaking the host overview.
 - The 320-pixel dashboard now wraps long interface names and avoids document
   overflow on browsers with non-overlay scrollbars.
+- Setup values now survive validation and recoverable request failures; a real
+  already-claimed conflict still clears the one-time credentials.
+- Dashboard transitions move keyboard focus deliberately, health changes use a
+  polite live region, forced-colors focus remains visible, and route context
+  follows the active section.
+- Updated `toml` to 1.1.4 while retaining Rust 1.88 compatibility and removing
+  the duplicate `winnow` 0.7 dependency.
 
 ### Security
 
@@ -49,6 +57,9 @@ binary or package release yet.
 - Login cleanup is bounded, oversized imported session sets converge through a
   generic retryable response, and final eviction/rehash/session/audit changes
   commit atomically.
+- Authentication/session audit retention protects the newest 1,024 events,
+  applies a 90-day window beyond that floor, targets at most 50,000 rows, and
+  prunes at most 256 rows per transaction.
 - API responses use restrictive browser headers and separate unknown API routes
   from the frontend fallback.
 - Critical state uses durable SQLite settings, verified online snapshots,
@@ -57,8 +68,10 @@ binary or package release yet.
 ### Known limitations
 
 - Helix is not ready for production deployment or public-network exposure.
-- Production master-key delivery/rotation/recovery, audit export and tamper
-  evidence, backup restore, privileged host administration, historical metrics,
-  persistent layouts, and game execution are not complete.
-- Linux installation, permissions, service behavior, recovery faults, and
-  reference performance have not passed the required Ubuntu matrix.
+- Production master-key delivery/rotation/recovery, broader audit-event coverage,
+  export, holds, tamper evidence, off-host forwarding, backup restore, privileged
+  host administration, historical metrics, persistent layouts, and game
+  execution are not complete.
+- A scoped Ubuntu 24.04 install/rollback/uninstall lifecycle has passed, but
+  clean-VM, cross-version upgrade, complete permission/fault/recovery, signing,
+  and reference-performance matrices remain open.

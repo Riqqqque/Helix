@@ -2,8 +2,8 @@
 
 ## Project status
 
-Helix is pre-release founding work. It is not ready for public deployment, is
-not supported for Internet exposure, and has not completed a security audit.
+Helix is pre-release founding work. It is not ready for production deployment
+or public-network exposure and has not completed an independent security audit.
 The detailed intended threat model is in [`docs/SECURITY.md`](docs/SECURITY.md).
 That document is architecture, not a claim that its controls are implemented.
 
@@ -73,9 +73,9 @@ assess. Do not access or retain other people's data, degrade public services,
 run persistence, move laterally, exfiltrate credentials, or destroy evidence.
 Use an isolated lab and the minimum action needed to prove impact.
 
-Reports that only note the absence of a future feature in the pre-release empty
-or founding scaffold are not vulnerabilities unless current documentation or
-UI falsely claims that feature is active. Dependency scanner output without an
+Reports that only note an explicitly documented future capability is absent are
+not vulnerabilities unless current documentation or UI claims that capability
+is active. Dependency scanner output without an
 exploitable Helix path is useful maintenance information but should include
 reachability/context before being treated as a security defect.
 

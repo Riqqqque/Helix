@@ -20,12 +20,12 @@ daemon, recoverable local state, and independently managed workloads.
 - revocable, bounded sessions with session-bound CSRF protection;
 - real CPU, memory, swap, storage, network, uptime, OS, architecture, and kernel
   overview data;
-- durable critical SQLite state and separately recoverable metrics state;
+- durable critical SQLite state and a separate replaceable metrics database;
 - local `status`, `doctor`, `ready`, `setup-token`, and verified `backup-state`
   CLI operations;
 - responsive System, Midnight, OLED, and Light dashboard themes;
 - Linux package install, rollback, and data-preserving uninstall tooling that is
-  implemented but still unvalidated on Ubuntu and not supported for use.
+  covered by one scoped Ubuntu 24.04 systemd lifecycle but not supported for use.
 
 Host mutation, remote access, games, services, files, restore, Vault, Genome,
 Strands, and automation remain future work. The dashboard does not show fake

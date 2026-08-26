@@ -3,7 +3,7 @@
 ## Status
 
 This document defines Helix's founding storage contract. The foundation
-currently implements a narrow SQLite slice in `crates/helix-state`: version-3
+currently implements a narrow SQLite slice in `crates/helix-state`: version-4
 critical state and version-1 metrics schemas, verified connection PRAGMAs, an
 installation/clean-shutdown marker, an operation ledger, owner/session security
 state, encrypted-secret metadata, integrity and semantic checks, verified

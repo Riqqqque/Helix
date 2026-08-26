@@ -405,4 +405,4 @@ trap - EXIT HUP INT TERM
 printf 'Package-file rollback snapshot: %s\n' "$transaction_snapshot_id"
 printf 'Rollback command: sudo %s/rollback-local.sh --snapshot %s\n' \
   "$bundle_dir" "$transaction_snapshot_id"
-printf 'Local lifecycle status: IMPLEMENTED-UNVALIDATED (requires Linux fault-injection testing).\n'
+printf 'Local lifecycle status: SCOPED-LIFECYCLE-TESTED (public support blocked; broader Linux fault-injection testing required).\n'

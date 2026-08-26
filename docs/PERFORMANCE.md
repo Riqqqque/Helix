@@ -74,12 +74,17 @@ Rust binaries used the checked-in release profile with thin LTO and stripped
 symbols. This snapshot predates the first commit, so its identity is the
 founding working tree rather than a reviewable Git revision.
 
+The binary-size rows were refreshed after the `toml` dependency update and the
+frontend-size row after the committed accessibility pass. Runtime rows remain
+the original founding snapshot, so this table is not a single-revision
+comparison.
+
 | Measurement | Result | Conditions and limits |
 | --- | ---: | --- |
-| `helixd.exe` | 7,568,384 bytes (7.22 MiB) | Release build, all workspace features |
-| `helixctl.exe` | 2,857,472 bytes (2.73 MiB) | Release build, all workspace features |
-| Combined release binaries | 10,425,856 bytes (9.94 MiB) | Windows PE files; not Linux installed size |
-| Compiled frontend | 91,465 bytes raw; 24,733 gzip; 21,838 Brotli | HTML, CSS, and JavaScript for the authenticated base route |
+| `helixd.exe` | 7,564,800 bytes (7.21 MiB) | Current release build, all workspace features |
+| `helixctl.exe` | 2,853,376 bytes (2.72 MiB) | Current release build, all workspace features |
+| Combined release binaries | 10,418,176 bytes (9.94 MiB) | Current Windows PE files; not Linux installed size |
+| Compiled frontend | 91,782 bytes raw; 24,796 gzip; 21,872 Brotli | Current source-alpha HTML, CSS, and JavaScript for the authenticated base route |
 | First daemon readiness | 563.4 ms | One sample on a new data root after `helixctl setup-token` initialized state; includes `Start-Process` and a 25 ms polling interval, so it is neither the 30-run warm p95 nor a pure cold-schema result |
 | `/healthz` | p50 0.202 ms; p95 0.283 ms; p99 0.322 ms | 1,000 sequential requests through one .NET `HttpClient`, release daemon, loopback |
 | Authenticated `/api/v1/health` | p50 0.280 ms; p95 0.374 ms; p99 0.405 ms | 500 sequential requests with a valid cookie and CSRF proof through the same client |

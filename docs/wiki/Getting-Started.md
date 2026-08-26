@@ -8,6 +8,9 @@ binary release yet; this page builds a development preview from source.
 
 You need Rust 1.88 or newer, Node.js 22.12 or newer, npm, and a current browser.
 
+These commands are maintainer/developer notes for evaluating the current source.
+They do not grant a license or create a supported distribution path.
+
 ## Build
 
 ```text
@@ -40,6 +43,10 @@ mkdir -p .helix-data/development
 Open `http://127.0.0.1:8080`, paste the one-time token, and create the owner.
 The token expires after 15 minutes and is invalidated when it is replaced or
 consumed.
+
+On later runs with the same data directory, start `helixd` directly;
+`setup-token` is only for an unclaimed installation. Press `Ctrl+C` in the daemon
+terminal for a clean source-preview shutdown.
 
 Never post the token, a session cookie, a CSRF proof, a password, or private host
 data in a GitHub issue or screenshot.

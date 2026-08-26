@@ -122,4 +122,4 @@ printf 'Preserved configuration, service account, state, cache, instances, backu
 printf 'Recovery snapshot: %s\n' "$uninstall_snapshot_id"
 printf 'Rollback command: sudo %s/rollback-local.sh --snapshot %s\n' \
   "$script_dir" "$uninstall_snapshot_id"
-printf 'Local lifecycle status: IMPLEMENTED-UNVALIDATED (requires Linux fault-injection testing).\n'
+printf 'Local lifecycle status: SCOPED-LIFECYCLE-TESTED (public support blocked; broader Linux fault-injection testing required).\n'

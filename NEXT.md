@@ -25,8 +25,20 @@ must be handled as one explicit exposure boundary.
 
 ## Exact target-host validation
 
-On a clean current Ubuntu Server VM with systemd and cgroup v2, start with the
-checked-in CI-equivalent commands:
+One GitHub-hosted Ubuntu 24.04 systemd lifecycle passed for commit
+[`6868b36`](https://github.com/Riqqqque/Helix/commit/6868b36abbd1a16665565753953abbdf1dfda148).
+It covered the declared Rust toolchains, archive verification, fresh install,
+owner claim, protected authentication/API flows, selected ownership/modes and
+unit hardening, forced-crash restart, clean stop/start, full doctor, verified
+backup, secret-redaction canaries, modified-bundle manifest rejection, repeat
+install, explicit package-file rollback, and data-preserving uninstall. CI first
+verified the runner's `/usr/share` ancestor was root-owned with its unusual
+`0777` mode, then normalized it to the conventional root-owned `0755` baseline
+so Helix's production path checks ran unchanged.
+
+That scoped disposable-runner result is not the complete support matrix. On a
+clean current Ubuntu Server VM with systemd and cgroup v2, start with the
+portable subset of the checked-in CI commands:
 
 ```bash
 rustup toolchain install 1.88.0 --component rustfmt,clippy
@@ -73,10 +85,13 @@ Phase 0 remains **BLOCKED**, not complete, until that matrix passes.
 
 ## Current workspace state
 
-- The recorded validation host had no usable Linux, WSL, Docker, or Podman
-  target, so no Ubuntu/systemd result is implied by the portable pass.
-- The validation snapshot predates the first commit and configured remote. A
-  later public source commit does not turn that snapshot into release evidence.
+- The Windows development host had no usable Linux, WSL, Docker, or Podman
+  target. Its live measurements remain non-reference and separate from the
+  committed hosted Ubuntu result above.
+- Hosted Ubuntu validation proves only the named commit, runner, and exercised
+  lifecycle. Clean-VM, cross-version, schema-downgrade, complete fault-injection,
+  low-disk/power-loss, restore, signing, architecture, and reference-performance
+  evidence remains absent.
 - Preserve any uncommitted work when resuming; do not clean, reset, or replace
   it as a shortcut.
 - Disposable E2E state and project-local audit tools are safe to recreate, but
@@ -88,8 +103,6 @@ Phase 0 remains **BLOCKED**, not complete, until that matrix passes.
   publishing a packaged release.
 - Choose initial supported Ubuntu releases and architectures only after
   clean-host testing.
-- Enable and verify GitHub private vulnerability reporting before inviting
-  external testing.
 - Choose release-signing identities and the key-compromise recovery procedure.
 
 ## Do not do next

@@ -126,4 +126,4 @@ trap - EXIT HUP INT TERM
 printf 'Restored package snapshot: %s\n' "$snapshot_id"
 printf 'Safety snapshot retained: %s\n' "$safety_snapshot_id"
 printf 'Configuration and user data were not changed.\n'
-printf 'Local lifecycle status: IMPLEMENTED-UNVALIDATED (requires Linux fault-injection testing).\n'
+printf 'Local lifecycle status: SCOPED-LIFECYCLE-TESTED (public support blocked; broader Linux fault-injection testing required).\n'
