@@ -1213,13 +1213,38 @@ mod tests {
         let bootstrap = install_bootstrap(&context);
         let _client = claim_owner(&context, &bootstrap).await;
 
+        let first = context
+            .app
+            .clone()
+            .oneshot(post_json(
+                "/api/v1/auth/login",
+                &json!({"loginName": "owner", "password": "wrong-password"}),
+                1,
+            ))
+            .await
+            .expect("wrong-password response");
+        assert_eq!(first.status(), StatusCode::UNAUTHORIZED);
+        assert!(!first.headers().contains_key(header::SET_COOKIE));
+        let expected = response_json(first).await;
+
+        let connection =
+            rusqlite::Connection::open(context.data.path().join("state").join("helix-state.db"))
+                .expect("open state database");
+        let delayed_until = i64::try_from(helix_core::unix_timestamp_ms())
+            .unwrap_or(i64::MAX)
+            .saturating_add(60_000);
+        connection
+            .execute(
+                "UPDATE users SET login_not_before_unix_ms = ?1 WHERE login_name = 'owner'",
+                [delayed_until],
+            )
+            .expect("keep the correct-password case inside the login delay");
+
         let attempts = [
-            ("owner", "wrong-password", 1_u8),
             ("owner", PASSWORD, 2_u8),
             ("unknown", "wrong-password", 3_u8),
             ("NotCanonical", "wrong-password", 4_u8),
         ];
-        let mut expected = None;
         for (login, password, peer) in attempts {
             let response = context
                 .app
@@ -1234,16 +1259,9 @@ mod tests {
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
             assert!(!response.headers().contains_key(header::SET_COOKIE));
             let body = response_json(response).await;
-            if let Some(expected) = &expected {
-                assert_eq!(&body, expected);
-            } else {
-                expected = Some(body);
-            }
+            assert_eq!(body, expected);
         }
 
-        let connection =
-            rusqlite::Connection::open(context.data.path().join("state").join("helix-state.db"))
-                .expect("open state database");
         connection
             .execute(
                 "UPDATE users
@@ -1262,10 +1280,7 @@ mod tests {
             .await
             .expect("disabled login response");
         assert_eq!(disabled.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(
-            response_json(disabled).await,
-            expected.expect("generic body")
-        );
+        assert_eq!(response_json(disabled).await, expected);
     }
 
     #[tokio::test]
