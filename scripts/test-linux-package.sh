@@ -73,8 +73,12 @@ fi
 test_root="$(mktemp -d /tmp/helix-package-test.XXXXXXXX)"
 [[ "$test_root" == /tmp/helix-package-test.* && -d "$test_root" && ! -L "$test_root" ]] ||
   fail "could not create a safe test root"
+probe_root=""
 
 cleanup() {
+  if [[ -n "${probe_root:-}" && "$probe_root" == /run/helix-package-probe.* && -d "$probe_root" && ! -L "$probe_root" ]]; then
+    find "$probe_root" -xdev -depth -delete
+  fi
   if [[ -n "${test_root:-}" && "$test_root" == /tmp/helix-package-test.* && -d "$test_root" && ! -L "$test_root" ]]; then
     find "$test_root" -xdev -depth -delete
   fi
@@ -351,6 +355,14 @@ systemctl is-enabled --quiet helixd.service || fail "service enablement was not 
 runuser -u helix -- env -i PATH=/usr/bin:/bin \
   /usr/bin/helixctl --config /etc/helix/helix.toml ready --timeout-seconds 20 >/dev/null
 
+probe_root="$(mktemp -d /run/helix-package-probe.XXXXXXXX)"
+[[ "$probe_root" == /run/helix-package-probe.* && -d "$probe_root" && ! -L "$probe_root" ]] ||
+  fail "could not create a safe preserved-state probe root"
+chmod 0755 -- "$probe_root"
+install -o root -g root -m 0755 -- "$bundle_dir/bin/helixctl" "$probe_root/helixctl"
+cmp -s -- /usr/bin/helixctl "$probe_root/helixctl" ||
+  fail "preserved-state probe does not match the installed CLI"
+
 "$bundle_dir/uninstall-local.sh" >"$test_root/uninstall.log" 2>&1 || fail "data-preserving uninstall failed"
 if systemctl is-active --quiet helixd.service; then
   fail "helixd remained active after uninstall"
@@ -373,8 +385,8 @@ getent passwd helix >/dev/null || fail "uninstall removed the service account"
 getent group helix >/dev/null || fail "uninstall removed the service group"
 
 preserved_installation="$(
-  runuser -u helix -- env -i PATH="$bundle_dir/bin:/usr/bin:/bin" \
-    "$bundle_dir/bin/helixctl" --config /etc/helix/helix.toml status |
+  runuser -u helix -- env -i PATH=/usr/bin:/bin \
+    "$probe_root/helixctl" --config /etc/helix/helix.toml status |
     sed -n 's/^Helix installation: //p'
 )"
 [[ "$preserved_installation" == "$installation_before" ]] || fail "uninstall did not preserve readable critical state"
