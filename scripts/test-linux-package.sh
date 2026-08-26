@@ -95,6 +95,10 @@ login_response="$test_root/login.json"
 if ! "$bundle_dir/install-local.sh" --bundle "$bundle_dir" >"$install_log" 2>&1; then
   printf 'Redacted installer log follows:\n' >&2
   sed -E '/^[A-Za-z0-9_-]{43}$/c\[REDACTED SETUP TOKEN]' "$install_log" >&2
+  printf 'Service journal follows:\n' >&2
+  if ! journalctl --quiet --unit=helixd.service --no-pager --lines=100 --output=short-precise >&2; then
+    printf 'warning: the Helix service journal could not be read\n' >&2
+  fi
   fail "fresh installation failed"
 fi
 
