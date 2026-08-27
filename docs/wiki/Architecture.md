@@ -1,33 +1,44 @@
 # Architecture
 
-Helix separates the web control plane from the workloads it will eventually
-manage.
+Helix separates the browser, unprivileged web service, privileged host boundary,
+and managed workloads.
 
 ```mermaid
 flowchart LR
-  Browser[Compiled dashboard] -->|loopback HTTP| D[helixd]
-  CLI[helixctl] --> S[(Critical state)]
-  D --> S
-  D --> M[(Replaceable metrics)]
-  D --> H[Read-only host adapters]
-  W[Games and services] -. independent systemd units .- D
+  Browser[Browser] --> Gateway[Private gateway]
+  Gateway --> D[helixd]
+  D --> State[(Critical and preference state)]
+  D --> System[Bounded host reads]
+  D -->|typed Unix socket| P[helix-privd]
+  D -->|authenticated one-use bridge| T[non-root host PTY]
+  P --> Host[Files, network, power, Docker]
+  P --> Native[Helix-native game containers]
+  P -->|optional loopback API| AMP[AMP-managed instances]
 ```
 
-- `helixd` is the unprivileged API and static-asset daemon.
-- `helixctl` performs local diagnostics, readiness, setup, verified backup, and
-  installation-independent preview Strand project checks.
-- Critical state uses SQLite WAL with `synchronous=FULL`.
-- Replaceable metrics use a separate SQLite durability domain.
-- Host discovery is bounded, read-only, and sampled only on demand.
-- Future privileged mutations must use a narrow typed broker, never a general
-  root shell.
-- Games and services must survive a Helix dashboard restart or upgrade.
-- Future Strands execute only in an optional isolated host. The current Strand
-  Kit reads metadata but runs no extension code.
+- `helixd` serves the compiled Preact interface, authenticates requests, checks
+  capabilities, and remains unprivileged.
+- `helix-privd` accepts a closed, length-bounded protocol. It has no general
+  shell RPC and revalidates configured roots and exact object identities.
+- The optional terminal is a separate Linux-user service with a distinct socket
+  group and kernel peer-UID check. It never runs inside the root broker.
+- Critical SQLite state is kept separate from replaceable metrics and caches.
+- Native Minecraft instances are Docker containers managed through the broker.
+  They keep running when the browser or dashboard closes.
+- AMP is optional, loopback-only, and remains a separate manager with its own
+  instances, files, and credentials.
+- Long or risky operations use bounded jobs and per-instance concurrency
+  guards. Current broker job status is not a crash-persistent queue.
+- Home widgets are built into Helix. The Strand Kit can scaffold and validate
+  preview metadata, but no third-party Strand installation/runtime exists.
+
+Network evidence deliberately keeps a local listener, Docker publication, UFW
+allowance, and outside reachability separate. A green value in one layer does
+not prove the next layer is reachable.
 
 Detailed contracts:
 
-- [Architecture](https://github.com/Riqqqque/Helix/blob/main/docs/ARCHITECTURE.md)
 - [API](https://github.com/Riqqqque/Helix/blob/main/docs/API.md)
+- [Security](https://github.com/Riqqqque/Helix/blob/main/docs/SECURITY.md)
+- [How Helix Works](https://github.com/Riqqqque/Helix/blob/main/docs/HOW-HELIX-WORKS.md)
 - [Storage](https://github.com/Riqqqque/Helix/blob/main/docs/STORAGE.md)
-- [Architecture decisions](https://github.com/Riqqqque/Helix/tree/main/docs/adr)

@@ -29,9 +29,31 @@ binary or package release yet.
   source link, and a checksummed license in release bundles.
 - A game-hosting capacity contract separating game/player performance from
   Helix control-plane bounds, resource admission, and required load evidence.
+- A lazy-loaded Games workspace with responsive card and compact views,
+  filtering, instance detail and capability-driven tabs, plus a protected
+  readiness API that keeps production controls locked until restore, broker,
+  and native-execution gates are real.
 - A non-executing Strand Kit preview with atomic no-overwrite project
   scaffolding, strict bounded manifest validation, CLI summaries, a checked
   reference project, and an author guide.
+- A full private-LAN dashboard with Overview, multi-layout Home, Storage,
+  Network, Host, Terminal, Servers, Hooks, and Settings pages; reorderable
+  navigation; and bounded color/theme controls.
+- Native Docker-backed Minecraft creation and lifecycle for Paper, Purpur,
+  Folia, Fabric, and Vanilla, including persistent console archives, settings,
+  files, performance, recoverable backups/removal, and custom server artwork.
+- Compatibility-filtered Modrinth project artwork/search/details/install and a
+  narrowly verified server-safe Fabric `.mrpack` creation path.
+- Configured-root file browsing with pagination, explicit edit/rename actions,
+  recoverable trash, and quick/thorough cancellable largest-item analysis.
+- Network evidence, exact Helix-owned UFW rules with Undo, and a separate
+  confirmed SSH-safety flow for enabling an installed inactive UFW.
+- Exact selected APT update jobs with list refresh, immediate candidate
+  revalidation, holds/disk/no-removal/conffile/final-version guards, bounded
+  logs, and no automatic reboot or rollback claim.
+- Immediate and recurring host reboot scheduling, exact Helix start-after-boot
+  policy control, Hooks for allowlisted services, and a separate authenticated
+  non-root Linux PTY service.
 
 ### Changed
 
@@ -57,6 +79,12 @@ binary or package release yet.
   setup, login, refresh, and logout use native non-repeat disabled states.
 - Frontend production builds now fail above 75 KiB initial gzip or 40 KiB
   initial JavaScript gzip, with focused parser and boundary tests.
+- Information tooltips now use a viewport-aware document portal so cards and
+  scroll containers cannot clip them. Marketplace artwork uses a constrained
+  same-origin image proxy instead of direct arbitrary browser image requests.
+- Home layouts now support templates, JSON export/import, drag handles,
+  width/height, paged notes, quick note editing, widget colors, revisioned
+  server persistence, and a retrying local fallback.
 
 ### Security
 
@@ -75,14 +103,18 @@ binary or package release yet.
   from the frontend fallback.
 - Critical state uses durable SQLite settings, verified online snapshots,
   restrictive Unix-mode policy, and explicit unclean-shutdown checks.
+- Terminal access requires the current Helix password for each 30-second
+  single-use session-bound HttpOnly ticket. Exact Origin/subprotocol checks,
+  a distinct socket group, Linux peer-UID verification, non-root execution,
+  bounded frames/sessions, and lifecycle-only auditing protect the bridge.
 
 ### Known limitations
 
 - Helix is not ready for production deployment or public-network exposure.
 - Production master-key delivery/rotation/recovery, broader audit-event coverage,
-  export, holds, tamper evidence, off-host forwarding, backup restore, privileged
-  host administration, historical metrics, persistent layouts, and game
-  execution are not complete.
+  tamper evidence, off-host forwarding, complete clean-host restore, signed
+  self-update, historical metrics, a third-party Strand runtime, and additional
+  game lifecycles are not complete.
 - A scoped Ubuntu 24.04 install/rollback/uninstall lifecycle has passed, but
   clean-VM, cross-version upgrade, complete permission/fault/recovery, signing,
   and reference-performance matrices remain open.

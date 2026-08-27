@@ -1,0 +1,34 @@
+[Unit]
+Description=Helix host broker
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=helix-broker
+UMask=0007
+StateDirectory=helix
+StateDirectoryMode=0700
+ExecStart=/usr/local/libexec/helix-privd --config /etc/helix/privd.json
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=20s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Managed content roots stay explicit. The OS package, UFW, and recurring-reboot
+# operations also need the package-managed trees and kernel firewall controls;
+# removing these exceptions intentionally makes those mutations fail closed.
+ReadWritePaths=/run/helix /var/lib/helix /srv/helix /srv/storage /srv/amp/instances /boot /etc /usr /var
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

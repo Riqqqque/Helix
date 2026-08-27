@@ -4,6 +4,7 @@ import type { AuthSession, SetupStatus } from './types';
 export const loginNoticeIds = {
   sessionExpired: 'auth.login.notice.sessionExpired',
   setupCompleted: 'auth.login.notice.setupCompleted',
+  accountUpdated: 'auth.login.notice.accountUpdated',
 } as const satisfies Record<string, TranslationId>;
 
 export type LoginNoticeId = (typeof loginNoticeIds)[keyof typeof loginNoticeIds];
@@ -32,7 +33,7 @@ export type SetupValidationErrorId = Extract<
   `auth.setup.error.${string}`
 >;
 
-const MIN_PASSWORD_CODE_POINTS = 15;
+const MIN_PASSWORD_CODE_POINTS = 13;
 const MAX_PASSWORD_CODE_POINTS = 256;
 const MAX_PASSWORD_BYTES = 1_024;
 const MAX_DISPLAY_NAME_CODE_POINTS = 128;
@@ -61,6 +62,10 @@ export function viewAfterSetupConflict(status: SetupStatus): AppView {
 
 export function sessionExpiredView(): AppView {
   return { kind: 'login', notice: loginNoticeIds.sessionExpired };
+}
+
+export function accountUpdatedView(): AppView {
+  return { kind: 'login', notice: loginNoticeIds.accountUpdated };
 }
 
 export function validateSetupCandidate(

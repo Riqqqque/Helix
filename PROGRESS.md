@@ -1,125 +1,127 @@
 # Helix Progress
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
-This file records verified implementation state. [ROADMAP.md](ROADMAP.md)
-describes ordering and intent; it is not evidence that a feature exists.
+This is the implementation ledger. [ROADMAP.md](ROADMAP.md) describes intended
+ordering; it is not evidence that a feature works.
 
 Status vocabulary: **NOT STARTED**, **DESIGNING**, **IMPLEMENTING**,
 **IMPLEMENTED — UNVALIDATED**, **TESTED**, **BLOCKED**, **COMPLETE**.
 
 ## Overall status
 
-Helix is a founding pre-release application. The portable Phase 0 and secure-core
-slice are real and testable. Ubuntu 24.04 GitHub Actions passed the declared Rust
-1.88/stable builds and one scoped systemd package lifecycle, but Phase 0 remains
-**BLOCKED** on clean supported-host, cross-version upgrade, broader permission and
-recovery-fault, restore, signing, and reference-performance matrices. Helix is not
-ready for production, public-network exposure, or a packaged public release.
+Helix is a **private alpha**. The authenticated dashboard, typed Linux broker,
+native Minecraft manager, optional AMP bridge, Hooks, multi-layout Home,
+storage tools, selected package updates, host controls, and an optional
+unprivileged terminal are implemented. Portable tests and focused mock/pure
+Linux-boundary tests pass in the current workspace.
 
-No game integration, backup restore, privileged host mutation, update channel,
-Genome import/export, or Strand runtime is supported. Non-executing preview
-Strand project scaffolding and validation exist. A portable encrypted
-secret-record boundary exists, but production master-key delivery, rotation,
-and independent recovery do not.
+This is not a public-release claim. Clean supported-host matrices, destructive
+fault injection, independent security review, signed artifacts, verified
+self-update, recovery drills, broad game-version coverage, and public-network
+review remain open. Public release status is **BLOCKED**.
 
-## Phase 0 — Foundation
+## Current implementation
 
 | Area | Status | Current evidence and limits |
 | --- | --- | --- |
-| Repository and architecture | TESTED | Architecture, storage, security, recovery, Genome, Sequence, Strand, backup, API, installation, development, roadmap, game-host capacity, ADR, and public-repository documents exist and were reviewed against the founding directive. The repository and package manifests record `AGPL-3.0-or-later`. |
-| Rust workspace | TESTED | Ten workspace crates compile on Windows and hosted Ubuntu with locked dependencies. Formatting, Clippy warnings-as-errors, tests, release builds, Rust stable, and the declared Rust 1.88 MSRV pass. Clean supported-host and additional architecture validation remain open. |
-| Configuration | TESTED | Strict typed TOML, explicit overrides, loopback-only policy, absolute roots, and canonical disjoint state/static roots have adversarial coverage. One packaged Ubuntu run exercised the installed configuration path; broader ownership and replacement-race matrices remain target-host gates. |
-| Critical state | TESTED | SQLite WAL/FULL policy, schema versions 1–4, stable installation/node identity, integrity and semantic checks, unclean marker, online snapshots, process lease, private-file checks, and read-only CLI paths have portable tests. Migration retries reuse only a fully verified source/version/target/SHA-bound rollback snapshot; changed sources get a new snapshot, altered aliases fail closed, and at most 16 legacy partials are reconciled per open. One scoped Ubuntu package run passed full doctor, verified database-only backup, and selected ownership/mode checks; complete Unix race and fault matrices remain open. |
-| Replaceable metrics | TESTED | Separate WAL/NORMAL database, corruption preservation/recreation, and degradation without critical-state loss have portable tests. Published forensic-set count/retention, disk-full, read-only mount, and sustained-retention policy/tests remain; persistent metric writers are not enabled yet. |
-| Daemon lifecycle | TESTED | Loopback listener, structured logging, API/static composition, exclusive writer lease, recovery-before-cleanup ordering, tracked blocking-task drain, and clean-marker ordering have focused tests. A live Windows run covered forced-stop recovery and clean Ctrl+C. One scoped Ubuntu package run verified systemd identity/hardening, forced-crash restart, and clean stop/start; broader signal, watchdog, and injected-fault matrices remain open. |
-| CLI | TESTED | Read-only status/doctor, verified state-only online backup, absolute-deadline readiness, lease-protected one-time setup-token creation, and installation-independent Strand scaffold/check commands are implemented. The administrative path passed a release-binary flow; the Strand path has unit and subprocess coverage. Repair and restore commands do not exist yet. |
-| Strand author tooling | TESTED | `helix-strand-kit` stages no-overwrite projects, emits zero-capability preview manifests, and validates size, UTF-8, strict fields, UUID/slug identity, Semantic Versions/ranges, permission reasons/duplicates, and resource ceilings without executing code. Concurrent creation publishes exactly once; the checked reference manifest and malformed CLI flows pass. The normal `helixd` dependency tree contains neither the kit nor its SemVer/tempfile dependencies. There is no stable installable package format, SDK, host, grant store, sandbox, signature verification, or runtime. |
-| HTTP foundation | TESTED | Versioned API, JSON API fallback, SPA fallback, restrictive headers, request IDs, compression, typed body-limit errors, request timeouts, strict loopback Host validation, global concurrency bounds, a 10-second HTTP/1 header deadline, fail-fast transport overload, and single-flight host sampling have service tests on Windows and hosted Ubuntu. A live Windows run covered 10,000 authenticated requests, a 512-request burst, and 128 silent sockets; broader supported-host matrices remain. |
-| Host overview | TESTED | Real hostname, OS, architecture, kernel, uptime, CPU, memory, swap, storage, and cumulative network counters are collected on demand. Windows live data rendered two mounts and two interfaces; a scoped Ubuntu package run returned an authenticated overview with a logical CPU count and explicit storage/network availability states. An unlabeled volume is represented as an explicit text omission rather than invalid empty text. Supported-host correctness and reference-performance matrices remain. |
-| Frontend | TESTED | The compiled Preact/Vite UI uses real protected APIs, honest degraded states, visibility-aware polling, native non-repeat submission controls, semantic native meters, explicit transition focus, visible forced-colors focus, reduced-motion support, responsive layouts, and System/Midnight/OLED/Light themes. The build now fails above the 75 KiB initial gzip or 40 KiB initial JavaScript gzip budgets. Live Windows browser checks passed login, reload-to-login CSRF behavior, sign-out, desktop OLED, and a 320-pixel layout with no horizontal overflow or console errors. Formal screen-reader and representative-device review remain. |
-| CI and dependency policy | TESTED | Actions and tool versions are pinned. Ubuntu 24.04 GitHub Actions passed Rust stable, the declared Rust 1.88 MSRV, frontend checks, pinned Rust advisory/license/source policy, current/full-history secret scans, CodeQL, and the scoped package lifecycle for commit `fdbbc0a`. This does not establish clean-host or platform support. |
-| Packaging and installer | TESTED | Hardened systemd/sysusers/tmpfiles fixtures, checksum-producing Linux bundles, transactional package-file install/rollback, and conservative data-preserving uninstall exist. One scoped Ubuntu 24.04 lifecycle passed archive verification, fresh install, owner claim, protected API/authentication flows, selected file modes and unit hardening, forced-crash restart, clean stop/start, full doctor, verified backup, modified-bundle manifest rejection, repeat install, explicit rollback, and data-preserving uninstall. Public package support remains blocked; artifacts are unsigned and must not be attached to a release. |
-| Performance baseline | BLOCKED | A non-reference Windows development snapshot is recorded in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Required Ubuntu RSS, ten-minute idle CPU, repeated startup, API/SQLite latency, and installed-size measurements remain unavailable. |
+| Repository, license, and build policy | TESTED | The Rust workspace and Preact frontend use locked dependencies, formatting/lint/test/build gates, secret scanning policy, and `AGPL-3.0-or-later`. Passing source checks is not a signed release. |
+| Authentication and preferences | TESTED | Race-safe owner enrollment, Argon2id login, revocable bounded sessions, session-bound CSRF, capability checks, username/password changes, and revision-guarded dashboard preferences have focused state/API/frontend tests. MFA, production remote-access review, and independent authentication review remain open. |
+| Critical state and recovery foundation | TESTED | SQLite integrity checks, migrations, exclusive writer lease, unclean-shutdown handling, verified state snapshots, and data-preserving package skeletons exist. Full broker/native-data restore drills, power-loss matrices, independent key recovery, and signed upgrade rollback remain open. |
+| Dashboard shell | TESTED | Overview, Home, Storage, Network, Host, Terminal, Servers, Hooks, and Settings are full responsive pages. Reorderable navigation, System, Midnight, OLED, and Light themes, bounded color controls, keyboard/focus states, reduced motion, lazy feature chunks, and initial asset budgets are enforced. Formal screen-reader and representative-device review remain open. |
+| Modular Home | TESTED | Users can create, rename, switch, duplicate, export, import, and remove bounded Home layouts. Clock, host, servers, storage, weather, paged-note, and HTTP(S) shortcut widgets support drag reordering, width/height, title, color, and type-specific settings. Preferences use bounded revisioned server state with a local fallback while syncing. This is a built-in dashboard system, not a third-party Strand runtime. |
+| Read-only host visibility | TESTED | CPU, memory, swap, uptime, disks, mounts, interfaces, routes, services, processes, and bounded listeners come from real adapters with explicit degraded/unavailable states. Reference Linux performance and platform matrices remain open. |
+| `helix-privd` boundary | IMPLEMENTED — UNVALIDATED | A Unix-socket broker accepts a closed typed protocol for configured storage, host, network, native server, marketplace, and AMP operations. It has no caller-supplied shell command RPC. Pure/mock tests cover validation and failure paths; the complete clean-host peer-credential, systemd-sandbox, race, and fault matrix remains open. |
+| Storage and files | IMPLEMENTED — UNVALIDATED | The dashboard browses configured roots with bounded pagination and type/size columns, and supports up to 4 MiB validated UTF-8 editing, file/folder creation, explicit rename, and recoverable trash. Quick and user-triggered thorough largest-file/folder analysis distinguish filesystem coverage from bounded top-result retention and allow confirmed trash directly from results. Descriptor-relative Linux traversal and cancellation have focused coverage. Broad mount-replacement, low-disk, permission, and live multi-terabyte scans remain target-host gates. |
+| Native Minecraft manager | IMPLEMENTED — UNVALIDATED | Docker-backed creation and lifecycle paths exist for Paper, Purpur, Folia, Fabric, and Vanilla. Native detail, start/stop/restart/latest-compatible-build update, settings, files, logs, performance, console, backup, restore, recoverable removal, and uploaded/preset server artwork are wired through typed APIs. Real supported-Ubuntu lifecycle/version matrices remain incomplete; arbitrary historical-build selection and broad player-capacity claims are not implemented. |
+| AMP bridge | IMPLEMENTED — UNVALIDATED | AMP is an optional separate manager reached through a loopback-only credentialed integration. Helix can inventory AMP instances and issue bounded supported actions without adopting their files or identity as native instances. AMP outages and ambiguous responses fail closed. Broader live AMP-version testing remains open. |
+| Persistent console history | IMPLEMENTED — UNVALIDATED | Native console output is captured to bounded protected rotating files independent of the browser. Cursor pages return at most 500 entries with retained boot/session metadata where available; the legacy tail response remains stable. Retention and restart logic have focused tests, while long-running disk/failure testing remains open. |
+| Native backups | IMPLEMENTED — UNVALIDATED | Backup creation/restore exists. Delete moves exact native backup artifacts into protected recoverable trash with opaque IDs and expiry metadata; Undo restores only matching records. Full interrupted-backup, disk-full, restore-to-clean-host, and retention-purge matrices remain open. |
+| Settings restart metadata | TESTED | Server settings expose which fields require restart and save responses report pending restart state instead of implying immediate application. Settings writes use revisions and preserve a rollback copy. Game-version-specific behavior still needs broad live coverage. |
+| Modrinth marketplace | IMPLEMENTED — UNVALIDATED | Search, project detail, compatible-version selection, and background install jobs exist for Paper/Purpur plugins, Folia-compatible plugins, and Fabric server-side mods. Loader/version/environment checks prevent mixing plugins and mods. Real upstream outage, artifact, dependency, and lifecycle matrices remain open. Vanilla, NeoForge, Forge, and CurseForge do not have plugin/mod install paths. |
+| Fabric Modrinth `.mrpack` creation | IMPLEMENTED — UNVALIDATED | “Start with a modpack” previews all loaders but creates only listed stable server-capable Fabric releases with one unambiguous `.mrpack`. The broker re-resolves opaque IDs, accepts only exact Modrinth API/CDN hosts without redirects, verifies the Modrinth-declared archive SHA-512 and index-declared SHA-1/SHA-512, enforces strict archive/path/size/time/disk limits, excludes server-optional/client-only files, pins Minecraft/Fabric Loader, atomically activates staging, and removes an incomplete exact instance on failure. Windows portable archive, protocol/API, clippy, and frontend gates pass. Linux extraction/resolver/Docker lifecycle and real upstream/pack matrices remain open. Output is a server-safe subset, not full-pack parity. |
+| Host integration and start on boot | IMPLEMENTED — UNVALIDATED | Status reports Docker and broker service state, exact dashboard/gateway container identities and restart policies, and bounded Helix-only resources/errors. The toggle changes only those exact containers and does not stop/start them or alter Docker itself. Docker restart metadata survives a daemon/host restart, but later container recreation may reapply Compose policy. |
+| Host reboot | IMPLEMENTED — UNVALIDATED | Immediate requests use a 10–300 second cancellable delay. Recurring daily/weekday schedules use one exact local time and verified host timezone. Both require exact hostname, disruption acknowledgement, and active-player/running-job preflight; one-shot work uses an opaque systemd transient timer. Tests use pure/mock runners and never reboot a host. A disposable live Linux validation is still required. |
+| Network inventory | IMPLEMENTED — UNVALIDATED | Linux TCP/UDP listeners, best-effort process ownership, Docker publications/bind addresses, native/AMP game ports, UFW installed/active/default/rule state, and externally unverified reachability are separate evidence. A listener or UFW rule is never labeled as proof of outside access. |
+| UFW rule management | IMPLEMENTED — UNVALIDATED | Named TCP/UDP single-port or bounded-range allow rules use exact opaque Helix comments, durable ownership records, a global mutation lock, before/after verification, safe delete, and bounded Undo. A separate exact-phrase activation flow first proves the selected SSH TCP port is listening, stages a durable SSH safety rule, enables UFW, verifies both, and attempts to restore inactive state on failure. Helix never resets UFW or changes defaults. These mutations have mock/pure coverage but have not completed a disposable live-UFW matrix. |
+| System packages | IMPLEMENTED — UNVALIDATED | dpkg/APT inventory reports installed/candidate versions, sizes, source/category/description, held/security/restart hints, cache timestamp, and simulation state. Explicit refresh and exact selected-candidate apply jobs serialize mutations, revalidate versions/holds/disk/no-removal simulation, preserve current conffiles, verify final versions, retain bounded logs, and never reboot automatically. There is deliberately no package rollback claim. Disposable interruption/conffile/dpkg-recovery matrices remain open. |
+| Helix self-update | NOT STARTED | The UI reports self-update unavailable. There is no `git pull` updater. Signed/digest-pinned releases, staging, configuration/data backup, health verification, and automatic rollback must exist before this can be enabled. |
+| Hooks | IMPLEMENTED — UNVALIDATED | The broker inventories exact allowlisted Plex, Tailscale, Pterodactyl Wings, and Jellyfin systemd units plus the AMP API adapter. The UI provides verified supported lifecycle/start-after-boot actions, local panel links, and guided official setup for absent services. It does not run remote install scripts, invent credentials, or claim full upstream API parity. |
+| Optional host terminal | IMPLEMENTED — UNVALIDATED | A lazy xterm frontend opens a real PTY through a separate non-root Linux service. Every connection requires the current Helix password, a 30-second single-use session-bound HttpOnly ticket, exact Origin/subprotocol checks, a distinct socket group, and Linux `SO_PEERCRED` matching the pinned dashboard UID. Commands/output are not audited or retained; disconnect kills the PTY. Protocol/unit tests, a real Linux PTY/resize/exit smoke, exact accepted-peer and rejected-peer checks, and a no-I/O-in-daemon-logs check pass. Clean-host service, authenticated browser, broader hostile-peer, sudo, and fault matrices remain open. |
+| Tailscale compatibility | IMPLEMENTED — UNVALIDATED | Container configuration can expose an explicitly constrained second private gateway suitable for an existing Tailscale route, while Hooks can detect/control an already installed exact service. Helix does not install, authenticate, or reconfigure Tailscale. Public-network exposure remains unsupported. |
+| Strand author preview | TESTED | `helixctl strand new` and `strand check` scaffold and validate a bounded zero-capability preview manifest. No Strand package installation, permission grants, SDK host, sandbox, signature validation, or runtime exists. |
 
-## Phase 1 — Secure core, Lattice, and Pulse
+## 2026-08-27 existing-host deployment evidence
 
-| Area | Status | Current evidence and limits |
-| --- | --- | --- |
-| Password/token primitives | TESTED | Argon2id v19 hashing/verification, bounded PHC parsing, parameter upgrades, prospective-password validation, canonical identities, fallible CSPRNG use, and domain-separated 256-bit opaque tokens have focused portable tests. The policy basis is documented; this is not a NIST-conformance claim. Supported-Ubuntu parameter benchmarking, maintained compromised-password data, and independent review remain. |
-| Owner bootstrap and state schema | TESTED | Schema v2 implements a race-safe single-use bootstrap, owner/role/capability/session/audit state, progressive login delay, expiry/revocation, auth-version invalidation, and atomic verified-password rehash. Login cleanup is bounded to 256 rows per attempt, converges normal state to at most 64 sessions per user, returns a generic retryable 503 while oversized imports remain, and keeps eviction/rehash/new-session/audit changes atomic. |
-| Browser login/session/CSRF | TESTED | The loopback setup, owner claim, login, protected reads, CSRF compare-and-swap rotation, logout/revocation, Host/Origin/Fetch-Metadata checks, cookie flags, generic failures, and reload-to-login rule passed unit, API, live compiled-asset, and one packaged Ubuntu flow. TLS, trusted proxies, MFA, broader Linux authentication matrices, brute-force field testing, and independent review remain gates. |
-| Portable recoverable-secret records | TESTED | Schema v3 and `helix-secrets` implement XChaCha20-Poly1305 record envelopes, fresh DEKs/nonces, master-key wrapping/check records, associated-data binding, CAS revisions, bounded plaintext, and zeroizing/redacted access. Daemon credential delivery, systemd credential lifetime, rotation/rewrapping, fallback key files, TPM use, and independent recovery are not implemented. |
-| Chronicle authentication audit | TESTED | Authentication/session events reject secret-bearing detail and remain append-only inside their retained window. Schema v4 retains the newest 1,024 rows, applies a 90-day window outside that floor, targets at most 50,000 rows, and removes at most 256 rows per audited write or startup pass with older denials first under record pressure. Fixed-batch convergence, counter/trigger semantics, rollback boundaries, and schema tamper rejection have portable tests. Export, holds, hash chaining, tamper evidence, off-host forwarding, and broader operator events remain future work. |
-| Lattice layouts and Pulse history/events | NOT STARTED | The current authenticated overview is a real responsive foundation. Persistent layouts, historical metrics, adaptive retention, and a versioned event/reconnect stream do not exist. |
+A private Ubuntu host was upgraded in place from state schema 6 to 7 after an
+integrity-checked rollback snapshot was created. The dashboard and gateway
+started healthy with zero container restarts, `helixctl doctor --full` passed,
+and the complete set of unrelated Docker workloads remained running across the
+Helix-only container replacement.
 
-## Validation snapshot
+The installed broker and terminal sockets had the expected distinct groups and
+`0660` modes. The terminal service ran as the configured non-root Linux user,
+accepted only the pinned dashboard peer UID, completed a real PTY user,
+working-directory, resize, output, and exit smoke, rejected a wrong peer UID,
+and did not place terminal input or output in journald. No reboot, firewall
+mutation, package application, native-server deletion, or live data deletion
+was performed during this pass.
 
-The final local pass used Rust 1.94.1 (`x86_64-pc-windows-msvc`), Cargo
-1.94.1, Node 24.12.0, and npm 11.6.2 on Windows 11 x64. The declared MSRV pass
-used Rust 1.88.0 on the same target.
+This is useful target-host evidence, not a clean-install or public-release
+matrix. The broader destructive fault, recovery, hostile-peer, authenticated
+browser-terminal, and supported-host gates below remain open.
 
-- `cargo fmt --all -- --check`
-- `cargo check --locked --workspace --all-targets --all-features`
-- `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`
-- `cargo test --locked --workspace --all-targets --all-features`
-- `cargo build --locked --release --workspace --all-features`
-- `cargo doc --locked --workspace --all-features --no-deps`
-- `cargo +1.88.0 check --locked --workspace --all-targets --all-features`
-- `cargo +1.88.0 test --locked --workspace --all-targets --all-features`
-- `npm run check` and `npm audit --audit-level=moderate` in `frontend`
+## Explicit unsupported states
 
-The settled suite contains 167 target-conditioned Rust tests on Windows, 173 on
-hosted Ubuntu, 50 Vitest tests, and 3 Node asset-budget tests. The final fresh
-Windows release-binary flow passed setup, owner claim, login, protected reads, CSRF
-rotation, cookie-only rejection, logout/revocation, generic login failure,
-progressive delay, CLI ready/status/full-doctor/backup, 1,500 latency requests,
-real storage/network collection, and a ten-file canary scan with zero secret
-leaks.
+- Forge and NeoForge native creation are not supported.
+- Broad/full-parity modpack, non-Fabric loader, and CurseForge workflows are not
+  supported. Only the documented server-safe Fabric `.mrpack` subset exists.
+- Broad unattended upgrades, dependency additions/removals, and package rollback
+  are not supported. Only explicitly selected exact candidates that pass the
+  documented APT preflight are accepted.
+- Helix self-update is not supported.
+- External port reachability is not tested or guaranteed.
+- UFW inactive/unavailable is never presented as “port open.”
+- Tailscale installation, tailnet authentication, and route configuration are
+  not performed by Helix; only an existing service lifecycle is manageable.
+- V Rising native creation is not supported on Linux because the current
+  official dedicated-server distribution is Windows-only.
+- AMP is not the Helix native runtime.
+- Public internet exposure and a supported public package are not approved.
 
-An additional optimized live run passed 10,000 authenticated health requests, a
-512-request transport-overload burst, 128 silent-connection pressure with
-deadline recovery, ten idle minutes, forced termination, same-state restart,
-full doctor, verified online backup, and persisted token/password canaries. The
-two HTTP-server regressions passed 400 optimized executions across 200
-repetitions; the malformed and oversized JSON boundary regression passed 100.
-A deterministic lifecycle regression also covers an HTTP drain completing in
-the same scheduler turn as its shutdown announcement.
+## Current validation gates
 
-Current release artifacts measured 7,579,648 bytes for `helixd.exe`, 3,184,128
-bytes for `helixctl.exe`, and 10,763,776 bytes combined. The compiled frontend
-measured 92,350 bytes raw, 24,951 bytes gzip, and 22,056 bytes Brotli. The
-production build now rejects more than 76,800 initial gzip bytes or 40,960
-initial JavaScript gzip bytes. These Windows values are non-reference.
+The checked workspace runs these core gates:
 
-For commit [`fdbbc0a`](https://github.com/Riqqqque/Helix/commit/fdbbc0aeb7b353069c74fe5186d1d48fd65b66ca),
-Ubuntu 24.04 GitHub Actions passed Rust 1.88/stable, the 158-test
-target-conditioned suite, the frontend gate, the scoped systemd package
-lifecycle, and CodeQL. Pinned `cargo-audit` 0.22.2 scanned 196 locked dependencies
-against 1,226 loaded RustSec advisories with no finding. Pinned `cargo-deny`
-0.20.2 passed advisories, bans, licenses, and sources with six reviewed
-duplicate-version warnings. npm reported zero vulnerabilities. Pinned Gitleaks
-8.30.1 found no leak in either the committed checkout or full Git history.
+```text
+cargo fmt --all -- --check
+cargo check --locked --workspace --all-targets --all-features
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets --all-features
 
-CodeQL's initial 36 path alerts were reviewed individually: 33 were narrow false
-positives on trusted operator-root boundaries guarded by strict path validation
-in production code, and three were test-only fixtures. Each dismissal records
-its rationale, the queries remain enabled, and the later analysis completed with
-zero open alerts.
+cd frontend
+npm run check
+```
 
-The Windows measurements remain non-reference. The hosted result establishes
-provenance only for its exact revision and scope; it is not clean-VM,
-cross-version-upgrade, schema-downgrade, complete fault-injection,
-low-disk/power-loss, reference-performance, platform-support, signed-release, or
-supported-installer evidence.
+Linux-only broker code also has pure/mock tests that never execute real reboot,
+firewall, package, or destructive workload mutations. Those tests prove input,
+ownership, concurrency, verification, and failure behavior; they do not replace
+a disposable live-host matrix.
 
-## Packaged release gate
+## Public-release gate
 
-**BLOCKED.** Required clean supported-host and cross-version package matrices,
-independent authentication review, production master-key lifecycle, broader
-audit-event coverage, export, holds, tamper evidence, off-host forwarding,
-complete permissions/filesystem tests, restore, corruption/disk-full/power-loss
-drills, signed update integrity, formal screen-reader review, representative
-mobile review, game lifecycle matrices, and reference performance have not
-passed. No signed binary/package release or deployment recommendation is
-authorized by the current evidence.
+**BLOCKED.** Before a public recommendation, Helix still needs:
+
+- clean supported-Ubuntu install/upgrade/rollback/uninstall matrices;
+- independent authentication and broker security review;
+- production master-key delivery, rotation, and independent recovery;
+- complete filesystem race, disk-full, interruption, and restore drills;
+- disposable live reboot and UFW validation;
+- disposable selected-package interruption, conffile, and dpkg recovery tests;
+- signed, digest-pinned Helix releases with staged health rollback;
+- real lifecycle matrices across every advertised Minecraft software/version;
+- accessibility and representative mobile review; and
+- reference performance and long-running retention evidence.
+
+No signed package, automatic updater, public-network recommendation, or broad
+Minecraft/modpack support claim is authorized by the current evidence.

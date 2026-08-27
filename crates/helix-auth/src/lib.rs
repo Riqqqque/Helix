@@ -19,7 +19,8 @@ pub use password::{
     PasswordHashParameters, PasswordInput, PasswordInputError, PasswordPhc,
     PasswordValidationError, StoredPasswordHashError, ValidatedPassword, hash_password,
     inspect_password_hash, normalize_password_for_verification, password_needs_rehash,
-    rehash_verified_password, validate_password, validate_password_with_checker, verify_password,
+    rehash_verified_password, validate_password, validate_password_with_checker,
+    validate_verified_password_for_context, verify_password,
 };
 pub use token::{
     EncodedToken, OPAQUE_TOKEN_BYTES, OPAQUE_TOKEN_ENCODED_LEN, OpaqueToken, TokenDomain,

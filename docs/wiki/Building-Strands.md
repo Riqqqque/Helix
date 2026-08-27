@@ -7,6 +7,10 @@ data provider.
 The current Strand Kit creates and validates **preview metadata only**. Helix
 cannot install or run a Strand yet.
 
+The movable Home widgets in the dashboard are built-in Helix modules, not
+Strands. They demonstrate the editing experience without granting third-party
+code any runtime authority.
+
 ```text
 helixctl strand new system-health --name "System Health" --publisher "Your name"
 helixctl strand check system-health

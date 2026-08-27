@@ -1,5 +1,6 @@
 //! SQLite durability domains and startup recovery primitives.
 
+mod appearance;
 mod secrets;
 mod security;
 
@@ -31,19 +32,24 @@ use std::{
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use appearance::{
+    MAX_SERVER_ICON_BYTES, ServerAppearanceRecord, ServerAppearanceSummary, ServerAppearanceUpdate,
+    ServerAppearanceUpdateOutcome, ServerIconPreset,
+};
 pub use secrets::{
     EncryptedSecretWrite, InstallMasterKeyInput, InstallMasterKeyOutcome, MasterKeyRecord,
     SecretRecordMetadata, StoredSecretRecord,
 };
 pub use security::{
     AuthenticatedSession, BootstrapInstallOutcome, BootstrapPreflightOutcome, BootstrapTokenHash,
-    CredentialRecord, CsrfRequirement, CsrfTokenHash, LoginDelayState, OwnerClaimInput,
-    OwnerClaimOutcome, OwnerClaimRejection, PasswordPhc, PasswordRehash,
-    SessionAuthenticationInput, SessionAuthorization, SessionCreateInput, SessionCreateOutcome,
-    SessionTokenHash, SetupStatus, UserStatus,
+    CredentialRecord, CsrfRequirement, CsrfTokenHash, LoginDelayState, OwnerAccountUpdateInput,
+    OwnerAccountUpdateOutcome, OwnerClaimInput, OwnerClaimOutcome, OwnerClaimRejection,
+    PasswordPhc, PasswordRehash, SessionAuthenticationInput, SessionAuthorization,
+    SessionCreateInput, SessionCreateOutcome, SessionTokenHash, SetupStatus, TerminalAuditEvent,
+    UserPreferencesRecord, UserPreferencesUpdateInput, UserPreferencesUpdateOutcome, UserStatus,
 };
 
-pub const STATE_SCHEMA_VERSION: i64 = 4;
+pub const STATE_SCHEMA_VERSION: i64 = 7;
 pub const METRICS_SCHEMA_VERSION: i64 = 1;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DAEMON_LEASE_FILE: &str = ".helixd.lock";
@@ -185,6 +191,8 @@ pub enum StateError {
     InvalidSecurityInput(&'static str),
     #[error("invalid secret-store input: {0}")]
     InvalidSecretInput(&'static str),
+    #[error("invalid server appearance input: {0}")]
+    InvalidServerAppearanceInput(&'static str),
     #[error("secret record was not found")]
     SecretNotFound,
     #[error("secret revision conflict: expected {expected}, found {actual}")]
@@ -690,6 +698,15 @@ fn migrate_state(
     }
     if current < 4 {
         security::migrate_audit_retention(connection)?;
+    }
+    if current < 5 {
+        security::migrate_preferences_and_capabilities(connection)?;
+    }
+    if current < 6 {
+        appearance::migrate_server_appearances(connection)?;
+    }
+    if current < 7 {
+        security::migrate_terminal_capability(connection)?;
     }
     Ok(())
 }
@@ -1386,6 +1403,12 @@ fn validate_state_semantics(
     if expected_schema_version >= 4 {
         required_tables.push("audit_retention_state");
     }
+    if expected_schema_version >= 5 {
+        required_tables.push("user_preferences");
+    }
+    if expected_schema_version >= 6 {
+        required_tables.push("server_appearances");
+    }
     for table in required_tables {
         let strict = connection
             .query_row(
@@ -1429,6 +1452,30 @@ fn validate_state_semantics(
             (2, "owner-authentication".to_owned()),
             (3, "recoverable-secret-storage".to_owned()),
             (4, "bounded-authentication-audit-retention".to_owned()),
+        ],
+        5 => vec![
+            (1, "foundational-state".to_owned()),
+            (2, "owner-authentication".to_owned()),
+            (3, "recoverable-secret-storage".to_owned()),
+            (4, "bounded-authentication-audit-retention".to_owned()),
+            (5, "dashboard-preferences-and-owner-capabilities".to_owned()),
+        ],
+        6 => vec![
+            (1, "foundational-state".to_owned()),
+            (2, "owner-authentication".to_owned()),
+            (3, "recoverable-secret-storage".to_owned()),
+            (4, "bounded-authentication-audit-retention".to_owned()),
+            (5, "dashboard-preferences-and-owner-capabilities".to_owned()),
+            (6, "server-appearance-customization".to_owned()),
+        ],
+        7 => vec![
+            (1, "foundational-state".to_owned()),
+            (2, "owner-authentication".to_owned()),
+            (3, "recoverable-secret-storage".to_owned()),
+            (4, "bounded-authentication-audit-retention".to_owned()),
+            (5, "dashboard-preferences-and-owner-capabilities".to_owned()),
+            (6, "server-appearance-customization".to_owned()),
+            (7, "terminal-capability".to_owned()),
         ],
         _ => {
             return Err(StateError::UnsupportedSchema {
@@ -1560,6 +1607,55 @@ fn validate_state_semantics(
         )?;
         if !retention_valid {
             failures.push("authentication audit retention state is invalid".to_owned());
+        }
+    }
+    if expected_schema_version >= 5 {
+        for capability in [
+            "dashboard.customize",
+            "games.backups.manage",
+            "games.view",
+            "games.manage",
+            "network.firewall.read",
+            "network.firewall.write",
+            "storage.analyze",
+            "storage.files.read",
+            "storage.files.manage",
+            "system.packages.read",
+            "system.packages.write",
+            "system.power",
+            "system.settings.write",
+            "users.manage",
+        ] {
+            let owner_has_capability = connection.query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM roles r
+                    JOIN role_capabilities rc ON rc.role_id = r.id
+                    WHERE r.name = 'owner' AND r.is_system = 1
+                          AND rc.capability = ?1
+                )",
+                [capability],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !owner_has_capability {
+                failures.push(format!("owner capability {capability} is missing"));
+            }
+        }
+    }
+    if expected_schema_version >= 7 {
+        let owner_has_terminal = connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM roles r
+                JOIN role_capabilities rc ON rc.role_id = r.id
+                WHERE r.name = 'owner' AND r.is_system = 1
+                      AND rc.capability = 'terminal.open'
+            )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !owner_has_terminal {
+            failures.push("owner capability terminal.open is missing".to_owned());
         }
     }
 

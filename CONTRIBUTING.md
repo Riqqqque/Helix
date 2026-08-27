@@ -1,6 +1,8 @@
 # Contributing to Helix
 
-Helix is early-stage systems software. Small, well-tested changes are more useful than broad feature scaffolding, and a green build does not by itself make a runtime, game, backup, or security claim true.
+Helix is private-alpha systems software. Small, well-tested changes are more
+useful than broad feature scaffolding, and a green build does not by itself make
+a runtime, game, backup, deployment, or security claim true.
 
 Code, documentation, tests, design discussion, and review feedback are welcome.
 By submitting a contribution, you agree to license it under
@@ -9,17 +11,27 @@ submit it and must identify copied or adapted work and its license.
 
 ## Before starting
 
-- Read [the architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY.md), and [roadmap](ROADMAP.md).
+- Read [how Helix works](docs/HOW-HELIX-WORKS.md), the
+  [security model](docs/SECURITY.md), and the [roadmap](ROADMAP.md).
 - Read [the support guide](SUPPORT.md) before opening a question or defect.
 - Check `PROGRESS.md` for what has actually been verified and `NEXT.md` for the current resumption point.
-- Open an issue before introducing a new privileged boundary, database, runtime dependency, plugin model, wire format, or large frontend framework.
+- Open an issue before introducing a new privileged operation, database, runtime
+  dependency, extension model, wire format, or large frontend framework.
 - Never put credentials, recovery material, private host data, game data, or proprietary assets in an issue, fixture, log, or commit.
 
 ## Development approach
 
-Keep changes focused and preserve the dependency direction described in the architecture. Optional features must not create idle work when disabled. Validate input at its trust boundary, bound memory and concurrency, and keep important writes recoverable.
+Keep changes focused and preserve the browser → unprivileged API → typed broker
+boundary. Optional features must not create idle work when disabled. Validate
+input at its trust boundary, bound memory and concurrency, and keep important
+writes recoverable. Never add a general privileged shell or caller-selected
+host command. The optional terminal is deliberately a separate non-root login
+service and must never be folded into `helix-privd` or given its socket group.
 
-Game integrations require current upstream evidence. Verify the exact game version, server distribution, loader, mappings, Java or compatibility-runtime requirement, API, licensing, and download source before changing an integration. A mock process is not proof that a game works.
+Game integrations require current upstream evidence. Verify the exact game
+version, server distribution, loader, mappings, Java or compatibility-runtime
+requirement, API, licensing, and download source before changing an integration.
+A mocked Docker/process adapter is not proof that a real game lifecycle works.
 
 See [Development](docs/DEVELOPMENT.md) for repository conventions and platform limits.
 
@@ -51,7 +63,12 @@ npm run check
 npm audit --audit-level=moderate
 ```
 
-Run the Linux, migration, recovery, packaging, security, and performance checks relevant to the change. If an environment is unavailable, say exactly what could not be tested; do not replace it with a weaker claim.
+Run the Linux, migration, recovery, packaging, broker, Docker, storage, network,
+security, and performance checks relevant to the change. Firewall, reboot,
+package, terminal peer/sudo, and destructive storage tests belong on an isolated
+target. If an
+environment is unavailable, say exactly what could not be tested; do not replace
+it with a weaker claim.
 
 Shell packaging changes also require:
 
@@ -71,7 +88,10 @@ Describe:
 - measured binary, bundle, idle, or latency impact when relevant;
 - remaining risks and platform-specific validation still needed.
 
-Documentation, changelog entries, commit messages, and UI copy should be direct and practical. Avoid marketing claims that the evidence does not support.
+Documentation, changelog entries, commit messages, and UI copy should be direct
+and practical. Keep AMP separate from Helix-native servers, distinguish a
+listener from outside reachability, and avoid package/self-update, player-count,
+loader, modpack, or public-readiness claims the evidence does not support.
 
 ## Security reports
 

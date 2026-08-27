@@ -2,357 +2,296 @@
 
 ## Purpose
 
-This roadmap defines dependency order and exit criteria. It is not a promise of dates and does not prove a feature exists. Verified state belongs in `PROGRESS.md`, with links to builds, tests, measurements, and operational evidence. The exact resumption point belongs in `NEXT.md`.
+This roadmap defines dependency order, not dates. It does not prove a feature
+exists. Current evidence belongs in [PROGRESS.md](PROGRESS.md), and the next
+concrete validation work belongs in [NEXT.md](NEXT.md).
 
-Status vocabulary:
-
-- **NOT STARTED**
-- **DESIGNING**
-- **IMPLEMENTING**
-- **IMPLEMENTED — UNVALIDATED**
-- **TESTED**
-- **BLOCKED**
-- **COMPLETE**
-
-A phase may contain work at several states. The status below is the phase's lowest honest summary, not an average and not a marketing label.
+Status vocabulary: **NOT STARTED**, **DESIGNING**, **IMPLEMENTING**,
+**IMPLEMENTED — UNVALIDATED**, **TESTED**, **BLOCKED**, **COMPLETE**.
 
 ## Sequencing rules
 
-1. Security, integrity, recovery, and resource bounds are part of a feature, not a later polish pass.
-2. The smallest complete vertical slice is preferred over broad fake screens.
-3. Host mutation waits for the typed privileged broker.
-4. Serious game hosting waits for a tested local backup and restore path.
-5. Game support waits for a lifecycle test on the real current software and platform.
-6. Remote Vault and Genome claims wait for successful fresh-machine restoration.
-7. Third-party Strands wait for mature authentication, authorization, jobs, state, and APIs.
-8. Optional dependencies are added only when their feature is enabled and measured.
-9. A later phase may be researched early, but it does not bypass the earlier safety dependency.
+1. Security, recovery, failure behavior, and resource bounds ship with a
+   feature, not after it.
+2. A real narrow vertical slice is better than a broad fake control surface.
+3. Root authority crosses only the typed local broker; Helix never grows a
+   general root shell endpoint.
+4. Existing game services remain independent. AMP is integrated, not absorbed.
+5. A server type is supported only after a real lifecycle and restore matrix on
+   the stated host/game versions.
+6. A listener, container publication, firewall rule, and outside reachability
+   are different facts.
+7. Updates stay unavailable until exact artifacts/candidates can be staged,
+   verified, health-checked, and recovered safely.
+8. Remote and extension claims wait for mature identity, authorization, audit,
+   recovery, and package provenance.
+9. Disabled optional features must not add permanent polling or heavyweight
+   runtime cost.
 
-```text
-Foundation
-   |
-Secure core + real host visibility
-   |
-Typed host administration
-   |
-Safe files and storage
-   |
-Local Vault and tested restore
-   |
-Independent native game execution
-   |
-Validated Sequence engine
-   |
-Certified game integrations
-   |
-Genome and remote Vault
-   |
-Optional Strand ecosystem
-   |
-Release hardening
-```
+## Phase 0 — Private-alpha foundation
 
-## Phase 0 — Foundation
+**Status: TESTED, public release BLOCKED**
+
+Implemented:
+
+- Rust workspace, locked dependency policy, CI, formatting, lint, tests, and
+  frontend asset budgets;
+- unprivileged `helixd`, versioned HTTP API, restrictive web defaults, and
+  separate critical/replaceable state domains;
+- owner bootstrap, login, sessions, CSRF, capability checks, audit foundation,
+  and account updates;
+- compiled responsive Preact dashboard with honest loading, denied, degraded,
+  unavailable, and disconnected states;
+- private container and systemd/broker deployment assets; and
+- `AGPL-3.0-or-later` repository and package metadata.
+
+Still required for a public release:
+
+- clean supported-host install/upgrade/rollback/uninstall matrices;
+- signed artifacts and provenance;
+- independent security review;
+- full recovery/fault/performance/accessibility evidence; and
+- public-network exposure review.
+
+## Phase 1 — Dashboard, Home, and live host visibility
+
+**Status: TESTED**
+
+Implemented:
+
+- Overview, Home, Storage, Network, Host, Terminal, Servers, Hooks, and Settings pages;
+- CPU, memory, swap, uptime, disks, interfaces, routes, services, processes,
+  and bounded listener views;
+- multiple exportable Home layouts with draggable/resizable widgets for clock,
+  host, servers, storage, weather, paged notes, and safe HTTP(S) shortcuts;
+- synchronized revisioned preferences, customizable metric cadence, reorderable
+  navigation, and bounded color controls;
+- System, Midnight, OLED, and Light themes; and
+- responsive keyboard/reduced-motion behavior and lazy feature chunks.
+
+Remaining work includes historical metrics/events, broader operator audit,
+formal screen-reader review, representative devices, and reference Linux
+performance.
+
+## Phase 2 — Typed host, storage, and network administration
+
+**Status: IMPLEMENTED — UNVALIDATED**
+
+Implemented through `helix-privd`:
+
+- configured-root file browsing, bounded text editing, creation, rename,
+  recoverable trash, and cancellable size analysis;
+- Docker/broker integration status and Helix-only resource/error reporting;
+- exact dashboard/gateway restart-policy control for start on boot;
+- immediate and recurring whole-host reboot with hostname confirmation,
+  disruption acknowledgement, timezone evidence, and workload preflight;
+- Linux listener/process, Docker publication, game-port, and UFW inventory;
+- exact Helix-owned UFW allow-rule create/delete/Undo plus a separate confirmed
+  SSH-safety activation path, without reset/default changes;
+- APT/dpkg inventory, explicit package-list refresh, and exact selected-
+  candidate apply jobs with no rollback or auto-reboot claim;
+- bounded Hooks for exact configured services; and
+- an optional current-password-gated, peer-UID-checked non-root PTY service.
+
+Exit criteria:
+
+- clean-host peer-credential and systemd sandbox validation;
+- traversal/symlink/mount, low-disk, interruption, and cancellation matrices;
+- disposable live reboot and UFW tests with unrelated-policy proof; and
+- clear support limits per Ubuntu release and architecture.
+
+Selected package application is implemented but stays in the validation phase
+until interruption, conffile, and dpkg-recovery matrices pass.
+
+## Phase 3 — Native Minecraft control plane
+
+**Status: IMPLEMENTED — UNVALIDATED**
+
+Current native targets:
+
+- Paper;
+- Purpur;
+- Folia;
+- Fabric; and
+- Vanilla.
+
+Implemented:
+
+- Docker-backed isolated instance identities and configured roots;
+- one-click creation with explicit EULA acceptance, validated ports, memory,
+  player limit, and start-on-boot choice;
+- start, stop, restart, update, health, performance, settings, files, logs,
+  console, backups, restore, and background jobs;
+- per-instance operation locks and typed non-shell Docker calls;
+- bounded rotating console archives with cursor pagination across retained
+  boots;
+- restart-required setting metadata; and
+- recoverable backup deletion with opaque trash identity and Undo; and
+- a narrow Fabric-only Modrinth `.mrpack` creation path with verified declared
+  hashes, strict archive bounds, server-safe exclusions, atomic activation, and
+  exact rollback.
+
+Exit criteria require real current-version lifecycle, crash, update, backup,
+restore, disk-full, and long-running retention matrices on each supported host.
+Synthetic high-cardinality tests prove only that Helix stays bounded; they do
+not prove a Minecraft player count.
+
+Forge and NeoForge are not supported in this phase.
+
+## Phase 4 — AMP coexistence
+
+**Status: IMPLEMENTED — UNVALIDATED**
+
+The optional AMP bridge uses a separately protected credential and loopback
+endpoint. Helix can inventory AMP instances and invoke the bounded AMP actions
+it understands. AMP remains the authority for AMP instance files and behavior.
+
+Exit requires versioned live AMP tests, outage/session-expiry/concurrency
+matrices, and proof that discovery or failed actions never alter an AMP
+instance.
+
+## Phase 5 — Minecraft content marketplace
+
+**Status: IMPLEMENTED — UNVALIDATED**
+
+Implemented:
+
+- Modrinth search and project detail;
+- server-software and Minecraft-version filtering;
+- Paper/Purpur plugin, Folia plugin, and Fabric server-mod profiles;
+- rejection of loader mismatch and client-only Fabric content; and
+- bounded background install jobs into the correct instance directory; and
+- all-loader modpack preview with creation limited to stable server-capable
+  Fabric `.mrpack` releases and explicitly non-parity server-safe results.
+
+Remaining:
+
+- real upstream outage/rate-limit/artifact matrices;
+- dependency/conflict/update/rollback behavior;
+- broader restart guidance and world-safety evidence;
+- Linux extraction/resolver/Docker plus upstream/real-pack validation for
+  Fabric `.mrpack` creation; and
+- lifecycle validation across supported game versions.
+
+Vanilla has no plugin/mod install path. Forge, NeoForge, Quilt, CurseForge, and
+broad/full-parity modpack workflows remain unsupported until each has an
+explicit implementation and real matrix. A catalog card is not support.
+
+## Phase 6 — Safe package and Helix updates
+
+**Status: IMPLEMENTED — UNVALIDATED for selected APT candidates; Helix update DESIGNING**
+
+Inventory, explicit list refresh, and exact selected-candidate apply jobs are
+implemented. They make no rollback claim and need disposable failure matrices.
+
+A supported package job must continue to provide:
+
+- explicit candidate selection and immediate revalidation;
+- dpkg lock, disk, conffile, workload, service, and reboot impact preflight;
+- one serialized mutation with bounded durable logs and clear interruption
+  boundaries;
+- no fake rollback claim and no automatic reboot; and
+- clear recovery when apt/dpkg reports partial configuration.
+
+Helix self-update must provide:
+
+- signed and digest-pinned releases;
+- staging and compatibility checks;
+- configuration/data backup;
+- health verification; and
+- automatic rollback to the exact previous release.
+
+`git pull` is not a release updater.
+
+## Phase 7 — Vault, recovery, and migration
+
+**Status: NOT STARTED beyond state snapshots and native backups**
+
+Planned:
+
+- local and second-disk backup destinations;
+- schedules, retention, manifests, checksums, and consistency hooks;
+- staged restore and recovery UI;
+- restore-confidence records based on real drills;
+- encrypted portable Genome export/import; and
+- off-host backup only after a full clean-machine restore succeeds.
+
+A backup is not disaster recovery until a restore drill passes. Helix must
+never delete the only verified copy.
+
+## Phase 8 — Additional game integrations
+
+**Status: NOT STARTED**
+
+Add one deep integration at a time, based on current feasibility and demand.
+Candidates include Bedrock, Velocity, V Rising, Valheim, Palworld, Project
+Zomboid, Rust, Terraria/tModLoader, Factorio, Satisfactory, 7 Days to Die, and
+CS2.
+
+V Rising is visible as a reserved catalog choice, not an install path. Its
+current official dedicated-server distribution is Windows-only, so Linux
+support requires a separately reviewed Wine install/update/backup/restore matrix.
+
+Every integration documents runtime dependencies, ports, config coverage,
+console/query behavior, saves, updates, backups, restore, limitations, and a
+real current lifecycle matrix. A generic process wrapper is not first-class game
+support.
+
+## Phase 9 — Strands and automation
+
+**Status: NOT STARTED beyond author preview tooling**
+
+The current Strand Kit scaffolds and validates a zero-capability manifest. It
+does not install or run code.
+
+Before a runtime exists, Helix needs:
+
+- a stable versioned package and SDK;
+- capability review, grants, revocation, and audit;
+- an optional isolated host with CPU/memory/I/O/storage/network limits;
+- namespaced state and mediated secret handles;
+- isolated lazy UI contributions;
+- package provenance and update review; and
+- hostile-message, timeout, crash, and exhaustion tests.
+
+Native sidecars remain trusted code, not a sandbox.
+
+## Phase 10 — Remote access and public-release hardening
 
 **Status: BLOCKED**
 
-Build the smallest real Helix application and the contracts that prevent later rewrites:
-
-- public-repository structure and contribution documents;
-- Rust workspace with `helix-core`, `helix-auth`, `helix-config`, `helix-state`, `helix-secrets`, `helix-strand-kit`, `helix-system`, `helix-api`, `helixd`, and `helixctl`;
-- lightweight frontend workspace compiled to static assets;
-- architecture, storage, security, performance, recovery, API, Sequence, Strand, Genome, and operational documentation;
-- typed configuration and production/development path policy;
-- critical SQLite initialization, migrations, integrity checks, and bounded execution;
-- common error and structured logging behavior with redaction;
-- versioned API, liveness/readiness, and a real host snapshot;
-- static frontend shell that renders real API data and honest degraded states;
-- graceful startup and shutdown;
-- formatting, lint, unit/integration tests, dependency policy, and CI;
-- systemd, Debian packaging, installer, upgrade, uninstall, and rollback skeletons.
-
-Exit criteria:
-
-- clean workspace build, Clippy, tests, frontend lint/test/build, and secret scan;
-- no fabricated production data or successful no-op controls;
-- a clean supported Ubuntu VM installs a verified artifact and serves the compiled UI;
-- service user, directories, modes, readiness, restart, uninstall preservation, and rollback behavior are tested;
-- initial Linux RSS, CPU, startup, binary, frontend, API, and SQLite baselines are recorded;
-- `PROGRESS.md` and `NEXT.md` make every unvalidated item explicit.
-
-Scaffolding or a page rendering does not complete this phase.
-
-## Phase 1 — Secure core, Lattice, and Pulse
-
-**Status: IMPLEMENTING**
-
-Deliver the first useful authenticated dashboard:
-
-- race-safe owner enrollment;
-- password hashing, session lifecycle, logout, revocation, and CSRF/origin protection;
-- roles and capability-based authorization foundation;
-- encrypted recoverable-secret storage and key lifecycle;
-- read-only host discovery for CPU, memory, uptime, storage, and network;
-- adaptive live and historical metrics with isolated failure behavior;
-- versioned event stream and reconnect behavior;
-- Lattice dashboard layouts and widgets stored in critical state;
-- Midnight, OLED, Nebula, Light, and System theme foundations;
-- responsive, keyboard-accessible, reduced-motion-aware UI;
-- real loading, empty, stale, denied, degraded, and disconnected states.
-
-Exit criteria:
-
-- authentication and authorization positive/negative tests pass;
-- bootstrap cannot be claimed remotely or reused;
-- session and secret redaction tests pass;
-- all displayed host values come from an identified source of truth;
-- metrics failure leaves authentication and critical administration available;
-- disabled metrics and unused widgets have measured negligible background cost;
-- the dashboard meets recorded initial bundle and responsiveness budgets.
-
-## Phase 2 — Host administration
-
-**Status: NOT STARTED**
-
-- versioned local protocol and socket-activated `helix-privd`;
-- systemd service inventory and narrowly authorized controls;
-- process inspection and resource views;
-- operating-system update discovery and previewed application;
-- quick host controls with confirmation and reauthentication;
-- Chronicle audit/change history;
-- health center, storage detail, network detail, and Port Planner;
-- support bundle generation with tested redaction.
-
-Exit criteria include peer-credential enforcement, path/target revalidation, absence of arbitrary command execution, broker fuzzing, systemd failure tests, and complete audit attribution.
-
-## Phase 3 — Files and storage safety
-
-**Status: NOT STARTED**
-
-- root-scoped file manager with descriptor-relative path safety;
-- bounded streaming upload and download;
-- staged, quota-limited archive inspection and extraction;
-- lazy-loaded editor for supported text formats;
-- crash-safe atomic Helix-owned configuration writes;
-- configuration revision, diff, and rollback;
-- storage-pool definitions, mount identity, capacity, health, and placement;
-- low-disk protective mode and operation preflight.
-
-Exit criteria include traversal, symlink-race, mount-replacement, decompression-bomb, permission, disk-full, and process-kill tests. User data must never be overwritten by an unverified staged result.
-
-## Phase 4 — Local Vault
-
-**Status: NOT STARTED**
-
-- integrate the existing verified database-only critical-state snapshot
-  primitive into Vault catalogs, retention, and restore workflows;
-- filesystem backup plans with consistency hooks;
-- local and second-disk Vault destinations;
-- schedules, retention, pre-change backup hooks, manifests, and checksums;
-- staged restore, integrity validation, cleanup, and recovery UI;
-- restore-confidence records based on real drills;
-- backup strategy assistant and recovery-key workflow.
-
-Exit criteria:
-
-- backup and restore survive interruption and restart;
-- corrupted or incomplete data is rejected;
-- state, configuration, and representative game data are restored into a clean fixture;
-- retention never deletes the only good copy or an in-use object;
-- “verified” means checksum and structural verification, while “restore tested” requires an actual restore drill.
-
-## Phase 5 — Native game execution
-
-**Status: NOT STARTED**
-
-- instance domain model and stable filesystem identities;
-- native systemd runtime backend;
-- independent workload lifetime through `helixd` restart and upgrade;
-- resource limits, ports, environment, graceful stop, health, logs, and console;
-- durable install/update/control jobs and incompatible-operation locks;
-- crash-loop protection and evidence-based “why did it stop?” diagnostics;
-- adoption workflow that inspects and backs up before changing an existing service.
-- host-wide admission control and operator-approved CPU, memory, I/O, and disk
-  headroom envelopes;
-- bounded, paginated instance/player/log surfaces and backpressured event
-  delivery as specified in
-  [the game-hosting capacity contract](docs/GAME-HOSTING-CAPACITY.md).
-
-First prove the lifecycle with a simple non-game fixture. Do not use a synthetic
-fixture as proof that a real game is supported. Synthetic high-cardinality tests
-prove only that Helix stays bounded; game capacity requires real load evidence.
-
-## Phase 6 — Sequence engine
-
-**Status: NOT STARTED**
-
-- versioned declarative schema, parser, and validator;
-- identity, platform, dependency, runtime, config, update, backup, and query models;
-- closed typed installer-action set;
-- capability and resource preview;
-- checksum and provenance policy;
-- configuration-schema rendering with raw expert access;
-- cancellation, idempotency, recovery, and compatibility behavior;
-- schema fixtures, negative tests, fuzzing, and reference Sequence.
-
-Sequences never gain arbitrary shell commands or caller-selected privileged paths. A valid schema is not proof that its external download or game lifecycle still works.
-
-## Phase 7 — Minecraft
-
-**Status: NOT STARTED**
-
-Initial certified targets:
-
-- current Vanilla and Paper server workflows;
-- verified Java runtime selection and download;
-- explicit EULA acknowledgement;
-- settings, raw configuration, console, players, worlds, backups, restore, and updates;
-- lifecycle and recovery tests on supported Ubuntu releases.
-
-Then expand based on current upstream support:
-
-- Purpur, Fabric, NeoForge, and modpack workflows;
-- Modrinth integration and terms-compliant CurseForge handling;
-- plugin/mod compatibility, updates, rollback, and world safety;
-- Bedrock;
-- Velocity, Folia, and advanced network management.
-
-Every implementation revalidates current game, loader, mapping, Java, API, dependency, and licensing facts from official sources. Support levels are **Certified**, **Stable**, **Experimental**, or **Community**, each with visible evidence and last-tested versions. Multiple real server types must pass install, start, query, stop, restart, update, backup, and restore before Minecraft can be called broadly complete.
-
-## Phase 8 — V Rising
-
-**Status: NOT STARTED**
-
-Implement and test the current Ubuntu hosting workflow, including SteamCMD, compatibility tooling if upstream still requires it, JSON configuration, ports, updates, query, logs, saves, backup, restore, and graceful shutdown.
-
-Do not freeze an August 2026 compatibility assumption or describe Wine-based execution as native Linux support.
-
-## Phase 9 — Additional games
-
-**Status: NOT STARTED**
-
-Add one deep, tested integration at a time. Candidate order is informed by user demand and current feasibility, not the size of a catalog:
-
-- Valheim;
-- Palworld;
-- Project Zomboid;
-- Rust;
-- Terraria/tModLoader;
-- Factorio;
-- Satisfactory;
-- 7 Days to Die;
-- CS2.
-
-Each integration documents external dependencies, configuration coverage, console/query behavior, saves, update safety, backup consistency, restore, current limitations, and a real lifecycle test matrix. A generic process wrapper may be useful but is not first-class game support.
-
-## Phase 10 — Genome
-
-**Status: NOT STARTED**
-
-- versioned self-describing manifest and compatibility policy;
-- Blueprint exports without bulk game data;
-- Full Clone exports with explicit user-selected content;
-- authenticated encryption and independent recovery material;
-- signed or authenticated metadata, checksums, and provenance;
-- import inspection and dry-run plan;
-- exact and portable clone modes;
-- hardware, path, dependency, storage, and port conflict planning;
-- fresh-machine migration and recovery.
-
-Exit requires successful export and import on two clean machines, malicious/corrupt input rejection, wrong-key behavior, partial-write cleanup, and an honest display of content that cannot be legally or technically bundled.
-
-## Phase 11 — Remote Vault
-
-**Status: NOT STARTED**
-
-- backend abstraction proven by an off-host provider;
-- encrypted, resumable, bandwidth-aware transfer;
-- credential lifecycle and recovery-key separation;
-- repository health, retention, pruning, and integrity checks;
-- interruption, offline, bad-credential, quota, stale-catalog, and corruption behavior;
-- full restore to a fresh machine without the original host.
-
-A remote upload is not disaster recovery until a restore drill succeeds.
-
-## Phase 12 — Strands
-
-**Status: NOT STARTED**
-
-A non-executing `preview-1` authoring tool can scaffold and validate package
-metadata. It intentionally does not count as starting the runtime phase: the
-format is not installable, the host API is not stable, and no extension code is
-loaded.
-
-- versioned manifest and SDK;
-- capability declaration, review, grant, revocation, and audit;
-- optional out-of-process sandbox host;
-- CPU, memory, I/O, storage, network, and call limits;
-- namespaced data and mediated secret handles;
-- isolated, lazy-loaded UI contribution model;
-- package provenance, update review, compatibility, and reference Strand;
-- crash, timeout, hostile-message, and resource-exhaustion tests.
-
-The base daemon must show no Wasm-runtime residency when no Strand requires it. Native sidecars are explicitly trusted code with a stronger warning and separate policy.
-
-## Phase 13 — Hardening and public-release gate
-
-**Status: NOT STARTED**
-
-Perform:
-
-- independent security review and remediation;
-- fuzzing of all high-risk parsers and protocols;
-- fault injection, disk-full, unclean-shutdown, and power-loss testing;
-- memory, CPU, I/O, startup, database, API, and frontend regression analysis;
-- clean install, upgrade, rollback, uninstall, and artifact-integrity matrices;
-- backup, corrupted-backup rejection, state recovery, and fresh-machine restoration drills;
-- accessibility and mobile core-flow review;
-- privacy, telemetry opt-in, and support-bundle redaction review;
-- multiple real game lifecycle matrices;
-- operator, recovery, contributor, and API documentation review.
-
-Public use is blocked while a major control is fake, a security or recovery path is untested, performance exceeds its budget without a documented exception, or release provenance cannot be verified.
-
-## Cross-cutting work
-
-These tracks run throughout every phase:
-
-- **Performance:** baselines, budgets, profiles, bounded resources, and regression evidence.
-- **Security:** threat-model updates, dependency review, secret scanning, permission tests, and least privilege.
-- **Recovery:** operation ledgers, snapshots, rollback, drills, and honest restore confidence.
-- **Accessibility:** semantic structure, keyboard behavior, focus, contrast, scaling, motion, and screen readers.
-- **Privacy:** local-first operation, opt-in telemetry, data inventory, retention, redaction, export, and deletion.
-- **Supply chain:** locked dependencies, minimal features, RustSec/deny policy, frontend audit, signed release metadata, and provenance.
-- **Documentation:** architecture and ADR alignment, source-of-truth maps, operator instructions, and truthful status.
+The container gateway can be constrained to a private LAN and can expose a
+second explicitly configured private entry point suitable for an existing
+Tailscale route. Helix does not install or manage Tailscale.
+
+Before any public recommendation:
+
+- complete independent security review and remediation;
+- validate TLS/proxy trust, remote onboarding, cookie policy, MFA, and brute
+  force behavior as one exposure boundary;
+- fuzz high-risk protocols/parsers;
+- complete power-loss, disk-full, corruption, backup, and recovery drills;
+- sign releases and prove upgrade rollback;
+- complete accessibility/mobile/privacy/support-bundle review;
+- pass multiple real game lifecycle matrices; and
+- record reference resource/performance limits.
+
+Public use stays blocked while a major control is fake, a recovery path is
+untested, a security boundary is unaudited, or release provenance cannot be
+verified.
 
 ## Deferred by design
 
-The following do not belong in the early product:
+Early Helix does not need:
 
-- Kubernetes or a Helix-specific orchestration cluster;
+- Kubernetes or a Helix orchestration cluster;
 - a hypervisor;
-- a database server dependency;
+- a separate database server;
 - a mail or DNS server implementation;
 - a proprietary cloud requirement;
 - distributed consensus;
-- an embedded AI model;
-- a general-purpose root command runner or workflow language.
+- an embedded AI model; or
+- a general-purpose root command runner.
 
-Remote nodes may be considered only after stable identifiers, protocols, permissions, jobs, recovery, and single-host operation have proven durable.
-
-## Immediate unblocked work
-
-1. Validate the existing Phase 0 package, service, filesystem policy, recovery
-   behavior, and MSRV on clean supported Ubuntu hosts.
-2. Finish production master-key delivery, key rotation, and independent recovery
-   around the implemented portable secret envelope.
-3. Add bounded Pulse history and a versioned event stream without creating an
-   idle polling cost when no dashboard is connected.
-4. Persist versioned Lattice layouts and complete formal accessibility and
-   representative mobile review of the authenticated dashboard.
-5. Expand Chronicle beyond bounded authentication/session retention to broader
-   operator events, export, holds, tamper evidence, and off-host forwarding
-   before remote exposure, then perform the independent authentication and
-   deployment-boundary review.
-
-If Linux validation infrastructure is unavailable, continue portable implementation and tests, mark Linux-dependent gates **BLOCKED** or **IMPLEMENTED — UNVALIDATED**, and leave exact reproduction steps in `NEXT.md`.
+Remote nodes can be reconsidered only after single-host identity, protocol,
+permissions, jobs, recovery, and upgrade behavior have proved durable.

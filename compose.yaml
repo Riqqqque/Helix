@@ -1,0 +1,129 @@
+name: ${COMPOSE_PROJECT_NAME:-server-dashboard}
+
+x-common: &common
+  restart: unless-stopped
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  labels:
+    com.centurylinklabs.watchtower.enable: "false"
+
+services:
+  dashboard:
+    <<: *common
+    container_name: server-dashboard
+    image: helix-dashboard:${HELIX_IMAGE_TAG:-local}
+    build:
+      context: .
+      target: dashboard
+      args:
+        HELIX_SOURCE_REVISION: ${HELIX_SOURCE_REVISION:-unknown}
+    read_only: true
+    stop_grace_period: 30s
+    environment:
+      RUST_LOG: helixd=info,tower_http=warn
+      HELIX_PRIVD_SOCKET: /run/helix-host/privd.sock
+      HELIX_TERMINAL_SOCKET: /run/helix-host/terminal/terminal.sock
+      # Password proofs are intentionally memory-hard. Keep glibc from retaining
+      # a separate arena after each short-lived blocking worker exits.
+      MALLOC_ARENA_MAX: "1"
+      MALLOC_MMAP_THRESHOLD_: "131072"
+      MALLOC_TRIM_THRESHOLD_: "131072"
+    group_add:
+      - ${HELIX_BROKER_GID:?set HELIX_BROKER_GID in .env}
+      - ${HELIX_TERMINAL_GID:?set HELIX_TERMINAL_GID in .env}
+    volumes:
+      - type: bind
+        source: ${HELIX_DATA_DIR:-./data}
+        target: /var/lib/helix
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${HELIX_BACKUP_DIR:-./backups}
+        target: /var/lib/helix-backups
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/helix
+        target: /run/helix-host
+        read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    ports:
+      - name: dashboard-lan
+        target: 3000
+        published: ${HELIX_LAN_PORT:-3100}
+        host_ip: ${HELIX_LAN_BIND_ADDRESS:?set HELIX_LAN_BIND_ADDRESS in .env}
+        protocol: tcp
+        app_protocol: http
+    networks:
+      - helix-private
+    healthcheck:
+      test:
+        - CMD
+        - /app/bin/helixctl
+        - --config
+        - /app/config/helix.toml
+        - ready
+        - --timeout-seconds
+        - "3"
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    mem_limit: 128m
+    cpus: 1.0
+    pids_limit: 128
+
+  gateway:
+    <<: *common
+    container_name: server-dashboard-gateway
+    image: helix-dashboard-gateway:${HELIX_IMAGE_TAG:-local}
+    build:
+      context: .
+      target: gateway
+      args:
+        HELIX_SOURCE_REVISION: ${HELIX_SOURCE_REVISION:-unknown}
+    network_mode: service:dashboard
+    depends_on:
+      dashboard:
+        condition: service_healthy
+        restart: true
+    read_only: true
+    stop_grace_period: 10s
+    environment:
+      HELIX_GATEWAY_HOST: ${HELIX_GATEWAY_HOST:?set HELIX_GATEWAY_HOST in .env}
+      HELIX_BROWSER_ORIGIN: ${HELIX_BROWSER_ORIGIN:?set HELIX_BROWSER_ORIGIN in .env}
+      HELIX_ALLOWED_CLIENT_CIDR: ${HELIX_ALLOWED_CLIENT_CIDR:?set HELIX_ALLOWED_CLIENT_CIDR in .env}
+      HELIX_SECONDARY_GATEWAY_HOST: ${HELIX_SECONDARY_GATEWAY_HOST:?set HELIX_SECONDARY_GATEWAY_HOST in .env}
+      HELIX_SECONDARY_BROWSER_ORIGIN: ${HELIX_SECONDARY_BROWSER_ORIGIN:?set HELIX_SECONDARY_BROWSER_ORIGIN in .env}
+      HELIX_SECONDARY_ALLOWED_CLIENT_CIDR: ${HELIX_SECONDARY_ALLOWED_CLIENT_CIDR:?set HELIX_SECONDARY_ALLOWED_CLIENT_CIDR in .env}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+      - /etc/nginx/conf.d:rw,noexec,nosuid,nodev,size=1m,uid=101,gid=101,mode=0755
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          wget -q -O /dev/null --header="Host: $${HELIX_GATEWAY_HOST}"
+          http://127.0.0.1:3000/gateway-healthz
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    mem_limit: 64m
+    cpus: 0.5
+    pids_limit: 64
+
+networks:
+  helix-private:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"

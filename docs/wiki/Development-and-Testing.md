@@ -15,19 +15,19 @@ npm run check
 npm audit --audit-level=moderate
 ```
 
-Shell changes also run Bash syntax checks and ShellCheck. The checked-in CI
-workflow is configured to build with the declared Rust 1.88 minimum and stable
-Rust, scan dependencies and secrets, and exercise the package lifecycle on
-Ubuntu 24.04 with systemd. For commit
-[`fdbbc0a`](https://github.com/Riqqqque/Helix/commit/fdbbc0aeb7b353069c74fe5186d1d48fd65b66ca),
-the hosted run passed 158 target-conditioned Rust tests, the frontend and
-supply-chain gates, CodeQL, and one scoped install/authentication/restart/backup/
-modified-bundle-rejection/reinstall/rollback/uninstall lifecycle.
+The frontend gate covers lint, component/adapter tests, production build, and
+compressed initial-asset budgets. Rust tests cover portable behavior plus pure
+or mocked Linux boundaries where a real host mutation would be unsafe.
 
-That result does not prove every systemd or Unix-permission boundary, clean-VM
-variation, cross-version upgrade, low-disk, power-loss, restore, game, signing,
-or reference-performance behavior. Claims must name the exact platform and test
-that supports them.
+A Windows or mocked pass does not prove Linux filesystem races, systemd, Docker,
+UFW, APT, AMP, reboot, or real Minecraft lifecycle behavior. Run the exact
+Linux checks relevant to a change on an isolated target, record whether each
+operation was real or mocked, and preserve unrelated workloads.
+
+Never run package, firewall, reboot, storage stress, or destructive server tests
+against a host with irreplaceable data or active users. A capacity claim also
+needs the exact game/version/hardware/configuration/load evidence; a synthetic
+fixture proves only control-plane bounds.
 
 ## Preview Strand projects
 
@@ -36,10 +36,13 @@ helixctl strand new system-health --name "System Health"
 helixctl strand check system-health
 ```
 
-These commands create and validate metadata without a daemon, Helix database,
-or extension runtime. They do not make the project installable. See
+These commands create and validate metadata without installing or executing an
+extension. See
 [Building Strands](https://github.com/Riqqqque/Helix/wiki/Building-Strands).
 
-See [Development](https://github.com/Riqqqque/Helix/blob/main/docs/DEVELOPMENT.md),
-[Contributing](https://github.com/Riqqqque/Helix/blob/main/CONTRIBUTING.md), and
-[Performance](https://github.com/Riqqqque/Helix/blob/main/docs/PERFORMANCE.md).
+More detail:
+
+- [Development](https://github.com/Riqqqque/Helix/blob/main/docs/DEVELOPMENT.md)
+- [Contributing](https://github.com/Riqqqque/Helix/blob/main/CONTRIBUTING.md)
+- [Performance](https://github.com/Riqqqque/Helix/blob/main/docs/PERFORMANCE.md)
+- [Progress](https://github.com/Riqqqque/Helix/blob/main/PROGRESS.md)

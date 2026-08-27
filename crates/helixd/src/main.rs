@@ -4,6 +4,7 @@ use clap::Parser;
 use helix_api::ApiState;
 use helix_config::{ConfigOverrides, RuntimeConfig};
 use helix_core::DatabaseStatus;
+use helix_privd::BrokerClient;
 use helix_state::{DatabaseSet, MetricsOpenOutcome, StateDatabase, StateError};
 use helix_system::HostSampler;
 use http_server::{MAX_CONCURRENT_CONNECTIONS, REQUEST_HEADER_TIMEOUT};
@@ -97,8 +98,48 @@ async fn main() -> Result<(), DynError> {
         warn!("compiled frontend index is missing; API and health routes remain available");
     }
 
-    let api_state =
-        ApiState::initialize(HostSampler::new(), metrics_database, Arc::clone(&databases)).await?;
+    let broker = std::env::var_os("HELIX_PRIVD_SOCKET")
+        .map(PathBuf::from)
+        .map(|path| {
+            if !path.is_absolute() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "HELIX_PRIVD_SOCKET must be an absolute path",
+                ));
+            }
+            Ok(BrokerClient::new(path))
+        })
+        .transpose()?;
+    if let Some(broker) = &broker {
+        info!(socket = %broker.socket_path().display(), "host broker configured");
+    } else {
+        warn!("host broker is not configured; host actions, files, and servers remain unavailable");
+    }
+    let terminal_socket = std::env::var_os("HELIX_TERMINAL_SOCKET")
+        .map(PathBuf::from)
+        .map(|path| {
+            if !path.is_absolute() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "HELIX_TERMINAL_SOCKET must be an absolute path",
+                ));
+            }
+            Ok(path)
+        })
+        .transpose()?;
+    let mut api_state = ApiState::initialize_with_broker(
+        HostSampler::new(),
+        metrics_database,
+        Arc::clone(&databases),
+        broker,
+    )
+    .await?;
+    if let Some(path) = terminal_socket {
+        info!(socket = %path.display(), "unprivileged terminal bridge configured");
+        api_state = api_state.with_terminal_socket(path)?;
+    } else {
+        warn!("terminal bridge is not configured; the Terminal page will remain unavailable");
+    }
     let blocking_tasks = api_state.blocking_task_tracker();
     let app = helix_api::router(api_state, config.web_root)?;
     let listener = tokio::net::TcpListener::bind(config.listen).await?;

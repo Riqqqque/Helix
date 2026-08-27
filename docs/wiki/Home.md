@@ -1,45 +1,72 @@
 # Helix Wiki
 
-Helix is a local-first Linux server dashboard built around a small unprivileged
-daemon, recoverable local state, and independently managed workloads.
+Helix is a local-first Linux dashboard for the host, its files, and game
+servers. It pairs a fast web interface with an unprivileged daemon and a narrow
+typed Linux broker, so useful host controls do not require a general root shell.
 
-> Helix is currently an alpha engineering preview. It is loopback-only and is
-> not supported for production servers or irreplaceable data.
+> Helix is a private alpha. Keep it on a network you control, do not expose it
+> directly to the public internet, and do not trust it as the only copy of
+> important data.
+
+The source is licensed under `AGPL-3.0-or-later`. Open source availability does
+not imply production support or a completed security review.
+
+## Why it is useful
+
+Helix brings the common jobs for one server into one place:
+
+- multiple exportable Home layouts with drag-and-drop/resizable status, clock,
+  weather, paged-note, and shortcut widgets plus color controls;
+- live host, storage, network, service, process, and Helix resource views;
+- mounted-drive browsing, bounded text editing, recoverable deletion, and
+  cancellable largest-file/folder analysis;
+- a native Docker-backed Minecraft manager for Paper, Purpur, Folia, Fabric,
+  and Vanilla;
+- persistent bounded console history, settings with restart guidance, backups,
+  a compatibility-aware Modrinth marketplace, and narrow server-safe Fabric
+  `.mrpack` creation;
+- optional AMP discovery and control without pretending AMP instances are
+  Helix-native;
+- Hooks for exact Plex, AMP, Tailscale, Pterodactyl Wings, and Jellyfin service
+  discovery/control;
+- an optional current-password-gated non-root Linux PTY; and
+- selected APT updates, immediate/recurring host reboot, UFW safety activation,
+  and exact Helix start-on-boot controls with explicit preflight/confirmation.
+
+The dashboard is the control plane, not the game process or player network
+path. Closing Helix does not stop a native game container. Actual player
+capacity still depends on the host, world, server software, configuration, and
+mods or plugins.
 
 ## Start here
 
 - [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started)
 - [How Helix Works](https://github.com/Riqqqque/Helix/wiki/How-Helix-Works)
+- [Dashboard and Home](https://github.com/Riqqqque/Helix/wiki/Dashboard-and-Home)
+- [Storage and Files](https://github.com/Riqqqque/Helix/wiki/Storage-and-Files)
+- [Servers and Marketplace](https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace)
+- [Network, Host, and Updates](https://github.com/Riqqqque/Helix/wiki/Network-Host-and-Updates)
+- [Hooks and Terminal](https://github.com/Riqqqque/Helix/wiki/Hooks-and-Terminal)
 - [Architecture](https://github.com/Riqqqque/Helix/wiki/Architecture)
 - [Security and Recovery](https://github.com/Riqqqque/Helix/wiki/Security-and-Recovery)
-- [Development and Testing](https://github.com/Riqqqque/Helix/wiki/Development-and-Testing)
 - [Game Hosting and Capacity](https://github.com/Riqqqque/Helix/wiki/Game-Hosting-and-Capacity)
 - [Building Strands](https://github.com/Riqqqque/Helix/wiki/Building-Strands)
 - [Roadmap and Status](https://github.com/Riqqqque/Helix/wiki/Roadmap-and-Status)
 
-## Current working surface
+## Important limits
 
-- one-time local owner setup and password authentication;
-- revocable, bounded sessions with session-bound CSRF protection;
-- real CPU, memory, swap, storage, network, uptime, OS, architecture, and kernel
-  overview data;
-- durable critical SQLite state and a separate replaceable metrics database;
-- local `status`, `doctor`, `ready`, `setup-token`, and verified `backup-state`
-  CLI operations;
-- development-only `strand new` and `strand check` project tooling that never
-  executes extension code;
-- responsive System, Midnight, OLED, and Light dashboard themes;
-- Linux package install, rollback, and data-preserving uninstall tooling that is
-  covered by one scoped Ubuntu 24.04 systemd lifecycle but not supported for use.
+Broad/unattended package upgrades, signed Helix self-update, public-network
+exposure, and a third-party Strand runtime are not implemented. Exact selected
+APT candidates do have a guarded path but no rollback claim. Helix can inspect
+UFW, manage exact owned allow rules, and separately enable inactive UFW only
+after preserving a verified SSH listener; it cannot configure a router or prove
+outside reachability. It can work behind an already configured private
+Tailscale route and control an existing service, but does not install or
+authenticate Tailscale.
 
-Host mutation, remote access, games, services, files, restore, Vault, Genome,
-Strand installation/execution, and automation remain future work. The dashboard
-does not show fake successful controls for those unfinished capabilities.
+Modpack creation is limited to listed stable server-capable Fabric releases
+from Modrinth and intentionally builds a server-safe subset. Forge, NeoForge,
+Quilt, CurseForge, and broad/full-pack parity are not supported.
 
-Helix will manage game processes but will not run their simulation ticks or
-player traffic. Each game and host determines real player capacity; Helix's
-responsibility is bounded control-plane overhead, resource admission, and
-responsive paginated views.
-
-The authoritative evidence is always
+The authoritative implementation ledger is
 [`PROGRESS.md`](https://github.com/Riqqqque/Helix/blob/main/PROGRESS.md).
