@@ -9,7 +9,8 @@ Helix is a single-host, local-first Linux control plane. Remote nodes are a futu
 ## Architectural invariants
 
 1. `helixd` is a control plane, not the parent process of managed services.
-2. Managed workloads run under systemd and continue through a daemon or frontend failure.
+2. Managed workloads run under their independent systemd/Docker/AMP runtime and
+   continue through a daemon or frontend failure.
 3. `helixd` does not run as root.
 4. Privileged behavior is exposed as narrow typed operations, never as arbitrary shell execution.
 5. Critical state, disposable telemetry, large game data, caches, logs, and secrets have different storage and durability policies.
@@ -31,6 +32,7 @@ helixd (unprivileged) ---- helix-state.db
    |       +------------> read-only /proc, /sys, system APIs
    |
    +-- typed local IPC --> helix-privd (root, socket activated)
+   +-- authenticated IPC -> helix-terminald (optional, one Linux user)
    +-- job dispatch ----> helix-worker (one shot, constrained)
    +-- optional IPC ----> helix-strandd (sandbox host)
    +-- systemd control -> independent managed workloads
@@ -69,7 +71,10 @@ Offline recovery commands may need direct file access. Those commands must be ex
 
 ### `helix-privd`
 
-`helix-privd` is a planned minimal privileged broker, preferably started through a root-owned systemd socket. Its protocol is an allowlist of versioned request and response types such as managing a specific Helix-owned unit or applying a validated ownership change. It must:
+`helix-privd` is the implemented minimal privileged broker, started as a
+separate root systemd service in the checked container deployment. Its protocol
+is an allowlist of versioned request and response types such as managing a
+specific Helix-owned container/rule/path or applying a validated host change. It must:
 
 - authenticate the calling peer using local operating-system credentials;
 - authorize the exact operation and target;
@@ -81,6 +86,16 @@ Offline recovery commands may need direct file access. Those commands must be ex
 
 The broker must not trust validation performed only by `helixd`.
 
+### `helix-terminald`
+
+`helix-terminald` is an optional, separately deployed real-PTY bridge. It runs
+as one configured non-root Linux account, uses a socket group distinct from the
+root broker, and checks the connecting dashboard UID through Linux
+`SO_PEERCRED`. The API requires a fresh dashboard-password proof and a one-use
+session-bound ticket for every WebSocket. The service has bounded frames and
+sessions, clears inherited environment values, kills the PTY on disconnect, and
+does not log terminal input/output. It is not a privileged broker operation.
+
 ### `helix-worker`
 
 `helix-worker` is a planned one-shot execution target for memory-, CPU-, I/O-, or failure-heavy jobs. systemd transient units/scopes should constrain memory, CPU weight, I/O priority, runtime, and cancellation. Workers receive an immutable job identifier and bounded capability description rather than broad daemon credentials. Results are committed through the job protocol; a worker crash must not corrupt unrelated daemon state.
@@ -91,7 +106,11 @@ The broker must not trust validation performed only by `helixd`.
 
 ### Managed workloads
 
-Game servers and adopted services are separate systemd units. Helix records their definitions and observes systemd as the runtime authority. Unit names and paths derive from stable identifiers, never user-controlled display names. Restart policy and crash-loop protection are part of each workload definition.
+Current Helix-native Minecraft servers are separate Docker containers. Adopted
+host services remain exact systemd units, while AMP stays its own manager.
+Helix records stable opaque identities and observes the owning runtime as
+authority; names and paths never derive directly from display names. Restart
+policy and crash-loop protection are part of each workload definition.
 
 Helix is outside the game's simulation and player network path. Hosting detail
 is demand-loaded through bounded pages and streams; no dashboard viewer means no
@@ -114,10 +133,15 @@ The foundation workspace uses these crates:
 | `helix-strand-kit` | Non-executing preview project scaffolding, strict manifest parsing, and author-facing validation summaries | Package installation, signature trust, capability grants, host calls, sandboxing, or extension execution |
 | `helix-system` | Narrow read-only Linux host discovery and metric snapshots | Privileged mutation, persistent polling loops, policy decisions |
 | `helix-api` | Versioned HTTP contracts, routing, extraction, middleware, and response mapping | Direct SQL strings, root operations, business invariants defined only in handlers |
+| `helix-privd` | Closed broker protocol plus Linux host, storage, network, native-server, package, and integration operations | General shell RPC, arbitrary unit/binary execution, frontend state |
+| `helix-terminal` | Framed bounded real-PTY protocol and non-root Linux bridge | Root broker calls, command/output persistence, browser authorization policy |
 | `helixd` | Dependency wiring, process lifecycle, task supervision, graceful shutdown, and asset serving | Reusable domain logic |
 | `helixctl` | CLI presentation and calls into supported administrative interfaces | A second, inconsistent implementation of control-plane policy |
 
-Planned process crates such as `helix-privd`, its shared protocol, `helix-worker`, and `helix-strandd` are added when their phase begins. Dependencies flow inward toward `helix-core`; cyclic dependencies are not allowed. Cross-crate data should use purpose-built types instead of unversioned JSON blobs.
+Planned process crates such as `helix-worker` and `helix-strandd` are added only
+when their phase begins. Dependencies flow inward toward `helix-core`; cyclic
+dependencies are not allowed. Cross-crate data should use purpose-built types
+instead of unversioned JSON blobs.
 
 `helix-system` returns snapshots or subscriptions requested by an orchestrator. It does not start global one-second polling on construction. Read-only does not mean harmless: filesystem reads must be bounded, parsing defensive, and blocking work kept off Tokio executor threads.
 
@@ -274,6 +298,7 @@ Conflicts are surfaced; the UI must not invent a successful state because a butt
 | Critical state | Restrictive permissions; secrets encrypted separately | FULL synchronous SQLite, foreign keys, migrations, integrity checks | Online snapshots, bounded contention, startup recovery |
 | Metrics | Avoid sensitive labels and filenames | Typed samples and schema validation | Failure is isolated; retention and buffers are bounded |
 | Privileged broker | Local socket and peer authentication; no secret output | Typed allowlist, target revalidation, audit trail | Socket activation, timeouts, no dependency for read-only UI |
+| Host terminal | One-use session/password proof; distinct socket group; peer UID | Non-root PTY, bounded frames, no root-broker path | Optional service, two-session cap, disconnect cleanup |
 | Managed workloads | Per-instance permissions and secret scoping | Stable IDs, systemd definitions, controlled changes | Independent lifetime, resource limits, crash-loop protection |
 | Workers | Minimum job capability and sanitized logs | Immutable inputs, checksums, staged output | Resource limits, cancellation, resumable/reconciled jobs |
 | Strands | Capability-scoped APIs and namespaced storage | Signed/verified packages and validated messages | Optional host, quotas, crash isolation |

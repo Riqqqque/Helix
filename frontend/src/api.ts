@@ -1,4 +1,5 @@
 import type {
+  AccountUpdateInput,
   AuthenticatedUser,
   AuthenticatedUserResponse,
   AuthSession,
@@ -23,7 +24,7 @@ const MAX_NETWORK_ADDRESSES = 256;
 const MAX_HOST_TEXT_BYTES = 32_768;
 const U64_MAX = 18_446_744_073_709_551_615n;
 
-type JsonRecord = Record<string, unknown>;
+export type JsonRecord = Record<string, unknown>;
 
 export class ApiError extends Error {
   override readonly name = 'ApiError';
@@ -37,7 +38,7 @@ export class ApiError extends Error {
   }
 }
 
-function expectRecord(value: unknown, context: string): JsonRecord {
+export function expectRecord(value: unknown, context: string): JsonRecord {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new ApiError(`${context} returned an invalid response.`);
   }
@@ -45,7 +46,7 @@ function expectRecord(value: unknown, context: string): JsonRecord {
   return value as JsonRecord;
 }
 
-function expectString(record: JsonRecord, key: string, context: string): string {
+export function expectString(record: JsonRecord, key: string, context: string): string {
   const value = record[key];
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new ApiError(`${context} returned an invalid ${key} value.`);
@@ -63,7 +64,7 @@ function expectBoolean(record: JsonRecord, key: string, context: string): boolea
   return value;
 }
 
-function expectArray(
+export function expectArray(
   record: JsonRecord,
   key: string,
   context: string,
@@ -111,7 +112,7 @@ function expectNullableHostText(
   return expectHostText(record, key, context);
 }
 
-function expectNumber(
+export function expectNumber(
   record: JsonRecord,
   key: string,
   context: string,
@@ -610,11 +611,12 @@ export function parseSystemOverview(value: unknown): SystemOverview {
   };
 }
 
-interface JsonRequestOptions {
-  method?: 'GET' | 'POST';
+export interface JsonRequestOptions {
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   csrfToken?: string;
   signal?: AbortSignal | undefined;
+  timeoutMs?: number;
 }
 
 async function apiProblem(response: Response, path: string): Promise<ApiError> {
@@ -636,7 +638,7 @@ async function apiProblem(response: Response, path: string): Promise<ApiError> {
   return new ApiError(message, response.status, code);
 }
 
-async function requestJson<T>(
+export async function requestJson<T>(
   path: string,
   parser: (value: unknown) => T,
   options: JsonRequestOptions = {},
@@ -645,7 +647,10 @@ async function requestJson<T>(
   const { signal } = options;
   const cancelRequest = (): void => controller.abort(signal?.reason);
   signal?.addEventListener('abort', cancelRequest, { once: true });
-  const timeout = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = globalThis.setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? REQUEST_TIMEOUT_MS,
+  );
 
   try {
     const response = await fetch(path, {
@@ -674,7 +679,12 @@ async function requestJson<T>(
       throw new ApiError(`${path} did not return valid JSON.`);
     }
 
-    return parser(payload);
+    try {
+      return parser(payload);
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(`${path} returned data Helix could not safely understand.`);
+    }
   } catch (error) {
     if (error instanceof ApiError) {
       throw error;
@@ -728,6 +738,38 @@ export function login(input: LoginInput): Promise<AuthSession> {
     method: 'POST',
     body: input,
   });
+}
+
+export async function updateAccount(
+  input: AccountUpdateInput,
+  csrfToken: string,
+): Promise<void> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch('/api/v1/auth/account', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Helix-CSRF': csrfToken,
+      },
+      body: JSON.stringify(input),
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!response.ok) throw await apiProblem(response, '/api/v1/auth/account');
+    if (response.status !== 204) {
+      throw new ApiError('The account update returned an unexpected response.');
+    }
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    if (controller.signal.aborted) throw new ApiError('The account update timed out.');
+    throw new ApiError('Could not reach /api/v1/auth/account.');
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 export function rotateCsrf(

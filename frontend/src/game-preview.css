@@ -1,0 +1,26 @@
+.game-preview-shell {
+  display: grid;
+  width: min(100%, 94rem);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: clamp(1.5rem, 4vw, 3rem);
+  gap: 1rem;
+  align-content: start;
+}
+
+.game-preview-shell--narrow {
+  max-width: 26.875rem;
+}
+
+.game-preview-label {
+  width: fit-content;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--warning);
+  border-radius: 0.4rem;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.68rem;
+  font-weight: 720;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}

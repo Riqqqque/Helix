@@ -1,120 +1,145 @@
 # Next Helix Work
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
 ## Current resumption point
 
-The loopback secure-core slice is implemented and locally tested. Continue with
-the highest-value work that does not pretend the blocked Linux gates passed:
+Helix is a working private alpha with a native Docker-backed Minecraft manager,
+an optional separate AMP bridge, persistent console history, recoverable
+backups, multi-layout Home, Hooks, storage analysis, guarded selected-package
+updates, host controls, and an optional non-root terminal.
 
-1. wire the installation master key through a reviewed systemd credential path,
-   define effective in-memory lifetime, and implement atomic key
-   rotation/rewrapping plus independent recovery;
-2. add bounded Pulse history and a versioned event/reconnect stream without an
-   idle polling or write cost when no dashboard is connected;
-3. persist versioned Lattice layouts and widget configuration in critical state;
-4. complete formal screen-reader, zoom/scaling, reduced-motion, and
-   representative-device checks;
-5. design Chronicle export, holds, hash chaining, and off-host forwarding
-   without weakening the fixed local retention boundary;
-6. keep the Strand Kit preview manifest-only until the Phase 12 permission,
-   audit, job, package-provenance, SDK, and sandbox boundaries are ready;
-7. rerun the full portable suite and update this file after each boundary lands.
+The next work is validation and hardening, not adding optimistic buttons to
+unfinished backends.
 
-Do not reopen remote binding as part of these items. TLS, proxy trust, cookie
-policy, MFA, rate-limit field testing, and an independent authentication review
-must be handled as one explicit exposure boundary.
+## Priority order
 
-## Exact target-host validation
+1. **Run the full Linux gate on a disposable target.** Verify the exact broker
+   and terminal service/socket identities, distinct groups, `SO_PEERCRED`,
+   owners/modes, writable roots, sandbox exceptions, dashboard/gateway
+   containers, and no unrelated workload changes.
+2. **Exercise each advertised native Minecraft path.** For Paper, Purpur,
+   Folia, Fabric, and Vanilla, cover install, start, query, console, settings,
+   restart, stop, update, backup, restore, crash recovery, and removal behavior
+   on pinned current versions.
+3. **Prove console retention over time.** Keep the dashboard closed through
+   multiple server boots, rotate retained segments, paginate older entries, and
+   inject disk/read-only/interruption failures without losing current state.
+4. **Complete native backup failure matrices.** Test interrupted creation,
+   disk-full behavior, exact trash/Undo expiry, corrupt archives, restore into a
+   clean fixture, and preservation of the last known-good copy.
+5. **Validate storage on disposable trees and mounts.** Cover symlink and mount
+   replacement races, deep/wide trees, cancellation, permission loss, low disk,
+   and large-file/folder ordering. Do not point stress tests at irreplaceable
+   media libraries.
+6. **Validate network inventory without changing policy.** Compare listener,
+   Docker publication, UFW, and game-port evidence on the target. Keep outside
+   reachability labeled unknown unless an actual external probe is added.
+7. **Run UFW mutation tests only on a disposable rule set.** Verify exact
+   Helix-owned create/delete/Undo, crash-pending reconciliation, inactive and
+   unavailable behavior, the separate SSH-safety activation/failed-activation
+   recovery flow, and proof that unrelated rules/defaults never change.
+8. **Validate host integration controls.** Confirm start-on-boot changes only
+   the exact dashboard/gateway restart policies. Schedule and cancel reboot
+   timers with a mock or disposable host first; never let an automated test
+   reboot a live workload host.
+9. **Validate selected package jobs on disposable Ubuntu fixtures.** Cover stale
+   candidates, holds, locks, low disk, unexpected additions/removals, conffile
+   preservation, maintainer-script failure, interruption, partial dpkg state,
+   bounded logs, final-version proof, and the no-auto-reboot contract. Keep the
+   explicit no-rollback claim.
+10. **Design signed Helix updates.** Require signed and digest-pinned releases,
+    staging, configuration/data backup, compatibility checks, health
+    verification, and automatic rollback. Do not implement `git pull` as an
+    updater.
+11. **Exercise Modrinth content and Fabric `.mrpack` creation.** Test real
+    Paper/Purpur/Folia plugin and Fabric server-mod installs, then run pinned
+    stable server-capable Fabric packs through search, preview, archive/hash
+    checks, server-safe exclusions, startup, backup, restart, and rollback.
+    Cover upstream errors, wrong loaders/versions, duplicates, disk pressure,
+    partial downloads, and client-only content without claiming full-pack
+    parity.
+12. **Finish release gates.** Independent security review, master-key delivery
+    and recovery, public-boundary review, accessibility, mobile, performance,
+     and clean install/upgrade/rollback/uninstall matrices remain required.
+13. **Exercise the optional terminal boundary.** Cover wrong/stale/replayed
+    tickets, cross-origin upgrades, wrong peer UID/group, concurrent limits,
+    disconnect/kill, resize/UTF-8/full-screen apps, sudo policy, service restart,
+    and proof that commands/output never enter logs or audit.
 
-One GitHub-hosted Ubuntu 24.04 systemd lifecycle passed for commit
-[`fdbbc0a`](https://github.com/Riqqqque/Helix/commit/fdbbc0aeb7b353069c74fe5186d1d48fd65b66ca).
-It covered the declared Rust toolchains, archive verification, fresh install,
-owner claim, protected authentication/API flows, selected ownership/modes and
-unit hardening, forced-crash restart, clean stop/start, full doctor, verified
-backup, secret-redaction canaries, modified-bundle manifest rejection, repeat
-install, explicit package-file rollback, and data-preserving uninstall. CI first
-verified the runner's `/usr/share` ancestor was root-owned with its unusual
-`0777` mode, then normalized it to the conventional root-owned `0755` baseline
-so Helix's production path checks ran unchanged.
+## Private network and Tailscale
 
-That scoped disposable-runner result is not the complete support matrix. On a
-clean current Ubuntu Server VM with systemd and cgroup v2, start with the
-portable subset of the checked-in CI commands:
+Keep the default source-development bind on loopback. A private container
+deployment may use an explicitly configured LAN gateway and a separately
+constrained secondary entry point suitable for an already configured Tailscale
+route.
 
-```bash
-rustup toolchain install 1.88.0 --component rustfmt,clippy
-rustup toolchain install stable --component rustfmt,clippy
+Validation must confirm exact Host/Origin/client-CIDR handling on every entry
+point. Helix must not install, enable, authenticate, or reconfigure Tailscale.
+Do not treat the whole Tailscale carrier-grade NAT range as trusted merely
+because one node uses Tailscale.
 
-cargo +stable fmt --all -- --check
-cargo +1.88.0 check --locked --workspace --all-targets --all-features
-cargo +1.88.0 test --locked --workspace --all-targets --all-features
-cargo +stable check --locked --workspace --all-targets --all-features
-cargo +stable clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo +stable test --locked --workspace --all-targets --all-features
-cargo +stable build --locked --release --workspace --all-features
+Public internet exposure remains out of scope for the alpha.
 
-cd frontend
-npm ci --no-audit --no-fund
-npm run check
-npm audit --audit-level=moderate
-cd ..
+## Minecraft expansion rules
 
-bash -n scripts/package-common.sh scripts/install-local.sh \
-  scripts/rollback-local.sh scripts/uninstall-local.sh scripts/build-release.sh
-./scripts/build-release.sh
-```
+- Paper, Purpur, Folia, Fabric, and Vanilla are the current native choices.
+- Forge and NeoForge stay visibly unavailable until their current Java,
+  installer, mappings, artifact, license, lifecycle, and update behavior are
+  implemented and tested from official sources.
+- Do not describe a catalog explanation as support.
+- The current modpack path is intentionally narrow: listed stable
+  server-capable Fabric releases from Modrinth with one unambiguous `.mrpack`,
+  pinned Minecraft/Fabric Loader, verified declared hashes, strict archive
+  bounds, and server-safe exclusion of optional/client-only files. It is not
+  byte-for-byte full-pack parity.
+- Do not expand that evidence into broad modpack support. Forge, NeoForge,
+  Quilt, unknown loaders, client parity, update/dependency reconciliation, and
+  real pack matrices need their own implementation and tests.
+- CurseForge integration needs an explicit terms-compliant API and artifact
+  plan. Do not scrape or silently mirror it.
+- Folia content must remain Folia-compatible; Paper fallback is not assumed.
+- Vanilla does not receive a fake plugin/mod marketplace.
 
-Then run the behavior that this Windows workspace cannot prove:
+## AMP boundary
 
-- verify bundle checksums, install as root, and confirm `helixd` runs only as
-  the dedicated `helix` account;
-- assert owners and modes for configuration, binaries, assets, state, metrics,
-  lock, WAL/SHM, backup, cache, runtime, and systemd credential paths;
-- test clean start/stop, SIGTERM, forced crash restart, second-daemon refusal,
-  bind conflict, invalid configuration, metrics unavailable/corrupt, state
-  corruption, read-only storage, low disk, interrupted migration, stale lock
-  artifacts, and pending snapshot reconciliation;
-- exercise packaged first-owner creation, concurrent claim rejection,
-  login/logout/expiry/revocation/CSRF/Host/rate-limit failures, session
-  maintenance convergence, and log/database token redaction;
-- test upgrade, automatic rollback, explicit rollback, uninstall with data
-  preservation, and repeated installation;
-- record the full reference protocol in `docs/PERFORMANCE.md`, including at
-  least ten minutes of idle CPU/wakeup evidence and repeated startup samples.
+AMP remains separate software with its own instances, files, credentials, and
+lifecycle rules. Helix may show and invoke supported AMP operations through the
+loopback bridge, but it must not:
 
-Phase 0 remains **BLOCKED**, not complete, until that matrix passes.
-
-## Current workspace state
-
-- The Windows development host had no usable Linux, WSL, Docker, or Podman
-  target. Its live measurements remain non-reference and separate from the
-  committed hosted Ubuntu result above.
-- Hosted Ubuntu validation proves only the named commit, runner, and exercised
-  lifecycle. Clean-VM, cross-version, schema-downgrade, complete fault-injection,
-  low-disk/power-loss, restore, signing, architecture, and reference-performance
-  evidence remains absent.
-- Preserve any uncommitted work when resuming; do not clean, reset, or replace
-  it as a shortcut.
-- Disposable E2E state and project-local audit tools are safe to recreate, but
-  must not be committed.
-
-## Pending owner decisions
-
-- Choose initial supported Ubuntu releases and architectures only after
-  clean-host testing.
-- Choose release-signing identities and the key-compromise recovery procedure.
+- move or rewrite an AMP instance as part of discovery;
+- identify an AMP instance as Helix native;
+- assume native backup/settings/marketplace semantics apply to AMP; or
+- report success when AMP is stopped, unreachable, unauthorized, or ambiguous.
 
 ## Do not do next
 
-- Do not bind remotely, trust forwarded headers, or publish the setup surface
-  merely because loopback authentication tests pass.
-- Do not add a privileged broker or arbitrary shell execution to accelerate host
-  controls.
-- Do not claim backup restore, Genome recovery, or game support before real
-  end-to-end restore and lifecycle evidence.
-- Do not start Minecraft integration without rechecking the exact current game,
-  Java, loader, mappings, API, dependency, and download requirements from
-  official sources.
-- Do not commit generated build output, local databases, logs, tokens, audit
-  tools, or benchmark host identifiers.
+- Do not publish a public release or mark the project production-ready.
+- Do not expose setup/login/API routes directly to the public internet.
+- Do not add a general privileged shell or caller-selected root command.
+- Do not broaden selected APT Apply into unattended upgrade, removal, dependency
+  installation, rollback, or Helix self-update claims.
+- Do not claim a listener, Docker mapping, or UFW rule proves outside access.
+- Do not reset UFW, change its defaults, or bypass the confirmed SSH-safety
+  activation flow.
+- Do not install Tailscale automatically.
+- Do not claim Forge, NeoForge, Quilt, CurseForge, or broad/full-parity modpacks
+  are supported.
+- Do not run destructive storage, firewall, reboot, or package tests against a
+  host with live users or irreplaceable data.
+- Do not commit tokens, passwords, private addresses, hostnames, deployment
+  roots, logs, databases, or generated build output.
+
+## When a validation pass finishes
+
+Record:
+
+- exact revision and host conditions;
+- commands and test results;
+- which operations were real, mocked, or skipped;
+- preserved workloads and rollback state;
+- failures and unverified edge cases; and
+- the narrow claim the evidence supports.
+
+Then update [PROGRESS.md](PROGRESS.md) without converting a focused pass into a
+general platform-support claim.

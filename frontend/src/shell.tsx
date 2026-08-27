@@ -2,6 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useState } from 'preact/hooks';
 import {
   destinationForSetupStatus,
+  accountUpdatedView,
   sessionExpiredView,
   validateSetupCandidate,
   viewAfterSetupConflict,
@@ -438,6 +439,10 @@ export function App() {
     (): void => setView(sessionExpiredView()),
     [],
   );
+  const accountUpdated = useCallback(
+    (): void => setView(accountUpdatedView()),
+    [],
+  );
 
   if (view.kind === 'loading') {
     return <LoadingView />;
@@ -479,6 +484,7 @@ export function App() {
       user={currentSession.user}
       csrfToken={currentSession.csrfToken}
       onSessionExpired={sessionExpired}
+      onAccountUpdated={accountUpdated}
       onLogout={signOut}
     />
   );

@@ -5,223 +5,234 @@
 <h1 align="center">Helix</h1>
 
 <p align="center">
-  A local-first Linux server dashboard engineered to stay small, recover cleanly, and tell the truth about what it can do.
+  A local-first Linux dashboard for the host, its files, and independently managed game servers.
 </p>
 
 <p align="center">
   <a href="https://github.com/Riqqqque/Helix/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/Riqqqque/Helix/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-f0c76a">
+  <img alt="Status: private alpha" src="https://img.shields.io/badge/status-private%20alpha-f0c76a">
   <img alt="Rust MSRV: 1.88" src="https://img.shields.io/badge/rust-1.88%2B-71e6a3">
   <a href="LICENSE"><img alt="License: AGPL-3.0-or-later" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-71e6a3"></a>
 </p>
 
 > [!CAUTION]
-> Helix is an alpha engineering preview, not a supported production control
-> plane. It currently binds to loopback only. Do not expose it through a proxy,
-> entrust it with irreplaceable data, or treat planned server-management features
-> as implemented. See [the exact verified state](PROGRESS.md) before using it.
+> Helix is a private alpha, not a supported public release. Keep it on a
+> network you control. Do not expose it directly to the public internet or
+> trust it as the only copy of important data. Read [PROGRESS.md](PROGRESS.md)
+> before relying on a control.
 
-## What works today
+## What Helix is
 
-The current build is a real, compiled dashboard foundation rather than a mock UI:
+Helix combines a responsive web dashboard, an unprivileged Rust service, and a
+narrow typed Linux broker. It gives the browser useful host controls without
+turning the dashboard into a general root shell.
 
-- one-time local owner setup, Argon2id password login, revocable sessions, and
-  session-bound CSRF protection;
-- a protected overview of CPU, memory, swap, storage, network, uptime, OS,
-  architecture, and kernel data;
-- separate durable critical-state and replaceable metrics SQLite databases;
-- migration snapshots, integrity checks, unclean-shutdown detection, verified
-  online state backup, and an exclusive daemon lease;
-- `helixctl` `status`, `doctor`, `ready`, `setup-token`, and `backup-state`
-  commands, plus development-only `strand new` and `strand check` tooling;
-- a responsive Preact interface with System, Midnight, OLED, and Light themes;
-- scripts for a checksummed Linux bundle, transactional package-file install,
-  rollback, and conservative data-preserving uninstall. One scoped Ubuntu 24.04
-  systemd lifecycle passed for commit [`fdbbc0a`](https://github.com/Riqqqque/Helix/commit/fdbbc0aeb7b353069c74fe5186d1d48fd65b66ca),
-  but the broader support matrix remains open and these are not a supported
-  installer.
+The current private-alpha build includes:
 
-Not implemented yet: remote access, TLS/proxy trust, MFA, host mutation, service
-or game management, file management, restore, Vault, Genome, Strand
-installation/execution, and the broader automation roadmap. Helix never renders
-a successful fake control for an unfinished backend.
+- local owner setup, Argon2id password login, revocable sessions, CSRF
+  protection, and owner username/password changes;
+- live CPU, memory, swap, disk, network, service, process, and Helix-only
+  resource views;
+- multiple named Home layouts with drag-and-drop/resizable clock, host, server,
+  storage, weather, paged-note, and website-shortcut widgets, per-widget color,
+  and JSON export/import;
+- mounted-drive browsing, bounded text editing, folder/file creation, rename,
+  recoverable deletion, and cancellable largest-file/folder analysis inside
+  configured storage roots;
+- separate views for local listeners, Docker port publications, UFW state, game
+  port mappings, and externally unverified reachability;
+- narrowly scoped, named UFW allow rules with exact Helix ownership metadata,
+  verified deletion, and bounded Undo when UFW is available and active;
+- APT/dpkg inventory, explicit package-list refresh, and an exact selected-
+  candidate update job with held-package, disk, no-removal simulation, conffile,
+  final-version, and never-auto-reboot guards;
+- native Docker-backed Minecraft instances for Paper, Purpur, Folia, Fabric,
+  and Vanilla, plus a compatibility-aware Modrinth plugin/mod marketplace and
+  a narrow Fabric-only “Start with a modpack” path;
+- start, stop, restart, update, backup, settings, files, performance, logs, and
+  console tools for native instances;
+- bounded persistent native console history that survives browser closes and
+  spans retained server boots;
+- recoverable native backup deletion and explicit restart-required metadata on
+  settings;
+- optional AMP discovery/control through a separate loopback integration. AMP
+  remains its own manager; Helix does not relabel AMP instances as native;
+- a Hooks page for bounded discovery and verified lifecycle control of AMP,
+  Plex, Tailscale, Pterodactyl Wings, Jellyfin, and root-configured systemd
+  services, while each upstream service keeps ownership of its settings;
+- an optional real Linux PTY that runs as one configured unprivileged host
+  user, requires the current Helix password for every one-use connection, and
+  does not record commands or output;
+- exact Helix dashboard/gateway start-on-boot controls and a scheduled,
+  cancellable immediate or recurring host reboot flow with hostname, timezone,
+  workload, and disruption checks; and
+- a responsive Preact UI with reorderable navigation, System, Midnight, OLED,
+  and Light themes, and bounded custom accent/surface/text colors.
+
+These paths have typed protocol, API, and portable/mock coverage. The complete
+supported-Ubuntu lifecycle, fault, firewall, package, game-version, and
+marketplace matrices are still release gates. See
+[the verified state](PROGRESS.md) for the distinction between implemented and
+validated.
+
+## Honest limits
+
+Helix does not currently:
+
+- make a listening port reachable from the internet, configure a router, or
+  prove outside reachability;
+- disable or reset UFW, or change its default policies. A separate confirmed
+  activation flow can enable an installed inactive UFW only after preserving a
+  verified listening SSH port;
+- perform broad unattended upgrades or claim package rollback. Only exact
+  selected APT candidates are supported and Linux never reboots automatically;
+- update itself from Git, GitHub, or an unsigned artifact;
+- install, authenticate, or reconfigure Tailscale. Hooks provides guided setup,
+  detection, service control, and a constrained route for an existing setup;
+- provide a supported Forge, NeoForge, Quilt, CurseForge, or broad/full-parity
+  modpack workflow;
+- provide MFA, a public-network security review, or a signed release channel;
+- run third-party Strands; or
+- replace independent backups and restore drills.
+
+Helix self-update stays disabled until the backend can stage and verify a signed
+release, preserve configuration/data, health-check, and roll back the exact
+deployment. Selected APT updates are supported but deliberately make no rollback
+claim. Unsupported states are shown as unsupported rather than rendered as
+successful no-ops.
 
 ## How it fits together
 
 ```mermaid
 flowchart LR
-  Browser[Compiled web dashboard] -->|loopback HTTP| Daemon[helixd]
-  CLI[helixctl] --> State[(Critical SQLite state)]
-  Daemon --> State
-  Daemon --> Metrics[(Replaceable metrics SQLite)]
-  Daemon --> Host[Read-only host adapters]
-  Games[Games and services] -. remain independent .- Daemon
+  Browser[Web dashboard] --> Gateway[Private gateway]
+  Gateway --> Daemon[helixd]
+  Daemon --> State[(Critical and preference state)]
+  Daemon -->|typed local protocol| Broker[helix-privd]
+  Daemon -->|one-use authenticated bridge| Terminal[unprivileged Linux PTY]
+  Broker --> Host[Linux host controls]
+  Broker --> Native[Helix native Docker servers]
+  Broker -->|optional loopback API| AMP[AMP-managed servers]
 ```
 
-`helixd` is unprivileged. Managed workloads are intended to remain independent
-systemd units, so restarting the dashboard must not stop a game. Future privileged
-operations belong behind a narrow typed broker—not a general root shell.
+`helixd` stays unprivileged. `helix-privd` accepts a closed set of typed
+operations, validates configured roots and exact object identities, and has no
+general root-shell RPC. Native game workloads are Docker containers and keep
+running when the dashboard is closed. AMP workloads remain owned by AMP. The
+optional terminal is a separate non-root service and ends its PTY when the
+browser disconnects.
 
-Read [How Helix works](docs/HOW-HELIX-WORKS.md) for the plain-language request
-flow, process boundaries, data model, future pieces, and product appeal.
+Read [How Helix works](docs/HOW-HELIX-WORKS.md) for the longer walkthrough.
 
-## What controls player capacity
+## Private network access
 
-Helix will manage game servers, but it will not execute game ticks or sit in the
-player network path. Real player capacity depends on the exact game, server
-build, plugins or mods, world, hardware, and configuration. Helix's job is to
-keep its own overhead bounded, apply operator-approved systemd/cgroup resource
-envelopes, schedule expensive work fairly, and avoid loading every player or log
-line at once.
+The development service defaults to loopback. The container deployment supports
+an explicitly configured private-LAN gateway and an optional second private
+entry point suitable for Tailscale routing. Helix does not install, enable, or
+reconfigure Tailscale, and “Tailscale-compatible” is not a claim that remote
+access was configured or audited.
 
-Game hosting is not implemented yet, so there is no honest player-count claim
-today. The required one-player-to-high-cardinality design and the load evidence
-needed before making one are documented in
+A public domain is not required for a private deployment. Public exposure is
+not supported by this alpha. See
+[Container deployment](docs/CONTAINER-DEPLOYMENT.md) for the exact boundary.
+
+## Minecraft scope
+
+The native manager currently exposes install paths for Paper, Purpur, Folia,
+Fabric, and Vanilla. The Modrinth marketplace filters content by the selected
+server software and Minecraft version: plugin servers receive compatible
+plugins, Fabric receives compatible server-side mods, and unsupported software
+does not get a fake install path.
+
+NeoForge and Forge appear only as explained future catalog entries. Broad
+modpack creation is not a supported claim, but one narrow path is implemented:
+“Start with a modpack” can create a stable, server-capable Fabric release from
+an unambiguous Modrinth `.mrpack`. The broker re-resolves the opaque project and
+version IDs, pins Minecraft and Fabric Loader, verifies the Modrinth-declared
+archive SHA-512 plus index-declared file hashes, excludes server-optional and
+client-only files, and rolls back an incomplete new instance. The result is
+explicitly a server-safe subset, not byte-for-byte pack parity.
+
+Forge, NeoForge, Quilt, unknown loaders, and CurseForge remain preview-only or
+unsupported. The archive/parser/API/frontend paths have portable tests; the
+complete Linux extraction/resolver/Docker lifecycle, upstream, and real-pack
+matrix remains a release gate.
+
+Helix manages servers; it does not execute Minecraft ticks or sit in the player
+traffic path. Capacity still depends on hardware, world behavior, server build,
+mods/plugins, and configuration. See
 [Game hosting capacity](docs/GAME-HOSTING-CAPACITY.md).
+
+The server chooser also reserves a clear V Rising entry rather than pretending
+it works on Linux. Stunlock's current dedicated-server distribution is
+Windows-only, so a Linux one-click path remains disabled until a reviewed Wine
+lifecycle can be installed, updated, backed up, and rolled back safely.
 
 ## Make a Strand
 
-A Strand is Helix's modular extension unit. The current Strand Kit can create
-and strictly check a manifest-first project without a daemon or initialized
-installation:
+A Strand is Helix's planned extension unit. The current Strand Kit can scaffold
+and validate a manifest-only preview project:
 
 ```text
 helixctl strand new system-health --name "System Health" --publisher "Your name"
 helixctl strand check system-health
 ```
 
-The scaffold starts with no permissions, bounded resource requests, a permanent
-UUID, Semantic Versioning, and an explicit Helix compatibility range. It is
-staged and validated before publication and never overwrites an existing path.
+The preview starts with no permissions and cannot be installed or executed by
+Helix. See [Building a Strand](docs/STRAND-DEVELOPMENT.md).
 
-This is developer tooling, not a runtime claim: Helix cannot install or execute
-Strands yet. The optional sandbox host and stable SDK wait for the required
-permission, job, audit, and isolation work. See
-[Building a Strand](docs/STRAND-DEVELOPMENT.md) and the
-[checked reference project](examples/strands/system-health).
+## Build the source
 
-## Try the development preview
-
-There is no supported installer or binary release yet. The only current trial
-path is a source build with disposable data on a machine you control.
-
-The commands below are maintainer/developer notes for evaluating the current
-source. The project license does not make this an endorsed distribution or a
-supported production path; see [Project and legal status](#project-and-legal-status).
-
-Prerequisites:
-
-- Rust 1.88 or newer;
-- Node.js 22.12 or newer and npm;
-- a current browser.
-
-Build from the repository root:
+There is no supported binary release. Maintainers can run the checked source
+gates with:
 
 ```text
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets --all-features
+
 cd frontend
 npm ci --no-audit --no-fund
-npm run build
-cd ..
-
-cargo build --locked --release --workspace --all-features
+npm run check
 ```
 
-Use an explicit disposable data directory and the compiled frontend. In a Bash
-shell, for example (this does not imply support for that host platform):
-
-```bash
-mkdir -p .helix-data/development
-
-./target/release/helixctl \
-  --data-dir "$(pwd)/.helix-data/development" \
-  setup-token
-
-./target/release/helixd \
-  --listen 127.0.0.1:8080 \
-  --data-dir "$(pwd)/.helix-data/development" \
-  --web-root "$(pwd)/frontend/dist"
-```
-
-Open `http://127.0.0.1:8080`, paste the one-time token, and create the owner.
-The token is displayed once and expires after 15 minutes. Never paste it into an
-issue, log, screenshot, or shell history shared with someone else.
-
-On later runs with the same data directory, start `helixd` directly;
-`setup-token` is only for an unclaimed installation. Press `Ctrl+C` in the daemon
-terminal for a clean source-preview shutdown.
-
-On Windows PowerShell, the equivalent launch uses resolved absolute paths:
-
-```powershell
-$dataRoot = (New-Item -ItemType Directory -Force '.helix-data\development').FullName
-$webRoot = (Resolve-Path 'frontend\dist').Path
-
-.\target\release\helixctl.exe --data-dir $dataRoot setup-token
-.\target\release\helixd.exe `
-  --listen 127.0.0.1:8080 `
-  --data-dir $dataRoot `
-  --web-root $webRoot
-```
-
-This source-run path is for an isolated preview. The exact scope and limits of
-the hosted Ubuntu package evidence are documented in
-[Installation](docs/INSTALLATION.md).
-
-## Engineering promises
-
-Helix treats four questions as release requirements for every feature:
-
-| Question | Current discipline |
-| --- | --- |
-| Is it safe? | Strict inputs, least privilege, bounded work, default deny, and explicit threat models |
-| Is it fast? | Measured binary, bundle, startup, idle, and API budgets rather than adjectives |
-| Is it recoverable? | Verified snapshots, fail-closed migrations, durable state, and rollback plans |
-| Is it quiet when unused? | Optional features must add no timer, poll, child process, or heavyweight runtime while disabled |
-
-The latest non-reference Windows snapshot and the still-blocked Ubuntu reference
-protocol are in [Performance](docs/PERFORMANCE.md).
+Building the web service alone does not configure the Linux broker or grant
+host authority. Use disposable data and follow [Development](docs/DEVELOPMENT.md)
+or [Container deployment](docs/CONTAINER-DEPLOYMENT.md).
 
 ## Repository guide
 
 | Path | Responsibility |
 | --- | --- |
-| `crates/helixd` | Daemon composition and lifecycle |
-| `crates/helixctl` | Local administration and diagnostics |
-| `crates/helix-api` | HTTP boundaries, authentication wiring, and middleware |
-| `crates/helix-state` | Critical SQLite state, migrations, backups, and integrity |
-| `crates/helix-auth` | Identity, password, and opaque-token primitives |
-| `crates/helix-secrets` | Portable encrypted-record boundary; production key delivery remains gated |
-| `crates/helix-strand-kit` | Non-executing preview Strand scaffolding and strict manifest validation |
+| `crates/helixd` | Unprivileged daemon composition and lifecycle |
+| `crates/helix-api` | HTTP, authentication, capability, and broker boundaries |
+| `crates/helix-privd` | Narrow Linux broker, native manager, AMP bridge, storage, network, and host controls |
+| `crates/helix-terminal` | Framed unprivileged PTY bridge for the optional Linux terminal |
+| `crates/helix-state` | Critical SQLite state, preferences, migrations, backups, and integrity |
+| `crates/helix-auth` | Identity, password, session, and token primitives |
+| `crates/helix-strand-kit` | Non-executing Strand preview scaffolding and validation |
 | `crates/helix-system` | Bounded read-only host discovery |
-| `frontend` | Preact, TypeScript, styling, tests, and compiled assets |
-| `packaging` / `scripts` | systemd assets and checked local bundle lifecycle |
-| `docs` | Architecture, security, recovery, storage, API, and performance contracts |
+| `frontend` | Preact UI, adapters, responsive styling, and tests |
+| `deploy` / `compose.yaml` | Private-alpha Linux broker and container examples |
+| `docs` | Architecture, security, API, recovery, and operator notes |
 
-Start here depending on what you need:
+Useful starting points:
 
-- **I want the short guided version.** [Guided docs](docs/wiki/Home.md) and the
-  [project wiki](https://github.com/Riqqqque/Helix/wiki)
-- **How does the whole app work?** [How Helix works](docs/HOW-HELIX-WORKS.md)
-- **What is genuinely finished?** [Progress](PROGRESS.md)
-- **What should be built next?** [Next work](NEXT.md) and [Roadmap](ROADMAP.md)
-- **How can I help?** [Contribution policy](CONTRIBUTING.md) and
-  [Development](docs/DEVELOPMENT.md)
-- **How do I make an extension?** [Building a Strand](docs/STRAND-DEVELOPMENT.md)
-- **What can Helix do for player capacity?**
-  [Game hosting capacity](docs/GAME-HOSTING-CAPACITY.md)
-- **How are releases gated?** [Release process](docs/RELEASING.md)
-- **How is data protected?** [Security model](docs/SECURITY.md),
-  [Storage](docs/STORAGE.md), and [Recovery](docs/RECOVERY.md)
-- **What does the API expose?** [API contract](docs/API.md)
-- **How should I report a vulnerability?** [Security policy](SECURITY.md)
+- [Progress](PROGRESS.md) — what is implemented and what remains unvalidated
+- [Next work](NEXT.md) — the current validation and implementation order
+- [Roadmap](ROADMAP.md) — longer-term sequencing
+- [API contract](docs/API.md) — implemented HTTP surface and safety rules
+- [Security model](docs/SECURITY.md) — current boundaries and remaining gates
+- [Security policy](SECURITY.md) — vulnerability reporting
 
-## Project and legal status
+## License
 
-The current source is versioned as `0.1.0-alpha.1`. Public source availability
-does not mean production support, stable compatibility, or a completed security
-review.
+Helix is versioned as `0.1.0-alpha.1` and licensed under the
+[GNU Affero General Public License v3.0 or later](LICENSE).
 
-Copyright © 2026 Rique. Helix is free software licensed under the
-[GNU Affero General Public License v3.0 or later](LICENSE). If you modify Helix
-and let users interact with that modified version over a network, the license
-requires offering those users the corresponding source under the same terms.
+Public source availability does not mean production support, stable
+compatibility, or a completed security review. If you modify Helix and let users
+interact with that modified version over a network, the AGPL requires offering
+those users the corresponding source under the same terms.
+
+Copyright © 2026 Rique.

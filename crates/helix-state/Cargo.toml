@@ -17,6 +17,7 @@ sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

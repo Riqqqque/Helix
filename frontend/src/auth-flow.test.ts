@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  accountUpdatedView,
   destinationForSetupStatus,
   loginNoticeIds,
   sessionExpiredView,
@@ -48,6 +49,13 @@ describe('authentication flow transitions', () => {
       notice: loginNoticeIds.sessionExpired,
     });
   });
+
+  it('uses a distinct notice after account changes revoke the session', () => {
+    expect(accountUpdatedView()).toEqual({
+      kind: 'login',
+      notice: loginNoticeIds.accountUpdated,
+    });
+  });
 });
 
 describe('owner setup validation', () => {
@@ -60,12 +68,24 @@ describe('owner setup validation', () => {
   };
 
   it('accepts canonical input and rejects mismatched or short passwords', () => {
+    const minimumPassword = ['cobalt', 'sky', '92'].join('-');
     expect(validateSetupCandidate(validCandidate)).toBeNull();
+    expect(
+      validateSetupCandidate({
+        ...validCandidate,
+        password: minimumPassword,
+        confirmation: minimumPassword,
+      }),
+    ).toBeNull();
     expect(
       validateSetupCandidate({ ...validCandidate, confirmation: 'something else entirely' }),
     ).toBe('auth.setup.error.passwordMismatch');
     expect(
-      validateSetupCandidate({ ...validCandidate, password: 'too short', confirmation: 'too short' }),
+      validateSetupCandidate({
+        ...validCandidate,
+        password: 'cobalt-sky-9',
+        confirmation: 'cobalt-sky-9',
+      }),
     ).toBe('auth.setup.error.passwordTooShort');
   });
 

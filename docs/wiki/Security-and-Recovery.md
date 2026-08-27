@@ -2,40 +2,56 @@
 
 ## Current boundary
 
-Helix rejects non-loopback binds. Remote access, TLS termination, trusted proxy
-metadata, MFA, and public setup are not implemented or supported.
+Helix is a private alpha. Source previews default to loopback. The Compose
+example can expose an exact private-LAN address through a constrained gateway,
+but public internet exposure has not passed review. A private Tailscale route
+may use a separately constrained entry point; Helix does not install or manage
+Tailscale.
 
 The current owner flow uses:
 
-- a random, single-use, 15-minute local bootstrap capability;
-- canonical owner identity and Argon2id password hashing;
-- random revocable sessions stored only as verification hashes;
+- a random, single-use, short-lived local setup token;
+- Argon2id password hashing and revocable bounded sessions;
 - `HttpOnly`, host-only, `SameSite=Strict` cookies;
-- a session-bound CSRF proof required even for protected reads;
-- bounded password work, login budgets, sessions, requests, and host sampling;
-- generic authentication failures and secret-free audit details.
+- a session-bound CSRF proof required for protected reads and writes;
+- exact capabilities enforced by the API; and
+- bounded authentication work and generic failures without secret details.
 
-Authentication/session audit retention is fixed and bounded: Helix protects the
-newest 1,024 events, applies a 90-day window beyond that floor, targets no more
-than 50,000 rows, and deletes at most 256 rows in one audited-write or startup
-transaction. Ordinary updates/deletes remain blocked. Export, holds, hash
-chaining, and off-host evidence are not implemented yet.
+`helixd` remains unprivileged. Root-required operations go to `helix-privd`
+over a group-protected Unix socket as a closed, length-bounded request enum.
+The broker has no general shell endpoint, but its socket boundary still relies
+on filesystem/group isolation rather than an independent peer-credential check.
+That and full clean-host sandbox testing remain release gates.
+
+The optional terminal is separate from the root broker. It runs as one normal
+Linux user and requires a fresh Helix password for each 30-second one-use
+ticket. Its distinct socket group also checks the dashboard UID through Linux
+`SO_PEERCRED`. Helix records only authorization/lifecycle events, not commands
+or output. Normal `sudo` policy still applies inside that shell.
+
+Host reboot requires exact hostname confirmation, acknowledgement, workload
+preflight, a delay, and a cancellable systemd timer. Firewall writes affect only
+exact Helix-owned UFW rules. A separate flow can enable inactive UFW after
+preserving a verified listening SSH port; it never resets or changes defaults.
+Exact selected APT candidates have a guarded update path with no rollback claim.
+Helix self-update remains unavailable.
 
 ## Data and recovery
 
-Critical state and replaceable metrics are separate. Existing-schema migrations
-create a no-clobber verified source snapshot before mutation. Startup validates
-recovery state before deleting transient evidence. A clean-shutdown marker is
-written only after HTTP draining and tracked blocking work finishes within the
-shared 20-second deadline. A forced exit leaves the marker unclean.
+Critical state and replaceable metrics use separate durability domains. Native
+console archives and backups are bounded on disk; backup deletion moves exact
+known artifacts into recoverable trash. File deletion also uses configured
+trash rather than claiming an irreversible delete.
 
-`helixctl backup-state` creates a verified online critical-state snapshot. A
-cleanup warning identifies a verified `.partial-*` hard-link residue; it does
-not mean the published destination failed. A verified restore command is not
-implemented yet, so do not use Helix as the only copy of important data.
+`helixctl backup-state` creates a verified critical-state snapshot. Native
+backup creation and restore exist, but complete clean-host, interrupted-write,
+disk-full, and off-host recovery drills are not finished. Helix must not be the
+only copy of valuable state or worlds.
 
-Read the full [security model](https://github.com/Riqqqque/Helix/blob/main/docs/SECURITY.md)
-and [recovery contract](https://github.com/Riqqqque/Helix/blob/main/docs/RECOVERY.md).
+Read the
+[full security model](https://github.com/Riqqqque/Helix/blob/main/docs/SECURITY.md)
+and
+[recovery contract](https://github.com/Riqqqque/Helix/blob/main/docs/RECOVERY.md).
 
 Report vulnerabilities through
 [GitHub private vulnerability reporting](https://github.com/Riqqqque/Helix/security/advisories/new),

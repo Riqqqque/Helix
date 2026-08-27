@@ -46,6 +46,13 @@ export interface LoginInput {
   password: string;
 }
 
+export interface AccountUpdateInput {
+  currentPassword: string;
+  loginName: string;
+  displayName: string;
+  newPassword?: string;
+}
+
 export interface CpuSnapshot {
   usagePercent: number | null;
   logicalCores: number;

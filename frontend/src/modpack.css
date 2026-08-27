@@ -1,0 +1,113 @@
+.create-mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin: 0 20px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.create-mode-switch button {
+  display: grid;
+  gap: 3px;
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.create-mode-switch button strong { color: var(--text); font-size: 10px; }
+.create-mode-switch button span { font-size: 8px; line-height: 1.35; }
+.create-mode-switch button.is-selected { background: var(--surface-strong); box-shadow: inset 0 0 0 1px var(--line-strong); }
+
+.modpack-browser,
+.modpack-detail { display: grid; gap: 14px; grid-column: 1 / -1; min-width: 0; }
+.modpack-browser__intro,
+.modpack-detail__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.modpack-browser__intro > div { display: grid; gap: 3px; }
+.modpack-browser__intro strong { font-size: 11px; }
+.modpack-browser__intro span { color: var(--quiet); font-size: 8px; }
+.modpack-browser a,
+.modpack-detail__head a { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 8px; text-decoration: none; }
+
+.modpack-selection { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 6%, var(--surface)); color: var(--accent); }
+.modpack-selection span { display: flex; gap: 7px; color: var(--muted); font-size: 8px; }
+.modpack-selection strong { color: var(--text); font-size: 9px; }
+.modpack-selection button { border: 0; background: transparent; color: var(--quiet); font-size: 8px; cursor: pointer; }
+
+.modpack-search { display: grid; gap: 5px; }
+.modpack-search > span { color: var(--muted); font-size: 9px; font-weight: 600; }
+.modpack-search > div { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; min-height: 38px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); color: var(--quiet); }
+.modpack-search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 10px; }
+
+.modpack-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.modpack-grid article { display: grid; grid-template-rows: auto auto minmax(48px, 1fr) auto auto; gap: 8px; min-width: 0; padding: 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.modpack-grid article.is-incompatible { background: color-mix(in srgb, var(--surface) 90%, var(--warning) 3%); }
+.modpack-grid header,
+.modpack-grid footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.modpack-mark { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-strong); color: var(--accent); }
+.modpack-mark img { width: 100%; height: 100%; display: block; border-radius: inherit; object-fit: cover; }
+.modpack-status { padding: 3px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--quiet); font-size: 7px; text-transform: uppercase; }
+.modpack-status.is-fabric_candidate { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); color: var(--accent); }
+.modpack-grid h3 { overflow: hidden; margin: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.modpack-grid article > div > span,
+.modpack-grid p,
+.modpack-grid article > small { color: var(--quiet); font-size: 8px; line-height: 1.45; }
+.modpack-grid p { margin: 0; color: var(--muted); }
+.modpack-grid footer span { color: var(--quiet); font-size: 8px; }
+.modpack-grid footer button,
+.modpack-pagination button,
+.modpack-state button { border: 0; background: transparent; color: var(--accent); font-size: 8px; cursor: pointer; }
+.modpack-grid footer button:disabled { color: var(--quiet); cursor: wait; }
+
+.modpack-state { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 72px; padding: 12px; border: 1px dashed var(--line); border-radius: 5px; color: var(--quiet); font-size: 9px; }
+.modpack-state.is-error { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); color: var(--danger); }
+.modpack-spinner { width: 13px; height: 13px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: modpack-spin .8s linear infinite; }
+@keyframes modpack-spin { to { transform: rotate(360deg); } }
+.modpack-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; color: var(--quiet); font-size: 8px; }
+.modpack-pagination button:disabled { color: var(--line-strong); cursor: not-allowed; }
+
+.modpack-detail__identity { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.modpack-detail__identity > div { display: grid; gap: 4px; }
+.modpack-detail__identity small,
+.modpack-detail__identity span { color: var(--quiet); font-size: 8px; }
+.modpack-detail__identity h3 { margin: 0; font-size: 15px; }
+.modpack-detail__identity p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.modpack-compatibility-note { display: grid; grid-template-columns: auto 1fr; gap: 9px; padding: 10px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); color: var(--accent); }
+.modpack-compatibility-note span { display: grid; gap: 3px; color: var(--muted); font-size: 8px; line-height: 1.45; }
+.modpack-compatibility-note strong { color: var(--text); }
+.modpack-version-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(180px, .7fr); gap: 10px; }
+.modpack-versions { display: grid; gap: 5px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.modpack-versions legend { margin-bottom: 6px; color: var(--muted); font-size: 9px; font-weight: 600; }
+.modpack-versions label { display: grid; grid-template-columns: auto 1fr; gap: 9px; padding: 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); cursor: pointer; }
+.modpack-versions label.is-selected { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); }
+.modpack-versions label.is-disabled { opacity: .62; cursor: not-allowed; }
+.modpack-versions label > span { display: grid; gap: 3px; min-width: 0; }
+.modpack-versions strong { display: flex; justify-content: space-between; gap: 8px; font-size: 9px; }
+.modpack-versions strong small { color: var(--quiet); font-size: 7px; text-transform: uppercase; }
+.modpack-versions span span,
+.modpack-versions span > small { color: var(--quiet); font-size: 8px; }
+.modpack-version-summary { align-self: start; display: grid; gap: 7px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.modpack-version-summary > small,
+.modpack-version-summary > span { color: var(--quiet); font-size: 8px; }
+.modpack-version-summary > strong { font-size: 11px; }
+.modpack-version-summary p { margin: 3px 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+.modpack-description { border-top: 1px solid var(--line); padding-top: 10px; }
+.modpack-description summary { color: var(--text); font-size: 9px; cursor: pointer; }
+.modpack-description p { max-height: 240px; overflow: auto; margin: 10px 0 0; color: var(--muted); font-size: 8px; line-height: 1.6; white-space: pre-wrap; }
+.modpack-create-result { display: grid; gap: 4px; margin-top: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--muted); font-size: 8px; }
+.modpack-create-result strong { color: var(--text); font-size: 9px; }
+
+@media (max-width: 760px) {
+  .modpack-grid { grid-template-columns: 1fr; }
+  .modpack-version-layout { grid-template-columns: 1fr; }
+  .modpack-browser__intro,
+  .modpack-detail__head { align-items: flex-start; flex-direction: column; }
+  .create-mode-switch { grid-template-columns: 1fr; }
+}

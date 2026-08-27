@@ -21,7 +21,10 @@ The package must not require these technologies for Helix itself:
 - nginx or Apache;
 - Node.js, Python, PHP, Java, Wine, or SteamCMD.
 
-Some may later be installed or managed for an explicitly selected feature. Node.js remains a frontend build dependency and is not installed on the target host.
+Some may be required for an explicitly selected feature. Native game-server
+management currently uses Docker, while a local `helixd` package does not.
+Node.js remains a frontend build dependency and is not installed on the target
+host.
 
 ## Installation identities
 
@@ -33,7 +36,11 @@ The package creates a dedicated unprivileged system account and group named `hel
 - is not added broadly to administrative groups;
 - receives only the filesystem and socket access required by enabled features.
 
-`helixd` runs as this account. A future `helix-privd` runs separately with a smaller root-owned unit and socket. Installing Helix must not make the main web daemon root.
+`helixd` runs as this account. The implemented `helix-privd` broker runs
+separately behind a restrictive root-owned systemd unit and Unix socket. The
+current local release bundle does not install that broker yet; the private
+container deployment wires it explicitly. Installing either shape must not
+make the main web daemon root.
 
 ## Local package layout
 
@@ -57,7 +64,7 @@ Storage-pool roots may live elsewhere. The installer records them only after che
 
 ## systemd units
 
-The foundation package provides `helixd.service`. It should:
+The current local bundle provides `helixd.service`. It should:
 
 - run as the dedicated account;
 - use an explicit configuration path;
@@ -69,14 +76,18 @@ The foundation package provides `helixd.service`. It should:
 - send logs to journald;
 - avoid declaring network readiness it does not actually require.
 
-Future units are separate:
+The private container deployment also uses a separate
+`helix-privd.service` for the implemented typed privileged broker. It is not
+part of the local bundle lifecycle yet. Other possible units remain separate:
 
-- `helix-privd.socket` and `helix-privd.service` for typed privileged requests;
-- template or transient units for independent game workloads;
+- template or transient units for non-Docker independent game workloads;
 - transient `helix-worker` units/scopes for expensive jobs;
 - `helix-strandd.service` only when an installed Strand needs the optional host.
 
-Managed game units must not use `PartOf=helixd.service` or another relationship that stops them when the dashboard restarts. Package uninstall and upgrade tests must explicitly verify this independence.
+Managed workloads must not use `PartOf=helixd.service` or another relationship
+that stops them when the dashboard restarts. The current native Minecraft
+containers are independent of both dashboard containers. Package uninstall
+and upgrade tests must explicitly verify this independence.
 
 ## Secure first run
 
@@ -189,7 +200,11 @@ Development overrides may redirect all writable paths into a temporary project-l
 
 ## Network exposure
 
-Installation must make the bind address, port, and TLS boundary explicit. The package does not automatically open a firewall or trust a reverse proxy. If firewall integration is later provided, it is a previewed, typed privileged operation.
+Installation must make the bind address, port, and TLS boundary explicit. The
+package does not automatically open a firewall or trust a reverse proxy. The
+implemented broker can create narrowly scoped, named UFW allow rules in the
+private container deployment, but this is not wired into the local installer
+and has not passed the public live-firewall validation matrix.
 
 Security headers and cookie behavior depend on whether `helixd` terminates TLS or receives verified proxy metadata. Forwarded headers are ignored unless the peer is in an explicit trusted-proxy configuration. Setup and health endpoints reveal minimal unauthenticated information.
 

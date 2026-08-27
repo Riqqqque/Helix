@@ -8,7 +8,9 @@ import {
   parseHealthResponse,
   parseSetupStatus,
   parseSystemOverview,
+  updateAccount,
 } from './api';
+import { parseGameHostingReadiness } from './game-api';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -70,6 +72,18 @@ const validOverview = {
   collected_at_unix_ms: 1_788_000_000_000,
 };
 
+const validGameReadiness = {
+  schema_version: 1,
+  availability: 'unavailable',
+  available_features: [],
+  blockers: [
+    { code: 'verified_restore', status: 'required' },
+    { code: 'privileged_broker', status: 'required' },
+    { code: 'native_execution', status: 'required' },
+  ],
+  collected_at_unix_ms: 1_788_000_000_000,
+};
+
 describe('parseHealthResponse', () => {
   it('maps a valid health response', () => {
     expect(
@@ -105,6 +119,46 @@ describe('parseHealthResponse', () => {
   it('rejects incomplete health data instead of inventing defaults', () => {
     expect(() =>
       parseHealthResponse({ status: 'ok', version: '0.1.0' }),
+    ).toThrowError(ApiError);
+  });
+});
+
+describe('parseGameHostingReadiness', () => {
+  it('accepts the bounded unavailable contract without inventing instances', () => {
+    expect(parseGameHostingReadiness(validGameReadiness)).toEqual({
+      schemaVersion: 1,
+      availability: 'unavailable',
+      availableFeatures: [],
+      blockers: [
+        { code: 'verified_restore', status: 'required' },
+        { code: 'privileged_broker', status: 'required' },
+        { code: 'native_execution', status: 'required' },
+      ],
+      collectedAtUnixMs: 1_788_000_000_000,
+    });
+  });
+
+  it('rejects duplicate or malformed capability metadata', () => {
+    expect(() =>
+      parseGameHostingReadiness({
+        ...validGameReadiness,
+        available_features: ['instances.view', 'instances.view'],
+      }),
+    ).toThrowError(ApiError);
+    expect(() =>
+      parseGameHostingReadiness({
+        ...validGameReadiness,
+        blockers: [{ code: '../native', status: 'required' }],
+      }),
+    ).toThrowError(ApiError);
+  });
+
+  it('rejects a ready state with unresolved blockers', () => {
+    expect(() =>
+      parseGameHostingReadiness({
+        ...validGameReadiness,
+        availability: 'ready',
+      }),
     ).toThrowError(ApiError);
   });
 });
@@ -587,6 +641,30 @@ describe('authentication requests', () => {
     expect(path).not.toContain(csrfToken);
     expect(request.headers).toMatchObject({ 'X-Helix-CSRF': csrfToken });
     expect(request.credentials).toBe('same-origin');
+  });
+
+  it('updates the owner with in-memory CSRF and accepts only an empty success', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const csrfToken = 'DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD';
+
+    await updateAccount({
+      currentPassword: 'current password only',
+      loginName: 'rique.owner',
+      displayName: 'Rique',
+      newPassword: 'replacement password only',
+    }, csrfToken);
+
+    const [path, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe('/api/v1/auth/account');
+    expect(request.headers).toMatchObject({ 'X-Helix-CSRF': csrfToken });
+    expect(request.credentials).toBe('same-origin');
+    expect(request.body).toBe(JSON.stringify({
+      currentPassword: 'current password only',
+      loginName: 'rique.owner',
+      displayName: 'Rique',
+      newPassword: 'replacement password only',
+    }));
   });
 
   it('sends the in-memory CSRF proof on protected reads', async () => {

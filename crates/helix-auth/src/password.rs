@@ -7,7 +7,7 @@ use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
-pub const MIN_PASSWORD_CODE_POINTS: usize = 15;
+pub const MIN_PASSWORD_CODE_POINTS: usize = 13;
 pub const MAX_PASSWORD_CODE_POINTS: usize = 256;
 pub const MAX_PASSWORD_BYTES: usize = 1024;
 
@@ -34,9 +34,13 @@ const MAX_VERIFY_SALT_BYTES: usize = 32;
 // compromised-password source is unavailable. It is intentionally not
 // represented as a complete breach corpus.
 const COMMON_PASSWORD_KEYS: &[&str] = &[
+    "0000000000000",
     "000000000000000",
+    "1111111111111",
     "111111111111111",
+    "1234567890123",
     "123456789012345",
+    "aaaaaaaaaaaaa",
     "aaaaaaaaaaaaaaa",
     "adminadminadmin",
     "administrator123",
@@ -49,6 +53,7 @@ const COMMON_PASSWORD_KEYS: &[&str] = &[
     "letmeinletmeinletmein",
     "monkeymonkeymonkey",
     "password123456",
+    "password12345",
     "passwordpassword",
     "qwerty123456789",
     "qwertyqwertyqwerty",
@@ -162,13 +167,40 @@ where
     C: CompromisedPasswordChecker + ?Sized,
 {
     let normalized = normalize_password_for_verification(candidate)?;
-    let code_points = normalized.0.chars().count();
+    validate_normalized_password(normalized.0.as_str(), context, compromised_checker)?;
+
+    Ok(ValidatedPassword(normalized))
+}
+
+/// Reapply the prospective-password policy to a password that was already
+/// normalized and successfully verified. This lets identity changes validate
+/// their new account context without making another plaintext password copy.
+pub fn validate_verified_password_for_context(
+    verified_password: &PasswordInput,
+    context: &PasswordContext<'_>,
+) -> Result<(), PasswordValidationError> {
+    validate_normalized_password(
+        verified_password.0.as_str(),
+        context,
+        &NoAdditionalCompromisedPasswords,
+    )
+}
+
+fn validate_normalized_password<C>(
+    normalized_password: &str,
+    context: &PasswordContext<'_>,
+    compromised_checker: &C,
+) -> Result<(), PasswordValidationError>
+where
+    C: CompromisedPasswordChecker + ?Sized,
+{
+    let code_points = normalized_password.chars().count();
 
     if code_points < MIN_PASSWORD_CODE_POINTS {
         return Err(PasswordValidationError::TooShort);
     }
 
-    let comparison_key = Zeroizing::new(context_key(normalized.0.as_str()));
+    let comparison_key = Zeroizing::new(context_key(normalized_password));
     if context_term_matches(comparison_key.as_str(), "helix")
         || context_term_matches(comparison_key.as_str(), context.login_name.as_str())
         || context_term_matches(comparison_key.as_str(), context.display_name.as_str())
@@ -181,12 +213,12 @@ where
     }
 
     if COMMON_PASSWORD_KEYS.contains(&comparison_key.as_str())
-        || compromised_checker.is_compromised(normalized.0.as_str())
+        || compromised_checker.is_compromised(normalized_password)
     {
         return Err(PasswordValidationError::Compromised);
     }
 
-    Ok(ValidatedPassword(normalized))
+    Ok(())
 }
 
 /// Normalize and bound a password submitted for verification without applying
@@ -232,7 +264,7 @@ fn context_term_matches(candidate_key: &str, term: &str) -> bool {
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum PasswordValidationError {
-    #[error("passwords must contain at least 15 Unicode code points")]
+    #[error("passwords must contain at least 13 Unicode code points")]
     TooShort,
     #[error("passwords must not contain account- or installation-specific terms")]
     ContextSpecific,
@@ -466,9 +498,9 @@ mod tests {
         let (login, display) = context();
         let policy = PasswordContext::new(&login, &display);
 
-        assert!(validate_password("cobalt-sky-927!".to_owned(), &policy).is_ok());
+        assert!(validate_password("cobalt-sky-92".to_owned(), &policy).is_ok());
         assert_eq!(
-            validate_password("cobalt-sky-927".to_owned(), &policy)
+            validate_password("cobalt-sky-9".to_owned(), &policy)
                 .err()
                 .expect("too short"),
             PasswordValidationError::TooShort
@@ -571,6 +603,31 @@ mod tests {
             normalize_password_for_verification("correct horse battery staple".to_owned()).is_ok()
         );
         assert!(normalize_password_for_verification("short".to_owned()).is_ok());
+    }
+
+    #[test]
+    fn verified_password_can_be_checked_against_a_prospective_identity_without_copying_it() {
+        let verified = normalize_password_for_verification("cobalt-sky-92".to_owned())
+            .expect("bounded verification input");
+        let safe_login = LoginName::parse("rique01").expect("safe login");
+        let conflicting_login = LoginName::parse("cobalt-sky-92").expect("conflicting login");
+        let display = DisplayName::parse("Rique").expect("display name");
+
+        assert!(
+            validate_verified_password_for_context(
+                &verified,
+                &PasswordContext::new(&safe_login, &display),
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            validate_verified_password_for_context(
+                &verified,
+                &PasswordContext::new(&conflicting_login, &display),
+            )
+            .expect_err("new identity must be rejected"),
+            PasswordValidationError::ContextSpecific
+        );
     }
 
     #[test]

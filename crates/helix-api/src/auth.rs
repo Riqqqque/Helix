@@ -9,13 +9,15 @@ use axum::{
 use helix_auth::{
     DisplayName, LoginName, OpaqueToken, PASSWORD_POLICY_VERSION, PasswordContext, TokenDomain,
     hash_password, normalize_password_for_verification, password_needs_rehash,
-    rehash_verified_password, validate_password, verify_password,
+    rehash_verified_password, validate_password, validate_verified_password_for_context,
+    verify_password,
 };
 use helix_state::{
     AuthenticatedSession, BootstrapPreflightOutcome, BootstrapTokenHash, CsrfRequirement,
-    CsrfTokenHash, DatabaseSet, OwnerClaimInput, OwnerClaimOutcome, OwnerClaimRejection,
-    PasswordPhc as StatePasswordPhc, PasswordRehash, SessionAuthenticationInput,
-    SessionAuthorization, SessionCreateInput, SessionCreateOutcome, SessionTokenHash, UserStatus,
+    CsrfTokenHash, DatabaseSet, OwnerAccountUpdateInput, OwnerAccountUpdateOutcome,
+    OwnerClaimInput, OwnerClaimOutcome, OwnerClaimRejection, PasswordPhc as StatePasswordPhc,
+    PasswordRehash, SessionAuthenticationInput, SessionAuthorization, SessionCreateInput,
+    SessionCreateOutcome, SessionTokenHash, UserStatus,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -38,6 +40,15 @@ const LOGIN_PEER_ATTEMPTS_PER_WINDOW: u32 = 5;
 const LOGIN_ACCOUNT_ATTEMPTS_PER_WINDOW: u32 = 5;
 const SETUP_GLOBAL_ATTEMPTS_PER_WINDOW: u32 = 32;
 const SETUP_ATTEMPTS_PER_WINDOW: u32 = 8;
+const ACCOUNT_UPDATE_ATTEMPTS_PER_WINDOW: u32 = 5;
+const PREFERENCE_USER_WRITES_PER_WINDOW: u32 = 240;
+const PREFERENCE_SESSION_WRITES_PER_WINDOW: u32 = 120;
+const PREFERENCE_WRITE_WINDOW: Duration = Duration::from_secs(60);
+const STORAGE_ANALYSIS_USER_STARTS_PER_WINDOW: u32 = 8;
+const STORAGE_ANALYSIS_SESSION_STARTS_PER_WINDOW: u32 = 4;
+const STORAGE_ANALYSIS_USER_READS_PER_WINDOW: u32 = 360;
+const STORAGE_ANALYSIS_SESSION_READS_PER_WINDOW: u32 = 180;
+const STORAGE_ANALYSIS_WINDOW: Duration = Duration::from_secs(60);
 const DUMMY_LOGIN: &str = "helix-timing-probe";
 const DUMMY_DISPLAY: &str = "Helix Timing Probe";
 const DUMMY_PASSWORD: &str = "V7!quartz-Meteor#29";
@@ -49,6 +60,7 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/auth/login", post(login))
         .route("/auth/csrf", post(rotate_csrf))
         .route("/auth/me", get(me))
+        .route("/auth/account", post(update_account))
         .route("/auth/logout", post(logout))
 }
 
@@ -93,6 +105,9 @@ pub(crate) struct AttemptLimiter {
     login_account_limit: u32,
     setup_global_limit: u32,
     setup_peer_limit: u32,
+    account_update_limit: u32,
+    preference_user_limit: u32,
+    preference_session_limit: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -105,8 +120,41 @@ enum AttemptScope {
 enum AttemptKey {
     GlobalLogin,
     GlobalSetup,
-    Peer { peer: IpAddr, scope: AttemptScope },
+    Peer {
+        peer: IpAddr,
+        scope: AttemptScope,
+    },
     Account(String),
+    AccountUpdateUser(String),
+    AccountUpdateSessionPeer {
+        user_id: String,
+        session_hash: SessionTokenHash,
+        peer: IpAddr,
+    },
+    TerminalProofUser(String),
+    TerminalProofSessionPeer {
+        user_id: String,
+        session_hash: SessionTokenHash,
+        peer: IpAddr,
+    },
+    PreferenceUser(String),
+    PreferenceSessionPeer {
+        user_id: String,
+        session_hash: SessionTokenHash,
+        peer: IpAddr,
+    },
+    StorageAnalysisStartUser(String),
+    StorageAnalysisStartSessionPeer {
+        user_id: String,
+        session_hash: SessionTokenHash,
+        peer: IpAddr,
+    },
+    StorageAnalysisReadUser(String),
+    StorageAnalysisReadSessionPeer {
+        user_id: String,
+        session_hash: SessionTokenHash,
+        peer: IpAddr,
+    },
 }
 
 struct AttemptEntry {
@@ -151,6 +199,9 @@ impl AttemptLimiter {
             login_account_limit: LOGIN_ACCOUNT_ATTEMPTS_PER_WINDOW,
             setup_global_limit: SETUP_GLOBAL_ATTEMPTS_PER_WINDOW,
             setup_peer_limit: SETUP_ATTEMPTS_PER_WINDOW,
+            account_update_limit: ACCOUNT_UPDATE_ATTEMPTS_PER_WINDOW,
+            preference_user_limit: PREFERENCE_USER_WRITES_PER_WINDOW,
+            preference_session_limit: PREFERENCE_SESSION_WRITES_PER_WINDOW,
         }
     }
 
@@ -171,6 +222,7 @@ impl AttemptLimiter {
                 ),
             ],
             now,
+            self.ttl,
         )?;
         Some(AttemptReservation {
             limiter: self.clone(),
@@ -196,7 +248,7 @@ impl AttemptLimiter {
                 self.login_account_limit,
             ));
         }
-        let tickets = self.reserve_keys(&keys, Instant::now())?;
+        let tickets = self.reserve_keys(&keys, Instant::now(), self.ttl)?;
         Some(AttemptReservation {
             limiter: self.clone(),
             tickets,
@@ -204,7 +256,182 @@ impl AttemptLimiter {
         })
     }
 
-    fn reserve_keys(&self, keys: &[(AttemptKey, u32)], now: Instant) -> Option<Vec<AttemptTicket>> {
+    fn reserve_account_update(
+        &self,
+        peer: IpAddr,
+        user_id: &str,
+        session_hash: &SessionTokenHash,
+    ) -> Option<AttemptReservation> {
+        self.reserve_account_update_at(peer, user_id, session_hash, Instant::now())
+    }
+
+    fn reserve_terminal_proof(
+        &self,
+        peer: IpAddr,
+        user_id: &str,
+        session_hash: &SessionTokenHash,
+    ) -> Option<AttemptReservation> {
+        let tickets = self.reserve_keys(
+            &[
+                (
+                    AttemptKey::TerminalProofUser(user_id.to_owned()),
+                    self.account_update_limit,
+                ),
+                (
+                    AttemptKey::TerminalProofSessionPeer {
+                        user_id: user_id.to_owned(),
+                        session_hash: session_hash.clone(),
+                        peer,
+                    },
+                    self.account_update_limit,
+                ),
+            ],
+            Instant::now(),
+            self.ttl,
+        )?;
+        Some(AttemptReservation {
+            limiter: self.clone(),
+            tickets,
+            consume: false,
+        })
+    }
+
+    fn reserve_account_update_at(
+        &self,
+        peer: IpAddr,
+        user_id: &str,
+        session_hash: &SessionTokenHash,
+        now: Instant,
+    ) -> Option<AttemptReservation> {
+        let tickets = self.reserve_keys(
+            &[
+                (
+                    AttemptKey::AccountUpdateUser(user_id.to_owned()),
+                    self.account_update_limit,
+                ),
+                (
+                    AttemptKey::AccountUpdateSessionPeer {
+                        user_id: user_id.to_owned(),
+                        session_hash: session_hash.clone(),
+                        peer,
+                    },
+                    self.account_update_limit,
+                ),
+            ],
+            now,
+            self.ttl,
+        )?;
+        Some(AttemptReservation {
+            limiter: self.clone(),
+            tickets,
+            consume: false,
+        })
+    }
+
+    pub(crate) fn allow_preference_write(
+        &self,
+        peer: IpAddr,
+        user_id: &str,
+        session_hash: &SessionTokenHash,
+    ) -> bool {
+        let Some(reservation) = self.reserve_keys(
+            &[
+                (
+                    AttemptKey::PreferenceUser(user_id.to_owned()),
+                    self.preference_user_limit,
+                ),
+                (
+                    AttemptKey::PreferenceSessionPeer {
+                        user_id: user_id.to_owned(),
+                        session_hash: session_hash.clone(),
+                        peer,
+                    },
+                    self.preference_session_limit,
+                ),
+            ],
+            Instant::now(),
+            PREFERENCE_WRITE_WINDOW,
+        ) else {
+            return false;
+        };
+        let reservation = AttemptReservation {
+            limiter: self.clone(),
+            tickets: reservation,
+            consume: false,
+        };
+        reservation.consume_failure();
+        true
+    }
+
+    pub(crate) fn allow_storage_analysis_start(
+        &self,
+        peer: IpAddr,
+        user_id: &str,
+        session_hash: &SessionTokenHash,
+    ) -> bool {
+        self.consume_bounded_request(
+            &[
+                (
+                    AttemptKey::StorageAnalysisStartUser(user_id.to_owned()),
+                    STORAGE_ANALYSIS_USER_STARTS_PER_WINDOW,
+                ),
+                (
+                    AttemptKey::StorageAnalysisStartSessionPeer {
+                        user_id: user_id.to_owned(),
+                        session_hash: session_hash.clone(),
+                        peer,
+                    },
+                    STORAGE_ANALYSIS_SESSION_STARTS_PER_WINDOW,
+                ),
+            ],
+            STORAGE_ANALYSIS_WINDOW,
+        )
+    }
+
+    pub(crate) fn allow_storage_analysis_read(
+        &self,
+        peer: IpAddr,
+        user_id: &str,
+        session_hash: &SessionTokenHash,
+    ) -> bool {
+        self.consume_bounded_request(
+            &[
+                (
+                    AttemptKey::StorageAnalysisReadUser(user_id.to_owned()),
+                    STORAGE_ANALYSIS_USER_READS_PER_WINDOW,
+                ),
+                (
+                    AttemptKey::StorageAnalysisReadSessionPeer {
+                        user_id: user_id.to_owned(),
+                        session_hash: session_hash.clone(),
+                        peer,
+                    },
+                    STORAGE_ANALYSIS_SESSION_READS_PER_WINDOW,
+                ),
+            ],
+            STORAGE_ANALYSIS_WINDOW,
+        )
+    }
+
+    fn consume_bounded_request(&self, keys: &[(AttemptKey, u32)], window: Duration) -> bool {
+        let Some(tickets) = self.reserve_keys(keys, Instant::now(), window) else {
+            return false;
+        };
+        let reservation = AttemptReservation {
+            limiter: self.clone(),
+            tickets,
+            consume: false,
+        };
+        reservation.consume_failure();
+        true
+    }
+
+    fn reserve_keys(
+        &self,
+        keys: &[(AttemptKey, u32)],
+        now: Instant,
+        window: Duration,
+    ) -> Option<Vec<AttemptTicket>> {
         let Ok(mut entries) = self.inner.lock() else {
             return None;
         };
@@ -219,7 +446,7 @@ impl AttemptLimiter {
         }
         for (key, maximum) in keys {
             if entries.get(key).is_some_and(|entry| {
-                now.saturating_duration_since(entry.window_started) < self.ttl
+                now.saturating_duration_since(entry.window_started) < window
                     && entry.attempts >= *maximum
             }) {
                 return None;
@@ -229,7 +456,7 @@ impl AttemptLimiter {
         let mut tickets = Vec::with_capacity(keys.len());
         for (key, _) in keys {
             let entry = if let Some(entry) = entries.get_mut(key) {
-                if now.saturating_duration_since(entry.window_started) >= self.ttl {
+                if now.saturating_duration_since(entry.window_started) >= window {
                     entry.window_started = now;
                     entry.attempts = 0;
                 }
@@ -290,6 +517,9 @@ impl AttemptLimiter {
             login_account_limit,
             setup_global_limit,
             setup_peer_limit,
+            account_update_limit: ACCOUNT_UPDATE_ATTEMPTS_PER_WINDOW,
+            preference_user_limit: PREFERENCE_USER_WRITES_PER_WINDOW,
+            preference_session_limit: PREFERENCE_SESSION_WRITES_PER_WINDOW,
         }
     }
 
@@ -319,14 +549,14 @@ struct OwnerSetupRequest {
 
 #[derive(Deserialize)]
 #[serde(transparent)]
-struct SecretString(String);
+pub(crate) struct SecretString(String);
 
 impl SecretString {
     fn as_str(&self) -> &str {
         &self.0
     }
 
-    fn take(&mut self) -> String {
+    pub(crate) fn take(&mut self) -> String {
         std::mem::take(&mut self.0)
     }
 
@@ -346,6 +576,15 @@ impl Drop for SecretString {
 struct LoginRequest {
     login_name: String,
     password: SecretString,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AccountUpdateRequest {
+    current_password: SecretString,
+    login_name: String,
+    display_name: String,
+    new_password: Option<SecretString>,
 }
 
 #[derive(Deserialize)]
@@ -406,6 +645,20 @@ enum LoginWorkerOutcome {
     Authenticated(Box<SessionIssue>),
     MaintenanceRequired,
     Rejected,
+}
+
+enum AccountWorkerOutcome {
+    Updated,
+    CurrentPasswordRejected,
+    LoginNameUnavailable,
+    InvalidReplacement,
+    CredentialChangedOrUnavailable,
+}
+
+enum TerminalProofOutcome {
+    Verified(AuthenticatedSession),
+    Rejected,
+    CredentialChangedOrUnavailable,
 }
 
 fn consumes_login_failure_budget(outcome: &Result<LoginWorkerOutcome, ()>) -> bool {
@@ -783,6 +1036,178 @@ async fn me(
     ))
 }
 
+async fn update_account(
+    State(state): State<ApiState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Result<Json<AccountUpdateRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    validate_post_headers(&headers)?;
+    let authenticated = require_capability(&state, &headers, "users.manage").await?;
+    let Json(request) = body.map_err(map_json_rejection)?;
+    let session_hash = session_hash_from_headers(&headers)?;
+    let reservation = state
+        .attempt_limiter
+        .reserve_account_update(peer.ip(), &authenticated.user_id, &session_hash)
+        .ok_or(ApiError::AttemptRateLimited)?;
+    let permit = Arc::clone(&state.password_workers)
+        .try_acquire_owned()
+        .map_err(|_| ApiError::PasswordWorkersBusy)?;
+    let blocking_guard = state.blocking_tasks.start();
+    let databases = Arc::clone(&state.databases);
+    let dummy_password_phc = Arc::clone(&state.dummy_password_phc);
+    let audit_user_id = authenticated.user_id.clone();
+
+    let outcome = tokio::task::spawn_blocking(move || {
+        let _blocking_guard = blocking_guard;
+        let _permit = permit;
+        let outcome = perform_account_update(
+            databases.as_ref(),
+            dummy_password_phc.as_ref(),
+            authenticated,
+            request,
+        );
+        if matches!(&outcome, Ok(AccountWorkerOutcome::CurrentPasswordRejected)) {
+            reservation.consume_failure();
+            databases
+                .state()
+                .record_owner_account_password_rejection(&audit_user_id, now_unix_ms())
+                .map_err(|_| ())?;
+        }
+        outcome
+    })
+    .await
+    .map_err(|_| {
+        tracing::error!("account update worker failed");
+        ApiError::ServiceUnavailable
+    })?
+    .map_err(|()| {
+        tracing::error!("account update could not complete");
+        ApiError::ServiceUnavailable
+    })?;
+
+    match outcome {
+        AccountWorkerOutcome::Updated => {
+            let mut response = StatusCode::NO_CONTENT.into_response();
+            response
+                .headers_mut()
+                .insert(header::SET_COOKIE, clear_session_cookie());
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            Ok(response)
+        }
+        AccountWorkerOutcome::CurrentPasswordRejected => Err(ApiError::CurrentPasswordRejected),
+        AccountWorkerOutcome::LoginNameUnavailable => Err(ApiError::AccountConflict),
+        AccountWorkerOutcome::InvalidReplacement => Err(ApiError::AccountRejected),
+        AccountWorkerOutcome::CredentialChangedOrUnavailable => {
+            Err(ApiError::AuthenticationRequired)
+        }
+    }
+}
+
+fn perform_account_update(
+    databases: &DatabaseSet,
+    dummy_password_phc: &str,
+    authenticated: AuthenticatedSession,
+    mut request: AccountUpdateRequest,
+) -> Result<AccountWorkerOutcome, ()> {
+    let now = now_unix_ms();
+    let credential = databases
+        .state()
+        .credential_by_login(&authenticated.login_name, now)
+        .map_err(|_| ())?;
+    let Some(credential) = credential.filter(|credential| {
+        credential.user_id == authenticated.user_id
+            && credential.auth_version == authenticated.auth_version
+            && credential.status == UserStatus::Active
+    }) else {
+        verify_dummy_password(dummy_password_phc)?;
+        return Ok(AccountWorkerOutcome::CredentialChangedOrUnavailable);
+    };
+
+    let current_password = request.current_password.take();
+    let normalized = normalize_password_for_verification(current_password).ok();
+    let current_password_matches = match normalized.as_ref() {
+        Some(password) => {
+            verify_password(password, credential.password_phc.expose_for_verification())
+                .unwrap_or(false)
+        }
+        None => {
+            verify_dummy_password(dummy_password_phc)?;
+            false
+        }
+    };
+    if !current_password_matches {
+        return Ok(AccountWorkerOutcome::CurrentPasswordRejected);
+    }
+
+    let login = match LoginName::parse(&request.login_name) {
+        Ok(login) => login,
+        Err(_) => return Ok(AccountWorkerOutcome::InvalidReplacement),
+    };
+    let display = match DisplayName::parse(&request.display_name) {
+        Ok(display) => display,
+        Err(_) => return Ok(AccountWorkerOutcome::InvalidReplacement),
+    };
+    let identity_changed = login.as_str() != authenticated.login_name
+        || display.as_str() != authenticated.display_name;
+    let replacement_password = match request.new_password.as_mut() {
+        Some(candidate) => {
+            let candidate = candidate.take();
+            let validated =
+                match validate_password(candidate, &PasswordContext::new(&login, &display)) {
+                    Ok(password) => password,
+                    Err(_) => return Ok(AccountWorkerOutcome::InvalidReplacement),
+                };
+            let hashed = hash_password(&validated).map_err(|_| ())?;
+            Some(StatePasswordPhc::new(hashed.as_str().to_owned()).map_err(|_| ())?)
+        }
+        None => {
+            if identity_changed
+                && validate_verified_password_for_context(
+                    normalized
+                        .as_ref()
+                        .expect("a matching password must have normalized successfully"),
+                    &PasswordContext::new(&login, &display),
+                )
+                .is_err()
+            {
+                return Ok(AccountWorkerOutcome::InvalidReplacement);
+            }
+            None
+        }
+    };
+    let replacement = replacement_password
+        .as_ref()
+        .map(|replacement| PasswordRehash {
+            replacement_password_phc: replacement,
+            replacement_password_policy_version: i64::from(PASSWORD_POLICY_VERSION),
+        });
+    let outcome = databases
+        .state()
+        .update_owner_account(OwnerAccountUpdateInput {
+            user_id: &authenticated.user_id,
+            expected_auth_version: credential.auth_version,
+            expected_password_phc: &credential.password_phc,
+            expected_password_policy_version: credential.password_policy_version,
+            login_name: login.as_str(),
+            display_name: display.as_str(),
+            replacement_password: replacement,
+            now_unix_ms: now,
+        })
+        .map_err(|_| ())?;
+    Ok(match outcome {
+        OwnerAccountUpdateOutcome::Updated => AccountWorkerOutcome::Updated,
+        OwnerAccountUpdateOutcome::LoginNameUnavailable => {
+            AccountWorkerOutcome::LoginNameUnavailable
+        }
+        OwnerAccountUpdateOutcome::CredentialChangedOrUnavailable => {
+            AccountWorkerOutcome::CredentialChangedOrUnavailable
+        }
+    })
+}
+
 async fn rotate_csrf(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -877,6 +1302,102 @@ pub(crate) async fn require_capability(
     .await
 }
 
+pub(crate) async fn require_capability_without_csrf(
+    state: &ApiState,
+    headers: &HeaderMap,
+    capability: &'static str,
+) -> Result<AuthenticatedSession, ApiError> {
+    authenticate(
+        state,
+        headers,
+        SessionAuthorization::RequireCapability(capability),
+        false,
+    )
+    .await
+}
+
+pub(crate) async fn authorize_terminal_with_current_password(
+    state: &ApiState,
+    peer: IpAddr,
+    headers: &HeaderMap,
+    mut current_password: SecretString,
+) -> Result<AuthenticatedSession, ApiError> {
+    let authenticated = require_capability(state, headers, "terminal.open").await?;
+    let session_hash = session_hash_from_headers(headers)?;
+    let reservation = state
+        .attempt_limiter
+        .reserve_terminal_proof(peer, &authenticated.user_id, &session_hash)
+        .ok_or(ApiError::AttemptRateLimited)?;
+    let permit = Arc::clone(&state.password_workers)
+        .try_acquire_owned()
+        .map_err(|_| ApiError::PasswordWorkersBusy)?;
+    let blocking_guard = state.blocking_tasks.start();
+    let databases = Arc::clone(&state.databases);
+    let dummy_password_phc = Arc::clone(&state.dummy_password_phc);
+    let audit_user_id = authenticated.user_id.clone();
+
+    let outcome = tokio::task::spawn_blocking(move || {
+        let _blocking_guard = blocking_guard;
+        let _permit = permit;
+        let now = now_unix_ms();
+        let credential = databases
+            .state()
+            .credential_by_login(&authenticated.login_name, now)
+            .map_err(|_| ())?;
+        let Some(credential) = credential.filter(|credential| {
+            credential.user_id == authenticated.user_id
+                && credential.auth_version == authenticated.auth_version
+                && credential.status == UserStatus::Active
+        }) else {
+            verify_dummy_password(dummy_password_phc.as_ref())?;
+            return Ok(TerminalProofOutcome::CredentialChangedOrUnavailable);
+        };
+        let candidate = current_password.take();
+        let normalized = normalize_password_for_verification(candidate).ok();
+        let matches = match normalized.as_ref() {
+            Some(password) => {
+                verify_password(password, credential.password_phc.expose_for_verification())
+                    .unwrap_or(false)
+            }
+            None => {
+                verify_dummy_password(dummy_password_phc.as_ref())?;
+                false
+            }
+        };
+        if matches {
+            Ok(TerminalProofOutcome::Verified(authenticated))
+        } else {
+            reservation.consume_failure();
+            databases
+                .state()
+                .record_terminal_audit(
+                    &audit_user_id,
+                    helix_state::TerminalAuditEvent::PasswordRejected,
+                    now,
+                )
+                .map_err(|_| ())?;
+            Ok(TerminalProofOutcome::Rejected)
+        }
+    })
+    .await
+    .map_err(|_| {
+        tracing::error!("terminal password worker failed");
+        ApiError::ServiceUnavailable
+    })?
+    .map_err(|()| {
+        tracing::error!("terminal password proof could not complete");
+        ApiError::ServiceUnavailable
+    })?;
+
+    match outcome {
+        TerminalProofOutcome::Verified(authenticated) => Ok(authenticated),
+        TerminalProofOutcome::Rejected => Err(ApiError::CurrentPasswordRejected),
+        TerminalProofOutcome::CredentialChangedOrUnavailable => {
+            Err(ApiError::AuthenticationRequired)
+        }
+    }
+}
+
 async fn authenticate(
     state: &ApiState,
     headers: &HeaderMap,
@@ -964,7 +1485,7 @@ async fn authenticate(
     }
 }
 
-fn session_hash_from_headers(headers: &HeaderMap) -> Result<SessionTokenHash, ApiError> {
+pub(crate) fn session_hash_from_headers(headers: &HeaderMap) -> Result<SessionTokenHash, ApiError> {
     let encoded = parse_session_cookie(headers)?;
     let token = OpaqueToken::from_encoded(encoded).map_err(|_| ApiError::AuthenticationRequired)?;
     let hash = token.verification_hash(TokenDomain::Session);
@@ -986,17 +1507,20 @@ fn csrf_hash_from_headers(headers: &HeaderMap) -> Result<CsrfTokenHash, ApiError
 }
 
 fn parse_session_cookie(headers: &HeaderMap) -> Result<&str, ApiError> {
+    parse_named_cookie(headers, SESSION_COOKIE_NAME).map_err(|()| ApiError::AuthenticationRequired)
+}
+
+pub(crate) fn parse_named_cookie<'a>(
+    headers: &'a HeaderMap,
+    target_name: &str,
+) -> Result<&'a str, ()> {
     let mut header_values = headers.get_all(header::COOKIE).iter();
-    let header_value = header_values
-        .next()
-        .ok_or(ApiError::AuthenticationRequired)?;
+    let header_value = header_values.next().ok_or(())?;
     if header_values.next().is_some() {
-        return Err(ApiError::AuthenticationRequired);
+        return Err(());
     }
-    let cookie = header_value
-        .to_str()
-        .map_err(|_| ApiError::AuthenticationRequired)?;
-    let mut session = None;
+    let cookie = header_value.to_str().map_err(|_| ())?;
+    let mut selected = None;
     for (index, raw_pair) in cookie.split(';').enumerate() {
         let pair = if index == 0 {
             raw_pair
@@ -1004,19 +1528,17 @@ fn parse_session_cookie(headers: &HeaderMap) -> Result<&str, ApiError> {
             raw_pair.trim_start_matches([' ', '\t'])
         };
         if pair.is_empty() {
-            return Err(ApiError::AuthenticationRequired);
+            return Err(());
         }
-        let (name, value) = pair
-            .split_once('=')
-            .ok_or(ApiError::AuthenticationRequired)?;
+        let (name, value) = pair.split_once('=').ok_or(())?;
         if !valid_cookie_name(name) || !valid_cookie_value(value) {
-            return Err(ApiError::AuthenticationRequired);
+            return Err(());
         }
-        if name == SESSION_COOKIE_NAME && (value.is_empty() || session.replace(value).is_some()) {
-            return Err(ApiError::AuthenticationRequired);
+        if name == target_name && (value.is_empty() || selected.replace(value).is_some()) {
+            return Err(());
         }
     }
-    session.ok_or(ApiError::AuthenticationRequired)
+    selected.ok_or(())
 }
 
 fn valid_cookie_name(value: &str) -> bool {
@@ -1049,7 +1571,7 @@ fn valid_cookie_value(value: &str) -> bool {
         .all(|byte| matches!(byte, 0x21 | 0x23..=0x2b | 0x2d..=0x3a | 0x3c..=0x5b | 0x5d..=0x7e))
 }
 
-fn validate_post_headers(headers: &HeaderMap) -> Result<(), ApiError> {
+pub(crate) fn validate_post_headers(headers: &HeaderMap) -> Result<(), ApiError> {
     let content_type =
         single_header(headers, header::CONTENT_TYPE).ok_or(ApiError::UnsupportedMediaType)?;
     let media_type =
@@ -1058,6 +1580,10 @@ fn validate_post_headers(headers: &HeaderMap) -> Result<(), ApiError> {
         return Err(ApiError::UnsupportedMediaType);
     }
 
+    validate_same_origin_headers(headers)
+}
+
+pub(crate) fn validate_same_origin_headers(headers: &HeaderMap) -> Result<(), ApiError> {
     let host = single_header(headers, header::HOST).ok_or(ApiError::InvalidHost)?;
     let origin = single_header(headers, header::ORIGIN).ok_or(ApiError::InvalidOrigin)?;
     if origin != format!("http://{host}") {
@@ -1074,7 +1600,7 @@ fn validate_post_headers(headers: &HeaderMap) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn map_json_rejection(rejection: JsonRejection) -> ApiError {
+pub(crate) fn map_json_rejection(rejection: JsonRejection) -> ApiError {
     if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
         ApiError::PayloadTooLarge
     } else {
@@ -1091,7 +1617,7 @@ fn single_header(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> 
     Some(value)
 }
 
-async fn run_blocking_state<T, F>(
+pub(crate) async fn run_blocking_state<T, F>(
     tracker: &BlockingTaskTracker,
     operation: F,
 ) -> Result<T, ApiError>
@@ -1166,6 +1692,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn same_origin_header_gate_rejects_other_ports_and_cross_site_fetches() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("192.0.2.10:3100"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://192.0.2.10:3100"),
+        );
+        headers.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+        assert!(validate_same_origin_headers(&headers).is_ok());
+
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://192.0.2.10:8080"),
+        );
+        assert!(matches!(
+            validate_same_origin_headers(&headers),
+            Err(ApiError::InvalidOrigin)
+        ));
+
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://192.0.2.10:3100"),
+        );
+        headers.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert!(matches!(
+            validate_same_origin_headers(&headers),
+            Err(ApiError::CrossSiteRequest)
+        ));
+    }
+
+    #[test]
     fn rate_map_is_hard_bounded_and_expired_entries_are_evicted() {
         let limiter = AttemptLimiter::with_limits(3, Duration::from_secs(60), 2, 2, 2, 2, 2);
         limiter
@@ -1222,6 +1779,97 @@ mod tests {
             );
         }
         assert_eq!(limiter.entry_count(), 0);
+    }
+
+    #[test]
+    fn account_update_budget_is_user_scoped_and_refunds_non_proof_outcomes() {
+        let limiter = AttemptLimiter::production();
+        let peer = IpAddr::from([127, 0, 0, 1]);
+        let session = SessionTokenHash::from_digest([1; 32]);
+        for _ in 0..ACCOUNT_UPDATE_ATTEMPTS_PER_WINDOW {
+            limiter
+                .reserve_account_update(peer, "owner-user", &session)
+                .expect("attempt within the account-update budget")
+                .consume_failure();
+        }
+        assert!(
+            limiter
+                .reserve_account_update(
+                    IpAddr::from([127, 0, 0, 2]),
+                    "owner-user",
+                    &SessionTokenHash::from_digest([2; 32]),
+                )
+                .is_none(),
+            "peer or session cycling must not bypass the authenticated-user budget"
+        );
+
+        let refundable = AttemptLimiter::production();
+        for _ in 0..(ACCOUNT_UPDATE_ATTEMPTS_PER_WINDOW * 2) {
+            drop(
+                refundable
+                    .reserve_account_update(peer, "owner-user", &session)
+                    .expect("non-proof outcomes refund the reservation"),
+            );
+        }
+        assert_eq!(refundable.entry_count(), 0);
+    }
+
+    #[test]
+    fn preference_write_budget_allows_normal_debounce_and_bounds_user_fanout() {
+        const { assert!(PREFERENCE_SESSION_WRITES_PER_WINDOW >= 86) };
+        let limiter = AttemptLimiter::production();
+        let first_peer = IpAddr::from([127, 0, 0, 1]);
+        let first_session = SessionTokenHash::from_digest([3; 32]);
+        for _ in 0..PREFERENCE_SESSION_WRITES_PER_WINDOW {
+            assert!(limiter.allow_preference_write(first_peer, "owner-user", &first_session,));
+        }
+        assert!(!limiter.allow_preference_write(first_peer, "owner-user", &first_session,));
+
+        let second_peer = IpAddr::from([127, 0, 0, 2]);
+        let second_session = SessionTokenHash::from_digest([4; 32]);
+        for _ in 0..PREFERENCE_SESSION_WRITES_PER_WINDOW {
+            assert!(limiter.allow_preference_write(second_peer, "owner-user", &second_session,));
+        }
+        assert!(!limiter.allow_preference_write(
+            IpAddr::from([127, 0, 0, 3]),
+            "owner-user",
+            &SessionTokenHash::from_digest([5; 32]),
+        ));
+    }
+
+    #[test]
+    fn storage_analysis_pressure_is_bounded_per_session_and_authenticated_user() {
+        let limiter = AttemptLimiter::production();
+        let first_peer = IpAddr::from([127, 0, 0, 1]);
+        let first_session = SessionTokenHash::from_digest([6; 32]);
+        for _ in 0..STORAGE_ANALYSIS_SESSION_STARTS_PER_WINDOW {
+            assert!(
+                limiter.allow_storage_analysis_start(first_peer, "owner-user", &first_session,)
+            );
+        }
+        assert!(!limiter.allow_storage_analysis_start(first_peer, "owner-user", &first_session,));
+
+        let second_peer = IpAddr::from([127, 0, 0, 2]);
+        let second_session = SessionTokenHash::from_digest([7; 32]);
+        for _ in STORAGE_ANALYSIS_SESSION_STARTS_PER_WINDOW..STORAGE_ANALYSIS_USER_STARTS_PER_WINDOW
+        {
+            assert!(limiter.allow_storage_analysis_start(
+                second_peer,
+                "owner-user",
+                &second_session,
+            ));
+        }
+        assert!(!limiter.allow_storage_analysis_start(
+            IpAddr::from([127, 0, 0, 3]),
+            "owner-user",
+            &SessionTokenHash::from_digest([8; 32]),
+        ));
+
+        let reads = AttemptLimiter::production();
+        for _ in 0..STORAGE_ANALYSIS_SESSION_READS_PER_WINDOW {
+            assert!(reads.allow_storage_analysis_read(first_peer, "owner-user", &first_session,));
+        }
+        assert!(!reads.allow_storage_analysis_read(first_peer, "owner-user", &first_session,));
     }
 
     #[test]

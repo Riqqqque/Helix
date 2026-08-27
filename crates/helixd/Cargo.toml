@@ -13,6 +13,7 @@ clap.workspace = true
 helix-api.workspace = true
 helix-config.workspace = true
 helix-core.workspace = true
+helix-privd.workspace = true
 helix-state.workspace = true
 helix-system.workspace = true
 hyper.workspace = true

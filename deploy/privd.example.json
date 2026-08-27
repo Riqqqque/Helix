@@ -1,0 +1,18 @@
+{
+  "socket": "/run/helix/privd.sock",
+  "amp_credentials": "/etc/helix/amp.json",
+  "managed_roots": [
+    "/srv/helix/instances",
+    "/srv/storage",
+    "/srv/amp/instances"
+  ],
+  "native": {
+    "state_root": "/srv/helix/state/instances",
+    "instance_root": "/srv/helix/instances",
+    "backup_root": "/srv/helix/backups",
+    "docker_binary": "/usr/bin/docker"
+  },
+  "network": {
+    "state_root": "/srv/helix/state/network"
+  }
+}

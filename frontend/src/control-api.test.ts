@@ -1,0 +1,229 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  getDirectory,
+  getServerBackups,
+  getServerDetail,
+  parseDirectoryListing,
+  parseMinecraftSettingsSaveResult,
+  restoreTrashedServerBackup,
+  runServerAction,
+  saveServerSettings,
+  trashServerBackup,
+  type MinecraftSettings,
+} from './control-api';
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('file manager API', () => {
+  const listing = {
+    path: '/HDD10tb1',
+    parent: '/',
+    writable: true,
+    omitted_entries: 0,
+    total_entries: 76,
+    next_cursor: 'movie 050.mkv',
+    has_more: true,
+    page_limit: 50,
+    entries: [{
+      name: 'movie 001.mkv',
+      path: '/HDD10tb1/movie 001.mkv',
+      kind: 'file',
+      size_bytes: 8_589_934_592,
+      modified_unix_ms: 1_800_000_000_000,
+      permissions: '0660',
+      owner_uid: 1000,
+      owner_gid: 1000,
+      writable: true,
+      restricted: false,
+      symlink_target: null,
+    }],
+  };
+
+  it('parses bounded cursor pagination and rejects contradictory cursors', () => {
+    expect(parseDirectoryListing(listing)).toMatchObject({
+      totalEntries: 76,
+      nextCursor: 'movie 050.mkv',
+      hasMore: true,
+      pageLimit: 50,
+    });
+    expect(() => parseDirectoryListing({ ...listing, has_more: false })).toThrow(/pagination/i);
+    expect(() => parseDirectoryListing({ ...listing, entries: Array(51).fill(listing.entries[0]) })).toThrow();
+  });
+
+  it('sends paths, cursors, and page sizes as encoded query parameters', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(listing), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getDirectory('/HDD10tb1/TV & Movies', 'csrf', 'movie 050.mkv', 50);
+
+    const [path] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const url = new URL(path, 'http://helix.local');
+    expect(url.pathname).toBe('/api/v1/files');
+    expect(url.searchParams.get('path')).toBe('/HDD10tb1/TV & Movies');
+    expect(url.searchParams.get('cursor')).toBe('movie 050.mkv');
+    expect(url.searchParams.get('limit')).toBe('50');
+  });
+});
+
+const settings: MinecraftSettings = {
+  expectedRevision: 'a'.repeat(64),
+  motd: 'Survival',
+  gameMode: 'survival',
+  difficulty: 'hard',
+  maxPlayers: 20,
+  viewDistance: 12,
+  simulationDistance: 8,
+  playerIdleTimeout: 15,
+  onlineMode: true,
+  pvp: true,
+  allowFlight: false,
+  whiteList: true,
+  enforceWhiteList: true,
+  spawnProtection: 8,
+  restartBehavior: {
+    activation: 'server_restart',
+    restartRequiredFields: [
+      'motd', 'game_mode', 'difficulty', 'max_players', 'view_distance',
+      'simulation_distance', 'player_idle_timeout', 'online_mode', 'pvp',
+      'allow_flight', 'white_list', 'enforce_white_list', 'spawn_protection',
+    ],
+    message: 'Changes saved here take effect the next time Minecraft starts.',
+  },
+};
+
+function wireSettings(value = settings): Record<string, unknown> {
+  return {
+    expected_revision: value.expectedRevision,
+    motd: value.motd,
+    game_mode: value.gameMode,
+    difficulty: value.difficulty,
+    max_players: value.maxPlayers,
+    view_distance: value.viewDistance,
+    simulation_distance: value.simulationDistance,
+    player_idle_timeout: value.playerIdleTimeout,
+    online_mode: value.onlineMode,
+    pvp: value.pvp,
+    allow_flight: value.allowFlight,
+    white_list: value.whiteList,
+    enforce_white_list: value.enforceWhiteList,
+    spawn_protection: value.spawnProtection,
+    restart_behavior: {
+      activation: value.restartBehavior.activation,
+      restart_required_fields: value.restartBehavior.restartRequiredFields,
+      message: value.restartBehavior.message,
+    },
+  };
+}
+
+describe('native server API', () => {
+  it('parses a background action job without waiting for the work', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ job_id: 'ccf645d5-7896-4659-bc71-6f177efb589d' }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(runServerAction('helix:server-id', 'backup', 'csrf')).resolves.toEqual({
+      jobId: 'ccf645d5-7896-4659-bc71-6f177efb589d',
+    });
+    const [path, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toContain('helix%3Aserver-id/actions');
+    expect(request.method).toBe('POST');
+  });
+
+  it('sends the guarded settings revision and parses the committed version', async () => {
+    const committed = { ...settings, expectedRevision: 'b'.repeat(64) };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ changed: true, restart_required: true, changed_fields: ['motd'], settings: wireSettings(committed) }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(saveServerSettings('helix:server-id', settings, 'csrf')).resolves.toEqual({
+      changed: true,
+      restartRequired: true,
+      changedFields: ['motd'],
+      settings: committed,
+    });
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      expected_revision: 'a'.repeat(64),
+      max_players: 20,
+      enforce_white_list: true,
+    });
+  });
+
+  it('preserves the backend no-op signal without inventing a restart', () => {
+    expect(parseMinecraftSettingsSaveResult({
+      changed: false,
+      restart_required: false,
+      changed_fields: [],
+      settings: wireSettings(),
+    })).toEqual({ changed: false, restartRequired: false, changedFields: [], settings });
+  });
+
+  it('parses recoverable backup trash and uses only opaque IDs for delete and undo', async () => {
+    const trashId = '019d1234-5678-4abc-8def-123456789abc';
+    const catalog = {
+      instance_id: 'helix:server-id',
+      backups: [{ id: '1787800010959', created_at_unix_ms: 1787800010959, size_bytes: 512, definition_present: true }],
+      trash: [{
+        trash_id: trashId,
+        backup_id: '1787799939239',
+        trashed_at_unix_ms: 1787800020000,
+        undo_available: true,
+        undo_expires_at_unix_ms: null,
+        purge_eligible_at_unix_ms: 1790392020000,
+        automatic_purge_enabled: false,
+        size_bytes: 256,
+        definition_present: true,
+        path: '/must/not/reach/the/ui',
+      }],
+      trash_policy: {
+        purge_after_days: 30,
+        automatic_purge_enabled: false,
+        note: 'Deleted backups stay recoverable until an explicit purge is requested.',
+      },
+    };
+    const trashed = {
+      instance_id: 'helix:server-id', backup_id: '1787800010959', trash_id: trashId,
+      trashed_at_unix_ms: 1787800020000, undo_available: true,
+      undo_expires_at_unix_ms: null, purge_eligible_at_unix_ms: 1790392020000,
+      automatic_purge_enabled: false,
+    };
+    const restored = {
+      instance_id: 'helix:server-id', backup_id: '1787800010959', trash_id: trashId,
+      restored_at_unix_ms: 1787800030000, cleanup_pending: false,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(catalog), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(trashed), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(restored), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const parsed = await getServerBackups('helix:server-id', 'csrf');
+    expect(parsed.trash[0]).not.toHaveProperty('path');
+    expect(parsed.trashPolicy.note).toContain('recoverable');
+    await trashServerBackup('helix:server-id', '1787800010959', 'csrf');
+    await restoreTrashedServerBackup('helix:server-id', trashId, 'csrf');
+
+    const [deletePath, deleteRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(deletePath).toContain('/backups/1787800010959');
+    expect(deletePath).not.toContain('/must/');
+    expect(deleteRequest.method).toBe('DELETE');
+    expect(deleteRequest.body).toBe('{}');
+    const deleteHeaders = new Headers(deleteRequest.headers);
+    expect(deleteHeaders.get('Content-Type')).toBe('application/json');
+    expect(deleteHeaders.get('X-Helix-CSRF')).toBe('csrf');
+    const [undoPath, undoRequest] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(undoPath).toContain(`/trash/${trashId}/restore`);
+    expect(undoRequest.method).toBe('POST');
+  });
+
+  it('rejects malformed detail status instead of rendering invented state', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: 'mystery' }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getServerDetail('helix:server-id', 'csrf')).rejects.toThrow();
+  });
+});

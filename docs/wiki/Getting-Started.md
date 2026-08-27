@@ -2,30 +2,35 @@
 
 ## Before you run Helix
 
-Helix is an alpha preview. Keep it on loopback, use disposable data, and do not
-place it in front of a public reverse proxy. There is no supported installer or
-binary release yet; this page builds a development preview from source.
+Helix is a private alpha with no supported binary release. Evaluate it on a
+private network with backups and a clear rollback path. Do not forward its port
+to the public internet or use live data as a first test.
 
-You need Rust 1.88 or newer, Node.js 22.12 or newer, npm, and a current browser.
+The repository is licensed under `AGPL-3.0-or-later`; that does not turn this
+source workflow into a supported distribution.
 
-These commands are maintainer/developer notes for evaluating the current source.
-The AGPL license does not make this a supported distribution or production path.
+Building the complete source requires Rust 1.88 or newer, Node.js, npm, and a
+current browser. Full host and native-server controls additionally require a
+reviewed Linux broker configuration and Docker on the Linux host.
 
-## Build
+## Build the source
 
 ```text
 cd frontend
 npm ci --no-audit --no-fund
-npm run build
+npm run check
 cd ..
 
 cargo build --locked --release --workspace --all-features
 ```
 
-## Run an isolated preview
+## Run a loopback preview
 
-From the repository root in a Bash shell (this does not imply support for that
-host platform):
+The loopback preview is useful for setup, authentication, Home, and read-only
+dashboard work. Broker-backed controls report unavailable until
+`helix-privd` is configured.
+
+From the repository root in a Bash shell:
 
 ```bash
 mkdir -p .helix-data/development
@@ -40,17 +45,23 @@ mkdir -p .helix-data/development
   --web-root "$(pwd)/frontend/dist"
 ```
 
-Open `http://127.0.0.1:8080`, paste the one-time token, and create the owner.
-The token expires after 15 minutes and is invalidated when it is replaced or
-consumed.
+Open the loopback URL printed by the daemon, use the one-time token, and create
+the owner. The token expires after 15 minutes and is invalidated when replaced
+or consumed.
 
-On later runs with the same data directory, start `helixd` directly;
-`setup-token` is only for an unclaimed installation. Press `Ctrl+C` in the daemon
-terminal for a clean source-preview shutdown.
+## Private-LAN deployment
 
-Never post the token, a session cookie, a CSRF proof, a password, or private host
-data in a GitHub issue or screenshot.
+The repository contains a constrained dashboard/gateway Compose example and a
+separate systemd example for the root broker. They are deployment building
+blocks, not a one-command supported installer. Every bind address, Host,
+Origin, client CIDR, broker group, socket, and managed storage root must match
+the target host before anything starts.
 
-See the repository's
-[Installation model](https://github.com/Riqqqque/Helix/blob/main/docs/INSTALLATION.md)
-before using the Linux package tooling.
+Read the
+[container deployment guide](https://github.com/Riqqqque/Helix/blob/main/docs/CONTAINER-DEPLOYMENT.md)
+and the
+[current security model](https://github.com/Riqqqque/Helix/blob/main/docs/SECURITY.md)
+first. Helix does not install Tailscale or open router ports.
+
+Never post setup tokens, passwords, cookies, CSRF proofs, private addresses,
+hostnames, storage paths, server logs, or world data in an issue or screenshot.

@@ -1,0 +1,28 @@
+[Unit]
+Description=Helix unprivileged terminal bridge for %i
+After=systemd-tmpfiles-setup.service
+ConditionPathIsDirectory=/run/helix/terminal
+
+[Service]
+Type=simple
+User=%i
+Group=helix-terminal
+UMask=0022
+WorkingDirectory=~
+ExecStart=/usr/local/libexec/helix-terminald --socket /run/helix/terminal/terminal.sock --shell /bin/bash --user %i --allowed-peer-uid 10001
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=10s
+KillMode=control-group
+TasksMax=512
+LimitNOFILE=65536
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

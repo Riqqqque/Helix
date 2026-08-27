@@ -143,6 +143,26 @@ static-shell work only. Run `npm run build` and serve `frontend/dist` through
 `helixd` for production-like setup, login, session, and host-data testing. Do
 not weaken the daemon's production request boundary for development convenience.
 
+### Games visual fixture
+
+The game-management layout has an explicit development-only visual harness:
+
+```text
+http://127.0.0.1:5173/game-preview.html
+```
+
+Use `?state=locked` for the real unavailable boundary, `?theme=light`,
+`?theme=midnight`, or `?theme=oled` for theme review, and `?viewport=narrow`
+for the component-width fixture. The sample server names, addresses, versions,
+and measurements are visibly labelled as fixture data. They are imported only
+by this development entry; `vite build` emits only `index.html`, and production
+bundle checks must keep all fixture labels and server data out of `dist`.
+
+The harness proves rendering, interaction, and bounded-list behavior only. Run
+the compiled `frontend/dist` through `helixd` to validate authentication, CSRF,
+the readiness API, and the production locked state. Never use the harness as
+game-lifecycle or player-capacity evidence.
+
 ## Strand project tooling
 
 Preview Strand authoring is intentionally independent of daemon configuration

@@ -1,0 +1,9 @@
+# helixd remains loopback-only. The companion gateway shares this network
+# namespace, validates the external Host and Origin, and is the only listener
+# reachable from the reverse-proxy network.
+[server]
+listen = "127.0.0.1:8080"
+
+[paths]
+data_dir = "/var/lib/helix"
+web_root = "/app/web"

@@ -4,6 +4,7 @@ use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use std::fmt;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const OWNER_ROLE_ID: &str = "00000000-0000-0000-0000-000000000001";
 const BOOTSTRAP_MAX_LIFETIME_MS: i64 = 15 * 60 * 1_000;
@@ -337,9 +338,70 @@ BEGIN
 END;
 "#;
 
+const SECURITY_MIGRATION_5: &str = r#"
+CREATE TABLE user_preferences (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    preferences_json TEXT NOT NULL CHECK (
+        length(CAST(preferences_json AS BLOB)) BETWEEN 2 AND 65536
+        AND json_valid(preferences_json)
+        AND json_type(preferences_json) = 'object'
+    ),
+    updated_at_unix_ms INTEGER NOT NULL CHECK (updated_at_unix_ms >= 0)
+) STRICT;
+
+INSERT INTO capabilities (capability, description, created_at_unix_ms) VALUES
+    ('dashboard.customize', 'Customize personal Helix dashboards', 0),
+    ('games.view', 'Inspect managed game servers', 0),
+    ('games.manage', 'Create and control managed game servers', 0),
+    ('games.backups.manage', 'Delete and restore managed game backups', 0),
+    ('network.firewall.read', 'Inspect firewall and port exposure state', 0),
+    ('network.firewall.write', 'Change Helix-owned firewall rules', 0),
+    ('storage.analyze', 'Analyze storage usage and large paths', 0),
+    ('storage.files.read', 'Browse and read managed files', 0),
+    ('storage.files.manage', 'Create, edit, rename, and trash managed files', 0),
+    ('system.packages.read', 'Inspect operating system package updates', 0),
+    ('system.packages.write', 'Apply operating system package updates', 0),
+    ('system.power', 'Schedule and cancel host power operations', 0),
+    ('system.settings.write', 'Change Helix host integration settings', 0),
+    ('users.manage', 'Change Helix account credentials', 0);
+
+INSERT INTO role_capabilities (role_id, capability, granted_at_unix_ms)
+SELECT '00000000-0000-0000-0000-000000000001', capability, 0
+FROM capabilities
+WHERE capability IN (
+    'dashboard.customize',
+    'games.view',
+    'games.manage',
+    'games.backups.manage',
+    'network.firewall.read',
+    'network.firewall.write',
+    'storage.analyze',
+    'storage.files.read',
+    'storage.files.manage',
+    'system.packages.read',
+    'system.packages.write',
+    'system.power',
+    'system.settings.write',
+    'users.manage'
+);
+"#;
+
+const SECURITY_MIGRATION_7: &str = r#"
+INSERT INTO capabilities (capability, description, created_at_unix_ms)
+VALUES ('terminal.open', 'Open an authenticated unprivileged host terminal', 0);
+
+INSERT INTO role_capabilities (role_id, capability, granted_at_unix_ms)
+VALUES (
+    '00000000-0000-0000-0000-000000000001',
+    'terminal.open',
+    0
+);
+"#;
+
 macro_rules! digest_type {
     ($name:ident) => {
-        #[derive(Clone, Eq, PartialEq)]
+        #[derive(Clone, Eq, Hash, PartialEq)]
         pub struct $name([u8; 32]);
 
         impl $name {
@@ -366,10 +428,11 @@ digest_type!(SessionTokenHash);
 digest_type!(CsrfTokenHash);
 
 #[derive(Clone, Eq, PartialEq)]
-pub struct PasswordPhc(String);
+pub struct PasswordPhc(Zeroizing<String>);
 
 impl PasswordPhc {
     pub fn new(value: String) -> Result<Self, StateError> {
+        let value = Zeroizing::new(value);
         if !(20..=1024).contains(&value.len())
             || !value.starts_with("$argon2id$")
             || !value.bytes().all(|byte| byte.is_ascii_graphic())
@@ -452,6 +515,44 @@ pub enum OwnerClaimRejection {
     BootstrapMismatch,
 }
 
+pub struct OwnerAccountUpdateInput<'a> {
+    pub user_id: &'a str,
+    pub expected_auth_version: i64,
+    pub expected_password_phc: &'a PasswordPhc,
+    pub expected_password_policy_version: i64,
+    pub login_name: &'a str,
+    pub display_name: &'a str,
+    pub replacement_password: Option<PasswordRehash<'a>>,
+    pub now_unix_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnerAccountUpdateOutcome {
+    Updated,
+    LoginNameUnavailable,
+    CredentialChangedOrUnavailable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserPreferencesRecord {
+    pub revision: i64,
+    pub preferences_json: String,
+    pub updated_at_unix_ms: i64,
+}
+
+pub struct UserPreferencesUpdateInput<'a> {
+    pub user_id: &'a str,
+    pub expected_revision: i64,
+    pub preferences_json: &'a str,
+    pub now_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum UserPreferencesUpdateOutcome {
+    Updated(UserPreferencesRecord),
+    Conflict(Option<UserPreferencesRecord>),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CredentialRecord {
     pub user_id: String,
@@ -526,6 +627,14 @@ pub enum SessionAuthorization<'a> {
     RequireCapability(&'a str),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalAuditEvent {
+    PasswordRejected,
+    SessionOpened,
+    SessionClosed,
+    SessionFailed,
+}
+
 pub struct SessionAuthenticationInput<'a> {
     pub session_hash: &'a SessionTokenHash,
     pub authorization: SessionAuthorization<'a>,
@@ -546,6 +655,23 @@ pub(super) fn migrate_audit_retention(
         "bounded-authentication-audit-retention",
         SECURITY_MIGRATION_4,
     )
+}
+
+pub(super) fn migrate_preferences_and_capabilities(
+    connection: &mut rusqlite::Connection,
+) -> Result<(), StateError> {
+    apply_migration(
+        connection,
+        5,
+        "dashboard-preferences-and-owner-capabilities",
+        SECURITY_MIGRATION_5,
+    )
+}
+
+pub(super) fn migrate_terminal_capability(
+    connection: &mut rusqlite::Connection,
+) -> Result<(), StateError> {
+    apply_migration(connection, 7, "terminal-capability", SECURITY_MIGRATION_7)
 }
 
 impl StateDatabase {
@@ -1166,6 +1292,304 @@ impl StateDatabase {
         Ok(Some(credential))
     }
 
+    /// Atomically replace the owner's public identity and, optionally, password.
+    /// Every successful change advances the authentication version and revokes
+    /// all sessions so a stolen session cannot survive a credential change.
+    pub fn update_owner_account(
+        &self,
+        input: OwnerAccountUpdateInput<'_>,
+    ) -> Result<OwnerAccountUpdateOutcome, StateError> {
+        require_identifier(input.user_id, "invalid user identifier")?;
+        require_nonnegative_time(input.now_unix_ms)?;
+        validate_login_name(input.login_name)?;
+        validate_display_name(input.display_name)?;
+        if input.expected_auth_version < 1 {
+            return Err(StateError::InvalidSecurityInput(
+                "auth version must be positive",
+            ));
+        }
+        if input.expected_password_policy_version < 1 {
+            return Err(StateError::InvalidSecurityInput(
+                "password policy version must be positive",
+            ));
+        }
+        if let Some(replacement) = input.replacement_password
+            && replacement.replacement_password_policy_version
+                < input.expected_password_policy_version
+        {
+            return Err(StateError::InvalidSecurityInput(
+                "replacement password policy version cannot decrease",
+            ));
+        }
+
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = transaction
+            .query_row(
+                "SELECT auth_version, password_phc, password_policy_version, status, is_owner
+                 FROM users WHERE id = ?1",
+                [input.user_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((auth_version, password_phc, password_policy_version, status, is_owner)) = current
+        else {
+            transaction.commit()?;
+            return Ok(OwnerAccountUpdateOutcome::CredentialChangedOrUnavailable);
+        };
+        let password_phc = PasswordPhc::new(password_phc)?;
+        if status != "active"
+            || is_owner != 1
+            || auth_version != input.expected_auth_version
+            || password_phc != *input.expected_password_phc
+            || password_policy_version != input.expected_password_policy_version
+        {
+            transaction.commit()?;
+            return Ok(OwnerAccountUpdateOutcome::CredentialChangedOrUnavailable);
+        }
+
+        let login_in_use = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE login_name = ?1 AND id <> ?2)",
+            params![input.login_name, input.user_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if login_in_use {
+            transaction.commit()?;
+            return Ok(OwnerAccountUpdateOutcome::LoginNameUnavailable);
+        }
+
+        let (replacement_phc, replacement_policy_version) = input.replacement_password.map_or(
+            (
+                input.expected_password_phc.as_str(),
+                input.expected_password_policy_version,
+            ),
+            |replacement| {
+                (
+                    replacement.replacement_password_phc.as_str(),
+                    replacement.replacement_password_policy_version,
+                )
+            },
+        );
+        let next_auth_version =
+            input
+                .expected_auth_version
+                .checked_add(1)
+                .ok_or(StateError::InvalidSecurityInput(
+                    "auth version overflowed during account update",
+                ))?;
+        let updated = transaction.execute(
+            "UPDATE users
+             SET login_name = ?1, display_name = ?2, password_phc = ?3,
+                 password_policy_version = ?4, auth_version = ?5,
+                 failed_login_count = 0, login_not_before_unix_ms = 0,
+                 updated_at_unix_ms = max(updated_at_unix_ms, ?6)
+             WHERE id = ?7 AND is_owner = 1 AND status = 'active'
+                   AND auth_version = ?8 AND password_phc = ?9
+                   AND password_policy_version = ?10",
+            params![
+                input.login_name,
+                input.display_name,
+                replacement_phc,
+                replacement_policy_version,
+                next_auth_version,
+                input.now_unix_ms,
+                input.user_id,
+                input.expected_auth_version,
+                input.expected_password_phc.as_str(),
+                input.expected_password_policy_version,
+            ],
+        )?;
+        if updated != 1 {
+            transaction.commit()?;
+            return Ok(OwnerAccountUpdateOutcome::CredentialChangedOrUnavailable);
+        }
+        transaction.execute("DELETE FROM sessions WHERE user_id = ?1", [input.user_id])?;
+        append_audit(
+            &transaction,
+            input.now_unix_ms,
+            Some(input.user_id),
+            "account.owner_updated",
+            Some("user"),
+            Some(input.user_id),
+            "success",
+        )?;
+        transaction.commit()?;
+        Ok(OwnerAccountUpdateOutcome::Updated)
+    }
+
+    /// Record a rejected current-password proof for an authenticated owner
+    /// account update without coupling it to login-delay state.
+    pub fn record_owner_account_password_rejection(
+        &self,
+        user_id: &str,
+        now_unix_ms: i64,
+    ) -> Result<(), StateError> {
+        require_identifier(user_id, "invalid user identifier")?;
+        require_nonnegative_time(now_unix_ms)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        append_audit(
+            &transaction,
+            now_unix_ms,
+            Some(user_id),
+            "account.owner_update_password_rejected",
+            Some("user"),
+            Some(user_id),
+            "denied",
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Record terminal authorization and lifecycle outcomes without recording
+    /// terminal commands, input, output, environment values, or paths.
+    pub fn record_terminal_audit(
+        &self,
+        user_id: &str,
+        event: TerminalAuditEvent,
+        now_unix_ms: i64,
+    ) -> Result<(), StateError> {
+        require_identifier(user_id, "invalid user identifier")?;
+        require_nonnegative_time(now_unix_ms)?;
+        let (action, outcome) = match event {
+            TerminalAuditEvent::PasswordRejected => ("terminal.password_rejected", "denied"),
+            TerminalAuditEvent::SessionOpened => ("terminal.session_opened", "success"),
+            TerminalAuditEvent::SessionClosed => ("terminal.session_closed", "success"),
+            TerminalAuditEvent::SessionFailed => ("terminal.session_failed", "error"),
+        };
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        append_audit(
+            &transaction,
+            now_unix_ms,
+            Some(user_id),
+            action,
+            Some("terminal"),
+            None,
+            outcome,
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn user_preferences(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<UserPreferencesRecord>, StateError> {
+        require_identifier(user_id, "invalid user identifier")?;
+        let connection = self.lock()?;
+        load_user_preferences(&connection, user_id)
+    }
+
+    pub fn update_user_preferences(
+        &self,
+        input: UserPreferencesUpdateInput<'_>,
+    ) -> Result<UserPreferencesUpdateOutcome, StateError> {
+        require_identifier(input.user_id, "invalid user identifier")?;
+        require_nonnegative_time(input.now_unix_ms)?;
+        if input.expected_revision < 0 {
+            return Err(StateError::InvalidSecurityInput(
+                "preference revision cannot be negative",
+            ));
+        }
+        let next_revision =
+            input
+                .expected_revision
+                .checked_add(1)
+                .ok_or(StateError::InvalidSecurityInput(
+                    "preference revision overflowed",
+                ))?;
+        if !(2..=65_536).contains(&input.preferences_json.len()) {
+            return Err(StateError::InvalidSecurityInput(
+                "preferences must be a bounded JSON object",
+            ));
+        }
+
+        let mut connection = self.lock()?;
+        let valid_json =
+            connection.query_row("SELECT json_valid(?1)", [input.preferences_json], |row| {
+                row.get::<_, bool>(0)
+            })?;
+        if !valid_json
+            || !connection.query_row(
+                "SELECT json_type(?1) = 'object'",
+                [input.preferences_json],
+                |row| row.get::<_, bool>(0),
+            )?
+        {
+            return Err(StateError::InvalidSecurityInput(
+                "preferences must be a bounded JSON object",
+            ));
+        }
+
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_user_preferences(&transaction, input.user_id)?;
+        if current.as_ref().map_or(0, |record| record.revision) != input.expected_revision {
+            transaction.commit()?;
+            return Ok(UserPreferencesUpdateOutcome::Conflict(current));
+        }
+        if let Some(current) = current
+            && current.preferences_json == input.preferences_json
+        {
+            transaction.commit()?;
+            return Ok(UserPreferencesUpdateOutcome::Updated(current));
+        }
+        if input.expected_revision == 0 {
+            let inserted = transaction.execute(
+                "INSERT INTO user_preferences (
+                    user_id, revision, preferences_json, updated_at_unix_ms
+                 )
+                 SELECT id, ?1, ?2, ?3 FROM users
+                 WHERE id = ?4 AND status = 'active'",
+                params![
+                    next_revision,
+                    input.preferences_json,
+                    input.now_unix_ms,
+                    input.user_id,
+                ],
+            )?;
+            if inserted != 1 {
+                transaction.commit()?;
+                return Ok(UserPreferencesUpdateOutcome::Conflict(None));
+            }
+        } else {
+            let updated = transaction.execute(
+                "UPDATE user_preferences
+                 SET revision = ?1, preferences_json = ?2,
+                     updated_at_unix_ms = max(updated_at_unix_ms, ?3)
+                 WHERE user_id = ?4 AND revision = ?5",
+                params![
+                    next_revision,
+                    input.preferences_json,
+                    input.now_unix_ms,
+                    input.user_id,
+                    input.expected_revision,
+                ],
+            )?;
+            if updated != 1 {
+                let current = load_user_preferences(&transaction, input.user_id)?;
+                transaction.commit()?;
+                return Ok(UserPreferencesUpdateOutcome::Conflict(current));
+            }
+        }
+        // Layout autosaves are ordinary user data, not security events. Keeping
+        // them out of the append-only authentication audit prevents rapid
+        // widget edits from displacing higher-value access and denial records.
+        let updated = load_user_preferences(&transaction, input.user_id)?.ok_or(
+            StateError::InvalidSecurityInput("saved preferences could not be read back"),
+        )?;
+        transaction.commit()?;
+        Ok(UserPreferencesUpdateOutcome::Updated(updated))
+    }
+
     pub fn record_failed_login(
         &self,
         user_id: &str,
@@ -1302,9 +1726,10 @@ impl StateDatabase {
             transaction.commit()?;
             return Ok(SessionCreateOutcome::CredentialChangedOrUnavailable);
         };
+        let password_phc = PasswordPhc::new(password_phc)?;
         if status != "active"
             || auth_version != input.expected_auth_version
-            || password_phc != input.expected_password_phc.as_str()
+            || password_phc != *input.expected_password_phc
             || password_policy_version != input.expected_password_policy_version
         {
             append_audit(
@@ -1478,6 +1903,26 @@ fn parse_user_status(value: &str) -> Result<UserStatus, StateError> {
             "stored user status is unsupported",
         )),
     }
+}
+
+fn load_user_preferences(
+    connection: &rusqlite::Connection,
+    user_id: &str,
+) -> Result<Option<UserPreferencesRecord>, StateError> {
+    Ok(connection
+        .query_row(
+            "SELECT revision, preferences_json, updated_at_unix_ms
+             FROM user_preferences WHERE user_id = ?1",
+            [user_id],
+            |row| {
+                Ok(UserPreferencesRecord {
+                    revision: row.get(0)?,
+                    preferences_json: row.get(1)?,
+                    updated_at_unix_ms: row.get(2)?,
+                })
+            },
+        )
+        .optional()?)
 }
 
 fn failed_login_delay_ms(failed_count: i64) -> i64 {
@@ -1888,7 +2333,12 @@ mod tests {
         ensure_installation, pragma_i64,
     };
     use rusqlite::Connection;
-    use std::{fs, path::Path, thread};
+    use std::{
+        fs,
+        path::Path,
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     const NOW: i64 = 1_800_000_000_000;
 
@@ -1956,6 +2406,226 @@ mod tests {
         let temp = crate::private_test_directory("temporary directory");
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("open databases");
         (temp, databases)
+    }
+
+    #[test]
+    fn owner_account_update_is_guarded_and_revokes_every_session() {
+        let (_temp, databases) = open_databases();
+        let fixture = claim_owner(databases.state(), NOW);
+        let state = databases.state();
+        let credential = state
+            .credential_by_login("owner", NOW)
+            .expect("credential lookup")
+            .expect("owner credential");
+        let replacement = password_phc("replacement");
+
+        assert_eq!(
+            state
+                .update_owner_account(OwnerAccountUpdateInput {
+                    user_id: &fixture.user_id,
+                    expected_auth_version: credential.auth_version,
+                    expected_password_phc: &credential.password_phc,
+                    expected_password_policy_version: credential.password_policy_version,
+                    login_name: "rique",
+                    display_name: "Rique",
+                    replacement_password: Some(PasswordRehash {
+                        replacement_password_phc: &replacement,
+                        replacement_password_policy_version: credential.password_policy_version + 1,
+                    }),
+                    now_unix_ms: NOW + 1,
+                })
+                .expect("update owner account"),
+            OwnerAccountUpdateOutcome::Updated
+        );
+        assert!(
+            state
+                .credential_by_login("owner", NOW + 1)
+                .expect("old login lookup")
+                .is_none()
+        );
+        let updated = state
+            .credential_by_login("rique", NOW + 1)
+            .expect("new login lookup")
+            .expect("updated owner credential");
+        assert_eq!(updated.password_phc, replacement);
+        assert_eq!(updated.auth_version, credential.auth_version + 1);
+        assert_eq!(
+            updated.password_policy_version,
+            credential.password_policy_version + 1
+        );
+        assert!(
+            state
+                .authenticate_session(SessionAuthenticationInput {
+                    session_hash: &fixture.session_hash,
+                    authorization: SessionAuthorization::Authenticated,
+                    csrf: CsrfRequirement::Match(&fixture.csrf_hash),
+                    now_unix_ms: NOW + 1,
+                })
+                .expect("old session lookup")
+                .is_none()
+        );
+        assert_eq!(
+            state
+                .update_owner_account(OwnerAccountUpdateInput {
+                    user_id: &fixture.user_id,
+                    expected_auth_version: credential.auth_version,
+                    expected_password_phc: &credential.password_phc,
+                    expected_password_policy_version: credential.password_policy_version,
+                    login_name: "owner-again",
+                    display_name: "Owner Again",
+                    replacement_password: None,
+                    now_unix_ms: NOW + 2,
+                })
+                .expect("stale account update"),
+            OwnerAccountUpdateOutcome::CredentialChangedOrUnavailable
+        );
+        let audit_rows = state
+            .lock()
+            .expect("state lock")
+            .query_row(
+                "SELECT count(*) FROM audit_events WHERE action = 'account.owner_updated'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("account audit count");
+        assert_eq!(audit_rows, 1);
+    }
+
+    #[test]
+    fn user_preferences_are_bounded_and_revision_guarded() {
+        let (_temp, databases) = open_databases();
+        let fixture = claim_owner(databases.state(), NOW);
+        let state = databases.state();
+        assert_eq!(
+            state
+                .user_preferences(&fixture.user_id)
+                .expect("initial preferences"),
+            None
+        );
+
+        let first = state
+            .update_user_preferences(UserPreferencesUpdateInput {
+                user_id: &fixture.user_id,
+                expected_revision: 0,
+                preferences_json: r#"{"metricsRefreshMs":1000}"#,
+                now_unix_ms: NOW + 1,
+            })
+            .expect("create preferences");
+        let UserPreferencesUpdateOutcome::Updated(first) = first else {
+            panic!("initial preference write conflicted");
+        };
+        assert_eq!(first.revision, 1);
+        assert_eq!(first.preferences_json, r#"{"metricsRefreshMs":1000}"#);
+
+        assert_eq!(
+            state
+                .update_user_preferences(UserPreferencesUpdateInput {
+                    user_id: &fixture.user_id,
+                    expected_revision: 1,
+                    preferences_json: r#"{"metricsRefreshMs":1000}"#,
+                    now_unix_ms: NOW + 2,
+                })
+                .expect("coalesce unchanged preferences"),
+            UserPreferencesUpdateOutcome::Updated(first.clone())
+        );
+
+        assert_eq!(
+            state
+                .update_user_preferences(UserPreferencesUpdateInput {
+                    user_id: &fixture.user_id,
+                    expected_revision: 0,
+                    preferences_json: r#"{"metricsRefreshMs":5000}"#,
+                    now_unix_ms: NOW + 2,
+                })
+                .expect("stale preference write"),
+            UserPreferencesUpdateOutcome::Conflict(Some(first.clone()))
+        );
+        let second = state
+            .update_user_preferences(UserPreferencesUpdateInput {
+                user_id: &fixture.user_id,
+                expected_revision: 1,
+                preferences_json: r#"{"metricsRefreshMs":5000}"#,
+                now_unix_ms: NOW + 3,
+            })
+            .expect("update preferences");
+        let UserPreferencesUpdateOutcome::Updated(second) = second else {
+            panic!("current preference write conflicted");
+        };
+        assert_eq!(second.revision, 2);
+        assert!(matches!(
+            state.update_user_preferences(UserPreferencesUpdateInput {
+                user_id: &fixture.user_id,
+                expected_revision: 2,
+                preferences_json: "[]",
+                now_unix_ms: NOW + 4,
+            }),
+            Err(StateError::InvalidSecurityInput(_))
+        ));
+        for expected_revision in [-1, i64::MAX] {
+            assert!(matches!(
+                state.update_user_preferences(UserPreferencesUpdateInput {
+                    user_id: &fixture.user_id,
+                    expected_revision,
+                    preferences_json: r#"{}"#,
+                    now_unix_ms: NOW + 5,
+                }),
+                Err(StateError::InvalidSecurityInput(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn concurrent_preference_compare_and_swap_has_one_winner() {
+        let (_temp, databases) = open_databases();
+        let fixture = claim_owner(databases.state(), NOW);
+        let databases = Arc::new(databases);
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+
+        for preferences_json in [
+            r#"{"metricsRefreshMs":2000}"#,
+            r#"{"metricsRefreshMs":5000}"#,
+        ] {
+            let databases = Arc::clone(&databases);
+            let barrier = Arc::clone(&barrier);
+            let user_id = fixture.user_id.clone();
+            workers.push(thread::spawn(move || {
+                barrier.wait();
+                databases
+                    .state()
+                    .update_user_preferences(UserPreferencesUpdateInput {
+                        user_id: &user_id,
+                        expected_revision: 0,
+                        preferences_json,
+                        now_unix_ms: NOW + 1,
+                    })
+            }));
+        }
+        barrier.wait();
+        let outcomes = workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .expect("preference worker")
+                    .expect("preference write")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, UserPreferencesUpdateOutcome::Updated(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, UserPreferencesUpdateOutcome::Conflict(Some(current)) if current.revision == 1))
+                .count(),
+            1
+        );
     }
 
     fn imported_session_token_hash(sequence: i64) -> [u8; 32] {
@@ -2981,7 +3651,26 @@ mod tests {
         assert_eq!(authenticated.display_name, "Owner");
         assert_eq!(
             authenticated.capabilities,
-            ["alpha.view", "system.view", "zeta.view"]
+            [
+                "alpha.view",
+                "dashboard.customize",
+                "games.backups.manage",
+                "games.manage",
+                "games.view",
+                "network.firewall.read",
+                "network.firewall.write",
+                "storage.analyze",
+                "storage.files.manage",
+                "storage.files.read",
+                "system.packages.read",
+                "system.packages.write",
+                "system.power",
+                "system.settings.write",
+                "system.view",
+                "terminal.open",
+                "users.manage",
+                "zeta.view",
+            ]
         );
         assert_eq!(
             authenticated.absolute_expires_at_unix_ms,
@@ -3744,6 +4433,10 @@ mod tests {
         for tamper_sql in [
             "DROP TABLE security_state;",
             "DELETE FROM role_capabilities WHERE capability = 'system.view';",
+            "DELETE FROM role_capabilities WHERE capability = 'games.view';",
+            "DELETE FROM role_capabilities WHERE capability = 'games.manage';",
+            "DELETE FROM role_capabilities WHERE capability = 'storage.files.read';",
+            "DELETE FROM role_capabilities WHERE capability = 'storage.files.manage';",
             "DROP TRIGGER audit_events_append_only_delete;",
             "DROP TRIGGER audit_events_retention_count_insert;",
             "DROP INDEX audit_events_retention_priority_idx;",

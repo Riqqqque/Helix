@@ -1,27 +1,37 @@
 # Game Hosting and Capacity
 
-Game management is planned, not implemented. Helix cannot honestly claim a
-player limit yet.
+Helix has a native Docker-backed Minecraft manager for Paper, Purpur, Folia,
+Fabric, and Vanilla. It can create and operate instances, retain bounded console
+history, manage settings and backups, and install compatible Modrinth content
+for the supported plugin/mod profiles. “Start with a modpack” additionally
+creates a server-safe subset from a listed stable server-capable Fabric
+`.mrpack`; it does not promise client/full-pack parity. AMP remains a separate
+optional manager.
 
-Helix will sit outside the game's tick loop and player network path. Each game
-server will remain an independent systemd unit and cgroup. The game, server
-build, plugins or mods, world, configuration, and hardware determine actual
-player capacity.
+That does not produce a universal player limit. Helix sits outside Minecraft's
+tick loop and player network path. Actual capacity depends on CPU single-thread
+performance, memory, storage latency, network, world behavior, view distance,
+server software, Java, mods/plugins, and configuration.
 
-Helix is responsible for keeping management overhead out of the way:
+## What scales today
 
-- no hosting timer, poll, worker, or database writer while hosting is disabled;
-- bounded cursor pages for instances, players, logs, and console data;
-- detail fetched only while a view is open and long lists rendered in a window;
-- coalesced reconnectable events instead of one polling loop per player or card;
-- bounded queues, backpressure, and fair job concurrency;
-- operator-approved resource envelopes and host headroom rather than unsafe
-  automatic overcommit;
-- game-specific capacity claims only after real versioned lifecycle and load
-  tests.
+- Native game containers keep running when the dashboard is closed.
+- Per-instance locks reject incompatible concurrent actions.
+- Console history uses bounded rotating files and cursor pages of at most 500
+  entries.
+- Host and game statistics use a configurable bounded refresh cadence.
+- Background creation, update, backup, and content jobs expose bounded status
+  and logs.
+- Server memory, port, player limit, and start-on-boot choices are explicit.
 
-A synthetic 10,000-player fixture can prove that the Helix API and UI stay
-bounded. It cannot prove that a real game supports 10,000 players.
+Current jobs are broker-lifetime state rather than a durable crash-persistent
+queue. Helix also does not auto-scale a Minecraft process, rewrite its memory or
+player limit under load, shard worlds, or create CPU/RAM that the host lacks.
 
-The full engineering and release contract is in
+A synthetic large-instance/player fixture can prove the API and UI remain
+bounded. It cannot prove a real server supports the same player count. A public
+capacity statement needs the exact game build, hardware, Java, world,
+configuration, plugins/mods, sample count, and failure threshold.
+
+The full contract is in
 [`docs/GAME-HOSTING-CAPACITY.md`](https://github.com/Riqqqque/Helix/blob/main/docs/GAME-HOSTING-CAPACITY.md).
