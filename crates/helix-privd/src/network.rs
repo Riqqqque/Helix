@@ -1431,7 +1431,9 @@ fn parse_proc_ipv6(value: &str) -> Option<String> {
         return None;
     }
     let mut bytes = [0_u8; 16];
-    for (index, chunk) in value.as_bytes().chunks_exact(8).enumerate() {
+    for index in 0..4 {
+        let start = index * 8;
+        let chunk = &value.as_bytes()[start..start + 8];
         let text = std::str::from_utf8(chunk).ok()?;
         let word = u32::from_str_radix(text, 16).ok()?;
         bytes[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());

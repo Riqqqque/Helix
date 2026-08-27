@@ -436,7 +436,7 @@ impl NativeManager {
                 execution_backend: "docker",
             });
         }
-        servers.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        servers.sort_by_key(|server| server.name.to_lowercase());
         Ok(servers)
     }
 
@@ -3215,10 +3215,10 @@ fn archive_console_stream(
         if repeated {
             continue;
         }
-        if let Ok(mut archive) = archive.lock() {
-            if let Err(error) = archive.append(&line) {
-                eprintln!("persistent console capture failed: {error}");
-            }
+        if let Ok(mut archive) = archive.lock()
+            && let Err(error) = archive.append(&line)
+        {
+            eprintln!("persistent console capture failed: {error}");
         }
     }
 }

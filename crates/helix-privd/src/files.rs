@@ -818,21 +818,21 @@ impl StorageAnalysisManager {
 
         let jobs = Arc::clone(&self.jobs);
         let worker_path = PathBuf::from(&normalized_path);
+        let worker = StorageAnalysisWorker {
+            jobs: Arc::clone(&jobs),
+            job_id,
+            descriptor,
+            root_path: worker_path,
+            target_device,
+            cancellation,
+            mode,
+            limits,
+        };
         let spawn = thread::Builder::new()
             .name(format!("helix-storage-{}", job_id.simple()))
             .spawn(move || {
-                let worker_jobs = Arc::clone(&jobs);
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run_storage_analysis_job(
-                        worker_jobs,
-                        job_id,
-                        descriptor,
-                        worker_path,
-                        target_device,
-                        cancellation,
-                        mode,
-                        limits,
-                    );
+                    run_storage_analysis_job(worker);
                 }));
                 if outcome.is_err() {
                     fail_storage_analysis_job(&jobs, job_id);
@@ -931,7 +931,7 @@ impl StorageAnalysisManager {
     }
 }
 
-fn run_storage_analysis_job(
+struct StorageAnalysisWorker {
     jobs: Arc<StorageAnalysisJobs>,
     job_id: Uuid,
     descriptor: OwnedFd,
@@ -940,7 +940,19 @@ fn run_storage_analysis_job(
     cancellation: Arc<AtomicBool>,
     mode: StorageAnalysisMode,
     limits: StorageAnalysisLimits,
-) {
+}
+
+fn run_storage_analysis_job(worker: StorageAnalysisWorker) {
+    let StorageAnalysisWorker {
+        jobs,
+        job_id,
+        descriptor,
+        root_path,
+        target_device,
+        cancellation,
+        mode,
+        limits,
+    } = worker;
     let started_unix_ms = now_unix_ms();
     {
         let mut registry = lock_jobs(&jobs);
@@ -1246,7 +1258,8 @@ impl StorageScan {
     }
 
     fn publish_progress(&self, force: bool) {
-        if !force && self.progress.entries_scanned % self.limits.progress_interval.max(1) != 0 {
+        let interval = self.limits.progress_interval.max(1);
+        if !force && self.progress.entries_scanned.checked_rem(interval) != Some(0) {
             return;
         }
         let entry_percent = self
