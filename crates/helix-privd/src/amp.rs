@@ -200,7 +200,7 @@ impl AmpClient {
         }
         inventory
             .servers
-            .sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+            .sort_by_key(|server| server.name.to_lowercase());
         Ok(inventory)
     }
 

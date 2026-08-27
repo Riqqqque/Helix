@@ -274,11 +274,11 @@ impl NativeManager {
             for (index, file) in plan.files.iter().enumerate() {
                 ensure_before(deadline)?;
                 let output = prepare_download_path(&staging_path, &file.path, &limits)?;
-                let file_progress = if file_count == 0 {
-                    55
-                } else {
-                    32 + u8::try_from(index.saturating_mul(23) / file_count).unwrap_or(23)
-                };
+                let scaled_progress = index
+                    .saturating_mul(23)
+                    .checked_div(file_count)
+                    .unwrap_or(23);
+                let file_progress = 32 + u8::try_from(scaled_progress).unwrap_or(23);
                 progress(
                     "Downloading and verifying declared server files",
                     file_progress,
