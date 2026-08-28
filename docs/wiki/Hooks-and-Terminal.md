@@ -9,13 +9,14 @@ complete API. The built-in catalog currently knows about:
 - AMP;
 - Tailscale;
 - Pterodactyl Wings;
-- Jellyfin; and
-- Docker, including every container on the host and Open Portainer when that
-  container is published.
+- Jellyfin;
+- Docker, including every container on the host; and
+- Portainer, when Helix finds that container and a UI port (9443, then 9000).
 
 The protected broker configuration decides which exact systemd units are
 controllable. Installed services report running, start-after-boot state, and
-cgroup memory when systemd exposes it. Supported buttons issue only start, stop,
+cgroup memory and a short CPU sample when systemd exposes them. Docker totals
+use engine stats when they succeed. Supported buttons issue only start, stop,
 restart, enable, or disable for that exact unit and verify the result. AMP uses
 its separate loopback API adapter. Docker start/stop/restart uses the typed
 container-action route and refuses Helix dashboard/gateway names.

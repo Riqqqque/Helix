@@ -9,6 +9,9 @@ describe('game marks', () => {
     expect(gameMarkForSoftware('V Rising', 'vrising')).toBe('vrising');
     expect(render(<GameMark game="minecraft" />)).toContain('game-mark--minecraft');
     expect(render(<GameMark game="vrising" />)).toContain('game-mark--vrising');
-    expect(render(<GameMark game="minecraft" />)).not.toBe(render(<GameMark game="vrising" />));
+    expect(gameMarkForSoftware('Valheim', 'valheim')).toBe('valheim');
+    expect(gameMarkForSoftware('tModLoader', 'terraria')).toBe('terraria');
+    expect(render(<GameMark game="valheim" />)).toContain('game-mark--valheim');
+    expect(render(<GameMark game="terraria" />)).toContain('game-mark--terraria');
   });
 });

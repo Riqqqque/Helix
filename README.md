@@ -48,9 +48,9 @@ The current private-alpha build includes:
   candidate update job with held-package, disk, no-removal simulation, conffile,
   final-version, and never-auto-reboot guards;
 - native Docker-backed Minecraft instances for Paper, Purpur, Folia, Leaves, Fabric,
-  Vanilla, and a guarded local custom-JAR import, plus a compatibility-aware
-  Modrinth plugin/mod marketplace and a narrow Fabric-only “Start with a
-  modpack” path;
+  Forge, NeoForge, Quilt, Pufferfish, Vanilla, and a guarded local custom-JAR import,
+  plus a compatibility-aware Modrinth plugin/mod marketplace and Modrinth/CurseForge
+  “Start with a modpack” (server-safe subset, not a full client copy);
 - bounded per-game port pools with collision-safe automatic allocation, plus
   exact opt-in Minecraft TCP forwarding on compatible same-LAN UPnP routers;
 - start, stop, restart, confirmed native kill when stop hangs, update, backup,
@@ -111,8 +111,8 @@ Helix does not currently:
   eligible Debian/Ubuntu host, Hooks can install the exact `tailscale` package
   from Tailscale's signed repository and verify `tailscaled`; the owner still
   runs `tailscale up` and approves the machine;
-- provide a supported Forge, NeoForge, Quilt, CurseForge, or broad/full-parity
-  modpack workflow;
+- claim a full client modpack copy, unsigned CurseForge API access, or every
+  historical Minecraft build;
 - provide MFA, a public-network security review, or a signed release channel;
 - run third-party Strands; or
 - replace independent backups and restore drills.
@@ -177,19 +177,16 @@ a warning instead of hiding the project or blocking its install; Helix still
 prevents plugin/mod mixing and writes only to the matching `plugins/` or `mods/`
 directory. Unsupported server software does not get a fake install path.
 
-NeoForge and Forge appear only as explained future catalog entries. Broad
-modpack creation is not a supported claim, but one narrow path is implemented:
-“Start with a modpack” can create a stable, server-capable Fabric release from
-an unambiguous Modrinth `.mrpack`. The broker re-resolves the opaque project and
-version IDs, pins Minecraft and Fabric Loader, verifies the Modrinth-declared
-archive SHA-512 plus index-declared file hashes, excludes server-optional and
-client-only files, and rolls back an incomplete new instance. The result is
-explicitly a server-safe subset, not byte-for-byte pack parity.
-
-Forge, NeoForge, Quilt, unknown loaders, and CurseForge remain preview-only or
-unsupported. The archive/parser/API/frontend paths have portable tests; the
-complete Linux extraction/resolver/Docker lifecycle, upstream, and real-pack
-matrix remains a release gate.
+Forge, NeoForge, Quilt, and Pufferfish are default create choices. Forge uses
+the official installer for Minecraft 1.17+. Pufferfish uses the publisher CI
+over HTTPS without a checksum pin. “Start with a modpack” can search Modrinth
+or the public CurseForge website catalog without an owner API key. Modrinth
+packs verify declared hashes. CurseForge packs use `manifest.json` plus
+forgecdn files. Both pin a matching loader and start an isolated server. The
+result is a server-safe subset, not byte-for-byte pack parity. The
+archive/parser/API/frontend paths have portable tests; the complete Linux
+extraction/resolver/Docker lifecycle, upstream, and real-pack matrix remains a
+release gate.
 
 Helix manages servers; it does not execute Minecraft ticks or sit in the player
 traffic path. Capacity still depends on hardware, world behavior, server build,

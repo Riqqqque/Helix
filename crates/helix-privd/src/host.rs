@@ -351,7 +351,11 @@ impl HostControl {
                     } else {
                         None
                     },
-                    "cpu_percent": Value::Null,
+                    "cpu_percent": if installed && active {
+                        self.unit_cpu_percent(&hook.unit)
+                    } else {
+                        None
+                    },
                     "error": if enabled_state.is_err() || active_state.is_err() {
                         Value::String("Helix could not verify every systemd state for this service.".to_owned())
                     } else {
@@ -896,15 +900,69 @@ impl HostControl {
             )
             .ok()?;
         let text = first_line(&output.stdout)?;
-        if text == "[not set]" || text == "[NotSet]" {
+        if text != "[not set]" && text != "[NotSet]" {
+            if let Ok(bytes) = text.parse::<u64>() {
+                if bytes > 0 && bytes != u64::MAX {
+                    return Some(bytes);
+                }
+            }
+        }
+        self.cgroup_memory_bytes(unit)
+    }
+
+    fn unit_cpu_percent(&self, unit: &str) -> Option<f64> {
+        let first = self.cgroup_cpu_usage_usec(unit)?;
+        std::thread::sleep(Duration::from_millis(120));
+        let second = self.cgroup_cpu_usage_usec(unit)?;
+        let delta = second.saturating_sub(first);
+        let percent = (delta as f64) / 1_200.0;
+        if percent.is_finite() && percent >= 0.0 && percent <= 10_000.0 {
+            Some(percent)
+        } else {
+            None
+        }
+    }
+
+    fn cgroup_dir(&self, unit: &str) -> Option<PathBuf> {
+        let output = self
+            .runner
+            .run(
+                &self.config.systemctl_binary,
+                &[
+                    "show".to_owned(),
+                    "-p".to_owned(),
+                    "ControlGroup".to_owned(),
+                    "--value".to_owned(),
+                    unit.to_owned(),
+                ],
+                Duration::from_secs(5),
+            )
+            .ok()?;
+        let group = first_line(&output.stdout)?.trim();
+        if group.is_empty() || group.contains('\0') || group.contains("/../") {
             return None;
         }
-        let bytes = text.parse::<u64>().ok()?;
-        if bytes == 0 || bytes == u64::MAX {
-            None
-        } else {
-            Some(bytes)
+        let path = PathBuf::from(format!("/sys/fs/cgroup{group}"));
+        path.starts_with("/sys/fs/cgroup")
+            .then_some(path)
+            .filter(|path| path.is_dir())
+    }
+
+    fn cgroup_memory_bytes(&self, unit: &str) -> Option<u64> {
+        let text = fs::read_to_string(self.cgroup_dir(unit)?.join("memory.current")).ok()?;
+        let bytes = text.trim().parse::<u64>().ok()?;
+        (bytes > 0 && bytes != u64::MAX).then_some(bytes)
+    }
+
+    fn cgroup_cpu_usage_usec(&self, unit: &str) -> Option<u64> {
+        let text = fs::read_to_string(self.cgroup_dir(unit)?.join("cpu.stat")).ok()?;
+        for line in text.lines() {
+            let Some(("usage_usec", rest)) = line.split_once(char::is_whitespace) else {
+                continue;
+            };
+            return rest.trim().parse().ok();
         }
+        None
     }
 
     fn inspect_container(&self, name: &str) -> Result<ContainerStatus, String> {

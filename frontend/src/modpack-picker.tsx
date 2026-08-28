@@ -6,6 +6,7 @@ import {
   getModpackProject,
   searchModpacks,
   type ModpackProjectDetail,
+  type ModpackProvider,
   type ModpackSearchPage,
   type ModpackSearchResult,
   type ModpackSelection,
@@ -15,7 +16,7 @@ import './modpack.css';
 const PAGE_SIZE = 12;
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Helix could not reach the Modrinth catalog.';
+  return error instanceof Error ? error.message : 'Helix could not reach the modpack catalog.';
 }
 
 function isSessionError(error: unknown): boolean {
@@ -39,9 +40,18 @@ export interface ModpackPickerProps {
   onSessionExpired: () => void;
 }
 
+function candidateLabel(status: string): string {
+  if (status === 'forge_candidate') return 'Forge';
+  if (status === 'neoforge_candidate') return 'NeoForge';
+  if (status === 'quilt_candidate') return 'Quilt';
+  if (status === 'fabric_candidate') return 'Fabric';
+  return 'Preview';
+}
+
 export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessionExpired }: ModpackPickerProps) {
   const [query, setQuery] = useState('');
   const [offset, setOffset] = useState(0);
+  const [provider, setProvider] = useState<ModpackProvider>('modrinth');
   const [page, setPage] = useState<ModpackSearchPage | null>(null);
   const [detail, setDetail] = useState<ModpackProjectDetail | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
@@ -55,7 +65,7 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
     setLoading(true);
     setError(null);
     const timer = window.setTimeout(() => {
-      void searchModpacks(query.trim(), offset, PAGE_SIZE, csrfToken, controller.signal)
+      void searchModpacks(query.trim(), offset, PAGE_SIZE, csrfToken, controller.signal, provider)
         .then((result) => setPage(result))
         .catch((requestError: unknown) => {
           if (controller.signal.aborted) return;
@@ -71,7 +81,7 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [csrfToken, offset, onSessionExpired, query, retry]);
+  }, [csrfToken, offset, onSessionExpired, provider, query, retry]);
 
   const openProject = async (project: ModpackSearchResult): Promise<void> => {
     setDetailLoading(true);
@@ -108,6 +118,7 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
       minecraftVersions: selectedVersion.gameVersions,
       filename: selectedVersion.mrpackFile.filename,
       fileSize: selectedVersion.mrpackFile.size,
+      provider,
     });
   };
 
@@ -116,20 +127,20 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
       <section class="modpack-detail" aria-busy={detailLoading}>
         <header class="modpack-detail__head">
           <button class="button button--quiet" type="button" onClick={() => setDetail(null)}><Icon name="chevron" size={14} />Back to results</button>
-          <a href={detail.project.webUrl} target="_blank" rel="noreferrer">Open on Modrinth <Icon name="external" size={12} /></a>
+          <a href={detail.project.webUrl} target="_blank" rel="noreferrer">Open catalog <Icon name="external" size={12} /></a>
         </header>
         <div class="modpack-detail__identity">
           <ModpackMark iconUrl={detail.project.iconUrl} size={24} />
           <div>
-            <small>Modrinth modpack</small>
+            <small>{provider === 'curseforge' ? 'CurseForge modpack' : 'Modrinth modpack'}</small>
             <h3>{detail.project.title}</h3>
             <p>{detail.project.description ?? 'No short description was provided.'}</p>
-            <span>{compactNumber(detail.project.downloads)} downloads · {detail.compatibleVersionCount} installable Fabric {detail.compatibleVersionCount === 1 ? 'release' : 'releases'}</span>
+            <span>{compactNumber(detail.project.downloads)} downloads · {detail.compatibleVersionCount} installable {detail.compatibleVersionCount === 1 ? 'release' : 'releases'}</span>
           </div>
         </div>
         <div class="modpack-compatibility-note">
           <Icon name="info" size={16} />
-          <span><strong>Fabric-only server install</strong>Helix validates the selected archive before activation. Server-optional and client-only files are excluded; the exact counts appear when the job finishes, so this is not byte-for-byte full-pack parity.</span>
+          <span><strong>Dedicated server install</strong>Helix downloads the selected pack, pins a matching loader, and starts the isolated server. Client-only extras stay out. This is not a full client pack copy.</span>
         </div>
         <div class="modpack-version-layout">
           <fieldset class="modpack-versions">
@@ -148,10 +159,10 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
           </fieldset>
           <aside class="modpack-version-summary">
             <small>Selected release</small>
-            <strong>{selectedVersion?.name ?? 'No installable Fabric release'}</strong>
+            <strong>{selectedVersion?.name ?? 'No installable server release'}</strong>
             {selectedVersion?.mrpackFile !== null && selectedVersion?.mrpackFile !== undefined && <>
               <span>{selectedVersion.mrpackFile.filename}</span>
-              <span>{formatBytes(selectedVersion.mrpackFile.size)} · Modrinth-declared SHA-512 available</span>
+              <span>{formatBytes(selectedVersion.mrpackFile.size)}</span>
             </>}
             <p>Latest listed release is selected by default. Helix re-resolves the opaque project and version IDs before it downloads anything.</p>
             <button class="button button--primary" type="button" disabled={selectedVersion?.installable !== true} onClick={choose}>{selection?.projectId === detail.project.id && selection.versionId === selectedVersionId ? 'Selected' : 'Use this modpack'}</button>
@@ -165,19 +176,23 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
   return (
     <section class="modpack-browser">
       <div class="modpack-browser__intro">
-        <div><strong>Start with a Modrinth modpack</strong><span>Browse server-capable packs without leaving Helix. Artwork is privacy-proxied through Helix.</span></div>
-        <a href="https://modrinth.com/modpacks" target="_blank" rel="noreferrer">Powered by Modrinth <Icon name="external" size={12} /></a>
+        <div><strong>Start with a modpack</strong><span>Browse server-capable packs without leaving Helix. Switch catalogs without giving Helix an API key.</span></div>
+        <a href={provider === 'curseforge' ? 'https://www.curseforge.com/minecraft/modpacks' : 'https://modrinth.com/modpacks'} target="_blank" rel="noreferrer">{provider === 'curseforge' ? 'CurseForge catalog' : 'Modrinth catalog'} <Icon name="external" size={12} /></a>
+      </div>
+      <div class="modpack-provider-tabs" role="tablist" aria-label="Modpack catalog">
+        <button type="button" class={provider === 'modrinth' ? 'is-active' : ''} aria-selected={provider === 'modrinth'} onClick={() => { setProvider('modrinth'); setOffset(0); setPage(null); }}>Modrinth</button>
+        <button type="button" class={provider === 'curseforge' ? 'is-active' : ''} aria-selected={provider === 'curseforge'} onClick={() => { setProvider('curseforge'); setOffset(0); setPage(null); }}>CurseForge</button>
       </div>
       {selection !== null && <div class="modpack-selection"><Icon name="check" size={16} /><span><strong>{selection.projectTitle}</strong>{selection.versionNumber} · {selection.minecraftVersions.join(', ')}</span><button type="button" onClick={() => onSelectionChange(null)}>Clear</button></div>}
       <label class="modpack-search"><span>Search packs</span><div><Icon name="search" size={16} /><input value={query} onInput={(event) => { setQuery(event.currentTarget.value); setOffset(0); }} maxlength={120} placeholder="All the Mods, Cobblemon, adventure…" /></div></label>
       {error !== null && <div class="modpack-state is-error" role="alert"><Icon name="warning" /><span>{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>Try again</button></div>}
-      {loading && <div class="modpack-state" role="status"><span class="modpack-spinner" /><span>Searching the Modrinth catalog…</span></div>}
+      {loading && <div class="modpack-state" role="status"><span class="modpack-spinner" /><span>Searching the {provider === 'curseforge' ? 'CurseForge' : 'Modrinth'} catalog…</span></div>}
       {!loading && error === null && page?.results.length === 0 && <div class="modpack-state"><Icon name="search" /><span>No modpacks match this search.</span></div>}
       <div class="modpack-grid" aria-live="polite">
         {!loading && page?.results.map((project) => (
           <article class={project.compatibilityStatus === 'incompatible' ? 'is-incompatible' : ''} key={project.projectId}>
-            <header><ModpackMark iconUrl={project.iconUrl} /><span class={`modpack-status is-${project.compatibilityStatus}`}>{project.compatibilityStatus === 'fabric_candidate' ? 'Fabric candidate' : 'Preview only'}</span></header>
-            <div><h3>{project.title}</h3><span>by {project.author ?? 'Modrinth creator'}</span></div>
+            <header><ModpackMark iconUrl={project.iconUrl} /><span class={`modpack-status is-${project.compatibilityStatus}`}>{candidateLabel(project.compatibilityStatus)}</span></header>
+            <div><h3>{project.title}</h3><span>by {project.author ?? (provider === 'curseforge' ? 'CurseForge creator' : 'Modrinth creator')}</span></div>
             <p>{project.description ?? 'No short description was provided.'}</p>
             <small>{project.compatibilityReason}</small>
             <footer><span>{compactNumber(project.downloads)} downloads</span><button type="button" disabled={detailLoading} onClick={() => void openProject(project)}>{detailLoading ? 'Loading…' : 'View releases'}</button></footer>

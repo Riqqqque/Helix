@@ -8,7 +8,7 @@ use helix_privd::{
     MAX_CONCURRENT_FILE_UPLOADS, MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES,
     MAX_MINECRAFT_VERSION_CATALOG, MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode,
     MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, ServerAction,
-    VRisingCreateSpec,
+    TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -33,6 +33,8 @@ use uuid::Uuid;
 
 mod marketplace;
 mod modpacks;
+mod terraria;
+mod valheim;
 mod vrising;
 
 const MANIFEST_VERSION: u32 = 1;
@@ -123,6 +125,8 @@ struct InstanceManifest {
     start_on_boot: bool,
     run_uid: u32,
     created_at_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unix_args: Option<String>,
 }
 
 impl InstanceManifest {
@@ -134,10 +138,36 @@ impl InstanceManifest {
         matches!(self.kind, GameKind::VRising)
     }
 
-    fn occupied_ports(&self) -> impl Iterator<Item = u16> + '_ {
-        std::iter::once(self.game_port).chain(
-            (self.query_port != 0 && self.query_port != self.game_port).then_some(self.query_port),
-        )
+    fn is_valheim(&self) -> bool {
+        matches!(self.kind, GameKind::Valheim)
+    }
+
+    fn is_terraria(&self) -> bool {
+        matches!(self.kind, GameKind::Terraria)
+    }
+
+    fn uses_ready_marker(&self) -> bool {
+        !self.is_minecraft()
+    }
+
+    fn kind_slug(&self) -> &'static str {
+        match self.kind {
+            GameKind::Minecraft => "minecraft",
+            GameKind::VRising => "vrising",
+            GameKind::Valheim => "valheim",
+            GameKind::Terraria => "terraria",
+        }
+    }
+
+    fn occupied_ports(&self) -> Vec<u16> {
+        let mut ports = vec![self.game_port];
+        if self.is_valheim() {
+            ports.push(self.game_port.saturating_add(1));
+            ports.push(self.game_port.saturating_add(2));
+        } else if self.query_port != 0 && self.query_port != self.game_port {
+            ports.push(self.query_port);
+        }
+        ports
     }
 }
 
@@ -156,6 +186,7 @@ struct Artifact {
     url: String,
     local_source: Option<PathBuf>,
     expected_hash: Option<ExpectedHash>,
+    install_server: bool,
 }
 
 struct ExpectedHash {
@@ -481,11 +512,25 @@ impl NativeManager {
             {
                 warnings.push("V Rising dedicated server files are not installed yet".to_owned());
             }
+            if manifest.is_valheim()
+                && !data_path
+                    .join("server")
+                    .join("valheim_server.x86_64")
+                    .is_file()
+            {
+                warnings.push("Valheim dedicated server files are not installed yet".to_owned());
+            }
+            if manifest.is_terraria()
+                && !data_path.join("serverconfig.txt").is_file()
+                && !data_path.join(".helix-ready").is_file()
+            {
+                warnings.push("Terraria dedicated server files are not installed yet".to_owned());
+            }
             if !states.contains_key(&manifest.container_name) {
                 warnings.push("Execution container is missing".to_owned());
             }
             let (status, players_online, player_count_verified, max_players, version) =
-                if manifest.is_vrising() {
+                if manifest.uses_ready_marker() {
                     (
                         if state.running {
                             "online"
@@ -517,11 +562,7 @@ impl NativeManager {
                             .unwrap_or_else(|| manifest.minecraft_version.clone()),
                     )
                 };
-            let kind = if manifest.is_vrising() {
-                "vrising"
-            } else {
-                "minecraft"
-            };
+            let kind = manifest.kind_slug();
             let software = display_software(&manifest).to_owned();
             servers.push(AmpServer {
                 id: format!("helix:{}", manifest.id),
@@ -626,6 +667,8 @@ impl NativeManager {
         let label = match game {
             GameKind::Minecraft => "Minecraft",
             GameKind::VRising => "V Rising",
+            GameKind::Valheim => "Valheim",
+            GameKind::Terraria => "Terraria",
         };
         Err(format!(
             "the {label} port pool has no available ports; add ports or expand its ranges in Servers > Port pools"
@@ -678,6 +721,52 @@ impl NativeManager {
         Err("the V Rising port pool does not have two free UDP ports; add ports or expand its ranges in Servers > Port pools".to_owned())
     }
 
+    fn resolve_valheim_ports(
+        &self,
+        requested_game_port: Option<u16>,
+        manifests: &[InstanceManifest],
+    ) -> Result<(u16, u16, bool), String> {
+        let used = assigned_game_ports(manifests);
+        if let Some(game_port) = requested_game_port {
+            let query_port = game_port.saturating_add(1);
+            let steam_port = game_port.saturating_add(2);
+            if steam_port < game_port {
+                return Err(
+                    "that Valheim game port is too high to reserve the next two UDP ports"
+                        .to_owned(),
+                );
+            }
+            for port in [game_port, query_port, steam_port] {
+                if used.contains(&port) {
+                    return Err(
+                        "those Valheim ports are already assigned to another Helix server"
+                            .to_owned(),
+                    );
+                }
+                ensure_port_available(port, true)?;
+            }
+            return Ok((game_port, query_port, false));
+        }
+        let _policy = self
+            .port_policies
+            .lock()
+            .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
+        let policy = self.read_game_port_policy(GameKind::Valheim)?;
+        let candidates = policy_candidates(&policy)?;
+        let available = candidates
+            .iter()
+            .copied()
+            .filter(|port| !used.contains(port) && ensure_port_available(*port, true).is_ok())
+            .collect::<Vec<_>>();
+        for window in available.windows(3) {
+            if window[1] == window[0].saturating_add(1) && window[2] == window[0].saturating_add(2)
+            {
+                return Ok((window[0], window[1], true));
+            }
+        }
+        Err("the Valheim port pool does not have three consecutive free UDP ports; add ports or expand its ranges in Servers > Port pools".to_owned())
+    }
+
     fn read_game_port_policy(&self, game: GameKind) -> Result<GamePortPolicySpec, String> {
         let path = self.game_port_policy_path(game);
         if !path.exists() {
@@ -702,6 +791,8 @@ impl NativeManager {
         self.state_root.join(match game {
             GameKind::Minecraft => "port-policy-minecraft.json",
             GameKind::VRising => "port-policy-vrising.json",
+            GameKind::Valheim => "port-policy-valheim.json",
+            GameKind::Terraria => "port-policy-terraria.json",
         })
     }
 
@@ -851,9 +942,7 @@ impl NativeManager {
         }
 
         self.stop_console_archiver(&manifest.id);
-        if manifest.is_vrising() {
-            self.reclaim_vrising_runtime();
-        }
+        self.reclaim_unused_runtime(manifest.kind);
         Ok(json!({
             "instance_id": format!("helix:{}", manifest.id),
             "trash_id": trash_id,
@@ -892,12 +981,15 @@ impl NativeManager {
                 "an active server already uses this identity; restore was not attempted".to_owned(),
             );
         }
-        ensure_port_available(manifest.game_port, true)?;
+        for port in manifest.occupied_ports() {
+            ensure_port_available(port, true)?;
+        }
         if manifest.is_vrising() {
-            if manifest.query_port != 0 {
-                ensure_port_available(manifest.query_port, true)?;
-            }
             self.ensure_vrising_runtime_image(&mut |_, _| {})?;
+        } else if manifest.is_valheim() {
+            self.ensure_valheim_runtime_image(&mut |_, _| {})?;
+        } else if manifest.is_terraria() {
+            self.ensure_terraria_runtime_image(&mut |_, _| {})?;
         } else {
             ensure_port_available(manifest.rcon_port, false)?;
         }
@@ -947,7 +1039,17 @@ impl NativeManager {
             return Err("the Helix execution backend did not report a version".to_owned());
         }
         let supported_software = [
-            "paper", "purpur", "folia", "leaves", "vanilla", "fabric", "custom",
+            "paper",
+            "purpur",
+            "folia",
+            "leaves",
+            "vanilla",
+            "fabric",
+            "neoforge",
+            "forge",
+            "quilt",
+            "pufferfish",
+            "custom",
         ];
         let features = [
             "publisher_checksum_verification_where_available",
@@ -977,7 +1079,7 @@ impl NativeManager {
             "manager": "helix",
             "execution_backend": "docker",
             "backend_version": docker_version,
-            "supported_games": ["minecraft", "vrising"],
+            "supported_games": ["minecraft", "vrising", "valheim", "terraria"],
             "supported_minecraft_software": supported_software,
             "minecraft_software_catalog": minecraft_software_catalog(),
             "features": features,
@@ -1004,14 +1106,12 @@ impl NativeManager {
             MinecraftSoftware::Purpur => (true, self.purpur_published_versions()?),
             MinecraftSoftware::Leaves => (true, self.leaves_installable_versions()?),
             MinecraftSoftware::Fabric => (true, self.fabric_published_versions()?),
+            MinecraftSoftware::Quilt => (true, self.quilt_published_versions()?),
+            MinecraftSoftware::Forge => (true, self.forge_published_versions()?),
+            MinecraftSoftware::NeoForge => (true, self.neoforge_published_versions()?),
+            MinecraftSoftware::Pufferfish => (true, self.pufferfish_published_versions()?),
             MinecraftSoftware::Vanilla => (true, self.vanilla_release_versions()?),
             MinecraftSoftware::Custom => (false, self.vanilla_release_versions()?),
-            MinecraftSoftware::NeoForge => {
-                return Err(
-                    "NeoForge is not installable until its loader and installer path pass native-manager release tests"
-                        .to_owned(),
-                );
-            }
         };
         Ok(json!({
             "schema_version": 1,
@@ -1174,7 +1274,7 @@ impl NativeManager {
         } else {
             None
         };
-        let detail_status = if manifest.is_vrising() {
+        let detail_status = if manifest.uses_ready_marker() {
             if state.running { "online" } else { "stopped" }
         } else if status.is_some() {
             "online"
@@ -1201,7 +1301,7 @@ impl NativeManager {
             "instance_name": manifest.instance_name,
             "manager": "helix",
             "execution_backend": "docker",
-            "kind": if manifest.is_vrising() { "vrising" } else { "minecraft" },
+            "kind": manifest.kind_slug(),
             "software": display_software(&manifest),
             "minecraft_version": manifest.minecraft_version,
             "build": manifest.build,
@@ -1302,10 +1402,11 @@ impl NativeManager {
 
     pub fn server_console(&self, id: &str, command: &str) -> Result<Value, String> {
         let manifest = self.load_manifest(native_id(id))?;
-        if manifest.is_vrising() {
-            return Err(
-                "V Rising does not expose a command console; use the log view instead".to_owned(),
-            );
+        if !manifest.is_minecraft() {
+            return Err(format!(
+                "{} does not expose a command console; use the log view and Files instead",
+                display_software(&manifest)
+            ));
         }
         let command = command.trim().trim_start_matches('/');
         if command.is_empty()
@@ -1459,10 +1560,11 @@ impl NativeManager {
     ) -> Result<Value, String> {
         validate_settings(settings)?;
         let mut manifest = self.load_manifest(native_id(id))?;
-        if manifest.is_vrising() {
-            return Err(
-                "V Rising host settings live in the save data; use Files to edit them".to_owned(),
-            );
+        if !manifest.is_minecraft() {
+            return Err(format!(
+                "{} settings live in the save data; use Files to edit them",
+                display_software(&manifest)
+            ));
         }
         let _operation = self.begin_instance_operation(&manifest.id, "settings update")?;
         let path = self.instance_path(&manifest.id)?.join("server.properties");
@@ -2171,6 +2273,12 @@ impl NativeManager {
 
             progress("Pinning the Java runtime", 48);
             let runtime_image = self.resolve_runtime_image(artifact.java_version)?;
+            let unix_args = if artifact.install_server {
+                progress("Running the official loader installer", 52);
+                Some(self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?)
+            } else {
+                None
+            };
             let manifest = InstanceManifest {
                 schema_version: MANIFEST_VERSION,
                 id: id.clone(),
@@ -2194,6 +2302,7 @@ impl NativeManager {
                 created_at_unix_ms: now_unix_ms(),
                 kind: GameKind::Minecraft,
                 query_port: 0,
+                unix_args,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -2320,6 +2429,7 @@ impl NativeManager {
                 start_on_boot: spec.start_on_boot,
                 run_uid,
                 created_at_unix_ms: now_unix_ms(),
+                unix_args: None,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -2353,6 +2463,260 @@ impl NativeManager {
                 "execution_backend": "docker",
                 "kind": "vrising",
                 "runtime_image": vrising::RUNTIME_IMAGE
+            }))
+        })();
+
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                progress("Preserving the failed install for recovery", 98);
+                let cleanup_error = self.rollback_creation(
+                    &id,
+                    &container_name,
+                    &data_path,
+                    &manifest_path,
+                    container_create_attempted,
+                );
+                Err(match cleanup_error {
+                    Ok(()) => error,
+                    Err(cleanup) => format!("{error}; cleanup also failed: {cleanup}"),
+                })
+            }
+        }
+    }
+
+    pub fn create_valheim<F>(
+        &self,
+        spec: &ValheimCreateSpec,
+        mut progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        valheim::validate_create_spec(spec)?;
+        let _operation = self.begin_creation_operation()?;
+        progress("Checking ports, names, and storage", 6);
+        let manifests = self.load_manifests()?;
+        if manifests
+            .iter()
+            .any(|manifest| manifest.name.eq_ignore_ascii_case(spec.name.trim()))
+        {
+            return Err("a Helix server with that name already exists".to_owned());
+        }
+        let (game_port, query_port, allocated_automatically) =
+            self.resolve_valheim_ports(spec.game_port, &manifests)?;
+        let id = Uuid::new_v4().to_string();
+        let instance_name = instance_name(spec.name.trim(), &id);
+        let container_name = format!("helix-game-{id}");
+        let run_uid = allocate_run_uid(&id, &manifests)?;
+        let data_path = self.instance_path(&id)?;
+        let manifest_path = self.manifest_path(&id)?;
+        let mut container_create_attempted = false;
+
+        let result = (|| -> Result<Value, String> {
+            progress("Building or reusing the isolated Valheim runtime", 14);
+            let runtime_image = self.ensure_valheim_runtime_image(&mut progress)?;
+
+            progress("Preparing the isolated Valheim directory", 28);
+            fs::create_dir(&data_path)
+                .map_err(|_| "could not create the server directory".to_owned())?;
+            fs::set_permissions(&data_path, fs::Permissions::from_mode(0o750))
+                .map_err(|_| "could not protect the server directory".to_owned())?;
+            for folder in ["server", "logs", "steamcmd", "plugins", "worlds"] {
+                fs::create_dir_all(data_path.join(folder))
+                    .map_err(|_| "could not create Valheim data folders".to_owned())?;
+            }
+
+            let manifest = InstanceManifest {
+                schema_version: MANIFEST_VERSION,
+                kind: GameKind::Valheim,
+                id: id.clone(),
+                name: spec.name.trim().to_owned(),
+                instance_name: instance_name.clone(),
+                container_name: container_name.clone(),
+                software: MinecraftSoftware::Vanilla,
+                minecraft_version: "dedicated".to_owned(),
+                build: valheim::STEAM_APP_ID.to_owned(),
+                java_version: 0,
+                runtime_image,
+                artifact_url: valheim::ARTIFACT_URL.to_owned(),
+                artifact_sha256: valheim::empty_artifact_sha256().to_owned(),
+                memory_mb: spec.memory_mb,
+                max_players: spec.max_players,
+                game_port,
+                query_port,
+                rcon_port: 0,
+                rcon_password: String::new(),
+                start_on_boot: spec.start_on_boot,
+                run_uid,
+                created_at_unix_ms: now_unix_ms(),
+                unix_args: None,
+            };
+            write_manifest(&manifest_path, &manifest)?;
+            self.chown_instance(&data_path, run_uid)?;
+
+            progress("Creating the isolated Valheim container", 52);
+            container_create_attempted = true;
+            self.create_container(&manifest, &data_path)?;
+
+            progress(
+                "Downloading Valheim through SteamCMD and starting the runtime",
+                62,
+            );
+            self.clear_ready_marker(&manifest)?;
+            self.docker(["start", manifest.container_name.as_str()], 90)?;
+            self.wait_until_ready(&manifest, Duration::from_secs(45 * 60), |elapsed| {
+                let percent = 62_u64.saturating_add((elapsed / 40).min(35));
+                progress(
+                    "First install downloads the dedicated server (this can take a while)",
+                    u8::try_from(percent).unwrap_or(97),
+                );
+            })?;
+            self.ensure_console_archiver(&manifest)?;
+            progress("Online", 100);
+            Ok(json!({
+                "instance_id": format!("helix:{id}"),
+                "instance_name": instance_name,
+                "game_port": game_port,
+                "query_port": query_port,
+                "steam_port": game_port.saturating_add(2),
+                "port_allocated_automatically": allocated_automatically,
+                "manager": "helix",
+                "execution_backend": "docker",
+                "kind": "valheim",
+                "runtime_image": valheim::RUNTIME_IMAGE
+            }))
+        })();
+
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                progress("Preserving the failed install for recovery", 98);
+                let cleanup_error = self.rollback_creation(
+                    &id,
+                    &container_name,
+                    &data_path,
+                    &manifest_path,
+                    container_create_attempted,
+                );
+                Err(match cleanup_error {
+                    Ok(()) => error,
+                    Err(cleanup) => format!("{error}; cleanup also failed: {cleanup}"),
+                })
+            }
+        }
+    }
+
+    pub fn create_terraria<F>(
+        &self,
+        spec: &TerrariaCreateSpec,
+        mut progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        terraria::validate_create_spec(spec)?;
+        let _operation = self.begin_creation_operation()?;
+        progress("Checking ports, names, and storage", 6);
+        let manifests = self.load_manifests()?;
+        if manifests
+            .iter()
+            .any(|manifest| manifest.name.eq_ignore_ascii_case(spec.name.trim()))
+        {
+            return Err("a Helix server with that name already exists".to_owned());
+        }
+        let (game_port, allocated_automatically) =
+            self.resolve_game_port(GameKind::Terraria, spec.game_port, &manifests)?;
+        let id = Uuid::new_v4().to_string();
+        let instance_name = instance_name(spec.name.trim(), &id);
+        let container_name = format!("helix-game-{id}");
+        let run_uid = allocate_run_uid(&id, &manifests)?;
+        let data_path = self.instance_path(&id)?;
+        let manifest_path = self.manifest_path(&id)?;
+        let mut container_create_attempted = false;
+        let (software_label, artifact_url, version, build) = match spec.software {
+            TerrariaSoftware::Vanilla => (
+                "vanilla",
+                terraria::VANILLA_ARTIFACT_URL,
+                terraria::VANILLA_VERSION,
+                terraria::VANILLA_VERSION,
+            ),
+            TerrariaSoftware::Tmodloader => (
+                "tmodloader",
+                terraria::TMOD_ARTIFACT_URL,
+                "dedicated",
+                "1281930",
+            ),
+        };
+
+        let result = (|| -> Result<Value, String> {
+            progress("Building or reusing the isolated Terraria runtime", 14);
+            let runtime_image = self.ensure_terraria_runtime_image(&mut progress)?;
+
+            progress("Preparing the isolated Terraria directory", 28);
+            fs::create_dir(&data_path)
+                .map_err(|_| "could not create the server directory".to_owned())?;
+            fs::set_permissions(&data_path, fs::Permissions::from_mode(0o750))
+                .map_err(|_| "could not protect the server directory".to_owned())?;
+            for folder in ["server", "logs", "steamcmd", "worlds", "mods"] {
+                fs::create_dir_all(data_path.join(folder))
+                    .map_err(|_| "could not create Terraria data folders".to_owned())?;
+            }
+
+            let manifest = InstanceManifest {
+                schema_version: MANIFEST_VERSION,
+                kind: GameKind::Terraria,
+                id: id.clone(),
+                name: spec.name.trim().to_owned(),
+                instance_name: instance_name.clone(),
+                container_name: container_name.clone(),
+                software: MinecraftSoftware::Vanilla,
+                minecraft_version: version.to_owned(),
+                build: format!("{software_label}-{build}"),
+                java_version: 0,
+                runtime_image,
+                artifact_url: artifact_url.to_owned(),
+                artifact_sha256: terraria::empty_artifact_sha256().to_owned(),
+                memory_mb: spec.memory_mb,
+                max_players: spec.max_players,
+                game_port,
+                query_port: 0,
+                rcon_port: 0,
+                rcon_password: String::new(),
+                start_on_boot: spec.start_on_boot,
+                run_uid,
+                created_at_unix_ms: now_unix_ms(),
+                unix_args: None,
+            };
+            write_manifest(&manifest_path, &manifest)?;
+            self.chown_instance(&data_path, run_uid)?;
+
+            progress("Creating the isolated Terraria container", 52);
+            container_create_attempted = true;
+            self.create_container(&manifest, &data_path)?;
+
+            progress("Downloading Terraria and starting the runtime", 62);
+            self.clear_ready_marker(&manifest)?;
+            self.docker(["start", manifest.container_name.as_str()], 90)?;
+            self.wait_until_ready(&manifest, Duration::from_secs(30 * 60), |elapsed| {
+                let percent = 62_u64.saturating_add((elapsed / 40).min(35));
+                progress(
+                    "First install downloads the dedicated server (this can take a while)",
+                    u8::try_from(percent).unwrap_or(97),
+                );
+            })?;
+            self.ensure_console_archiver(&manifest)?;
+            progress("Online", 100);
+            Ok(json!({
+                "instance_id": format!("helix:{id}"),
+                "instance_name": instance_name,
+                "game_port": game_port,
+                "port_allocated_automatically": allocated_automatically,
+                "manager": "helix",
+                "execution_backend": "docker",
+                "kind": "terraria",
+                "software": software_label,
+                "runtime_image": terraria::RUNTIME_IMAGE
             }))
         })();
 
@@ -2439,10 +2803,11 @@ impl NativeManager {
     }
 
     fn require_minecraft_content(&self, manifest: &InstanceManifest) -> Result<(), String> {
-        if manifest.is_vrising() {
-            return Err(
-                "V Rising does not have a Modrinth marketplace in this Helix release".to_owned(),
-            );
+        if !manifest.is_minecraft() {
+            return Err(format!(
+                "{} does not have a Modrinth marketplace in this Helix release",
+                display_software(manifest)
+            ));
         }
         Ok(())
     }
@@ -2462,10 +2827,10 @@ impl NativeManager {
             MinecraftSoftware::Leaves => self.resolve_leaves(requested_version),
             MinecraftSoftware::Vanilla => self.resolve_vanilla(requested_version),
             MinecraftSoftware::Fabric => self.resolve_fabric(requested_version),
-            MinecraftSoftware::NeoForge => Err(format!(
-                "{} installation is not enabled until its loader and installer path pass the native-manager release tests",
-                software_name(software)
-            )),
+            MinecraftSoftware::Quilt => self.resolve_quilt(requested_version),
+            MinecraftSoftware::Forge => self.resolve_forge(requested_version),
+            MinecraftSoftware::NeoForge => self.resolve_neoforge(requested_version),
+            MinecraftSoftware::Pufferfish => self.resolve_pufferfish(requested_version),
         }
     }
 
@@ -2517,6 +2882,7 @@ impl NativeManager {
             url: "local-import".to_owned(),
             local_source: Some(canonical),
             expected_hash: None,
+            install_server: false,
         })
     }
 
@@ -2599,6 +2965,7 @@ impl NativeManager {
                 algorithm: HashAlgorithm::Sha256,
                 value: sha256,
             }),
+            install_server: false,
         })
     }
 
@@ -2662,6 +3029,7 @@ impl NativeManager {
             url,
             local_source: None,
             expected_hash: None,
+            install_server: false,
         })
     }
 
@@ -2712,6 +3080,278 @@ impl NativeManager {
             url,
             local_source: None,
             expected_hash: None,
+            install_server: false,
+        })
+    }
+
+    fn quilt_published_versions(&self) -> Result<Vec<String>, String> {
+        let games = self.fetch_json(
+            "https://meta.quiltmc.org/v3/versions/game",
+            &["meta.quiltmc.org"],
+        )?;
+        Ok(bounded_version_list(fabric_stable_game_versions(&games)))
+    }
+
+    fn resolve_quilt(&self, requested_version: &str) -> Result<Artifact, String> {
+        let versions = self.quilt_published_versions()?;
+        let version = resolve_requested_version(requested_version, &versions)?;
+        let (_, version_data) = self.minecraft_version_metadata(&version)?;
+        let loaders = self.fetch_json(
+            &format!("https://meta.quiltmc.org/v3/versions/loader/{version}"),
+            &["meta.quiltmc.org"],
+        )?;
+        let loader = select_stable_quilt_loader(&loaders)?;
+        let installers = self.fetch_json(
+            "https://meta.quiltmc.org/v3/versions/installer",
+            &["meta.quiltmc.org"],
+        )?;
+        let installer = select_stable_quilt_installer(&installers)?;
+        let java_version = version_data
+            .pointer("/javaVersion/majorVersion")
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or_else(|| fallback_java_version(&version));
+        let url = format!(
+            "https://meta.quiltmc.org/v3/versions/loader/{version}/{loader}/{installer}/server/jar"
+        );
+        require_https_host(&url, &["meta.quiltmc.org"])?;
+        Ok(Artifact {
+            software: MinecraftSoftware::Quilt,
+            version,
+            build: format!("loader-{loader}_installer-{installer}"),
+            java_version,
+            url,
+            local_source: None,
+            expected_hash: None,
+            install_server: false,
+        })
+    }
+
+    fn forge_published_versions(&self) -> Result<Vec<String>, String> {
+        let promotions = self.fetch_json(
+            "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json",
+            &["files.minecraftforge.net"],
+        )?;
+        let mut versions = forge_promo_versions(&promotions);
+        versions.retain(|version| minecraft_at_least(version, 17));
+        Ok(bounded_version_list(versions))
+    }
+
+    fn resolve_forge(&self, requested_version: &str) -> Result<Artifact, String> {
+        let versions = self.forge_published_versions()?;
+        let version = resolve_requested_version(requested_version, &versions)?;
+        if !minecraft_at_least(&version, 17) {
+            return Err(
+                "Helix installs Forge through the official installer for Minecraft 1.17 and newer"
+                    .to_owned(),
+            );
+        }
+        let promotions = self.fetch_json(
+            "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json",
+            &["files.minecraftforge.net"],
+        )?;
+        let forge_build = forge_promo_build(&promotions, &version)?;
+        let (_, version_data) = self.minecraft_version_metadata(&version)?;
+        let java_version = version_data
+            .pointer("/javaVersion/majorVersion")
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or_else(|| fallback_java_version(&version));
+        let url = format!(
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/{version}-{forge_build}/forge-{version}-{forge_build}-installer.jar"
+        );
+        require_https_host(&url, &["maven.minecraftforge.net"])?;
+        Ok(Artifact {
+            software: MinecraftSoftware::Forge,
+            version,
+            build: forge_build,
+            java_version,
+            url,
+            local_source: None,
+            expected_hash: None,
+            install_server: true,
+        })
+    }
+
+    fn neoforge_published_versions(&self) -> Result<Vec<String>, String> {
+        let catalog = self.fetch_json(
+            "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge",
+            &["maven.neoforged.net"],
+        )?;
+        Ok(bounded_version_list(neoforge_game_versions(&catalog)))
+    }
+
+    fn resolve_neoforge(&self, requested_version: &str) -> Result<Artifact, String> {
+        let versions = self.neoforge_published_versions()?;
+        let version = resolve_requested_version(requested_version, &versions)?;
+        let catalog = self.fetch_json(
+            "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge",
+            &["maven.neoforged.net"],
+        )?;
+        let loader = neoforge_loader_for_game(&catalog, &version)?;
+        let (_, version_data) = self.minecraft_version_metadata(&version)?;
+        let java_version = version_data
+            .pointer("/javaVersion/majorVersion")
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or_else(|| fallback_java_version(&version));
+        let url = format!(
+            "https://maven.neoforged.net/releases/net/neoforged/neoforge/{loader}/neoforge-{loader}-installer.jar"
+        );
+        require_https_host(&url, &["maven.neoforged.net"])?;
+        Ok(Artifact {
+            software: MinecraftSoftware::NeoForge,
+            version,
+            build: loader,
+            java_version,
+            url,
+            local_source: None,
+            expected_hash: None,
+            install_server: true,
+        })
+    }
+
+    fn pufferfish_published_versions(&self) -> Result<Vec<String>, String> {
+        let mut versions = Vec::new();
+        for family in ["1.21", "1.20", "1.19", "1.18"] {
+            if let Ok(job_versions) = self.pufferfish_family_versions(family) {
+                versions.extend(job_versions);
+            }
+        }
+        versions.sort_by(|left, right| compare_minecraft_versions(right, left));
+        versions.dedup();
+        Ok(bounded_version_list(versions))
+    }
+
+    fn pufferfish_family_versions(&self, family: &str) -> Result<Vec<String>, String> {
+        let job = self.fetch_json(
+            &format!(
+                "https://ci.pufferfish.host/job/Pufferfish-{family}/lastSuccessfulBuild/api/json?tree=number,artifacts[fileName,relativePath]"
+            ),
+            &["ci.pufferfish.host"],
+        )?;
+        Ok(pufferfish_versions_from_job(&job))
+    }
+
+    fn resolve_pufferfish(&self, requested_version: &str) -> Result<Artifact, String> {
+        let versions = self.pufferfish_published_versions()?;
+        let version = resolve_requested_version(requested_version, &versions)?;
+        let family = pufferfish_family(&version)?;
+        let job = self.fetch_json(
+            &format!(
+                "https://ci.pufferfish.host/job/Pufferfish-{family}/lastSuccessfulBuild/api/json?tree=number,artifacts[fileName,relativePath]"
+            ),
+            &["ci.pufferfish.host"],
+        )?;
+        let (url, build) = pufferfish_artifact_url(&job, &version)?;
+        require_https_host(&url, &["ci.pufferfish.host"])?;
+        Ok(Artifact {
+            software: MinecraftSoftware::Pufferfish,
+            version: version.clone(),
+            build,
+            java_version: fallback_java_version(&version),
+            url,
+            local_source: None,
+            expected_hash: None,
+            install_server: false,
+        })
+    }
+
+    fn resolve_pinned_quilt(
+        &self,
+        minecraft_version: &str,
+        loader_version: &str,
+    ) -> Result<Artifact, String> {
+        validate_version(minecraft_version)?;
+        validate_version(loader_version)?;
+        let (_, version_data) = self.minecraft_version_metadata(minecraft_version)?;
+        let installers = self.fetch_json(
+            "https://meta.quiltmc.org/v3/versions/installer",
+            &["meta.quiltmc.org"],
+        )?;
+        let installer = select_stable_quilt_installer(&installers)?;
+        let java_version = version_data
+            .pointer("/javaVersion/majorVersion")
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or_else(|| fallback_java_version(minecraft_version));
+        let url = format!(
+            "https://meta.quiltmc.org/v3/versions/loader/{minecraft_version}/{loader_version}/{installer}/server/jar"
+        );
+        require_https_host(&url, &["meta.quiltmc.org"])?;
+        Ok(Artifact {
+            software: MinecraftSoftware::Quilt,
+            version: minecraft_version.to_owned(),
+            build: format!("loader-{loader_version}-installer-{installer}"),
+            java_version,
+            url,
+            local_source: None,
+            expected_hash: None,
+            install_server: false,
+        })
+    }
+
+    fn resolve_pinned_forge(
+        &self,
+        minecraft_version: &str,
+        forge_build: &str,
+    ) -> Result<Artifact, String> {
+        validate_version(minecraft_version)?;
+        validate_version(forge_build)?;
+        if !minecraft_at_least(minecraft_version, 17) {
+            return Err(
+                "Helix installs Forge through the official installer for Minecraft 1.17 and newer"
+                    .to_owned(),
+            );
+        }
+        let (_, version_data) = self.minecraft_version_metadata(minecraft_version)?;
+        let java_version = version_data
+            .pointer("/javaVersion/majorVersion")
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or_else(|| fallback_java_version(minecraft_version));
+        let url = format!(
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/{minecraft_version}-{forge_build}/forge-{minecraft_version}-{forge_build}-installer.jar"
+        );
+        require_https_host(&url, &["maven.minecraftforge.net"])?;
+        Ok(Artifact {
+            software: MinecraftSoftware::Forge,
+            version: minecraft_version.to_owned(),
+            build: forge_build.to_owned(),
+            java_version,
+            url,
+            local_source: None,
+            expected_hash: None,
+            install_server: true,
+        })
+    }
+
+    fn resolve_pinned_neoforge(
+        &self,
+        minecraft_version: &str,
+        loader: &str,
+    ) -> Result<Artifact, String> {
+        validate_version(minecraft_version)?;
+        validate_version(loader)?;
+        let (_, version_data) = self.minecraft_version_metadata(minecraft_version)?;
+        let java_version = version_data
+            .pointer("/javaVersion/majorVersion")
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or_else(|| fallback_java_version(minecraft_version));
+        let url = format!(
+            "https://maven.neoforged.net/releases/net/neoforged/neoforge/{loader}/neoforge-{loader}-installer.jar"
+        );
+        require_https_host(&url, &["maven.neoforged.net"])?;
+        Ok(Artifact {
+            software: MinecraftSoftware::NeoForge,
+            version: minecraft_version.to_owned(),
+            build: loader.to_owned(),
+            java_version,
+            url,
+            local_source: None,
+            expected_hash: None,
+            install_server: true,
         })
     }
 
@@ -2758,6 +3398,7 @@ impl NativeManager {
             url,
             local_source: None,
             expected_hash: None,
+            install_server: false,
         })
     }
 
@@ -2813,6 +3454,7 @@ impl NativeManager {
                 algorithm: HashAlgorithm::Sha256,
                 value: sha256,
             }),
+            install_server: false,
         })
     }
 
@@ -2843,6 +3485,7 @@ impl NativeManager {
                 algorithm: HashAlgorithm::Sha1,
                 value: sha1,
             }),
+            install_server: false,
         })
     }
 
@@ -3030,13 +3673,21 @@ impl NativeManager {
                 "piston-data.mojang.com",
                 "launcher.mojang.com",
                 "meta.fabricmc.net",
+                "meta.quiltmc.org",
+                "maven.minecraftforge.net",
+                "maven.neoforged.net",
+                "ci.pufferfish.host",
             ],
         )?;
         let partial = destination.with_extension("jar.partial");
         self.curl_no_redirect(&artifact.url, &partial, MAX_SERVER_JAR_BYTES, 10 * 60)?;
         let metadata =
             fs::metadata(&partial).map_err(|_| "the server download is unavailable".to_owned())?;
-        let minimum_bytes = if matches!(artifact.software, MinecraftSoftware::Fabric) {
+        let minimum_bytes = if artifact.install_server
+            || matches!(
+                artifact.software,
+                MinecraftSoftware::Fabric | MinecraftSoftware::Quilt
+            ) {
             16 * 1024
         } else {
             1024 * 1024
@@ -3059,6 +3710,47 @@ impl NativeManager {
         fs::rename(&partial, destination)
             .map_err(|_| "could not commit the verified server download".to_owned())?;
         Ok(sha256)
+    }
+
+    fn run_loader_installer(
+        &self,
+        artifact: &Artifact,
+        data_path: &Path,
+        run_uid: u32,
+        runtime_image: &str,
+    ) -> Result<String, String> {
+        let installer = data_path.join("server.jar");
+        if !installer.is_file() {
+            return Err("the loader installer was not downloaded".to_owned());
+        }
+        let mount = format!("type=bind,src={},dst=/data", data_path.display());
+        let user = format!("{run_uid}:{run_uid}");
+        let args = vec![
+            "run".to_owned(),
+            "--rm".to_owned(),
+            "--user".to_owned(),
+            user,
+            "--network".to_owned(),
+            "bridge".to_owned(),
+            "--mount".to_owned(),
+            mount,
+            "--workdir".to_owned(),
+            "/data".to_owned(),
+            "--entrypoint".to_owned(),
+            "java".to_owned(),
+            runtime_image.to_owned(),
+            "-jar".to_owned(),
+            "/data/server.jar".to_owned(),
+            "--installServer".to_owned(),
+        ];
+        self.docker_owned(&args, 15 * 60)?;
+        find_unix_args(data_path)
+            .ok_or_else(|| {
+                format!(
+                    "{} installer finished without writing unix_args.txt; Helix cannot launch that loader version",
+                    software_name(artifact.software)
+                )
+            })
     }
 
     fn import_local_artifact(&self, source: &Path, destination: &Path) -> Result<String, String> {
@@ -3139,6 +3831,12 @@ impl NativeManager {
         if manifest.is_vrising() {
             return self.create_vrising_container(manifest, data_path);
         }
+        if manifest.is_valheim() {
+            return self.create_valheim_container(manifest, data_path);
+        }
+        if manifest.is_terraria() {
+            return self.create_terraria_container(manifest, data_path);
+        }
         let restart = if manifest.start_on_boot {
             "unless-stopped"
         } else {
@@ -3210,10 +3908,15 @@ impl NativeManager {
             "-XX:+ParallelRefProcEnabled".to_owned(),
             "-XX:+DisableExplicitGC".to_owned(),
             "-XX:+AlwaysPreTouch".to_owned(),
-            "-jar".to_owned(),
-            "server.jar".to_owned(),
-            "--nogui".to_owned(),
         ];
+        if let Some(unix_args) = &manifest.unix_args {
+            args.push(format!("@{unix_args}"));
+            args.push("nogui".to_owned());
+        } else {
+            args.push("-jar".to_owned());
+            args.push("server.jar".to_owned());
+            args.push("--nogui".to_owned());
+        }
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -3287,6 +3990,157 @@ impl NativeManager {
         Ok(())
     }
 
+    fn create_valheim_container(
+        &self,
+        manifest: &InstanceManifest,
+        data_path: &Path,
+    ) -> Result<(), String> {
+        let restart = if manifest.start_on_boot {
+            "unless-stopped"
+        } else {
+            "no"
+        };
+        let memory_limit = u64::from(manifest.memory_mb).saturating_add(1024);
+        let game_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port);
+        let query_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port.saturating_add(1));
+        let steam_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port.saturating_add(2));
+        let mount = format!("type=bind,src={},dst=/data", data_path.display());
+        let user = format!("{}:{}", manifest.run_uid, manifest.run_uid);
+        let memory = format!("{memory_limit}m");
+        let instance_label = format!("io.helix.instance={}", manifest.id);
+        let args = vec![
+            "create".to_owned(),
+            "--name".to_owned(),
+            manifest.container_name.clone(),
+            "--label".to_owned(),
+            "io.helix.managed=true".to_owned(),
+            "--label".to_owned(),
+            "io.helix.game=valheim".to_owned(),
+            "--label".to_owned(),
+            instance_label,
+            "--restart".to_owned(),
+            restart.to_owned(),
+            "--memory".to_owned(),
+            memory.clone(),
+            "--memory-swap".to_owned(),
+            memory,
+            "--pids-limit".to_owned(),
+            "2048".to_owned(),
+            "--cap-drop".to_owned(),
+            "ALL".to_owned(),
+            "--security-opt".to_owned(),
+            "no-new-privileges:true".to_owned(),
+            "--tmpfs".to_owned(),
+            "/tmp:rw,exec,nosuid,nodev,size=512m,mode=1777".to_owned(),
+            "--mount".to_owned(),
+            mount,
+            "--workdir".to_owned(),
+            "/data".to_owned(),
+            "--user".to_owned(),
+            user,
+            "--env".to_owned(),
+            "HOME=/data".to_owned(),
+            "--env".to_owned(),
+            format!("HELIX_SERVER_NAME={}", manifest.name),
+            "--env".to_owned(),
+            format!("HELIX_GAME_PORT={}", manifest.game_port),
+            "--env".to_owned(),
+            format!("HELIX_MAX_PLAYERS={}", manifest.max_players),
+            "--publish".to_owned(),
+            game_udp,
+            "--publish".to_owned(),
+            query_udp,
+            "--publish".to_owned(),
+            steam_udp,
+            "--stop-timeout".to_owned(),
+            "45".to_owned(),
+            "--log-opt".to_owned(),
+            "max-size=20m".to_owned(),
+            "--log-opt".to_owned(),
+            "max-file=5".to_owned(),
+            manifest.runtime_image.clone(),
+        ];
+        self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
+        Ok(())
+    }
+
+    fn create_terraria_container(
+        &self,
+        manifest: &InstanceManifest,
+        data_path: &Path,
+    ) -> Result<(), String> {
+        let restart = if manifest.start_on_boot {
+            "unless-stopped"
+        } else {
+            "no"
+        };
+        let memory_limit = u64::from(manifest.memory_mb).saturating_add(512);
+        let game_tcp = format!("0.0.0.0:{0}:{0}/tcp", manifest.game_port);
+        let mount = format!("type=bind,src={},dst=/data", data_path.display());
+        let user = format!("{}:{}", manifest.run_uid, manifest.run_uid);
+        let memory = format!("{memory_limit}m");
+        let instance_label = format!("io.helix.instance={}", manifest.id);
+        let flavor = if manifest.build.starts_with("tmodloader") {
+            "tmodloader"
+        } else {
+            "vanilla"
+        };
+        let args = vec![
+            "create".to_owned(),
+            "--name".to_owned(),
+            manifest.container_name.clone(),
+            "--label".to_owned(),
+            "io.helix.managed=true".to_owned(),
+            "--label".to_owned(),
+            "io.helix.game=terraria".to_owned(),
+            "--label".to_owned(),
+            instance_label,
+            "--restart".to_owned(),
+            restart.to_owned(),
+            "--memory".to_owned(),
+            memory.clone(),
+            "--memory-swap".to_owned(),
+            memory,
+            "--pids-limit".to_owned(),
+            "1024".to_owned(),
+            "--cap-drop".to_owned(),
+            "ALL".to_owned(),
+            "--security-opt".to_owned(),
+            "no-new-privileges:true".to_owned(),
+            "--tmpfs".to_owned(),
+            "/tmp:rw,exec,nosuid,nodev,size=256m,mode=1777".to_owned(),
+            "--mount".to_owned(),
+            mount,
+            "--workdir".to_owned(),
+            "/data".to_owned(),
+            "--user".to_owned(),
+            user,
+            "--env".to_owned(),
+            "HOME=/data".to_owned(),
+            "--env".to_owned(),
+            format!("HELIX_SERVER_NAME={}", manifest.name),
+            "--env".to_owned(),
+            format!("HELIX_GAME_PORT={}", manifest.game_port),
+            "--env".to_owned(),
+            format!("HELIX_MAX_PLAYERS={}", manifest.max_players),
+            "--env".to_owned(),
+            format!("HELIX_TERRARIA_SOFTWARE={flavor}"),
+            "--env".to_owned(),
+            format!("HELIX_TERRARIA_VERSION={}", manifest.minecraft_version),
+            "--publish".to_owned(),
+            game_tcp,
+            "--stop-timeout".to_owned(),
+            "45".to_owned(),
+            "--log-opt".to_owned(),
+            "max-size=20m".to_owned(),
+            "--log-opt".to_owned(),
+            "max-file=5".to_owned(),
+            manifest.runtime_image.clone(),
+        ];
+        self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
+        Ok(())
+    }
+
     fn wait_until_ready<F>(
         &self,
         manifest: &InstanceManifest,
@@ -3296,15 +4150,15 @@ impl NativeManager {
     where
         F: FnMut(u64),
     {
-        if manifest.is_vrising() {
-            self.wait_for_vrising(manifest, timeout, progress)
+        if manifest.uses_ready_marker() {
+            self.wait_for_ready_marker(manifest, timeout, progress)
         } else {
             self.wait_for_minecraft(manifest, timeout, progress)
         }
     }
 
     fn ready_timeout(&self, manifest: &InstanceManifest) -> Duration {
-        if manifest.is_vrising() {
+        if manifest.uses_ready_marker() {
             Duration::from_secs(20 * 60)
         } else {
             Duration::from_secs(6 * 60)
@@ -3312,20 +4166,17 @@ impl NativeManager {
     }
 
     fn clear_ready_marker(&self, manifest: &InstanceManifest) -> Result<(), String> {
-        if !manifest.is_vrising() {
+        if !manifest.uses_ready_marker() {
             return Ok(());
         }
-        let marker = self
-            .instance_path(&manifest.id)?
-            .join(vrising::READY_MARKER);
+        let marker = self.instance_path(&manifest.id)?.join(".helix-ready");
         if marker.exists() {
-            fs::remove_file(&marker)
-                .map_err(|_| "could not clear the V Rising ready marker".to_owned())?;
+            fs::remove_file(&marker).map_err(|_| "could not clear the ready marker".to_owned())?;
         }
         Ok(())
     }
 
-    fn wait_for_vrising<F>(
+    fn wait_for_ready_marker<F>(
         &self,
         manifest: &InstanceManifest,
         timeout: Duration,
@@ -3336,9 +4187,8 @@ impl NativeManager {
     {
         let started = Instant::now();
         let deadline = started + timeout;
-        let marker = self
-            .instance_path(&manifest.id)?
-            .join(vrising::READY_MARKER);
+        let marker = self.instance_path(&manifest.id)?.join(".helix-ready");
+        let label = display_software(manifest);
         while Instant::now() < deadline {
             if marker.is_file() && self.container_running(&manifest.container_name) {
                 return Ok(());
@@ -3351,18 +4201,20 @@ impl NativeManager {
                     )
                     .unwrap_or_default();
                 return Err(if logs.trim().is_empty() {
-                    "V Rising stopped before it became ready".to_owned()
+                    format!("{label} stopped before it became ready")
                 } else {
                     format!(
-                        "V Rising stopped before it became ready: {}",
+                        "{label} stopped before it became ready: {}",
                         one_line_tail(&logs, 600)
                     )
                 });
             }
             progress(Instant::now().saturating_duration_since(started).as_secs());
-            thread::sleep(Duration::from_secs(3));
+            std::thread::sleep(Duration::from_secs(2));
         }
-        Err("V Rising did not become ready before the startup deadline".to_owned())
+        Err(format!(
+            "{label} did not become ready before the install timeout"
+        ))
     }
 
     fn wait_for_minecraft<F>(
@@ -3482,8 +4334,8 @@ impl NativeManager {
     }
 
     fn update(&self, manifest: &InstanceManifest) -> Result<bool, String> {
-        if manifest.is_vrising() {
-            return self.update_vrising(manifest);
+        if manifest.uses_ready_marker() {
+            return self.update_ready_marker_game(manifest);
         }
         let artifact = self.resolve_artifact(manifest.software, &manifest.minecraft_version)?;
         if artifact.java_version != manifest.java_version {
@@ -3575,7 +4427,7 @@ impl NativeManager {
         Ok(true)
     }
 
-    fn update_vrising(&self, manifest: &InstanceManifest) -> Result<bool, String> {
+    fn update_ready_marker_game(&self, manifest: &InstanceManifest) -> Result<bool, String> {
         let running = self.container_running(&manifest.container_name);
         if !running {
             return Ok(false);
@@ -3635,15 +4487,89 @@ impl NativeManager {
         Ok(vrising::RUNTIME_IMAGE.to_owned())
     }
 
-    fn reclaim_vrising_runtime(&self) {
+    fn ensure_valheim_runtime_image<F>(&self, progress: &mut F) -> Result<String, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        self.ensure_bundled_runtime_image(
+            valheim::RUNTIME_IMAGE,
+            valheim::DOCKERFILE,
+            valheim::ENTRYPOINT,
+            "valheim-runtime",
+            "Building the isolated Valheim runtime image (one-time)",
+            progress,
+        )
+    }
+
+    fn ensure_terraria_runtime_image<F>(&self, progress: &mut F) -> Result<String, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        self.ensure_bundled_runtime_image(
+            terraria::RUNTIME_IMAGE,
+            terraria::DOCKERFILE,
+            terraria::ENTRYPOINT,
+            "terraria-runtime",
+            "Building the isolated Terraria runtime image (one-time)",
+            progress,
+        )
+    }
+
+    fn ensure_bundled_runtime_image<F>(
+        &self,
+        image: &str,
+        dockerfile: &str,
+        entrypoint: &str,
+        staging_name: &str,
+        progress_label: &str,
+        progress: &mut F,
+    ) -> Result<String, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        if self.docker(["image", "inspect", image], 20).is_ok() {
+            return Ok(image.to_owned());
+        }
+        progress(progress_label, 16);
+        let staging = self.state_root.join(".staging").join(staging_name);
+        let _ = fs::remove_dir_all(&staging);
+        fs::create_dir_all(&staging)
+            .map_err(|_| format!("could not stage the {staging_name} build"))?;
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o700))
+            .map_err(|_| format!("could not protect the {staging_name} build"))?;
+        write_new_file(&staging.join("Dockerfile"), dockerfile.as_bytes(), 0o600)?;
+        write_new_file(&staging.join("entrypoint.sh"), entrypoint.as_bytes(), 0o755)?;
+        let result = self.docker_owned(
+            &[
+                "build".to_owned(),
+                "--tag".to_owned(),
+                image.to_owned(),
+                "--file".to_owned(),
+                staging.join("Dockerfile").to_string_lossy().into_owned(),
+                staging.to_string_lossy().into_owned(),
+            ],
+            20 * 60,
+        );
+        let _ = fs::remove_dir_all(&staging);
+        result?;
+        Ok(image.to_owned())
+    }
+
+    fn reclaim_unused_runtime(&self, kind: GameKind) {
+        let image = match kind {
+            GameKind::VRising => vrising::RUNTIME_IMAGE,
+            GameKind::Valheim => valheim::RUNTIME_IMAGE,
+            GameKind::Terraria => terraria::RUNTIME_IMAGE,
+            GameKind::Minecraft => return,
+        };
         let remaining = self
             .load_manifests()
             .ok()
-            .is_some_and(|manifests| manifests.iter().any(InstanceManifest::is_vrising));
+            .is_some_and(|manifests| manifests.iter().any(|manifest| manifest.kind == kind));
         if remaining {
             return;
         }
-        let _ = self.docker(["rmi", "--force", vrising::RUNTIME_IMAGE], 60);
+        let _ = self.docker(["rmi", "--force", image], 60);
     }
 
     fn container_restart_policy(&self, name: &str) -> Result<String, String> {
@@ -4702,6 +5628,8 @@ fn default_game_port_policy(game: GameKind) -> GamePortPolicySpec {
             auto_forward_on_create: false,
         },
         GameKind::VRising => vrising::default_port_policy(),
+        GameKind::Valheim => valheim::default_port_policy(),
+        GameKind::Terraria => terraria::default_port_policy(),
     }
 }
 
@@ -4730,7 +5658,7 @@ fn normalize_game_port_policy(
     policy.ranges.dedup();
     policy.ports.sort_unstable();
     policy.ports.dedup();
-    if policy.game == GameKind::VRising {
+    if matches!(policy.game, GameKind::VRising | GameKind::Valheim) {
         policy.auto_forward_on_create = false;
     }
     if policy.ranges.is_empty() && policy.ports.is_empty() {
@@ -4878,6 +5806,244 @@ fn select_stable_fabric_installer(value: &Value) -> Result<String, String> {
         .filter(|version| validate_version(version).is_ok())
         .map(str::to_owned)
         .ok_or_else(|| "Fabric did not report a stable server installer".to_owned())
+}
+
+fn select_stable_quilt_loader(value: &Value) -> Result<String, String> {
+    select_stable_fabric_loader(value).or_else(|_| {
+        value
+            .as_array()
+            .and_then(|entries| {
+                entries.iter().find_map(|entry| {
+                    entry
+                        .pointer("/loader/version")
+                        .or_else(|| entry.get("version"))
+                        .and_then(Value::as_str)
+                })
+            })
+            .filter(|version| validate_version(version).is_ok())
+            .map(str::to_owned)
+            .ok_or_else(|| "Quilt has no loader for that Minecraft version".to_owned())
+    })
+}
+
+fn select_stable_quilt_installer(value: &Value) -> Result<String, String> {
+    select_stable_fabric_installer(value).or_else(|_| {
+        value
+            .as_array()
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find_map(|entry| entry.get("version").and_then(Value::as_str))
+            })
+            .filter(|version| validate_version(version).is_ok())
+            .map(str::to_owned)
+            .ok_or_else(|| "Quilt did not report a server installer".to_owned())
+    })
+}
+
+fn resolve_requested_version(requested: &str, versions: &[String]) -> Result<String, String> {
+    if requested.eq_ignore_ascii_case("latest") {
+        return versions.first().cloned().ok_or_else(|| {
+            "that software catalog did not report any Minecraft versions".to_owned()
+        });
+    }
+    validate_version(requested)?;
+    if versions.iter().any(|version| version == requested) {
+        return Ok(requested.to_owned());
+    }
+    Err(format!(
+        "Minecraft {requested} is not available for that server software"
+    ))
+}
+
+fn minecraft_at_least(version: &str, minor: u32) -> bool {
+    matches!(numeric_version_parts(version).as_slice(), [1, found, ..] if *found >= minor)
+}
+
+fn compare_minecraft_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    numeric_version_parts(left).cmp(&numeric_version_parts(right))
+}
+
+fn forge_promo_versions(value: &Value) -> Vec<String> {
+    let mut versions = value
+        .get("promos")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|promos| promos.keys())
+        .filter_map(|key| {
+            key.strip_suffix("-latest")
+                .or_else(|| key.strip_suffix("-recommended"))
+        })
+        .filter(|version| validate_version(version).is_ok())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    versions.sort_by(|left, right| compare_minecraft_versions(right, left));
+    versions.dedup();
+    versions
+}
+
+fn forge_promo_build(value: &Value, minecraft: &str) -> Result<String, String> {
+    let promos = value
+        .get("promos")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "Forge did not report installer promotions".to_owned())?;
+    let recommended = format!("{minecraft}-recommended");
+    let latest = format!("{minecraft}-latest");
+    promos
+        .get(&recommended)
+        .or_else(|| promos.get(&latest))
+        .and_then(Value::as_str)
+        .filter(|build| validate_version(build).is_ok())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("Forge has no installer promotion for Minecraft {minecraft}"))
+}
+
+fn neoforge_game_versions(value: &Value) -> Vec<String> {
+    let mut versions = value
+        .get("versions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(neoforge_loader_to_game)
+        .collect::<Vec<_>>();
+    versions.sort_by(|left, right| compare_minecraft_versions(right, left));
+    versions.dedup();
+    versions
+}
+
+fn neoforge_loader_to_game(loader: &str) -> Option<String> {
+    let parts = numeric_version_parts(loader);
+    match parts.as_slice() {
+        [major, 0, ..] => Some(format!("1.{major}")),
+        [major, minor, ..] => Some(format!("1.{major}.{minor}")),
+        _ => None,
+    }
+}
+
+fn neoforge_loader_for_game(value: &Value, game: &str) -> Result<String, String> {
+    let prefix = game
+        .strip_prefix("1.")
+        .map(|rest| {
+            if rest.contains('.') {
+                rest.to_owned()
+            } else {
+                format!("{rest}.0")
+            }
+        })
+        .ok_or_else(|| format!("NeoForge does not publish Minecraft {game}"))?;
+    value
+        .get("versions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|loader| loader.starts_with(&format!("{prefix}.")))
+        .max_by_key(|loader| numeric_version_parts(loader))
+        .filter(|loader| validate_version(loader).is_ok())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("NeoForge has no installer for Minecraft {game}"))
+}
+
+fn pufferfish_family(version: &str) -> Result<String, String> {
+    match numeric_version_parts(version).as_slice() {
+        [1, minor, ..] => Ok(format!("1.{minor}")),
+        _ => Err(format!(
+            "Pufferfish has no Jenkins family for Minecraft {version}"
+        )),
+    }
+}
+
+fn pufferfish_versions_from_job(value: &Value) -> Vec<String> {
+    value
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|artifact| artifact.get("fileName").and_then(Value::as_str))
+        .filter_map(minecraft_version_from_filename)
+        .collect()
+}
+
+fn minecraft_version_from_filename(name: &str) -> Option<String> {
+    name.split(['-', '_'])
+        .find(|part| part.starts_with("1.") && validate_version(part).is_ok())
+        .map(str::to_owned)
+}
+
+fn pufferfish_artifact_url(value: &Value, version: &str) -> Result<(String, String), String> {
+    let artifacts = value
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Pufferfish did not report build artifacts".to_owned())?;
+    let artifact = artifacts.iter().find(|entry| {
+        entry
+            .get("fileName")
+            .and_then(Value::as_str)
+            .is_some_and(|name| {
+                name.contains(version) && name.ends_with(".jar") && !name.contains("sources")
+            })
+    });
+    let artifact = artifact.or_else(|| {
+        artifacts.iter().find(|entry| {
+            entry
+                .get("fileName")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.ends_with(".jar") && !name.contains("sources"))
+        })
+    });
+    let relative = artifact
+        .and_then(|entry| entry.get("relativePath").and_then(Value::as_str))
+        .filter(|path| !path.contains("..") && !path.starts_with('/'))
+        .ok_or_else(|| format!("Pufferfish has no jar for Minecraft {version}"))?;
+    let build = value
+        .get("number")
+        .and_then(Value::as_u64)
+        .map(|number| number.to_string())
+        .unwrap_or_else(|| "lastSuccessfulBuild".to_owned());
+    let family = pufferfish_family(version)?;
+    Ok((
+        format!(
+            "https://ci.pufferfish.host/job/Pufferfish-{family}/lastSuccessfulBuild/artifact/{relative}"
+        ),
+        build,
+    ))
+}
+
+fn find_unix_args(root: &Path) -> Option<String> {
+    let libraries = root.join("libraries");
+    if !libraries.is_dir() {
+        return None;
+    }
+    find_named_file(&libraries, "unix_args.txt", 0).and_then(|path| {
+        path.strip_prefix(root)
+            .ok()
+            .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+    })
+}
+
+fn find_named_file(root: &Path, name: &str, depth: u8) -> Option<PathBuf> {
+    if depth > 12 {
+        return None;
+    }
+    let entries = fs::read_dir(root).ok()?;
+    let mut dirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_type = entry.file_type().ok()?;
+        if file_type.is_file() && entry.file_name() == name {
+            return Some(path);
+        }
+        if file_type.is_dir() {
+            dirs.push(path);
+        }
+    }
+    for dir in dirs {
+        if let Some(found) = find_named_file(&dir, name, depth.saturating_add(1)) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn stable_fill_build(value: &Value) -> Option<Value> {
@@ -5046,28 +6212,28 @@ fn minecraft_software_catalog() -> Vec<Value> {
             "neoforge",
             "NeoForge",
             "mod_server",
-            "validation_pending",
+            "ready",
             false,
             "A modern Forge-family loader for large content mods and modpacks.",
-            "Its installer generates a version-specific runtime layout and launch arguments. Helix will enable it after installer, update, and rollback tests pass.",
+            "Helix downloads the official installer, runs --installServer, and launches with the generated unix_args. Minecraft 1.20.2+ only.",
         ),
         software_catalog_entry(
             "forge",
             "Forge",
             "mod_server",
-            "validation_pending",
+            "ready",
             false,
             "The long-running mod-loader ecosystem used by many older and current modpacks.",
-            "Forge versions have different installer and Java requirements; a single server.jar workflow would be unsafe.",
+            "Helix installs Minecraft 1.17+ through the official installer and unix_args launch path. Older universal-jar versions stay unsupported.",
         ),
         software_catalog_entry(
             "quilt",
             "Quilt",
             "mod_server",
-            "validation_pending",
+            "ready",
             false,
             "A Fabric-derived mod-loader ecosystem with its own loader and compatibility rules.",
-            "Helix needs a release-tested installer path and cannot assume every Fabric mod is compatible.",
+            "Helix uses Quilt's official server jar metadata. Fabric mods are not assumed compatible.",
         ),
         software_catalog_entry(
             "spigot",
@@ -5082,10 +6248,10 @@ fn minecraft_software_catalog() -> Vec<Value> {
             "pufferfish",
             "Pufferfish",
             "plugin_server",
-            "publisher_source_required",
+            "ready",
             false,
             "A Paper-derived server focused on additional performance tuning.",
-            "Helix will not call it one-click until a stable publisher artifact and verification path can be pinned.",
+            "Helix installs the last successful Jenkins artifact for the matching Minecraft family from ci.pufferfish.host over HTTPS.",
         ),
         software_catalog_entry(
             "velocity",
@@ -5786,10 +6952,17 @@ fn assigned_game_ports(manifests: &[InstanceManifest]) -> HashSet<u16> {
 }
 
 fn display_software(manifest: &InstanceManifest) -> &'static str {
-    if manifest.is_vrising() {
-        "V Rising"
-    } else {
-        software_name(manifest.software)
+    match manifest.kind {
+        GameKind::VRising => "V Rising",
+        GameKind::Valheim => "Valheim",
+        GameKind::Terraria => {
+            if manifest.build.starts_with("tmodloader") {
+                "tModLoader"
+            } else {
+                "Terraria"
+            }
+        }
+        GameKind::Minecraft => software_name(manifest.software),
     }
 }
 
@@ -5811,6 +6984,9 @@ fn software_name(software: MinecraftSoftware) -> &'static str {
         MinecraftSoftware::Leaves => "Leaves",
         MinecraftSoftware::Fabric => "Fabric",
         MinecraftSoftware::NeoForge => "NeoForge",
+        MinecraftSoftware::Forge => "Forge",
+        MinecraftSoftware::Quilt => "Quilt",
+        MinecraftSoftware::Pufferfish => "Pufferfish",
     }
 }
 
@@ -6279,6 +7455,7 @@ mod tests {
             start_on_boot: true,
             run_uid: 20_000,
             created_at_unix_ms: 1,
+            unix_args: None,
         };
         let encoded = serde_json::to_value(&vrising).unwrap();
         assert_eq!(encoded["kind"], "vrising");
@@ -6470,7 +7647,17 @@ mod tests {
         assert_eq!(
             ready,
             HashSet::from([
-                "paper", "purpur", "folia", "leaves", "vanilla", "fabric", "custom"
+                "paper",
+                "purpur",
+                "folia",
+                "leaves",
+                "vanilla",
+                "fabric",
+                "neoforge",
+                "forge",
+                "quilt",
+                "pufferfish",
+                "custom"
             ])
         );
         assert!(catalog.iter().any(|entry| {
@@ -6493,9 +7680,7 @@ mod tests {
                 && entry["installable"] == false
         }));
         assert!(catalog.iter().any(|entry| {
-            entry["id"] == "neoforge"
-                && entry["status"] == "validation_pending"
-                && entry["installable"] == false
+            entry["id"] == "neoforge" && entry["status"] == "ready" && entry["installable"] == true
         }));
     }
 
@@ -7022,6 +8207,7 @@ mod tests {
             created_at_unix_ms: 1,
             kind: GameKind::Minecraft,
             query_port: 0,
+            unix_args: None,
         };
         write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
         let active = backup_root.join(id);

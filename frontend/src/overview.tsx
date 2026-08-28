@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type { DashboardData } from './dashboard-model';
 import { InlineError, Metric, PageHead, ProgressBar, Sparkline, toneForPercent } from './dashboard-ui';
 import { DockerInventoryRoute } from './docker-panel-route';
+import { dismissNotice, isDismissed } from './dismissals';
 import { calculatePercent, formatBytes, formatDuration, formatPercent } from './format';
 import { Icon } from './icons';
 import { InfoTip } from './info-tip';
@@ -53,6 +54,9 @@ export function OverviewPage({ data, themeLabel, csrfToken, canManageDocker, onS
   const helixCpu = helixCpuValues.length === 0 ? null : helixCpuValues.reduce((sum, value) => sum + value, 0);
   const helixMemory = helixMemoryValues.length === 0 ? null : helixMemoryValues.reduce((sum, value) => sum + value, 0);
   const helixErrors = integration.data?.errors ?? [];
+  const [dismissTick, setDismissTick] = useState(0);
+  void dismissTick;
+  const visibleMounts = criticalMounts.filter((mount) => !isDismissed(`capacity:${mount.target}`));
   const toggleGraphs = (): void => {
     setGraphs((current) => {
       const next = !current;
@@ -75,15 +79,26 @@ export function OverviewPage({ data, themeLabel, csrfToken, canManageDocker, onS
         actions={<button class={`button${graphs ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={graphs} onClick={toggleGraphs}><Icon name="activity" size={15} />{graphs ? 'Hide graphs' : 'Show graphs'}</button>}
       />
       <InlineError message={overview.error ?? inventory.error ?? servers.error ?? integration.error} />
-      {criticalMounts.map((mount) => (
-        <a class="capacity-alert" href="#storage" key={mount.target}>
+      {visibleMounts.map((mount) => (
+        <div class="capacity-alert" key={mount.target}>
           <Icon name="warning" />
-          <div>
+          <a href="#storage">
             <strong>{mount.target} is {formatPercent(mount.usePercent)} full</strong>
             <span>{formatBytes(mount.availableBytes)} remains on {mount.source}. Open Storage to make room.</span>
-          </div>
-          <Icon name="chevron" />
-        </a>
+          </a>
+          <a class="capacity-alert__go" href="#storage" aria-label="Open Storage"><Icon name="chevron" /></a>
+          <button
+            class="capacity-alert__dismiss"
+            type="button"
+            aria-label={`Dismiss ${mount.target} warning`}
+            onClick={() => {
+              dismissNotice(`capacity:${mount.target}`);
+              setDismissTick((value) => value + 1);
+            }}
+          >
+            <Icon name="close" size={14} />
+          </button>
+        </div>
       ))}
       <section class="host-facts overview-identity">
         <div><span>Processor</span><strong>{inventory.data?.cpuModel ?? (overview.data === null ? '—' : `${overview.data.cpu.logicalCores} cores`)}</strong></div>
@@ -141,7 +156,7 @@ export function OverviewPage({ data, themeLabel, csrfToken, canManageDocker, onS
           <div class="interface-summary">{(inventory.data?.interfaces ?? []).filter((item) => item.name !== 'lo').slice(0, 4).map((item) => <div key={item.name}><span class={`status-dot status-dot--${item.state.toLowerCase() === 'up' ? 'good' : 'idle'}`} /><strong>{item.name}</strong><span>{item.addresses.find((address) => address.family === 'inet')?.address ?? 'No IPv4 address'}</span></div>)}</div>
         </section>
         <section class="surface overview-docker">
-          <div class="section-title"><div><h2>Containers</h2><p>Every Docker container on this host</p></div><a href="#hooks">Open Docker <Icon name="chevron" size={14} /></a></div>
+          <div class="section-title"><div><h2>Containers</h2><p>Every Docker container on this host</p></div><a href="#hooks">Open Portainer <Icon name="chevron" size={14} /></a></div>
           <DockerInventoryRoute csrfToken={csrfToken} canManage={canManageDocker} compact onSessionExpired={onSessionExpired} />
         </section>
       </div>

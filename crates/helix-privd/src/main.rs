@@ -33,7 +33,8 @@ use files::{FileManager, MAX_CONFIGURED_ROOTS, StorageAnalysisManager};
 use helix_privd::{
     BrokerClient, BrokerRequest, BrokerResponse, DockerContainerActionKind, FileUploadPurpose,
     FileUploadTarget, HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec,
-    PackageUpdateCandidate, ServerNetworkExposure, VRisingCreateSpec, read_frame, write_frame,
+    PackageUpdateCandidate, ServerNetworkExposure, TerrariaCreateSpec, VRisingCreateSpec,
+    ValheimCreateSpec, read_frame, write_frame,
 };
 #[cfg(target_os = "linux")]
 use hook_install::{HookInstaller, HookInstallerConfig};
@@ -357,11 +358,14 @@ impl BrokerContext {
                 query,
                 offset,
                 limit,
+                provider,
             } => self
                 .native
                 .as_deref()
                 .ok_or_else(|| "the Helix server manager is not configured".to_owned())
-                .and_then(|native| native.minecraft_modpack_search(&query, offset, limit)),
+                .and_then(|native| {
+                    native.minecraft_modpack_search(&query, offset, limit, provider)
+                }),
             BrokerRequest::MinecraftModpackProject { project_id } => self
                 .native
                 .as_deref()
@@ -406,6 +410,8 @@ impl BrokerContext {
                 self.start_minecraft_modpack_job(spec)
             }
             BrokerRequest::CreateVRising { spec } => self.start_vrising_job(spec),
+            BrokerRequest::CreateValheim { spec } => self.start_valheim_job(spec),
+            BrokerRequest::CreateTerraria { spec } => self.start_terraria_job(spec),
             BrokerRequest::SetNativeStartOnBoot {
                 instance_id,
                 enabled,
@@ -587,21 +593,35 @@ impl BrokerContext {
             .ok_or_else(|| "host hook inventory was invalid".to_owned())?;
         let amp = match &self.amp {
             Some(amp) => match amp.list_servers() {
-                Ok(inventory) => json!({
-                    "id": "amp",
-                    "kind": "api",
-                    "installed": true,
-                    "active": true,
-                    "active_state": if inventory.issue_count == 0 { "connected" } else { "degraded" },
-                    "enabled": true,
-                    "enabled_state": "configured",
-                    "controllable": false,
-                    "actions": [],
-                    "instance_count": inventory.servers.len(),
-                    "unverified_instance_count": inventory.issue_count,
-                    "panel_port": amp.public_panel_port(),
-                    "error": Value::Null
-                }),
+                Ok(inventory) => {
+                    let memory = inventory
+                        .servers
+                        .iter()
+                        .map(|server| server.memory_used_mb.saturating_mul(1024 * 1024))
+                        .sum::<u64>();
+                    let cpu = inventory
+                        .servers
+                        .iter()
+                        .map(|server| server.cpu_percent)
+                        .sum::<f64>();
+                    json!({
+                        "id": "amp",
+                        "kind": "api",
+                        "installed": true,
+                        "active": true,
+                        "active_state": if inventory.issue_count == 0 { "connected" } else { "degraded" },
+                        "enabled": true,
+                        "enabled_state": "configured",
+                        "controllable": false,
+                        "actions": [],
+                        "instance_count": inventory.servers.len(),
+                        "unverified_instance_count": inventory.issue_count,
+                        "panel_port": amp.public_panel_port(),
+                        "memory_used_bytes": if memory > 0 { Value::from(memory) } else { Value::Null },
+                        "cpu_percent": if inventory.servers.iter().any(|server| server.cpu_percent > 0.0) { Value::from(cpu) } else { Value::Null },
+                        "error": Value::Null
+                    })
+                }
                 Err(error) => json!({
                     "id": "amp",
                     "kind": "api",
@@ -652,6 +672,10 @@ impl BrokerContext {
                 let portainer = docker.get("portainer").cloned().unwrap_or(Value::Null);
                 let installed =
                     docker.get("docker_installed").and_then(Value::as_bool) == Some(true);
+                let portainer_running =
+                    portainer.get("running").and_then(Value::as_bool) == Some(true);
+                let portainer_detected =
+                    portainer.get("detected").and_then(Value::as_bool) == Some(true);
                 hooks.push(json!({
                     "id": "docker",
                     "kind": "docker",
@@ -664,24 +688,63 @@ impl BrokerContext {
                     "actions": [],
                     "instance_count": containers.len(),
                     "unverified_instance_count": Value::Null,
-                    "panel_port": portainer.get("panel_port").cloned().unwrap_or(Value::Null),
+                    "panel_port": Value::Null,
+                    "panel_scheme": Value::Null,
                     "memory_used_bytes": if memory > 0 { Value::from(memory) } else { Value::Null },
                     "cpu_percent": if running > 0 { Value::from(cpu) } else { Value::Null },
                     "error": docker.get("error").cloned().unwrap_or(Value::Null)
                 }));
+                hooks.push(json!({
+                    "id": "portainer",
+                    "kind": "panel",
+                    "installed": portainer_detected,
+                    "active": portainer_running,
+                    "active_state": if portainer_detected {
+                        if portainer_running { "running" } else { "stopped" }
+                    } else {
+                        "not_found"
+                    },
+                    "enabled": portainer_detected,
+                    "enabled_state": if portainer_detected { "detected" } else { "not_found" },
+                    "controllable": false,
+                    "actions": [],
+                    "instance_count": if portainer_detected { 1 } else { 0 },
+                    "unverified_instance_count": Value::Null,
+                    "panel_port": portainer.get("panel_port").cloned().unwrap_or(Value::Null),
+                    "panel_scheme": portainer.get("panel_scheme").cloned().unwrap_or(Value::Null),
+                    "memory_used_bytes": Value::Null,
+                    "cpu_percent": Value::Null,
+                    "error": Value::Null
+                }));
             }
-            Err(error) => hooks.push(json!({
-                "id": "docker",
-                "kind": "docker",
-                "installed": false,
-                "active": false,
-                "active_state": "unavailable",
-                "enabled": false,
-                "enabled_state": "unavailable",
-                "controllable": false,
-                "actions": [],
-                "error": error
-            })),
+            Err(error) => {
+                hooks.push(json!({
+                    "id": "docker",
+                    "kind": "docker",
+                    "installed": false,
+                    "active": false,
+                    "active_state": "unavailable",
+                    "enabled": false,
+                    "enabled_state": "unavailable",
+                    "controllable": false,
+                    "actions": [],
+                    "error": error
+                }));
+                hooks.push(json!({
+                    "id": "portainer",
+                    "kind": "panel",
+                    "installed": false,
+                    "active": false,
+                    "active_state": "not_found",
+                    "enabled": false,
+                    "enabled_state": "not_found",
+                    "controllable": false,
+                    "actions": [],
+                    "panel_port": Value::Null,
+                    "panel_scheme": Value::Null,
+                    "error": Value::Null
+                }));
+            }
         }
         Ok(host_inventory)
     }
@@ -1445,6 +1508,108 @@ impl BrokerContext {
                 "",
             );
             return Err("could not start the V Rising installation job".to_owned());
+        }
+
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
+    fn start_valheim_job(self: &Arc<Self>, spec: ValheimCreateSpec) -> Result<Value, String> {
+        let native = Arc::clone(
+            self.native
+                .as_ref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())?,
+        );
+        let (job_id, _) = self.queue_job("valheim_create", Some("valheim:create"), None)?;
+
+        let context = Arc::clone(self);
+        let worker_job_id = job_id.clone();
+        if thread::Builder::new()
+            .name(format!("valheim-job-{}", &job_id[..8]))
+            .spawn(move || {
+                context.update_job(&worker_job_id, |job| {
+                    job.status = JobState::Running;
+                    job.stage = "Preparing".to_owned();
+                    job.progress_percent = 2;
+                });
+                let result = native.create_valheim(&spec, |stage, progress| {
+                    context.update_job(&worker_job_id, |job| {
+                        job.stage = stage.to_owned();
+                        job.progress_percent = progress;
+                    });
+                });
+                context.update_job(&worker_job_id, |job| match result {
+                    Ok(value) => {
+                        job.status = JobState::Complete;
+                        job.stage = "Online".to_owned();
+                        job.progress_percent = 100;
+                        job.result = Some(value);
+                    }
+                    Err(message) => {
+                        job.status = JobState::Failed;
+                        job.stage = "Failed".to_owned();
+                        job.error = Some(message);
+                    }
+                });
+            })
+            .is_err()
+        {
+            self.finish_job(
+                &job_id,
+                Err("could not start the Valheim installation job".to_owned()),
+                "",
+            );
+            return Err("could not start the Valheim installation job".to_owned());
+        }
+
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
+    fn start_terraria_job(self: &Arc<Self>, spec: TerrariaCreateSpec) -> Result<Value, String> {
+        let native = Arc::clone(
+            self.native
+                .as_ref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())?,
+        );
+        let (job_id, _) = self.queue_job("terraria_create", Some("terraria:create"), None)?;
+
+        let context = Arc::clone(self);
+        let worker_job_id = job_id.clone();
+        if thread::Builder::new()
+            .name(format!("terraria-job-{}", &job_id[..8]))
+            .spawn(move || {
+                context.update_job(&worker_job_id, |job| {
+                    job.status = JobState::Running;
+                    job.stage = "Preparing".to_owned();
+                    job.progress_percent = 2;
+                });
+                let result = native.create_terraria(&spec, |stage, progress| {
+                    context.update_job(&worker_job_id, |job| {
+                        job.stage = stage.to_owned();
+                        job.progress_percent = progress;
+                    });
+                });
+                context.update_job(&worker_job_id, |job| match result {
+                    Ok(value) => {
+                        job.status = JobState::Complete;
+                        job.stage = "Online".to_owned();
+                        job.progress_percent = 100;
+                        job.result = Some(value);
+                    }
+                    Err(message) => {
+                        job.status = JobState::Failed;
+                        job.stage = "Failed".to_owned();
+                        job.error = Some(message);
+                    }
+                });
+            })
+            .is_err()
+        {
+            self.finish_job(
+                &job_id,
+                Err("could not start the Terraria installation job".to_owned()),
+                "",
+            );
+            return Err("could not start the Terraria installation job".to_owned());
         }
 
         Ok(json!({"job_id": job_id, "reused": false}))

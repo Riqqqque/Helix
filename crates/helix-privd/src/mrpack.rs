@@ -73,6 +73,7 @@ pub struct MrpackPlan {
     pub version_id: String,
     pub summary: Option<String>,
     pub minecraft_version: String,
+    pub loader: &'static str,
     pub fabric_loader_version: String,
     pub files: Vec<MrpackDownload>,
     pub skipped_optional_files: usize,
@@ -359,24 +360,48 @@ fn validate_index(
     }
     let minecraft_version =
         required_dependency(index.dependencies.minecraft.as_deref(), "Minecraft version")?;
-    if index.dependencies.forge.is_some() {
-        return Err("Forge modpacks are preview-only because Helix does not yet have a lifecycle-ready Forge server loader".to_owned());
-    }
-    if index.dependencies.neoforge.is_some() {
-        return Err("NeoForge modpacks are preview-only because Helix does not yet have a lifecycle-ready NeoForge server loader".to_owned());
-    }
-    if index.dependencies.quilt_loader.is_some() {
-        return Err("Quilt modpacks are preview-only because Helix does not yet have a lifecycle-ready Quilt server loader".to_owned());
-    }
     if let Some(dependency) = index.dependencies.unsupported.keys().next() {
         return Err(format!(
-            "the modpack loader dependency {dependency} is not supported; Helix modpack creation is currently Fabric-only"
+            "the modpack loader dependency {dependency} is not supported"
         ));
     }
-    let fabric_loader_version = required_dependency(
-        index.dependencies.fabric_loader.as_deref(),
-        "Fabric Loader version",
-    )?;
+    let declared = [
+        (
+            index.dependencies.fabric_loader.as_deref(),
+            "fabric",
+            "Fabric Loader version",
+        ),
+        (
+            index.dependencies.forge.as_deref(),
+            "forge",
+            "Forge version",
+        ),
+        (
+            index.dependencies.neoforge.as_deref(),
+            "neoforge",
+            "NeoForge version",
+        ),
+        (
+            index.dependencies.quilt_loader.as_deref(),
+            "quilt",
+            "Quilt Loader version",
+        ),
+    ];
+    let selected = declared
+        .into_iter()
+        .filter_map(|(value, loader, label)| value.map(|version| (version, loader, label)))
+        .collect::<Vec<_>>();
+    if selected.len() > 1 {
+        return Err(
+            "the modpack declares more than one server loader; Helix needs a single loader pin"
+                .to_owned(),
+        );
+    }
+    let (loader_version, loader, loader_label) = selected
+        .into_iter()
+        .next()
+        .ok_or_else(|| "the modpack does not pin a supported server loader".to_owned())?;
+    let loader_version = required_dependency(Some(loader_version), loader_label)?;
     if index.files.len() > limits.maximum_files {
         return Err(format!(
             "the modpack index exceeds the {}-file safety limit",
@@ -449,7 +474,8 @@ fn validate_index(
         version_id: index.version_id,
         summary: index.summary,
         minecraft_version: minecraft_version.to_owned(),
-        fabric_loader_version: fabric_loader_version.to_owned(),
+        loader,
+        fabric_loader_version: loader_version.to_owned(),
         files,
         skipped_optional_files,
         skipped_client_only_files,
@@ -1096,19 +1122,36 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_loader_dependencies_with_precise_reason() {
-        for (dependency, reason) in [
-            ("forge", "Forge"),
-            ("neoforge", "NeoForge"),
-            ("quilt-loader", "Quilt"),
+        let temp = TempDir::new().expect("tempdir");
+        let archive = temp.path().join("pack.mrpack");
+        let json = index(
+            "mods/a.jar",
+            b"a",
+            "required",
+            r#"{"minecraft":"1.21.1","future-loader":"2.0"}"#,
+        );
+        write_pack(&archive, &json, &[]);
+        let error = inspect_mrpack(&archive, &MrpackLimits::default(), deadline())
+            .expect_err("unknown loader must fail closed");
+        assert!(error.contains("future-loader"));
+    }
+
+    #[test]
+    fn accepts_forge_family_loader_pins() {
+        for (dependency, loader) in [
+            ("forge", "forge"),
+            ("neoforge", "neoforge"),
+            ("quilt-loader", "quilt"),
         ] {
             let temp = TempDir::new().expect("tempdir");
             let archive = temp.path().join("pack.mrpack");
-            let dependencies = format!(r#"{{"minecraft":"1.21.1","{dependency}":"1.0"}}"#);
+            let dependencies = format!(r#"{{"minecraft":"1.21.1","{dependency}":"1.0.0"}}"#);
             let json = index("mods/a.jar", b"a", "required", &dependencies);
             write_pack(&archive, &json, &[]);
-            let error = inspect_mrpack(&archive, &MrpackLimits::default(), deadline())
-                .expect_err("loader must fail");
-            assert!(error.contains(reason), "{error}");
+            let plan = inspect_mrpack(&archive, &MrpackLimits::default(), deadline())
+                .unwrap_or_else(|error| panic!("{loader} pack should inspect: {error}"));
+            assert_eq!(plan.loader, loader);
+            assert_eq!(plan.fabric_loader_version, "1.0.0");
         }
     }
 
@@ -1127,7 +1170,7 @@ mod tests {
         let error = inspect_mrpack(&archive, &MrpackLimits::default(), deadline())
             .expect_err("unknown loader must fail closed");
         assert!(error.contains("future-loader"));
-        assert!(error.contains("Fabric-only"), "{error}");
+        assert!(error.contains("not supported"), "{error}");
     }
 
     #[test]

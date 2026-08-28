@@ -18,6 +18,7 @@ import { Icon, type IconName } from './icons';
 import { InfoTip } from './info-tip';
 import { Dialog } from './modal';
 import { DockerInventoryPanel } from './docker-panel';
+import { portainerHref } from './docker-api';
 import './hooks.css';
 
 interface HookDescriptor {
@@ -85,12 +86,22 @@ const descriptors: Record<string, HookDescriptor> = {
   docker: {
     name: 'Docker',
     category: 'Containers',
-    summary: 'Every container on this host, plus Portainer when it is present',
-    detail: 'Helix reads Docker directly. You can see CPU, memory, and running state for all containers, start or stop them with the exact name, and open Portainer if that container is published. Helix dashboard and gateway containers stay protected.',
-    icon: 'host',
+    summary: 'Every container on this host, including Portainer-managed ones',
+    detail: 'Helix reads Docker Engine on this host. That includes stacks Portainer also shows. Opening Portainer uses the HTTPS UI port when it is published, not the Edge agent port.',
+    icon: 'servers',
     color: '#2496ed',
-    docs: 'https://docs.docker.com/',
-    setupSteps: ['Install Docker Engine on this Linux host.', 'Refresh Hooks; Helix lists every container Docker reports.', 'If Portainer is running, Open Portainer uses its published port on this LAN address.'],
+    docs: 'https://docs.docker.com/engine/',
+    setupSteps: ['Install Docker Engine on this Linux host.', 'Refresh Hooks; Helix lists containers from the engine, not from a guessed panel URL.'],
+  },
+  portainer: {
+    name: 'Portainer',
+    category: 'Containers',
+    summary: 'Open the Portainer UI Helix detected on this host',
+    detail: 'Helix looks for a Portainer container and prefers the HTTPS UI on 9443, then 9000. It skips Edge agent port 8000, which is not a web console.',
+    icon: 'external',
+    color: '#13bef0',
+    docs: 'https://docs.portainer.io/',
+    setupSteps: ['Run Portainer CE or EE in Docker.', 'Publish 9443 or 9000.', 'Refresh Hooks; Open Portainer uses the detected LAN address.'],
   },
 };
 
@@ -123,7 +134,9 @@ function panelHref(hook: HookConnection): string | null {
   if (typeof window === 'undefined') return null;
   const hostname = window.location.hostname;
   if (hook.id === 'amp' && hook.panelPort !== null) return `http://${hostname}:${hook.panelPort}/`;
-  if (hook.id === 'docker' && hook.panelPort !== null) return `http://${hostname}:${hook.panelPort}/`;
+  if ((hook.id === 'docker' || hook.id === 'portainer') && hook.panelPort !== null) {
+    return portainerHref(hostname, hook.panelPort, hook.panelScheme);
+  }
   if (hook.id === 'plex') return `http://${hostname}:32400/web/`;
   if (hook.id === 'jellyfin') return `http://${hostname}:8096/`;
   if (hook.id === 'tailscale' && hook.installed) return 'https://login.tailscale.com/admin/machines';

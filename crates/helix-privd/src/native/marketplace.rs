@@ -623,12 +623,33 @@ fn content_profile(software: MinecraftSoftware) -> Result<ContentProfile, String
             directory: "mods",
             accepted_loaders: &["fabric"],
         }),
+        MinecraftSoftware::Quilt => Ok(ContentProfile {
+            kind: "mod",
+            search_project_type: "mod",
+            directory: "mods",
+            accepted_loaders: &["quilt"],
+        }),
+        MinecraftSoftware::Forge => Ok(ContentProfile {
+            kind: "mod",
+            search_project_type: "mod",
+            directory: "mods",
+            accepted_loaders: &["forge"],
+        }),
+        MinecraftSoftware::NeoForge => Ok(ContentProfile {
+            kind: "mod",
+            search_project_type: "mod",
+            directory: "mods",
+            accepted_loaders: &["neoforge"],
+        }),
+        MinecraftSoftware::Pufferfish => Ok(ContentProfile {
+            kind: "plugin",
+            search_project_type: "plugin",
+            directory: "plugins",
+            accepted_loaders: &["paper", "spigot", "bukkit", "pufferfish"],
+        }),
         MinecraftSoftware::Vanilla => Err(
             "Vanilla has no safe plugin or mod loader; choose Paper for plugins or Fabric for mods"
                 .to_owned(),
-        ),
-        MinecraftSoftware::NeoForge => Err(
-            "NeoForge marketplace installs will unlock with its native server runtime".to_owned(),
         ),
     }
 }

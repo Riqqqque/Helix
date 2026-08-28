@@ -11,15 +11,7 @@ const MAX_HOMARR_WIDGETS: usize = 64;
 
 impl HostControl {
     pub fn docker_inventory(&self) -> Result<Value, String> {
-        let listed = match self.docker_command(
-            &[
-                "ps".to_owned(),
-                "-a".to_owned(),
-                "--format".to_owned(),
-                "{{json .}}".to_owned(),
-            ],
-            Duration::from_secs(20),
-        ) {
+        let listed = match self.list_docker_containers() {
             Ok(output) => output,
             Err(error) => {
                 return Ok(json!({
@@ -28,29 +20,32 @@ impl HostControl {
                     "docker_installed": false,
                     "containers": [],
                     "truncated": false,
-                    "portainer": { "detected": false, "panel_port": Value::Null, "container": Value::Null },
+                    "portainer": { "detected": false, "panel_port": Value::Null, "panel_scheme": Value::Null, "container": Value::Null },
                     "error": error,
                     "collected_at_unix_ms": now_unix_ms()
                 }));
             }
         };
-        let mut containers = parse_docker_ps(&listed.stdout)?;
+        let mut containers = parse_docker_listing(&listed);
         let truncated = containers.len() > MAX_CONTAINERS;
         containers.truncate(MAX_CONTAINERS);
-        let stats = self
-            .docker_command(
-                &[
-                    "stats".to_owned(),
-                    "--all".to_owned(),
-                    "--no-stream".to_owned(),
-                    "--format".to_owned(),
-                    "{{json .}}".to_owned(),
-                ],
-                Duration::from_secs(25),
-            )
-            .ok();
-        if let Some(stats) = stats {
-            apply_docker_stats(&mut containers, &stats.stdout);
+        let running: Vec<String> = containers
+            .iter()
+            .filter(|item| item.get("running").and_then(Value::as_bool) == Some(true))
+            .filter_map(|item| item.get("name").and_then(Value::as_str).map(str::to_owned))
+            .take(MAX_CONTAINERS)
+            .collect();
+        if !running.is_empty() {
+            let mut args = vec![
+                "stats".to_owned(),
+                "--no-stream".to_owned(),
+                "--format".to_owned(),
+                "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}".to_owned(),
+            ];
+            args.extend(running);
+            if let Ok(stats) = self.docker_command(&args, Duration::from_secs(20)) {
+                apply_docker_stats(&mut containers, &stats.stdout);
+            }
         }
         let protected = self.protected_container_names();
         for container in &mut containers {
@@ -75,7 +70,7 @@ impl HostControl {
             "truncated": truncated,
             "portainer": portainer,
             "error": Value::Null,
-            "note": "Helix lists every Docker container on this host. Start, stop, and restart require typing the exact container name. Helix dashboard and gateway containers cannot be stopped here.",
+            "note": "Helix lists Docker Engine containers on this host, including ones Portainer also shows. Start, stop, and restart require typing the exact container name. Helix dashboard and gateway containers cannot be stopped here.",
             "collected_at_unix_ms": now_unix_ms()
         }))
     }
@@ -111,7 +106,7 @@ impl HostControl {
         };
         let output =
             self.docker_command(&[verb.to_owned(), name.to_owned()], Duration::from_secs(45))?;
-        require_success(output)?;
+        let _ = require_success(output)?;
         let inventory = self.docker_inventory()?;
         let container = inventory
             .get("containers")
@@ -171,7 +166,6 @@ impl HostControl {
             ],
             Duration::from_secs(15),
         )?;
-        let inspect = require_success(inspect)?;
         let mounts: Value = serde_json::from_str(inspect.stdout.trim())
             .map_err(|_| "Docker returned invalid Homarr mount metadata".to_owned())?;
         let mut widgets = Vec::new();
@@ -215,6 +209,50 @@ impl HostControl {
         }))
     }
 
+    fn list_docker_containers(&self) -> Result<String, String> {
+        let compact = self.docker_command(
+            &[
+                "ps".to_owned(),
+                "-a".to_owned(),
+                "--format".to_owned(),
+                "{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Ports}}".to_owned(),
+            ],
+            Duration::from_secs(20),
+        );
+        match compact {
+            Ok(output) => Ok(output.stdout),
+            Err(compact_error) => {
+                let json = self.docker_command(
+                    &[
+                        "ps".to_owned(),
+                        "-a".to_owned(),
+                        "--format".to_owned(),
+                        "{{json .}}".to_owned(),
+                    ],
+                    Duration::from_secs(20),
+                );
+                match json {
+                    Ok(output) => Ok(output.stdout),
+                    Err(_) => {
+                        let names = self.docker_command(
+                            &[
+                                "ps".to_owned(),
+                                "-a".to_owned(),
+                                "--format".to_owned(),
+                                "{{.Names}}".to_owned(),
+                            ],
+                            Duration::from_secs(20),
+                        );
+                        match names {
+                            Ok(output) => Ok(output.stdout),
+                            Err(_) => Err(compact_error),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn docker_command(
         &self,
         args: &[String],
@@ -233,77 +271,145 @@ impl HostControl {
     }
 }
 
-fn parse_docker_ps(stdout: &str) -> Result<Vec<Value>, String> {
+fn parse_docker_listing(stdout: &str) -> Vec<Value> {
+    let trimmed = stdout.trim();
+    if trimmed.starts_with('[') {
+        if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(trimmed) {
+            return items
+                .iter()
+                .filter_map(container_from_json)
+                .take(MAX_CONTAINERS)
+                .collect();
+        }
+    }
     let mut containers = Vec::new();
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
-        if containers.len() > MAX_CONTAINERS {
+        if containers.len() >= MAX_CONTAINERS {
             break;
         }
-        let value: Value = serde_json::from_str(line)
-            .map_err(|_| "Docker returned invalid container inventory".to_owned())?;
-        let name = sanitize_container_name(
-            value
-                .get("Names")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        )
-        .ok_or_else(|| "Docker returned an invalid container name".to_owned())?;
-        let image = sanitize_label(
-            value.get("Image").and_then(Value::as_str).unwrap_or(""),
-            180,
-        );
-        let state = sanitize_label(value.get("State").and_then(Value::as_str).unwrap_or(""), 32)
-            .to_ascii_lowercase();
-        let status = sanitize_label(
-            value.get("Status").and_then(Value::as_str).unwrap_or(""),
-            80,
-        );
-        let ports = sanitize_label(
-            value.get("Ports").and_then(Value::as_str).unwrap_or(""),
-            240,
-        );
-        let running = state == "running";
-        containers.push(json!({
-            "name": name,
-            "image": image,
-            "state": state,
-            "status": status,
-            "ports": ports,
-            "running": running,
-            "cpu_percent": Value::Null,
-            "memory_used_bytes": Value::Null,
-            "memory_limit_bytes": Value::Null,
-            "pids": Value::Null,
-            "panel_port": published_tcp_port(&ports)
-        }));
+        if let Some(container) = container_from_line(line) {
+            containers.push(container);
+        }
     }
-    Ok(containers)
+    containers
+}
+
+fn container_from_line(line: &str) -> Option<Value> {
+    let line = line.trim();
+    if line.starts_with('{') {
+        let value: Value = serde_json::from_str(line).ok()?;
+        return container_from_json(&value);
+    }
+    let mut parts = line.splitn(5, '\t');
+    let name = sanitize_container_name(parts.next().unwrap_or_default())?;
+    let image = sanitize_label(parts.next().unwrap_or_default(), 180);
+    let state = sanitize_label(parts.next().unwrap_or_default(), 32).to_ascii_lowercase();
+    let status = sanitize_label(parts.next().unwrap_or_default(), 80);
+    let ports = sanitize_label(parts.next().unwrap_or_default(), 240);
+    Some(container_record(name, image, state, status, ports))
+}
+
+fn container_from_json(value: &Value) -> Option<Value> {
+    let name = sanitize_container_name(
+        value
+            .get("Names")
+            .or_else(|| value.get("Name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    )?;
+    let image = sanitize_label(
+        value.get("Image").and_then(Value::as_str).unwrap_or(""),
+        180,
+    );
+    let state = sanitize_label(value.get("State").and_then(Value::as_str).unwrap_or(""), 32)
+        .to_ascii_lowercase();
+    let status = sanitize_label(
+        value.get("Status").and_then(Value::as_str).unwrap_or(""),
+        80,
+    );
+    let ports = sanitize_label(
+        value.get("Ports").and_then(Value::as_str).unwrap_or(""),
+        240,
+    );
+    Some(container_record(name, image, state, status, ports))
+}
+
+fn container_record(
+    name: String,
+    image: String,
+    state: String,
+    status: String,
+    ports: String,
+) -> Value {
+    let running = state == "running";
+    json!({
+        "name": name,
+        "image": image,
+        "state": state,
+        "status": status,
+        "ports": ports,
+        "running": running,
+        "cpu_percent": Value::Null,
+        "memory_used_bytes": Value::Null,
+        "memory_limit_bytes": Value::Null,
+        "pids": Value::Null,
+        "panel_port": published_tcp_port(&ports),
+    })
+}
+
+fn parse_docker_ps(stdout: &str) -> Result<Vec<Value>, String> {
+    Ok(parse_docker_listing(stdout))
 }
 
 fn apply_docker_stats(containers: &mut [Value], stdout: &str) {
     let mut by_name = Map::new();
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let Some(name) =
-            sanitize_container_name(value.get("Name").and_then(Value::as_str).unwrap_or(""))
-        else {
-            continue;
-        };
-        let cpu_percent = value
-            .get("CPUPerc")
-            .and_then(Value::as_str)
-            .and_then(parse_percent);
-        let (memory_used_bytes, memory_limit_bytes) = value
-            .get("MemUsage")
-            .and_then(Value::as_str)
-            .and_then(parse_mem_usage)
-            .unwrap_or((None, None));
-        let pids = value
-            .get("PIDs")
-            .and_then(Value::as_str)
-            .and_then(|value| value.parse::<u64>().ok());
+        let (name, cpu_percent, memory_used_bytes, memory_limit_bytes, pids) =
+            if let Ok(value) = serde_json::from_str::<Value>(line) {
+                let Some(name) = sanitize_container_name(
+                    value.get("Name").and_then(Value::as_str).unwrap_or(""),
+                ) else {
+                    continue;
+                };
+                let cpu_percent = value
+                    .get("CPUPerc")
+                    .and_then(Value::as_str)
+                    .and_then(parse_percent);
+                let (memory_used_bytes, memory_limit_bytes) = value
+                    .get("MemUsage")
+                    .and_then(Value::as_str)
+                    .and_then(parse_mem_usage)
+                    .unwrap_or((None, None));
+                let pids = value
+                    .get("PIDs")
+                    .and_then(Value::as_str)
+                    .and_then(|value| value.parse::<u64>().ok());
+                (
+                    name,
+                    cpu_percent,
+                    memory_used_bytes,
+                    memory_limit_bytes,
+                    pids,
+                )
+            } else {
+                let mut parts = line.split('\t');
+                let Some(name) = sanitize_container_name(parts.next().unwrap_or_default()) else {
+                    continue;
+                };
+                let cpu_percent = parts.next().and_then(parse_percent);
+                let (memory_used_bytes, memory_limit_bytes) = parts
+                    .next()
+                    .and_then(parse_mem_usage)
+                    .unwrap_or((None, None));
+                let pids = parts.next().and_then(|value| value.parse::<u64>().ok());
+                (
+                    name,
+                    cpu_percent,
+                    memory_used_bytes,
+                    memory_limit_bytes,
+                    pids,
+                )
+            };
         by_name.insert(
             name,
             json!({
@@ -355,18 +461,22 @@ fn detect_portainer(containers: &[Value]) -> Value {
         if !looks_like_portainer(name, image) {
             continue;
         }
+        let ports = container.get("ports").and_then(Value::as_str).unwrap_or("");
+        let panel_port = portainer_ui_port(ports);
         return json!({
             "detected": true,
             "container": name,
             "running": container.get("running").and_then(Value::as_bool).unwrap_or(false),
-            "panel_port": container.get("panel_port").cloned().unwrap_or(Value::Null)
+            "panel_port": panel_port,
+            "panel_scheme": panel_port.map(|port| if port == 9443 { "https" } else { "http" })
         });
     }
     json!({
         "detected": false,
         "container": Value::Null,
         "running": false,
-        "panel_port": Value::Null
+        "panel_port": Value::Null,
+        "panel_scheme": Value::Null
     })
 }
 
@@ -382,7 +492,8 @@ fn looks_like_homarr(name: &str, image: &str) -> bool {
     name.contains("homarr") || image.contains("homarr")
 }
 
-fn published_tcp_port(ports: &str) -> Value {
+fn published_tcp_ports(ports: &str) -> Vec<u16> {
+    let mut found = Vec::new();
     for part in ports.split(',') {
         let part = part.trim();
         let Some((_, rest)) = part.split_once(':') else {
@@ -391,12 +502,32 @@ fn published_tcp_port(ports: &str) -> Value {
         let host = rest.split("->").next().unwrap_or(rest);
         let host = host.split('/').next().unwrap_or(host);
         if let Ok(port) = host.parse::<u16>() {
-            if port >= 1 {
-                return json!(port);
+            if port >= 1 && !found.contains(&port) {
+                found.push(port);
             }
         }
     }
-    Value::Null
+    found
+}
+
+fn portainer_ui_port(ports: &str) -> Option<u16> {
+    let published = published_tcp_ports(ports);
+    for preferred in [9443_u16, 9000, 9001] {
+        if published.contains(&preferred) {
+            return Some(preferred);
+        }
+    }
+    published
+        .into_iter()
+        .find(|port| !matches!(port, 8000 | 2375 | 2376 | 2377))
+}
+
+fn published_tcp_port(ports: &str) -> Value {
+    published_tcp_ports(ports)
+        .into_iter()
+        .next()
+        .map(Value::from)
+        .unwrap_or(Value::Null)
 }
 
 fn parse_percent(value: &str) -> Option<f64> {
@@ -604,6 +735,28 @@ mod tests {
         let portainer = detect_portainer(&containers);
         assert_eq!(portainer["detected"], true);
         assert_eq!(portainer["panel_port"], 9000);
+        assert_eq!(portainer["panel_scheme"], "http");
+    }
+
+    #[test]
+    fn parse_docker_tsv_and_skips_invalid_names() {
+        let stdout = "plex\tplexinc/pms-docker\trunning\tUp 2 hours\t0.0.0.0:32400->32400/tcp\nbad;name\timage\trunning\tUp\t\nportainer\tportainer/portainer-ce\trunning\tUp\t0.0.0.0:8000->8000/tcp, 0.0.0.0:9443->9443/tcp\n";
+        let containers = parse_docker_listing(stdout);
+        assert_eq!(containers.len(), 2);
+        assert_eq!(containers[0]["name"], "plex");
+        assert_eq!(containers[1]["name"], "portainer");
+        let portainer = detect_portainer(&containers);
+        assert_eq!(portainer["panel_port"], 9443);
+        assert_eq!(portainer["panel_scheme"], "https");
+    }
+
+    #[test]
+    fn portainer_prefers_ui_port_over_edge_agent() {
+        assert_eq!(
+            portainer_ui_port("0.0.0.0:8000->8000/tcp, 0.0.0.0:9000->9000/tcp"),
+            Some(9000)
+        );
+        assert_eq!(portainer_ui_port("0.0.0.0:8000->8000/tcp"), None);
     }
 
     #[test]

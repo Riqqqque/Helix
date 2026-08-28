@@ -139,10 +139,10 @@ code {
 .helix-brand {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 11px;
   height: 34px;
-  padding: 0;
+  padding: 0 4px;
   font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.19em;
@@ -219,11 +219,13 @@ img.helix-mark::after {
   grid-template-columns: minmax(0, 1fr);
 }
 .dashboard-shell.is-home-focus .sidebar,
-.dashboard-shell.is-home-focus .mobile-nav {
+.dashboard-shell.is-home-focus .mobile-nav,
+.dashboard-shell.is-home-focus .topbar {
   display: none;
 }
 .dashboard-shell.is-home-focus .dashboard-workspace {
   grid-column: 1;
+  grid-template-rows: minmax(0, 1fr);
 }
 .dashboard-shell.is-home-focus .page--home {
   width: min(1680px, 100%);
@@ -342,6 +344,7 @@ img.helix-mark::after {
 .sidebar-foot {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 9px;
   height: 36px;
   margin-top: 16px;
@@ -351,6 +354,16 @@ img.helix-mark::after {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+.sidebar-help {
+  color: var(--quiet);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  text-transform: none;
+}
+.sidebar-help:hover {
+  color: var(--text);
 }
 .status-dot {
   display: inline-block;
@@ -433,6 +446,48 @@ img.helix-mark::after {
   color: var(--text);
   border-color: var(--line-strong);
   background: var(--surface-hover);
+}
+.notifications-wrap {
+  position: relative;
+}
+.notifications-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(360px, calc(100vw - 32px));
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: 0 12px 40px color-mix(in srgb, #000 28%, transparent);
+}
+.notifications-menu h2 {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.notifications-menu > p,
+.notifications-item span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.notifications-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: start;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.notifications-item strong {
+  display: block;
+  font-size: 12px;
+}
+.notifications-item a {
+  color: var(--accent);
+  font-size: 11px;
+  text-decoration: none;
 }
 .icon-button:disabled,
 .button:disabled {
@@ -801,7 +856,7 @@ main {
 .capacity-alert {
   min-height: 62px;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 13px;
   margin-bottom: 18px;
@@ -814,13 +869,31 @@ main {
 .capacity-alert > svg:first-child {
   color: var(--danger);
 }
-.capacity-alert > svg:last-child {
+.capacity-alert__go {
   color: var(--quiet);
 }
-.capacity-alert div {
+.capacity-alert__dismiss {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--quiet);
+  cursor: pointer;
+}
+.capacity-alert__dismiss:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.capacity-alert a {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  color: inherit;
+  text-decoration: none;
 }
 .capacity-alert strong {
   font-size: 12px;
@@ -1028,18 +1101,33 @@ main {
 }
 
 .storage-space-intro {
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
   margin-bottom: 12px;
-  padding: 17px 18px;
+  padding: 17px 44px 17px 18px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
   border-radius: 6px;
   background:
     linear-gradient(115deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 58%),
     var(--surface);
+}
+.storage-space-intro__dismiss {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--quiet);
+  cursor: pointer;
 }
 .storage-space-intro > div:first-child {
   min-width: 0;
@@ -1831,6 +1919,14 @@ main {
   color: #ffdedc;
   background: radial-gradient(circle at 55% 35%, #9f3a39, #33171d 58%, #130d12);
 }
+.game-create-icon--valheim {
+  color: #e8f0e4;
+  background: radial-gradient(circle at 40% 30%, #6f8f63, #243428 62%, #121812);
+}
+.game-create-icon--terraria {
+  color: #fff4d6;
+  background: radial-gradient(circle at 60% 28%, #d4a04a, #5a3a1c 55%, #1a120c);
+}
 .game-mark {
   display: block;
   flex: 0 0 auto;
@@ -2537,7 +2633,15 @@ textarea:focus {
   font-size: 9px;
   line-height: 1.55;
 }
-.dialog-intro + .form-grid { padding: 16px 20px; }
+.dialog .form-grid {
+  padding-left: 20px;
+  padding-right: 20px;
+  padding-bottom: 4px;
+}
+.dialog .check-row {
+  margin: 0;
+  padding: 14px 24px 16px;
+}
 .creation-network-result {
   width: 100%;
   display: grid;
@@ -2937,7 +3041,7 @@ textarea:focus {
   display: flex;
   align-items: flex-start;
   gap: 11px;
-  padding: 13px 0;
+  padding: 13px 20px;
   border-bottom: 1px solid var(--line);
   cursor: pointer;
 }
@@ -5241,6 +5345,62 @@ textarea:focus {
   color: var(--muted);
   font-size: 9px;
 }
+.helix-data-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--line);
+}
+.helix-data-summary > div {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--bg);
+}
+.helix-data-summary strong { font: 650 1.05rem/1.2 var(--font-display); }
+.helix-data-summary span,
+.helix-data-empty,
+.helix-data-list small,
+.helix-data-trash p,
+.helix-data-notices small { color: var(--muted); font-size: 11px; }
+.helix-data-empty { margin: 0 0 12px; }
+.helix-data-list,
+.helix-data-trash ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.helix-data-list li,
+.helix-data-trash li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--line);
+}
+.helix-data-trash li { grid-template-columns: minmax(0, 1fr) auto; }
+.helix-data-list li > div,
+.helix-data-trash li span { min-width: 0; display: grid; gap: 2px; }
+.helix-data-list strong,
+.helix-data-trash strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.helix-data-trash,
+.helix-data-notices {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.helix-data-notices {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+@media (max-width: 720px) {
+  .helix-data-list li { grid-template-columns: auto minmax(0, 1fr); }
+  .helix-data-notices { grid-template-columns: 1fr; }
+}
 .settings-select-row {
   min-height: 78px;
   display: flex;
@@ -7083,12 +7243,21 @@ textarea:focus {
 .docker-panel {
   display: grid;
   gap: 12px;
+  min-width: 0;
+  padding: 12px 16px 14px;
 }
 .docker-panel__head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  padding: 0;
+}
+.docker-panel__head > div:first-child,
+.docker-empty,
+.docker-panel__error {
+  min-width: 0;
+  padding-left: 0;
 }
 .docker-panel__head strong {
   display: block;

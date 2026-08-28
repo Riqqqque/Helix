@@ -63,12 +63,16 @@ describe('Servers route', () => {
       <NewServerChooser
         onMinecraft={() => undefined}
         onVRising={() => undefined}
+        onValheim={() => undefined}
+        onTerraria={() => undefined}
         onClose={() => undefined}
       />,
     );
 
     expect(markup).toContain('Minecraft: Java Edition');
     expect(markup).toContain('V Rising');
+    expect(markup).toContain('Valheim');
+    expect(markup).toContain('Terraria');
     expect(markup).toContain('Click to install');
     expect(markup).toContain('game-mark--minecraft');
     expect(markup).toContain('game-mark--vrising');
@@ -104,13 +108,13 @@ describe('Servers route', () => {
 
   it('offers every currently installable native Minecraft software', () => {
     expect(minecraftCreateSoftwareOptions.map((option) => option.id)).toEqual([
-      'paper', 'purpur', 'folia', 'leaves', 'fabric', 'vanilla',
+      'paper', 'purpur', 'folia', 'leaves', 'fabric', 'neoforge', 'forge', 'quilt', 'pufferfish', 'vanilla',
     ]);
   });
 
   it('only exposes the marketplace for supported Helix-native software', () => {
-    expect(['Paper', 'Purpur', 'Folia', 'Leaves', 'Fabric'].every(supportsMarketplaceSoftware)).toBe(true);
-    expect(['Vanilla', 'NeoForge', 'AMP'].some(supportsMarketplaceSoftware)).toBe(false);
+    expect(['Paper', 'Purpur', 'Folia', 'Leaves', 'Fabric', 'Forge', 'NeoForge', 'Quilt', 'Pufferfish'].every(supportsMarketplaceSoftware)).toBe(true);
+    expect(['Vanilla', 'AMP'].some(supportsMarketplaceSoftware)).toBe(false);
   });
 
   it('keeps server inventory visible while disabling mutations for view-only users', () => {

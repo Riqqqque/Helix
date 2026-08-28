@@ -1,6 +1,7 @@
 import { ApiError, expectArray, expectNumber, expectRecord, expectString, requestJson } from './api';
 
-export type ModpackCompatibilityStatus = 'fabric_candidate' | 'incompatible';
+export type ModpackCompatibilityStatus = 'fabric_candidate' | 'forge_candidate' | 'neoforge_candidate' | 'quilt_candidate' | 'incompatible';
+export type ModpackProvider = 'modrinth' | 'curseforge';
 
 export interface ModpackSearchResult {
   projectId: string;
@@ -82,6 +83,7 @@ export interface ModpackSelection {
   minecraftVersions: string[];
   filename: string;
   fileSize: number;
+  provider: ModpackProvider;
 }
 
 export interface MinecraftModpackCreateInput {
@@ -94,6 +96,7 @@ export interface MinecraftModpackCreateInput {
   eula_accepted: boolean;
   project_id: string;
   version_id: string;
+  provider?: ModpackProvider;
 }
 
 export interface MinecraftModpackCreateResult {
@@ -128,15 +131,21 @@ function stringList(record: Record<string, unknown>, key: string, context: strin
   });
 }
 
-function modrinthWebUrl(record: Record<string, unknown>, key: string, context: string): string {
+function packWebUrl(record: Record<string, unknown>, key: string, context: string): string {
   const value = expectString(record, key, context);
-  if (!/^https:\/\/modrinth\.com\/modpack\/[A-Za-z0-9_-]+$/u.test(value)) throw new ApiError(`${context} returned an invalid Modrinth URL.`);
-  return value;
+  if (
+    /^https:\/\/modrinth\.com\/modpack\/[A-Za-z0-9_-]+$/u.test(value)
+    || /^https:\/\/www\.curseforge\.com\/minecraft\/modpacks\/[A-Za-z0-9_-]+$/u.test(value)
+  ) {
+    return value;
+  }
+  throw new ApiError(`${context} returned an invalid pack URL.`);
 }
 
 function marketplaceImageUrl(record: Record<string, unknown>, key: string, context: string): string | null {
   const value = optionalString(record, key, context);
   if (value === null) return null;
+  if (/^https:\/\/(?:(?:www|[a-z0-9-]+)\.)?(?:curseforge|forgecdn)\.com\//iu.test(value)) return value;
   const parsed = new URL(value, 'http://helix.invalid');
   const keys = Array.from(parsed.searchParams.keys());
   const path = parsed.searchParams.get('path');
@@ -159,8 +168,8 @@ function marketplaceImageUrl(record: Record<string, unknown>, key: string, conte
 function parseSearchResult(value: unknown): ModpackSearchResult {
   const item = expectRecord(value, 'Modrinth search result');
   const compatibilityStatus = expectString(item, 'compatibility_status', 'Modrinth search result');
-  if (compatibilityStatus !== 'fabric_candidate' && compatibilityStatus !== 'incompatible') {
-    throw new ApiError('Modrinth search returned an invalid compatibility state.');
+  if (compatibilityStatus !== 'fabric_candidate' && compatibilityStatus !== 'forge_candidate' && compatibilityStatus !== 'neoforge_candidate' && compatibilityStatus !== 'quilt_candidate' && compatibilityStatus !== 'incompatible') {
+    throw new ApiError('Modpack search returned an invalid compatibility state.');
   }
   return {
     projectId: expectString(item, 'project_id', 'Modrinth search result'),
@@ -177,7 +186,7 @@ function parseSearchResult(value: unknown): ModpackSearchResult {
     compatibilityStatus,
     compatibilityReason: expectString(item, 'compatibility_reason', 'Modrinth search result'),
     requiresVersionCheck: boolean(item, 'requires_version_check', 'Modrinth search result'),
-    webUrl: modrinthWebUrl(item, 'web_url', 'Modrinth search result'),
+    webUrl: packWebUrl(item, 'web_url', 'Modrinth search result'),
     iconUrl: marketplaceImageUrl(item, 'icon_url', 'Modrinth search result'),
   };
 }
@@ -242,7 +251,7 @@ export function parseModpackProjectDetail(value: unknown): ModpackProjectDetail 
       serverSide: expectString(project, 'server_side', 'Modrinth modpack project'),
       clientSide: optionalString(project, 'client_side', 'Modrinth modpack project'),
       loaders: stringList(project, 'loaders', 'Modrinth modpack project', 32),
-      webUrl: modrinthWebUrl(project, 'web_url', 'Modrinth modpack project'),
+      webUrl: packWebUrl(project, 'web_url', 'Modrinth modpack project'),
       iconUrl: marketplaceImageUrl(project, 'icon_url', 'Modrinth modpack project'),
     },
     versions: expectArray(root, 'versions', 'Modrinth modpack project', 200).map(parseModpackVersion),
@@ -254,6 +263,21 @@ export function parseModpackProjectDetail(value: unknown): ModpackProjectDetail 
 export function parseMinecraftModpackCreateResult(value: unknown): MinecraftModpackCreateResult {
   const root = expectRecord(value, 'modpack creation result');
   const modpack = expectRecord(root.modpack, 'modpack creation result');
+  const provider = optionalString(modpack, 'provider', 'modpack creation result');
+  if (provider === 'curseforge') {
+    return {
+      projectTitle: optionalString(modpack, 'project_title', 'modpack creation result') ?? 'CurseForge pack',
+      versionNumber: optionalString(modpack, 'version_id', 'modpack creation result') ?? expectString(modpack, 'source_filename', 'modpack creation result'),
+      minecraftVersion: expectString(modpack, 'minecraft_version', 'modpack creation result'),
+      fabricLoaderVersion: optionalString(modpack, 'loader', 'modpack creation result') ?? 'unknown',
+      installedServerFiles: expectNumber(modpack, 'installed_server_files', 'modpack creation result', { integer: true, minimum: 0 }),
+      excludedServerOptionalFiles: 0,
+      excludedClientOnlyFiles: 0,
+      serverSafeSubset: true,
+      fullPackParity: false,
+      modrinthDeclaredSha512Verified: false,
+    };
+  }
   const parsed = {
     projectTitle: expectString(modpack, 'project_title', 'modpack creation result'),
     versionNumber: expectString(modpack, 'version_number', 'modpack creation result'),
@@ -270,8 +294,8 @@ export function parseMinecraftModpackCreateResult(value: unknown): MinecraftModp
   return parsed;
 }
 
-export function searchModpacks(query: string, offset: number, limit: number, csrfToken: string, signal?: AbortSignal): Promise<ModpackSearchPage> {
-  const params = new URLSearchParams({ query, offset: String(offset), limit: String(limit) });
+export function searchModpacks(query: string, offset: number, limit: number, csrfToken: string, signal?: AbortSignal, provider: ModpackProvider = 'modrinth'): Promise<ModpackSearchPage> {
+  const params = new URLSearchParams({ query, offset: String(offset), limit: String(limit), provider });
   return requestJson(`/api/v1/servers/minecraft/modpacks/search?${params}`, parseModpackSearchPage, { csrfToken, signal, timeoutMs: 25_000 });
 }
 

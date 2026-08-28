@@ -10,6 +10,8 @@ import { ApiError } from "./api";
 import {
   createMinecraftServer,
   createVRisingServer,
+  createValheimServer,
+  createTerrariaServer,
   getDirectory,
   getMinecraftVersions,
   getTrashedNativeServers,
@@ -18,6 +20,8 @@ import {
   getServerLogs,
   getMinecraftPortPolicy,
   getVRisingPortPolicy,
+  getValheimPortPolicy,
+  getTerrariaPortPolicy,
   restoreServerBackup,
   restoreTrashedServerBackup,
   restoreTrashedNativeServer,
@@ -26,6 +30,8 @@ import {
   sendConsoleCommand,
   saveMinecraftPortPolicy,
   saveVRisingPortPolicy,
+  saveValheimPortPolicy,
+  saveTerrariaPortPolicy,
   setNativeStartOnBoot,
   setServerNetworkExposure,
   trashServerBackup,
@@ -137,6 +143,26 @@ export const minecraftCreateSoftwareOptions: ReadonlyArray<{
     id: "fabric",
     name: "Fabric",
     detail: "Lightweight mod loader for Fabric server mods",
+  },
+  {
+    id: "neoforge",
+    name: "NeoForge",
+    detail: "Modern Forge-family loader for current modpacks",
+  },
+  {
+    id: "forge",
+    name: "Forge",
+    detail: "Classic mod loader for 1.17+ dedicated servers",
+  },
+  {
+    id: "quilt",
+    name: "Quilt",
+    detail: "Fabric-derived loader with its own mod ecosystem",
+  },
+  {
+    id: "pufferfish",
+    name: "Pufferfish",
+    detail: "Paper-based performance fork from the Pufferfish CI",
   },
   { id: "vanilla", name: "Vanilla", detail: "Official Mojang server" },
 ];
@@ -686,7 +712,7 @@ function PortPoolDialog({
   onSessionExpired: () => void;
 }) {
   const [policy, setPolicy] = useState<GamePortPolicy | null>(null);
-  const [game, setGame] = useState<"minecraft" | "vrising">("minecraft");
+  const [game, setGame] = useState<"minecraft" | "vrising" | "valheim" | "terraria">("minecraft");
   const [ranges, setRanges] = useState("");
   const [ports, setPorts] = useState("");
   const [autoForward, setAutoForward] = useState(false);
@@ -696,7 +722,14 @@ function PortPoolDialog({
     const controller = new AbortController();
     setPolicy(null);
     setError(null);
-    const load = game === "minecraft" ? getMinecraftPortPolicy : getVRisingPortPolicy;
+    const load =
+      game === "minecraft"
+        ? getMinecraftPortPolicy
+        : game === "vrising"
+          ? getVRisingPortPolicy
+          : game === "valheim"
+            ? getValheimPortPolicy
+            : getTerrariaPortPolicy;
     void load(csrfToken, controller.signal)
       .then((value) => {
         setPolicy(value);
@@ -721,7 +754,14 @@ function PortPoolDialog({
       if (parsedRanges.length === 0 && parsedPorts.length === 0) {
         throw new Error("Add at least one port or port range.");
       }
-      const savePolicy = game === "minecraft" ? saveMinecraftPortPolicy : saveVRisingPortPolicy;
+      const savePolicy =
+        game === "minecraft"
+          ? saveMinecraftPortPolicy
+          : game === "vrising"
+            ? saveVRisingPortPolicy
+            : game === "valheim"
+              ? saveValheimPortPolicy
+              : saveTerrariaPortPolicy;
       const saved = await savePolicy(
         {
           ranges: parsedRanges,
@@ -765,6 +805,26 @@ function PortPoolDialog({
         >
           V Rising
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={game === "valheim"}
+          class={game === "valheim" ? "is-active" : ""}
+          disabled={busy}
+          onClick={() => setGame("valheim")}
+        >
+          Valheim
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={game === "terraria"}
+          class={game === "terraria" ? "is-active" : ""}
+          disabled={busy}
+          onClick={() => setGame("terraria")}
+        >
+          Terraria
+        </button>
       </div>
       <div class="port-pool-summary">
         <div><strong>{policy?.capacity ?? "—"}</strong><span>configured</span></div>
@@ -781,7 +841,15 @@ function PortPoolDialog({
             value={ranges}
             disabled={busy || policy === null}
             onInput={(event) => setRanges(event.currentTarget.value)}
-            placeholder={game === "vrising" ? "9876-9910" : "25565-25599, 25610-25619"}
+            placeholder={
+              game === "vrising"
+                ? "9876-9910"
+                : game === "valheim"
+                  ? "2456-2490"
+                  : game === "terraria"
+                    ? "7777-7796"
+                    : "25565-25599, 25610-25619"
+            }
           />
           <small>Separate ranges with commas or spaces. A single port is accepted here too.</small>
         </label>
@@ -791,7 +859,15 @@ function PortPoolDialog({
             value={ports}
             disabled={busy || policy === null}
             onInput={(event) => setPorts(event.currentTarget.value)}
-            placeholder={game === "vrising" ? "9876, 9878" : "25565, 25570, 25580"}
+            placeholder={
+              game === "vrising"
+                ? "9876, 9878"
+                : game === "valheim"
+                  ? "2456, 2459"
+                  : game === "terraria"
+                    ? "7777, 7778"
+                    : "25565, 25570, 25580"
+            }
           />
           <small>Optional. These are tried before the ranges; duplicates are removed safely.</small>
         </label>
@@ -816,7 +892,9 @@ function PortPoolDialog({
         </label>
       ) : (
         <p class="dialog-intro">
-          V Rising stays private in this Helix release. Helix does not offer UPnP for its UDP game and query ports.
+          {game === "terraria"
+            ? "Terraria public setup is chosen per server, not from this pool. Automatic create still stays on the private LAN unless you flip that later."
+            : `${game === "valheim" ? "Valheim" : "V Rising"} stays private in this Helix release. Helix does not offer UPnP for its UDP game ports.`}
         </p>
       )}
       <InlineError message={error} />
@@ -961,9 +1039,11 @@ function CreateServerDialog({
     onSessionExpired,
   });
 
-  const fabricReady =
+  const loaderReady =
     readiness?.availability === "ready" &&
-    readiness.supportedMinecraftSoftware.includes("fabric");
+    ["fabric", "forge", "neoforge", "quilt"].some((id) =>
+      readiness.supportedMinecraftSoftware.includes(id as InstallableMinecraftSoftware),
+    );
   const softwareReady =
     readiness?.availability === "ready" &&
     readiness.supportedMinecraftSoftware.some((id) => id === software);
@@ -979,7 +1059,7 @@ function CreateServerDialog({
   const canReview =
     name.trim().length >= 2 &&
     (mode === "modpack"
-      ? fabricReady && modpack !== null
+      ? loaderReady && modpack !== null
       : mode === "custom"
         ? customInputReady
         : softwareReady && version.trim().length > 0) &&
@@ -1031,10 +1111,8 @@ function CreateServerDialog({
     setError(null);
     try {
       if (mode === "modpack") {
-        if (modpack === null || !fabricReady)
-          throw new Error(
-            "Choose an installable Fabric modpack release first.",
-          );
+        if (modpack === null || !loaderReady)
+          throw new Error("Choose an installable modpack release first.");
         const result = await createMinecraftModpack(
           {
             name: name.trim(),
@@ -1046,6 +1124,7 @@ function CreateServerDialog({
             eula_accepted: eula,
             project_id: modpack.projectId,
             version_id: modpack.versionId,
+            provider: modpack.provider,
           },
           csrfToken,
         );
@@ -1495,15 +1574,15 @@ function CreateServerDialog({
             ) : (
               <>
                 <div
-                  class={`software-readiness-note field--wide ${fabricReady ? "" : "is-error"}`}
+                  class={`software-readiness-note field--wide ${loaderReady ? "" : "is-error"}`}
                   role="status"
                 >
                   <span>
                     {readiness === null
                       ? "Checking Fabric lifecycle readiness…"
-                      : fabricReady
-                        ? "Fabric modpack creation is ready on this host."
-                        : "Fabric is not lifecycle-ready on this host, so modpack creation is disabled."}
+                      : loaderReady
+                        ? "Modpack creation is ready on this host."
+                        : "No installable mod loader is ready on this host, so modpack creation is disabled."}
                   </span>
                 </div>
                 <ModpackRoute
@@ -2193,7 +2272,7 @@ const nativeServerTabs: ReadonlyArray<{
 ];
 
 export function supportsMarketplaceSoftware(software: string): boolean {
-  return /^(?:paper|purpur|folia|leaves|fabric)$/iu.test(software.trim());
+  return /^(?:paper|purpur|folia|leaves|fabric|forge|neoforge|quilt|pufferfish)$/iu.test(software.trim());
 }
 
 function ConsolePanel({
@@ -2387,12 +2466,12 @@ function ConsolePanel({
             <InfoTip text="Helix stores this server’s console output on the host. Closing the dashboard does not stop collection or erase earlier boots." />
           </h2>
           <p>
-            {detail.kind === "vrising"
-              ? "V Rising has no RCON command channel. This view follows the dedicated-server log."
+            {detail.kind !== "minecraft"
+              ? "This dedicated server has no RCON command channel. This view follows the container log."
               : "Commands use a loopback-only channel; output stays available across dashboard sessions."}
           </p>
         </div>
-        {detail.kind !== "vrising" && (
+        {detail.kind === "minecraft" && (
         <div class="quick-commands">
           <button
             type="button"
@@ -2566,14 +2645,13 @@ function ConsolePanel({
           </small>
         </span>
       </div>
-      {detail.kind === "vrising" ? (
+      {detail.kind !== "minecraft" ? (
         <p class="console-retention-note">
           <Icon name="info" size={14} />
           <span>
-            <strong>No command console for V Rising.</strong>
+            <strong>No command console for this game.</strong>
             <small>
-              Stunlock does not expose a supported RCON path here. Use Files for
-              ServerHostSettings.json and restart the server after edits.
+              Use Files for host settings and restart the server after edits.
             </small>
           </span>
         </p>
@@ -3887,7 +3965,8 @@ function NativeServerPage({
     );
   const online = detail.status === "online";
   const containerUp = detail.status === "online" || detail.status === "starting";
-  const isVRising = detail.kind === "vrising";
+  const isReadyMarkerGame = detail.kind !== "minecraft";
+  const usesUdpJoin = detail.kind === "vrising" || detail.kind === "valheim";
   const tailscaleAddress =
     hostInventory?.interfaces
       .find((item) => item.name.toLowerCase().startsWith("tailscale"))
@@ -3901,7 +3980,7 @@ function NativeServerPage({
     (item) => item.instanceId === detail.id && item.protocol === "udp",
   );
   const joinAddress =
-    (isVRising ? udpEvidence?.privateJoinAddress : tcpEvidence?.privateJoinAddress) ??
+    (usesUdpJoin ? udpEvidence?.privateJoinAddress : tcpEvidence?.privateJoinAddress) ??
     (network?.addresses.privateIpv4 === null || network?.addresses.privateIpv4 === undefined
       ? "Private address unavailable"
       : formatJoinAddress(network.addresses.privateIpv4, detail.gamePort));
@@ -3950,11 +4029,11 @@ function NativeServerPage({
           <ServerArtwork server={server} size="detail" />
           <div>
             <span class="eyebrow">
-              HELIX MANAGED · {isVRising ? "V RISING" : detail.software.toUpperCase()}
+              HELIX MANAGED · {detail.software.toUpperCase()}
             </span>
             <h1>{detail.name}</h1>
             <p>
-              {isVRising
+              {isReadyMarkerGame
                 ? `${joinAddress} · isolated runtime · UDP ${detail.gamePort}${detail.queryPort === null ? "" : ` / ${detail.queryPort}`}`
                 : `${joinAddress} · ${detail.minecraftVersion} · Java ${detail.javaVersion}`}
             </p>
@@ -4098,7 +4177,7 @@ function NativeServerPage({
                 </article>
                 <article>
                   <span>PUBLIC INTERNET</span>
-                  {isVRising ? (
+                  {isReadyMarkerGame ? (
                     <>
                       <strong>Private only</strong>
                       <small>
@@ -4153,7 +4232,7 @@ function NativeServerPage({
               </div>
               <InlineError message={networkError} />
               <div class="join-evidence">
-                {!isVRising && (
+                {!isReadyMarkerGame && (
                 <span
                   class={`state-label state-label--${tcpDiagnostic.tone}`}
                 >
@@ -4167,7 +4246,7 @@ function NativeServerPage({
                 </span>
                 <small>
                   {networkError ??
-                    (isVRising
+                    (usesUdpJoin
                       ? udpDiagnostic.detail
                       : `${tcpDiagnostic.detail} ${udpDiagnostic.detail}`)}
                 </small>
@@ -4178,7 +4257,7 @@ function NativeServerPage({
                 <div class="section-title">
                   <div>
                     <h2>Right now</h2>
-                    <p>{isVRising ? "Live dedicated-server runtime" : "Live Minecraft and runtime state"}</p>
+                    <p>{isReadyMarkerGame ? "Live dedicated-server runtime" : "Live Minecraft and runtime state"}</p>
                   </div>
                   <span
                     class={`state-label state-label--${online ? "good" : "idle"}`}
@@ -4190,7 +4269,7 @@ function NativeServerPage({
                   <div>
                     <span>Players</span>
                     <strong>
-                      {isVRising
+                      {isReadyMarkerGame
                         ? `— / ${detail.maxPlayers}`
                         : `${detail.playersOnline} / ${detail.maxPlayers}`}
                     </strong>
@@ -4218,7 +4297,7 @@ function NativeServerPage({
                 <div class="section-title">
                   <div>
                     <h2>Build</h2>
-                    <p>{isVRising ? "Isolated Helix runtime" : "Resolved and pinned by Helix"}</p>
+                    <p>{isReadyMarkerGame ? "Isolated Helix runtime" : "Resolved and pinned by Helix"}</p>
                   </div>
                 </div>
                 <dl>
@@ -4226,7 +4305,7 @@ function NativeServerPage({
                     <dt>Software</dt>
                     <dd>{detail.software}</dd>
                   </div>
-                  {isVRising ? (
+                  {isReadyMarkerGame ? (
                     <>
                       <div>
                         <dt>Steam app</dt>
@@ -4790,12 +4869,12 @@ function ImportedServerPage({
   );
 }
 
-type ServerFilter = "all" | "helix" | "minecraft" | "vrising" | "imported";
+type ServerFilter = "all" | "helix" | "minecraft" | "vrising" | "valheim" | "terraria" | "imported";
 
 function isMinecraftServer(server: ManagedServer): boolean {
-  if (server.kind === "vrising") return false;
+  if (server.kind === "vrising" || server.kind === "valheim" || server.kind === "terraria") return false;
   if (server.kind === "minecraft") return true;
-  return /minecraft|paper|purpur|folia|leaves|fabric|forge|spigot|bukkit|velocity|sponge/iu.test(
+  return /minecraft|paper|purpur|folia|leaves|fabric|forge|spigot|bukkit|velocity|sponge|quilt|pufferfish|neoforge/iu.test(
     `${server.software} ${server.version}`,
   );
 }
@@ -4804,13 +4883,25 @@ function isVRisingServer(server: ManagedServer): boolean {
   return server.kind === "vrising" || /v\s*rising/iu.test(server.software);
 }
 
+function isValheimServer(server: ManagedServer): boolean {
+  return server.kind === "valheim" || /valheim/iu.test(server.software);
+}
+
+function isTerrariaServer(server: ManagedServer): boolean {
+  return server.kind === "terraria" || /terraria|tmodloader/iu.test(server.software);
+}
+
 export function NewServerChooser({
   onMinecraft,
   onVRising,
+  onValheim,
+  onTerraria,
   onClose,
 }: {
   onMinecraft: () => void;
   onVRising: () => void;
+  onValheim: () => void;
+  onTerraria: () => void;
   onClose: () => void;
 }) {
   return (
@@ -4823,8 +4914,7 @@ export function NewServerChooser({
           <span>
             <strong>Minecraft: Java Edition</strong>
             <small>
-              Paper, Purpur, Folia, Fabric, Vanilla, and supported Modrinth
-              server packs.
+              Paper, Fabric, Forge, NeoForge, Quilt, Pufferfish, and Modrinth or CurseForge packs.
             </small>
           </span>
           <em>Ready</em>
@@ -4836,7 +4926,31 @@ export function NewServerChooser({
           <span>
             <strong>V Rising</strong>
             <small>
-              One click installs the dedicated server in an isolated container. Uninstalling the last V Rising server removes that runtime too.
+              One click installs the dedicated server in an isolated container.
+            </small>
+          </span>
+          <em>Click to install</em>
+        </button>
+        <button type="button" onClick={onValheim}>
+          <span class="game-create-icon game-create-icon--valheim">
+            <GameMark game="valheim" size={32} />
+          </span>
+          <span>
+            <strong>Valheim</strong>
+            <small>
+              Linux dedicated server plus optional BepInEx plugins from Files.
+            </small>
+          </span>
+          <em>Click to install</em>
+        </button>
+        <button type="button" onClick={onTerraria}>
+          <span class="game-create-icon game-create-icon--terraria">
+            <GameMark game="terraria" size={32} />
+          </span>
+          <span>
+            <strong>Terraria</strong>
+            <small>
+              Vanilla or tModLoader. Drop `.tmod` files in mods and restart.
             </small>
           </span>
           <em>Click to install</em>
@@ -4846,7 +4960,7 @@ export function NewServerChooser({
         <Icon name="info" size={16} />
         <span>
           <strong>Nothing is installed on the host OS</strong>
-          Helix downloads the official dedicated server into a private container, including everything that server needs to run. Backups, start-on-boot, files, and logs work the same way as Minecraft. There is no command console because V Rising does not offer one.
+          Helix downloads each dedicated server into a private container. Backups, start-on-boot, files, and logs work the same way across games.
         </span>
       </div>
       <div class="dialog-actions">
@@ -5016,6 +5130,200 @@ function CreateVRisingDialog({
   );
 }
 
+function CreateValheimDialog({
+  csrfToken,
+  onClose,
+  onComplete,
+  onSessionExpired,
+}: {
+  csrfToken: string;
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [memory, setMemory] = useState(4096);
+  const [players, setPlayers] = useState(10);
+  const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
+  const [gamePort, setGamePort] = useState(2456);
+  const [startOnBoot, setStartOnBoot] = useState(true);
+  const [job, setJob] = useState<BrokerJob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const polling = useJobPolling({
+    job,
+    csrfToken,
+    onJob: setJob,
+    onComplete: async () => {
+      await onComplete();
+      onClose();
+    },
+    onSessionExpired,
+  });
+
+  const submit = async (): Promise<void> => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await createValheimServer({
+        name: name.trim(),
+        memory_mb: memory,
+        max_players: players,
+        start_on_boot: startOnBoot,
+        ...(portMode === "manual" ? { game_port: gamePort } : {}),
+      }, csrfToken);
+      setJob({
+        id: result.jobId,
+        kind: "valheim_create",
+        status: "queued",
+        stage: "Queued",
+        progressPercent: 0,
+        createdAtUnixMs: Date.now(),
+        updatedAtUnixMs: Date.now(),
+        result: null,
+        error: null,
+      });
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const busy = submitting || (job !== null && job.status !== "failed");
+  return (
+    <Dialog title="New Valheim server" onClose={onClose} wide>
+      {job !== null && job.status !== "failed" ? (
+        <div class="create-progress">
+          <strong>{job.stage}</strong>
+          <ProgressBar value={job.progressPercent} />
+          <small>First create downloads the dedicated server through SteamCMD. Drop a BepInEx pack zip at `/data/bepinex-pack.zip` and plugin DLLs in `/data/plugins` for one-restart mods.</small>
+          {polling.error !== null && <InlineError message={polling.error} />}
+        </div>
+      ) : (
+        <>
+          <p class="dialog-intro">Helix installs the Linux dedicated server in an isolated container. Public UPnP is not offered yet. Mods: put a BepInEx pack zip and plugin files in the server Files tab, then restart.</p>
+          <div class="form-grid">
+            <label class="field field--wide"><span>Server name</span><input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} /></label>
+            <label class="field"><span>Memory (MiB)</span><input type="number" min={1024} max={16384} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} /></label>
+            <label class="field"><span>Player limit</span><input type="number" min={1} max={64} value={players} disabled={busy} onInput={(event) => setPlayers(Number(event.currentTarget.value))} /></label>
+            <label class="field field--wide"><span>Ports</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Valheim pool</option><option value="manual">Specific UDP game port (uses +1 and +2 too)</option></select></label>
+            {portMode === "manual" && <label class="field"><span>Game UDP</span><input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} /></label>}
+          </div>
+          <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>Start with the host</strong><small>Docker restart policy unless-stopped.</small></span></label>
+          <InlineError message={error ?? (job?.error ?? null)} />
+          <div class="dialog-actions">
+            <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
+            <button class="button button--primary" type="button" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>{submitting ? "Starting…" : "Create Valheim server"}</button>
+          </div>
+        </>
+      )}
+    </Dialog>
+  );
+}
+
+function CreateTerrariaDialog({
+  csrfToken,
+  onClose,
+  onComplete,
+  onSessionExpired,
+}: {
+  csrfToken: string;
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [software, setSoftware] = useState<"vanilla" | "tmodloader">("vanilla");
+  const [memory, setMemory] = useState(2048);
+  const [players, setPlayers] = useState(8);
+  const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
+  const [gamePort, setGamePort] = useState(7777);
+  const [startOnBoot, setStartOnBoot] = useState(true);
+  const [job, setJob] = useState<BrokerJob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const polling = useJobPolling({
+    job,
+    csrfToken,
+    onJob: setJob,
+    onComplete: async () => {
+      await onComplete();
+      onClose();
+    },
+    onSessionExpired,
+  });
+
+  const submit = async (): Promise<void> => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await createTerrariaServer({
+        name: name.trim(),
+        software,
+        memory_mb: memory,
+        max_players: players,
+        start_on_boot: startOnBoot,
+        network_exposure: "private",
+        ...(portMode === "manual" ? { game_port: gamePort } : {}),
+      }, csrfToken);
+      setJob({
+        id: result.jobId,
+        kind: "terraria_create",
+        status: "queued",
+        stage: "Queued",
+        progressPercent: 0,
+        createdAtUnixMs: Date.now(),
+        updatedAtUnixMs: Date.now(),
+        result: null,
+        error: null,
+      });
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const busy = submitting || (job !== null && job.status !== "failed");
+  return (
+    <Dialog title="New Terraria server" onClose={onClose} wide>
+      {job !== null && job.status !== "failed" ? (
+        <div class="create-progress">
+          <strong>{job.stage}</strong>
+          <ProgressBar value={job.progressPercent} />
+          <small>Vanilla downloads the publisher zip. tModLoader uses SteamCMD. Drop `.tmod` files in `/data/mods` and restart for one-click mods.</small>
+          {polling.error !== null && <InlineError message={polling.error} />}
+        </div>
+      ) : (
+        <>
+          <p class="dialog-intro">Vanilla uses the official dedicated zip. tModLoader installs from Steam. Edit `serverconfig.txt` in Files. Place `.tmod` files in the mods folder, then restart.</p>
+          <div class="form-grid">
+            <label class="field field--wide"><span>Server name</span><input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} /></label>
+            <label class="field field--wide"><span>Software</span><select value={software} disabled={busy} onChange={(event) => setSoftware(event.currentTarget.value as "vanilla" | "tmodloader")}><option value="vanilla">Vanilla dedicated</option><option value="tmodloader">tModLoader</option></select></label>
+            <label class="field"><span>Memory (MiB)</span><input type="number" min={512} max={8192} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} /></label>
+            <label class="field"><span>Player limit</span><input type="number" min={1} max={255} value={players} disabled={busy} onInput={(event) => setPlayers(Number(event.currentTarget.value))} /></label>
+            <label class="field field--wide"><span>Port</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Terraria pool</option><option value="manual">Specific TCP port</option></select></label>
+            {portMode === "manual" && <label class="field"><span>Game TCP</span><input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} /></label>}
+          </div>
+          <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>Start with the host</strong><small>Docker restart policy unless-stopped.</small></span></label>
+          <InlineError message={error ?? (job?.error ?? null)} />
+          <div class="dialog-actions">
+            <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
+            <button class="button button--primary" type="button" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>{submitting ? "Starting…" : "Create Terraria server"}</button>
+          </div>
+        </>
+      )}
+    </Dialog>
+  );
+}
+
 export function ServersPage({
   data,
   csrfToken,
@@ -5034,6 +5342,8 @@ export function ServersPage({
   const [chooseGame, setChooseGame] = useState(false);
   const [creatingMinecraft, setCreatingMinecraft] = useState(false);
   const [creatingVRising, setCreatingVRising] = useState(false);
+  const [creatingValheim, setCreatingValheim] = useState(false);
+  const [creatingTerraria, setCreatingTerraria] = useState(false);
   const [portPoolOpen, setPortPoolOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<ServerFilter>("all");
@@ -5131,7 +5441,11 @@ export function ServersPage({
           ? isMinecraftServer(server)
           : filter === "vrising"
             ? isVRisingServer(server)
-            : server.manager !== "helix"),
+            : filter === "valheim"
+              ? isValheimServer(server)
+              : filter === "terraria"
+                ? isTerrariaServer(server)
+                : server.manager !== "helix"),
   );
   const online = servers.filter((server) => server.status === "online").length;
   const helixManaged = servers.filter(
@@ -5225,6 +5539,20 @@ export function ServersPage({
           V Rising <span>{servers.filter(isVRisingServer).length}</span>
         </button>
         <button
+          class={filter === "valheim" ? "is-active" : ""}
+          type="button"
+          onClick={() => setFilter("valheim")}
+        >
+          Valheim <span>{servers.filter(isValheimServer).length}</span>
+        </button>
+        <button
+          class={filter === "terraria" ? "is-active" : ""}
+          type="button"
+          onClick={() => setFilter("terraria")}
+        >
+          Terraria <span>{servers.filter(isTerrariaServer).length}</span>
+        </button>
+        <button
           class={filter === "imported" ? "is-active" : ""}
           type="button"
           onClick={() => setFilter("imported")}
@@ -5266,7 +5594,7 @@ export function ServersPage({
             </strong>
             <span>
               {servers.length === 0
-                ? "Create a native Minecraft or V Rising server with New server. Helix Native stays separate from any AMP import."
+                ? "Create a native Minecraft, V Rising, Valheim, or Terraria server with New server. Helix Native stays separate from any AMP import."
                 : "Create a native server, change the filter, or restore a hidden connection below."}
             </span>
           </div>
@@ -5341,6 +5669,14 @@ export function ServersPage({
             setChooseGame(false);
             setCreatingVRising(true);
           }}
+          onValheim={() => {
+            setChooseGame(false);
+            setCreatingValheim(true);
+          }}
+          onTerraria={() => {
+            setChooseGame(false);
+            setCreatingTerraria(true);
+          }}
         />
       )}
       {creatingMinecraft && (
@@ -5360,6 +5696,28 @@ export function ServersPage({
         <CreateVRisingDialog
           csrfToken={csrfToken}
           onClose={() => setCreatingVRising(false)}
+          onComplete={async () => {
+            await data.refresh();
+            await loadRemoved();
+          }}
+          onSessionExpired={onSessionExpired}
+        />
+      )}
+      {creatingValheim && (
+        <CreateValheimDialog
+          csrfToken={csrfToken}
+          onClose={() => setCreatingValheim(false)}
+          onComplete={async () => {
+            await data.refresh();
+            await loadRemoved();
+          }}
+          onSessionExpired={onSessionExpired}
+        />
+      )}
+      {creatingTerraria && (
+        <CreateTerrariaDialog
+          csrfToken={csrfToken}
+          onClose={() => setCreatingTerraria(false)}
           onComplete={async () => {
             await data.refresh();
             await loadRemoved();

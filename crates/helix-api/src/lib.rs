@@ -24,8 +24,9 @@ use helix_privd::{
     BrokerClient, BrokerClientError, BrokerRequest, DockerContainerActionKind, FileUploadPurpose,
     FileUploadTarget, FirewallRuleSpec, GameKind, GamePortPolicySpec, HookServiceAction,
     MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware,
-    PackageUpdateCandidate, RecurringRebootSpec, ServerAction, ServerNetworkExposure,
-    StorageAnalysisMode, VRisingCreateSpec,
+    ModpackProvider, PackageUpdateCandidate, RecurringRebootSpec, ServerAction,
+    ServerNetworkExposure, StorageAnalysisMode, TerrariaCreateSpec, VRisingCreateSpec,
+    ValheimCreateSpec,
 };
 use helix_state::{
     DatabaseSet, ServerAppearanceUpdateOutcome, UserPreferencesRecord, UserPreferencesUpdateInput,
@@ -330,6 +331,14 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             "/servers/port-policies/vrising",
             get(vrising_port_policy).put(set_vrising_port_policy),
         )
+        .route(
+            "/servers/port-policies/valheim",
+            get(valheim_port_policy).put(set_valheim_port_policy),
+        )
+        .route(
+            "/servers/port-policies/terraria",
+            get(terraria_port_policy).put(set_terraria_port_policy),
+        )
         .route("/servers/minecraft", post(create_minecraft))
         .route("/servers/minecraft/versions", get(list_minecraft_versions))
         .route(
@@ -345,6 +354,8 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             post(create_minecraft_modpack).layer(DefaultBodyLimit::max(API_BODY_LIMIT_BYTES)),
         )
         .route("/servers/vrising", post(create_vrising))
+        .route("/servers/valheim", post(create_valheim))
+        .route("/servers/terraria", post(create_terraria))
         .route("/servers/{instance_id}", get(server_detail))
         .route(
             "/servers/{instance_id}/appearance",
@@ -1373,6 +1384,8 @@ struct MinecraftModpackSearchQuery {
     offset: u32,
     #[serde(default = "default_marketplace_search_limit")]
     limit: u8,
+    #[serde(default)]
+    provider: ModpackProvider,
 }
 
 const fn default_marketplace_search_limit() -> u8 {
@@ -1602,6 +1615,66 @@ async fn set_vrising_port_policy(
     if policy.game != GameKind::VRising {
         return Err(ApiError::BrokerRejected(
             "the policy game must match V Rising".to_owned(),
+        ));
+    }
+    broker_json(&state, BrokerRequest::SetGamePortPolicy { policy }).await
+}
+
+async fn valheim_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    broker_json(
+        &state,
+        BrokerRequest::GamePortPolicy {
+            game: GameKind::Valheim,
+        },
+    )
+    .await
+}
+
+async fn set_valheim_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<GamePortPolicySpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(policy) = body.map_err(auth::map_json_rejection)?;
+    if policy.game != GameKind::Valheim {
+        return Err(ApiError::BrokerRejected(
+            "the policy game must match Valheim".to_owned(),
+        ));
+    }
+    broker_json(&state, BrokerRequest::SetGamePortPolicy { policy }).await
+}
+
+async fn terraria_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    broker_json(
+        &state,
+        BrokerRequest::GamePortPolicy {
+            game: GameKind::Terraria,
+        },
+    )
+    .await
+}
+
+async fn set_terraria_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<GamePortPolicySpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(policy) = body.map_err(auth::map_json_rejection)?;
+    if policy.game != GameKind::Terraria {
+        return Err(ApiError::BrokerRejected(
+            "the policy game must match Terraria".to_owned(),
         ));
     }
     broker_json(&state, BrokerRequest::SetGamePortPolicy { policy }).await
@@ -2632,6 +2705,33 @@ async fn create_vrising(
     broker_json(&state, BrokerRequest::CreateVRising { spec }).await
 }
 
+async fn create_valheim(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<ValheimCreateSpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(spec) = body.map_err(auth::map_json_rejection)?;
+    spec.validate().map_err(ApiError::BrokerRejected)?;
+    broker_json(&state, BrokerRequest::CreateValheim { spec }).await
+}
+
+async fn create_terraria(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<TerrariaCreateSpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(spec) = body.map_err(auth::map_json_rejection)?;
+    spec.validate().map_err(ApiError::BrokerRejected)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
+    broker_json(&state, BrokerRequest::CreateTerraria { spec }).await
+}
+
 async fn set_native_start_on_boot(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -2663,6 +2763,7 @@ async fn minecraft_modpack_search(
             query: query.query,
             offset: query.offset,
             limit: query.limit,
+            provider: query.provider,
         },
     )
     .await

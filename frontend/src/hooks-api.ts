@@ -1,7 +1,7 @@
 import { ApiError, expectArray, expectNumber, expectRecord, expectString, requestJson } from './api';
 
 export type HookServiceAction = 'start' | 'stop' | 'restart' | 'enable' | 'disable';
-export type HookKind = 'systemd' | 'api' | 'docker';
+export type HookKind = 'systemd' | 'api' | 'docker' | 'panel';
 
 export interface HookConnection {
   id: string;
@@ -15,6 +15,7 @@ export interface HookConnection {
   controllable: boolean;
   actions: HookServiceAction[];
   panelPort: number | null;
+  panelScheme: 'http' | 'https' | null;
   instanceCount: number | null;
   unverifiedInstanceCount: number | null;
   memoryUsedBytes: number | null;
@@ -108,7 +109,7 @@ function parseHook(value: unknown): HookConnection {
   const id = expectString(item, 'id', context);
   const kind = expectString(item, 'kind', context);
   const unit = nullableText(item, 'unit', context);
-  if (!HOOK_ID.test(id) || (kind !== 'systemd' && kind !== 'api' && kind !== 'docker') || (unit !== null && !UNIT.test(unit))) {
+  if (!HOOK_ID.test(id) || (kind !== 'systemd' && kind !== 'api' && kind !== 'docker' && kind !== 'panel') || (unit !== null && !UNIT.test(unit))) {
     throw new ApiError('Hook connection returned an invalid identity.');
   }
   const actions = expectArray(item, 'actions', context, 5).map(parseAction);
@@ -127,6 +128,7 @@ function parseHook(value: unknown): HookConnection {
     controllable: bool(item, 'controllable', context),
     actions,
     panelPort,
+    panelScheme: item.panel_scheme === 'https' || item.panel_scheme === 'http' ? item.panel_scheme : null,
     instanceCount: nullableCount(item, 'instance_count', 100_000),
     unverifiedInstanceCount: nullableCount(item, 'unverified_instance_count', 100_000),
     memoryUsedBytes: item.memory_used_bytes === null || item.memory_used_bytes === undefined
@@ -144,7 +146,7 @@ export function parseHookInventory(value: unknown): HookInventory {
   if (expectNumber(root, 'schema_version', 'hook inventory', { integer: true, minimum: 1, maximum: 1 }) !== 1) {
     throw new ApiError('Hook inventory returned an unsupported schema.');
   }
-  const hooks = expectArray(root, 'hooks', 'hook inventory', 33).map(parseHook);
+  const hooks = expectArray(root, 'hooks', 'hook inventory', 48).map(parseHook);
   if (new Set(hooks.map((hook) => hook.id)).size !== hooks.length) {
     throw new ApiError('Hook inventory returned duplicate hooks.');
   }

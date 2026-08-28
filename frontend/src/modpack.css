@@ -1,5 +1,22 @@
 .modpack-browser,
 .modpack-detail { display: grid; gap: 14px; grid-column: 1 / -1; min-width: 0; }
+.modpack-provider-tabs {
+  display: flex;
+  gap: 6px;
+}
+.modpack-provider-tabs button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.modpack-provider-tabs button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  color: var(--text);
+}
 .modpack-browser__intro,
 .modpack-detail__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .modpack-browser__intro > div { display: grid; gap: 3px; }
@@ -19,20 +36,27 @@
 .modpack-search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 10px; }
 
 .modpack-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
-.modpack-grid article { display: grid; grid-template-rows: auto auto minmax(48px, 1fr) auto auto; gap: 8px; min-width: 0; padding: 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.modpack-grid article { display: grid; grid-template-rows: auto auto minmax(48px, 1fr) auto auto; gap: 8px; min-width: 0; overflow: hidden; padding: 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .modpack-grid article.is-incompatible { background: color-mix(in srgb, var(--surface) 90%, var(--warning) 3%); }
 .modpack-grid header,
-.modpack-grid footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.modpack-mark { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-strong); color: var(--accent); }
+.modpack-grid footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.modpack-mark { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-strong); color: var(--accent); }
 .modpack-mark img { width: 100%; height: 100%; display: block; border-radius: inherit; object-fit: cover; }
-.modpack-status { padding: 3px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--quiet); font-size: 7px; text-transform: uppercase; }
-.modpack-status.is-fabric_candidate { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); color: var(--accent); }
-.modpack-grid h3 { overflow: hidden; margin: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.modpack-status { max-width: 52%; overflow: hidden; padding: 3px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--quiet); font-size: 7px; text-transform: uppercase; text-overflow: ellipsis; white-space: nowrap; }
+.modpack-status.is-fabric_candidate,
+.modpack-status.is-forge_candidate,
+.modpack-status.is-neoforge_candidate,
+.modpack-status.is-quilt_candidate,
+.modpack-status.is-server_candidate { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); color: var(--accent); }
+.modpack-grid h3 { overflow: hidden; margin: 0; min-width: 0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.modpack-grid article > div { min-width: 0; }
 .modpack-grid article > div > span,
 .modpack-grid p,
 .modpack-grid article > small { color: var(--quiet); font-size: 8px; line-height: 1.45; }
-.modpack-grid p { margin: 0; color: var(--muted); }
-.modpack-grid footer span { color: var(--quiet); font-size: 8px; }
+.modpack-grid p { display: -webkit-box; overflow: hidden; margin: 0; color: var(--muted); -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.modpack-grid article > small { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.modpack-grid footer span { min-width: 0; overflow: hidden; color: var(--quiet); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.modpack-grid footer button { flex: 0 0 auto; }
 .modpack-grid footer button,
 .modpack-pagination button,
 .modpack-state button { border: 0; background: transparent; color: var(--accent); font-size: 8px; cursor: pointer; }
@@ -49,8 +73,8 @@
 .modpack-detail__identity > div { display: grid; gap: 4px; }
 .modpack-detail__identity small,
 .modpack-detail__identity span { color: var(--quiet); font-size: 8px; }
-.modpack-detail__identity h3 { margin: 0; font-size: 15px; }
-.modpack-detail__identity p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.modpack-detail__identity h3 { overflow: hidden; margin: 0; font-size: 15px; text-overflow: ellipsis; }
+.modpack-detail__identity p { display: -webkit-box; overflow: hidden; margin: 0; color: var(--muted); font-size: 9px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
 .modpack-compatibility-note { display: grid; grid-template-columns: auto 1fr; gap: 9px; padding: 10px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); color: var(--accent); }
 .modpack-compatibility-note span { display: grid; gap: 3px; color: var(--muted); font-size: 8px; line-height: 1.45; }
 .modpack-compatibility-note strong { color: var(--text); }

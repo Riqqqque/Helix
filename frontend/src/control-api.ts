@@ -139,7 +139,7 @@ export interface TextFile {
 
 export type ServerStatus = 'online' | 'offline' | 'manager_stopped';
 
-export type ServerKind = 'minecraft' | 'vrising' | 'imported';
+export type ServerKind = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'imported';
 
 export interface ManagedServer {
   id: string;
@@ -168,7 +168,7 @@ export interface ManagedServer {
 }
 
 export type ServerAction = 'start' | 'stop' | 'restart' | 'kill' | 'update' | 'backup';
-export type MinecraftSoftware = 'custom' | 'vanilla' | 'paper' | 'purpur' | 'folia' | 'leaves' | 'fabric' | 'neoforge';
+export type MinecraftSoftware = 'custom' | 'vanilla' | 'paper' | 'purpur' | 'folia' | 'leaves' | 'fabric' | 'neoforge' | 'forge' | 'quilt' | 'pufferfish';
 
 export interface MinecraftCreateInput {
   name: string;
@@ -266,7 +266,7 @@ export interface NativeServerDetail {
   id: string;
   name: string;
   instanceName: string;
-  kind: 'minecraft' | 'vrising';
+  kind: 'minecraft' | 'vrising' | 'valheim' | 'terraria';
   software: string;
   minecraftVersion: string;
   build: string;
@@ -597,10 +597,14 @@ export function parseServers(value: unknown): ManagedServer[] {
     const software = expectString(item, 'software', 'server');
     const rawKind = typeof item.kind === 'string' ? item.kind : '';
     const kind: ServerKind =
-      rawKind === 'vrising' || rawKind === 'minecraft' || rawKind === 'imported'
+      rawKind === 'vrising' || rawKind === 'minecraft' || rawKind === 'imported' || rawKind === 'valheim' || rawKind === 'terraria'
         ? rawKind
         : /v\s*rising/iu.test(software)
           ? 'vrising'
+          : /valheim/iu.test(software)
+            ? 'valheim'
+            : /terraria|tmodloader/iu.test(software)
+              ? 'terraria'
           : manager === 'helix'
             ? 'minecraft'
             : 'imported';
@@ -731,7 +735,10 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
   if (!['online', 'starting', 'stopped'].includes(status)) throw new Error('Invalid native server status');
   const software = expectString(root, 'software', 'server detail');
   const rawKind = typeof root.kind === 'string' ? root.kind : '';
-  const kind = rawKind === 'vrising' || software.toLowerCase() === 'v rising' ? 'vrising' as const : 'minecraft' as const;
+  const kind =
+    rawKind === 'vrising' || rawKind === 'valheim' || rawKind === 'terraria'
+      ? rawKind
+      : 'minecraft';
   const containerState = expectRecord(root.container_state, 'container state');
   const consoleHistory = expectRecord(root.console_history, 'console history configuration');
   const consoleHistoryScope = expectString(consoleHistory, 'scope', 'console history configuration');
@@ -761,7 +768,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     cpuPercent: number(root, 'cpu_percent'),
     memoryUsedMb: number(root, 'memory_used_mb'),
     containerState,
-    settings: kind === 'vrising' && (root.settings === null || root.settings === undefined)
+    settings: kind !== 'minecraft' && (root.settings === null || root.settings === undefined)
       ? null
       : parseMinecraftSettings(root.settings),
     consoleHistory: {
@@ -1020,7 +1027,7 @@ export function createMinecraftServer(input: MinecraftCreateInput, csrfToken: st
   }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
 }
 
-function parseGamePortPolicy(expectedGame: 'minecraft' | 'vrising') {
+function parseGamePortPolicy(expectedGame: 'minecraft' | 'vrising' | 'valheim' | 'terraria') {
   return (value: unknown): GamePortPolicy => {
     const root = expectRecord(value, 'game port policy');
     if (number(root, 'schema_version') !== 1) throw new ApiError('Unsupported game port policy schema.');
@@ -1103,6 +1110,74 @@ export function createVRisingServer(input: {
     const root = expectRecord(value, 'V Rising job');
     return { jobId: expectString(root, 'job_id', 'V Rising job') };
   }, { method: 'POST', body: { ...input, network_exposure: 'private' }, csrfToken, timeoutMs: 20_000 });
+}
+
+export function createValheimServer(input: {
+  name: string;
+  memory_mb: number;
+  max_players: number;
+  game_port?: number;
+  start_on_boot: boolean;
+}, csrfToken: string): Promise<{ jobId: string }> {
+  return requestJson('/api/v1/servers/valheim', (value) => {
+    const root = expectRecord(value, 'Valheim job');
+    return { jobId: expectString(root, 'job_id', 'Valheim job') };
+  }, { method: 'POST', body: { ...input, network_exposure: 'private' }, csrfToken, timeoutMs: 20_000 });
+}
+
+export function createTerrariaServer(input: {
+  name: string;
+  software: 'vanilla' | 'tmodloader';
+  memory_mb: number;
+  max_players: number;
+  game_port?: number;
+  start_on_boot: boolean;
+  network_exposure: 'private' | 'public';
+}, csrfToken: string): Promise<{ jobId: string }> {
+  return requestJson('/api/v1/servers/terraria', (value) => {
+    const root = expectRecord(value, 'Terraria job');
+    return { jobId: expectString(root, 'job_id', 'Terraria job') };
+  }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
+}
+
+export function getValheimPortPolicy(csrfToken: string, signal?: AbortSignal): Promise<GamePortPolicy> {
+  return requestJson('/api/v1/servers/port-policies/valheim', parseGamePortPolicy('valheim'), { csrfToken, signal });
+}
+
+export function getTerrariaPortPolicy(csrfToken: string, signal?: AbortSignal): Promise<GamePortPolicy> {
+  return requestJson('/api/v1/servers/port-policies/terraria', parseGamePortPolicy('terraria'), { csrfToken, signal });
+}
+
+export function saveValheimPortPolicy(
+  input: Pick<GamePortPolicy, 'ranges' | 'ports' | 'autoForwardOnCreate'>,
+  csrfToken: string,
+): Promise<GamePortPolicy> {
+  return requestJson('/api/v1/servers/port-policies/valheim', parseGamePortPolicy('valheim'), {
+    method: 'PUT',
+    body: {
+      game: 'valheim',
+      ranges: input.ranges,
+      ports: input.ports,
+      auto_forward_on_create: false,
+    },
+    csrfToken,
+  });
+}
+
+export function saveTerrariaPortPolicy(
+  input: Pick<GamePortPolicy, 'ranges' | 'ports' | 'autoForwardOnCreate'>,
+  csrfToken: string,
+): Promise<GamePortPolicy> {
+  return requestJson('/api/v1/servers/port-policies/terraria', parseGamePortPolicy('terraria'), {
+    method: 'PUT',
+    body: {
+      game: 'terraria',
+      ranges: input.ranges,
+      ports: input.ports,
+      auto_forward_on_create: input.autoForwardOnCreate,
+    },
+    csrfToken,
+  });
 }
 
 export function setNativeStartOnBoot(id: string, enabled: boolean, csrfToken: string): Promise<{ enabled: boolean }> {

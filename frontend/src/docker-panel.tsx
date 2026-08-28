@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'preact/hooks';
 import { ApiError } from './api';
 import {
   getDockerInventory,
+  portainerHref,
   runDockerContainerAction,
   type DockerContainer,
   type DockerContainerAction,
@@ -13,11 +14,6 @@ import { Dialog } from './modal';
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : 'Helix could not complete that Docker action.';
-}
-
-function portainerHref(inventory: DockerInventory | null): string | null {
-  if (typeof window === 'undefined' || inventory === null || inventory.portainer.panelPort === null) return null;
-  return `http://${window.location.hostname}:${inventory.portainer.panelPort}/`;
 }
 
 export function DockerInventoryPanel({
@@ -74,7 +70,9 @@ export function DockerInventoryPanel({
   };
 
   const containers = inventory?.containers ?? [];
-  const href = portainerHref(inventory);
+  const href = typeof window === 'undefined'
+    ? null
+    : portainerHref(window.location.hostname, inventory?.portainer.panelPort ?? null, inventory?.portainer.panelScheme ?? null);
   return (
     <div class={`docker-panel${compact ? ' docker-panel--compact' : ''}`}>
       <div class="docker-panel__head">
