@@ -40,6 +40,7 @@ const kinds = new Set<HomeWidgetKind>(['clock', 'host', 'servers', 'storage', 'w
 const sizes = new Set<HomeWidgetSize>(['compact', 'wide', 'full']);
 const heights = new Set<HomeWidgetHeight>(['short', 'medium', 'tall']);
 const MAX_HOME_TEMPLATES = 8;
+export const MAX_WIDGETS_PER_HOME = 32;
 const MAX_TOTAL_WIDGETS = 64;
 const MAX_NOTE_PAGES = 8;
 const MAX_NOTE_TEXT_CHARACTERS = 7_000;
@@ -124,7 +125,7 @@ export function normalizeHomeWidgets(value: unknown): HomeWidget[] {
   const ids = new Set<string>();
   const widgets: HomeWidget[] = [];
 
-  for (const item of value.slice(0, 32)) {
+  for (const item of value.slice(0, MAX_WIDGETS_PER_HOME)) {
     if (typeof item !== 'object' || item === null) continue;
     const record = item as Record<string, unknown>;
     const id = cleanText(record.id, 96);
@@ -379,7 +380,7 @@ export function importHomeTemplate(value: string): HomeTemplate {
     typeof rawTemplate.id !== 'string' || !/^[a-zA-Z0-9_-]{1,96}$/u.test(rawTemplate.id) ||
     typeof rawTemplate.name !== 'string' || rawTemplate.name.trim().length === 0 ||
     typeof rawTemplate.accent !== 'string' || !/^#[0-9a-fA-F]{6}$/u.test(rawTemplate.accent) ||
-    !Array.isArray(rawTemplate.widgets) || rawTemplate.widgets.length > 32
+    !Array.isArray(rawTemplate.widgets) || rawTemplate.widgets.length > MAX_WIDGETS_PER_HOME
   ) throw new Error('Template file is invalid.');
   const templates = normalizeHomeTemplates([record.template], []);
   const template = templates[0];
@@ -389,4 +390,28 @@ export function importHomeTemplate(value: string): HomeTemplate {
     id: `home-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
     widgets: template.widgets.map((widget, index) => ({ ...widget, id: `${widget.kind}-${Date.now().toString(36)}-${index.toString(36)}` })),
   };
+}
+
+export function homeShortcutUrls(widgets: readonly HomeWidget[]): Set<string> {
+  const urls = new Set<string>();
+  for (const widget of widgets) {
+    if (widget.kind === 'shortcut' && widget.url.length > 0) urls.add(widget.url);
+  }
+  return urls;
+}
+
+export function newHomarrShortcuts<T extends { url: string }>(
+  chosen: readonly T[],
+  existingWidgets: readonly HomeWidget[],
+): T[] {
+  const existing = homeShortcutUrls(existingWidgets);
+  const seen = new Set<string>();
+  const selected: T[] = [];
+  for (const item of chosen) {
+    if (item.url.length === 0 || existing.has(item.url) || seen.has(item.url)) continue;
+    if (existingWidgets.length + selected.length >= MAX_WIDGETS_PER_HOME) break;
+    seen.add(item.url);
+    selected.push(item);
+  }
+  return selected;
 }

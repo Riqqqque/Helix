@@ -3,8 +3,11 @@ import type { HostInventory, ManagedServer } from './control-api';
 import { calculatePercent, formatBytes, formatDuration, formatPercent } from './format';
 import {
   exportHomeTemplate,
+  homeShortcutUrls,
   importHomeTemplate,
+  MAX_WIDGETS_PER_HOME,
   moveHomeWidget,
+  newHomarrShortcuts,
   nextHomeWidgetHeight,
   nextHomeWidgetSize,
   normalizeShortcutUrl,
@@ -479,6 +482,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
   const [homarrSelected, setHomarrSelected] = useState<string[]>([]);
   const activeTemplate = templates.find((template) => template.id === activeHomeId) ?? templates[0]!;
   const widgets = activeTemplate.widgets;
+  const existingShortcutUrls = homeShortcutUrls(widgets);
 
   const changeWidgets = (update: (current: HomeWidget[]) => HomeWidget[]): void => {
     onHomeChange(
@@ -502,15 +506,38 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
   const loadHomarr = async (): Promise<void> => {
     setHomarrLoading(true);
     setHomarrError(null);
+    setHomarrNote(null);
     setHomarrOpen(true);
     try {
       const catalog = await getHomarrCatalog(csrfToken);
-      setHomarrNote(catalog.note);
+      const already = existingShortcutUrls;
+      const importable = catalog.widgets.filter((widget) => !already.has(widget.url));
       setHomarrWidgets(catalog.widgets);
-      setHomarrSelected(catalog.widgets.map((widget) => widget.url));
-      if (catalog.availability !== 'ready') setHomarrError(catalog.note);
+      setHomarrSelected(importable.map((widget) => widget.url));
+      if (catalog.availability !== 'ready') {
+        setHomarrError(catalog.note);
+        setHomarrNote(null);
+        return;
+      }
+      if (catalog.widgets.length === 0) {
+        setHomarrNote(catalog.note ?? 'Homarr has no http(s) shortcuts Helix can import.');
+        return;
+      }
+      if (widgets.length >= MAX_WIDGETS_PER_HOME) {
+        setHomarrNote(catalog.note);
+        setHomarrError('This Home is full. Remove a widget before importing Homarr shortcuts.');
+        setHomarrSelected([]);
+        return;
+      }
+      if (importable.length === 0) {
+        setHomarrNote('Those Homarr apps are already shortcuts on this Home.');
+        return;
+      }
+      setHomarrNote(catalog.note ?? 'Choose which Homarr links to place on this Home. Relative icons, notes, and Homarr-only apps stay in Homarr.');
     } catch (reason) {
       setHomarrWidgets([]);
+      setHomarrSelected([]);
+      setHomarrNote(null);
       setHomarrError(reason instanceof Error ? reason.message : 'Helix could not read Homarr.');
     } finally {
       setHomarrLoading(false);
@@ -518,10 +545,11 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
   };
   const importHomarr = (): void => {
     const chosen = homarrWidgets.filter((widget) => homarrSelected.includes(widget.url));
-    if (chosen.length === 0) return;
+    const additions = newHomarrShortcuts(chosen, widgets);
+    if (additions.length === 0) return;
     changeWidgets((current) => [
       ...current,
-      ...chosen.map((widget, index) => ({
+      ...additions.map((widget, index) => ({
         id: `shortcut-homarr-${Date.now().toString(36)}-${index.toString(36)}`,
         kind: 'shortcut' as const,
         size: 'compact' as const,
@@ -552,21 +580,37 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
       {templatesOpen && <HomeTemplatePanel templates={templates} activeHomeId={activeTemplate.id} onHomeChange={onHomeChange} onClose={() => setTemplatesOpen(false)} />}
       {editing && homarrOpen && (
         <section class="home-widget-catalog" aria-label="Import Homarr shortcuts">
-          <div><strong>Homarr shortcuts</strong><span>{homarrNote ?? 'Choose which Homarr links to place on this Home. Notes and Homarr-only apps stay in Homarr.'}</span></div>
-          {homarrError !== null && <p class="home-homarr-error" role="status">{homarrError}</p>}
-          {homarrWidgets.map((widget) => (
-            <label key={widget.url} class="home-homarr-item">
-              <input
-                type="checkbox"
-                checked={homarrSelected.includes(widget.url)}
-                onChange={() => setHomarrSelected((current) => current.includes(widget.url) ? current.filter((item) => item !== widget.url) : [...current, widget.url])}
-              />
-              <span><strong>{widget.name}</strong><small>{widget.url}</small></span>
-            </label>
-          ))}
+          <div>
+            <strong>Homarr shortcuts</strong>
+            <span>
+              {homarrLoading
+                ? 'Reading Homarr apps from this host…'
+                : homarrWidgets.length > 0
+                  ? (homarrNote ?? 'Choose which Homarr links to place on this Home. Relative icons, notes, and Homarr-only apps stay in Homarr.')
+                  : (homarrError ?? homarrNote ?? 'Choose which Homarr links to place on this Home.')}
+            </span>
+          </div>
+          {homarrError !== null && homarrWidgets.length > 0 && <p class="home-homarr-error" role="status">{homarrError}</p>}
+          {homarrWidgets.map((widget) => {
+            const alreadyOnHome = existingShortcutUrls.has(widget.url);
+            return (
+              <label key={widget.url} class={`home-homarr-item${alreadyOnHome ? ' is-present' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={homarrSelected.includes(widget.url)}
+                  disabled={alreadyOnHome}
+                  onChange={() => setHomarrSelected((current) => current.includes(widget.url) ? current.filter((item) => item !== widget.url) : [...current, widget.url])}
+                />
+                <span>
+                  <strong>{widget.name}</strong>
+                  <small>{alreadyOnHome ? 'Already on this Home' : widget.url}</small>
+                </span>
+              </label>
+            );
+          })}
           <div class="home-homarr-actions">
             <button class="button button--quiet" type="button" onClick={() => setHomarrOpen(false)}>Cancel</button>
-            <button class="button button--primary" type="button" disabled={homarrSelected.length === 0} onClick={importHomarr}>Add {homarrSelected.length} shortcut{homarrSelected.length === 1 ? '' : 's'}</button>
+            <button class="button button--primary" type="button" disabled={homarrSelected.length === 0 || homarrLoading} onClick={importHomarr}>Add {homarrSelected.length} shortcut{homarrSelected.length === 1 ? '' : 's'}</button>
           </div>
         </section>
       )}

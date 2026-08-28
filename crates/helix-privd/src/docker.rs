@@ -1,13 +1,31 @@
 use crate::host::{HostControl, parse_human_bytes, require_success};
 use helix_privd::DockerContainerActionKind;
+use rusqlite::{Connection, OpenFlags, backup::Backup};
 use serde_json::{Map, Value, json};
 use std::{
+    collections::HashSet,
     fs,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const MAX_CONTAINERS: usize = 64;
 const MAX_HOMARR_WIDGETS: usize = 64;
+const MAX_HOMARR_DB_BYTES: u64 = 32 * 1024 * 1024;
+
+#[derive(Debug)]
+enum HomarrSqliteRead {
+    Absent,
+    Found(Vec<Value>),
+    Unreadable(String),
+}
+
+struct HomarrCatalogScan {
+    widgets: Vec<Value>,
+    source: Option<&'static str>,
+    sqlite_note: Option<String>,
+    sqlite_empty: bool,
+}
 
 impl HostControl {
     pub fn docker_inventory(&self) -> Result<Value, String> {
@@ -168,33 +186,28 @@ impl HostControl {
         )?;
         let mounts: Value = serde_json::from_str(inspect.stdout.trim())
             .map_err(|_| "Docker returned invalid Homarr mount metadata".to_owned())?;
-        let mut widgets = Vec::new();
-        let mut source = None;
-        if let Some(items) = mounts.as_array() {
-            for mount in items.iter().take(16) {
-                if mount.get("Type").and_then(Value::as_str) != Some("bind") {
-                    continue;
-                }
-                let Some(path) = mount.get("Source").and_then(Value::as_str) else {
-                    continue;
-                };
-                if !safe_host_path(path) {
-                    continue;
-                }
-                if let Some(found) = read_homarr_widgets(path) {
-                    source = Some(path.to_owned());
-                    widgets = found;
-                    break;
-                }
-            }
+        let scan = scan_homarr_mounts(&mounts);
+        if scan.sqlite_empty {
+            return Ok(json!({
+                "schema_version": 1,
+                "availability": "ready",
+                "container": name,
+                "source": scan.source,
+                "widgets": [],
+                "note": "Homarr's app catalog has no http(s) addresses Helix can import. Relative links and Homarr-only apps stay in Homarr.",
+                "collected_at_unix_ms": now_unix_ms()
+            }));
         }
-        if widgets.is_empty() {
+        if scan.widgets.is_empty() {
+            let note = scan.sqlite_note.unwrap_or_else(|| {
+                "Homarr is running, but Helix could not read its app list from the container mounts. Helix looks for classic Homarr JSON and for a SQLite app catalog.".to_owned()
+            });
             return Ok(json!({
                 "schema_version": 1,
                 "availability": "unsupported_format",
                 "container": name,
                 "widgets": [],
-                "note": "Homarr is running, but Helix could not read a classic JSON widget list from its bind mounts. Newer Homarr stores apps in a database Helix does not parse. Export shortcuts from Homarr or add them by hand.",
+                "note": note,
                 "collected_at_unix_ms": now_unix_ms()
             }));
         }
@@ -202,9 +215,9 @@ impl HostControl {
             "schema_version": 1,
             "availability": "ready",
             "container": name,
-            "source": source,
-            "widgets": widgets,
-            "note": "Helix imported Homarr shortcuts that already have an http(s) address. Notes and Homarr-only apps stay in Homarr.",
+            "source": scan.source,
+            "widgets": scan.widgets,
+            "note": "Choose which Homarr links to place on this Home. Relative icons, notes, and Homarr-only apps stay in Homarr.",
             "collected_at_unix_ms": now_unix_ms()
         }))
     }
@@ -598,6 +611,68 @@ fn safe_host_path(path: &str) -> bool {
         && !path.ends_with("/..")
 }
 
+fn homarr_mount_roots(mounts: &Value) -> Vec<String> {
+    let mut roots = Vec::new();
+    let Some(items) = mounts.as_array() else {
+        return roots;
+    };
+    for mount in items.iter().take(16) {
+        let Some(path) = homarr_mount_source(mount) else {
+            continue;
+        };
+        if !roots.iter().any(|existing| existing == path) {
+            roots.push(path.to_owned());
+        }
+    }
+    roots
+}
+
+fn homarr_mount_source(mount: &Value) -> Option<&str> {
+    let mount_type = mount.get("Type").and_then(Value::as_str)?;
+    if mount_type != "bind" && mount_type != "volume" {
+        return None;
+    }
+    let path = mount.get("Source").and_then(Value::as_str)?;
+    if safe_host_path(path) {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn scan_homarr_mounts(mounts: &Value) -> HomarrCatalogScan {
+    let mut scan = HomarrCatalogScan {
+        widgets: Vec::new(),
+        source: None,
+        sqlite_note: None,
+        sqlite_empty: false,
+    };
+    for path in homarr_mount_roots(mounts) {
+        if let Some(found) = read_homarr_widgets(&path) {
+            scan.widgets = found;
+            scan.source = Some("json");
+            scan.sqlite_empty = false;
+            scan.sqlite_note = None;
+            break;
+        }
+        match read_homarr_sqlite_catalog(&path) {
+            HomarrSqliteRead::Found(mut found) => {
+                sort_homarr_widgets(&mut found);
+                scan.widgets = finalize_homarr_widgets(found);
+                scan.source = Some("sqlite");
+                scan.sqlite_empty = scan.widgets.is_empty();
+                scan.sqlite_note = None;
+                break;
+            }
+            HomarrSqliteRead::Unreadable(note) => {
+                scan.sqlite_note = Some(note);
+            }
+            HomarrSqliteRead::Absent => {}
+        }
+    }
+    scan
+}
+
 #[allow(clippy::collapsible_if)]
 fn read_homarr_widgets(root: &str) -> Option<Vec<Value>> {
     let candidates = [
@@ -642,10 +717,10 @@ pub(crate) fn parse_homarr_config(text: &str) -> Option<Vec<Value>> {
     let value: Value = serde_json::from_str(text).ok()?;
     let mut widgets = Vec::new();
     collect_homarr_services(&value, &mut widgets);
+    let widgets = finalize_homarr_widgets(widgets);
     if widgets.is_empty() {
         None
     } else {
-        widgets.truncate(MAX_HOMARR_WIDGETS);
         Some(widgets)
     }
 }
@@ -681,33 +756,238 @@ fn homarr_shortcut(object: &Map<String, Value>) -> Option<Value> {
     let name = object
         .get("name")
         .or_else(|| object.get("title"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+        .and_then(Value::as_str)?;
     let url = object
         .get("href")
         .or_else(|| object.get("url"))
         .or_else(|| object.get("link"))
-        .and_then(Value::as_str)
-        .map(str::trim)?;
+        .and_then(Value::as_str)?;
+    let icon = object
+        .get("icon")
+        .or_else(|| object.get("iconUrl"))
+        .or_else(|| object.get("icon_url"))
+        .and_then(Value::as_str);
+    homarr_http_shortcut(name, url, icon)
+}
+
+fn homarr_http_shortcut(name: &str, url: &str, icon: Option<&str>) -> Option<Value> {
+    let name = name.trim();
+    let url = url.trim();
+    if name.is_empty() {
+        return None;
+    }
     if !(url.starts_with("http://") || url.starts_with("https://")) || url.len() > 2_048 {
         return None;
     }
     if name.chars().count() > 80 || name.chars().any(char::is_control) {
         return None;
     }
-    let icon = object
-        .get("icon")
-        .or_else(|| object.get("iconUrl"))
-        .and_then(Value::as_str)
+    let icon = icon
         .map(str::trim)
         .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
-        .map(|value| value.chars().take(2_048).collect::<String>());
+        .filter(|value| value.len() <= 2_048)
+        .map(str::to_owned);
     Some(json!({
         "name": name,
         "url": url,
         "icon": icon
     }))
+}
+
+fn finalize_homarr_widgets(mut widgets: Vec<Value>) -> Vec<Value> {
+    let mut seen = HashSet::new();
+    widgets.retain(|widget| {
+        widget
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(|url| seen.insert(url.to_owned()))
+    });
+    widgets.truncate(MAX_HOMARR_WIDGETS);
+    widgets
+}
+
+fn sort_homarr_widgets(widgets: &mut [Value]) {
+    widgets.sort_by(|left, right| {
+        let left_name = left.get("name").and_then(Value::as_str).unwrap_or("");
+        let right_name = right.get("name").and_then(Value::as_str).unwrap_or("");
+        match left_name.cmp(right_name) {
+            std::cmp::Ordering::Equal => left
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .cmp(right.get("url").and_then(Value::as_str).unwrap_or("")),
+            order => order,
+        }
+    });
+}
+
+fn read_homarr_sqlite_catalog(root: &str) -> HomarrSqliteRead {
+    match find_homarr_sqlite(root) {
+        Ok(None) => HomarrSqliteRead::Absent,
+        Err(note) => HomarrSqliteRead::Unreadable(note),
+        Ok(Some(path)) => match query_homarr_sqlite(&path) {
+            Ok(widgets) => HomarrSqliteRead::Found(widgets),
+            Err(note) => HomarrSqliteRead::Unreadable(note),
+        },
+    }
+}
+
+fn find_homarr_sqlite(root: &str) -> Result<Option<PathBuf>, String> {
+    let candidates = [
+        format!("{root}/db/db.sqlite"),
+        format!("{root}/db.sqlite"),
+        format!("{root}/data/db.sqlite"),
+        format!("{root}/appdata/db/db.sqlite"),
+    ];
+    for path in candidates {
+        let path = PathBuf::from(path);
+        let Ok(metadata) = fs::metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() == 0 {
+            continue;
+        }
+        if metadata.len() > MAX_HOMARR_DB_BYTES {
+            return Err("the Homarr SQLite catalog is larger than Helix will read".to_owned());
+        }
+        return Ok(Some(path));
+    }
+    Ok(None)
+}
+
+fn query_homarr_sqlite(path: &Path) -> Result<Vec<Value>, String> {
+    let snapshot = snapshot_homarr_sqlite(path)?;
+    read_homarr_apps(&snapshot)
+}
+
+fn snapshot_homarr_sqlite(path: &Path) -> Result<Connection, String> {
+    let source = open_homarr_readonly(path)?;
+    match backup_homarr_to_memory(&source) {
+        Ok(snapshot) => Ok(snapshot),
+        Err(_) => Ok(source),
+    }
+}
+
+fn open_homarr_readonly(path: &Path) -> Result<Connection, String> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| "could not open the Homarr SQLite catalog".to_owned())?;
+    let _ = connection.busy_timeout(Duration::from_millis(800));
+    Ok(connection)
+}
+
+fn backup_homarr_to_memory(source: &Connection) -> Result<Connection, String> {
+    let mut snapshot = Connection::open_in_memory()
+        .map_err(|_| "could not snapshot the Homarr SQLite catalog".to_owned())?;
+    {
+        let backup = Backup::new(source, &mut snapshot)
+            .map_err(|_| "could not snapshot the Homarr SQLite catalog".to_owned())?;
+        backup
+            .run_to_completion(64, Duration::from_millis(10), None)
+            .map_err(|_| "could not snapshot the Homarr SQLite catalog".to_owned())?;
+    }
+    Ok(snapshot)
+}
+
+fn read_homarr_apps(connection: &Connection) -> Result<Vec<Value>, String> {
+    let (table, columns) = homarr_app_table(connection)?;
+    if !column_named(&columns, "name") || !column_named(&columns, "href") {
+        return Err("the Homarr SQLite catalog does not have the expected app columns".to_owned());
+    }
+    let icon_column = if column_named(&columns, "icon_url") {
+        Some("icon_url")
+    } else if column_named(&columns, "iconUrl") {
+        Some("iconUrl")
+    } else {
+        None
+    };
+    let sql = homarr_app_select_sql(table, icon_column).ok_or_else(|| {
+        "the Homarr SQLite catalog does not have the expected app columns".to_owned()
+    })?;
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?;
+    let mut rows = statement
+        .query([])
+        .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?;
+    let mut widgets = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?
+    {
+        if widgets.len() >= MAX_HOMARR_WIDGETS {
+            break;
+        }
+        let name = row
+            .get::<_, String>(0)
+            .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?;
+        let href = row
+            .get::<_, Option<String>>(1)
+            .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?;
+        let icon = row
+            .get::<_, Option<String>>(2)
+            .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?;
+        let Some(href) = href.as_deref() else {
+            continue;
+        };
+        if let Some(widget) = homarr_http_shortcut(&name, href, icon.as_deref()) {
+            widgets.push(widget);
+        }
+    }
+    Ok(widgets)
+}
+
+fn homarr_app_table(connection: &Connection) -> Result<(&'static str, Vec<String>), String> {
+    for table in ["app", "apps"] {
+        let columns = table_columns(connection, table)?;
+        if !columns.is_empty() {
+            return Ok((table, columns));
+        }
+    }
+    Err("the Homarr SQLite catalog is missing the app table".to_owned())
+}
+
+fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, String> {
+    let pragma = match table {
+        "app" => "PRAGMA table_info(app)",
+        "apps" => "PRAGMA table_info(apps)",
+        _ => return Err("the Homarr SQLite catalog is missing the app table".to_owned()),
+    };
+    let mut statement = connection
+        .prepare(pragma)
+        .map_err(|_| "could not inspect the Homarr SQLite catalog".to_owned())?;
+    let mut rows = statement
+        .query([])
+        .map_err(|_| "could not inspect the Homarr SQLite catalog".to_owned())?;
+    let mut names = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|_| "could not inspect the Homarr SQLite catalog".to_owned())?
+    {
+        let name: String = row
+            .get(1)
+            .map_err(|_| "could not inspect the Homarr SQLite catalog".to_owned())?;
+        names.push(name);
+    }
+    Ok(names)
+}
+
+fn column_named(columns: &[String], wanted: &str) -> bool {
+    columns.iter().any(|name| name == wanted)
+}
+
+fn homarr_app_select_sql(table: &str, icon_column: Option<&str>) -> Option<&'static str> {
+    match (table, icon_column) {
+        ("app", Some("icon_url")) => Some("SELECT name, href, icon_url FROM app LIMIT 96"),
+        ("app", Some("iconUrl")) => Some(r#"SELECT name, href, "iconUrl" FROM app LIMIT 96"#),
+        ("app", None) => Some("SELECT name, href, NULL FROM app LIMIT 96"),
+        ("apps", Some("icon_url")) => Some("SELECT name, href, icon_url FROM apps LIMIT 96"),
+        ("apps", Some("iconUrl")) => Some(r#"SELECT name, href, "iconUrl" FROM apps LIMIT 96"#),
+        ("apps", None) => Some("SELECT name, href, NULL FROM apps LIMIT 96"),
+        _ => None,
+    }
 }
 
 fn now_unix_ms() -> u64 {
@@ -778,6 +1058,200 @@ mod tests {
         assert_eq!(widgets.len(), 1);
         assert_eq!(widgets[0]["name"], "Plex");
         assert_eq!(widgets[0]["url"], "http://192.168.1.10:32400/web");
+        assert_eq!(widgets[0]["icon"], "https://example.test/plex.png");
+    }
+
+    #[test]
+    fn homarr_parser_dedupes_identical_urls() {
+        let widgets = parse_homarr_config(
+            r#"{
+                "services": [
+                    {"name": "Plex", "href": "http://192.168.1.10:32400/web"},
+                    {"name": "Plex copy", "href": "http://192.168.1.10:32400/web"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(widgets.len(), 1);
+        assert_eq!(widgets[0]["name"], "Plex");
+    }
+
+    #[test]
+    fn homarr_mounts_accept_bind_and_volume_sources() {
+        let mounts = json!([
+            {"Type": "bind", "Source": "/home/owner/homarr/appdata", "Destination": "/appdata"},
+            {"Type": "volume", "Source": "/var/lib/docker/volumes/homarr_data/_data", "Destination": "/data"},
+            {"Type": "tmpfs", "Source": "", "Destination": "/tmp"},
+            {"Type": "bind", "Source": "/home/owner/homarr/appdata", "Destination": "/appdata"}
+        ]);
+        assert_eq!(
+            homarr_mount_roots(&mounts),
+            vec![
+                "/home/owner/homarr/appdata".to_owned(),
+                "/var/lib/docker/volumes/homarr_data/_data".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn homarr_scan_prefers_classic_json_over_sqlite() {
+        let root = tempfile::tempdir().expect("homarr mixed fixture");
+        let configs = root.path().join("configs");
+        fs::create_dir(&configs).expect("homarr configs");
+        fs::write(
+            configs.join("default.json"),
+            r#"{"services":[{"name":"Plex","href":"http://192.168.1.10:32400/web"}]}"#,
+        )
+        .expect("write homarr json");
+        let db_dir = root.path().join("db");
+        fs::create_dir(&db_dir).expect("homarr db dir");
+        let connection = Connection::open(db_dir.join("db.sqlite")).expect("create sqlite");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE app (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    icon_url TEXT NOT NULL,
+                    href TEXT
+                );
+                INSERT INTO app VALUES
+                    ('1', 'Sonarr', 'https://example.test/sonarr.png', 'http://192.168.1.10:8989');
+                "#,
+            )
+            .expect("seed sqlite");
+        drop(connection);
+        let path = root.path().to_str().expect("utf8 path");
+        let mounts = json!([{ "Type": "bind", "Source": path, "Destination": "/appdata" }]);
+        let scan = scan_homarr_mounts(&mounts);
+        assert_eq!(scan.source, Some("json"));
+        assert_eq!(scan.widgets.len(), 1);
+        assert_eq!(scan.widgets[0]["name"], "Plex");
+    }
+
+    #[test]
+    fn homarr_scan_reads_sqlite_when_json_is_absent() {
+        let root = tempfile::tempdir().expect("homarr sqlite scan fixture");
+        let db_dir = root.path().join("db");
+        fs::create_dir(&db_dir).expect("homarr db dir");
+        let connection = Connection::open(db_dir.join("db.sqlite")).expect("create sqlite");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE app (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    icon_url TEXT NOT NULL,
+                    href TEXT
+                );
+                INSERT INTO app VALUES
+                    ('1', 'Sonarr', 'https://example.test/sonarr.png', 'http://192.168.1.10:8989');
+                "#,
+            )
+            .expect("seed sqlite");
+        drop(connection);
+        let path = root.path().to_str().expect("utf8 path");
+        let mounts = json!([{ "Type": "bind", "Source": path, "Destination": "/appdata" }]);
+        let scan = scan_homarr_mounts(&mounts);
+        assert_eq!(scan.source, Some("sqlite"));
+        assert_eq!(scan.widgets.len(), 1);
+        assert_eq!(scan.widgets[0]["name"], "Sonarr");
+        assert!(!scan.sqlite_empty);
+    }
+
+    #[test]
+    fn homarr_sqlite_reads_http_apps_and_drops_relative_links() {
+        let root = tempfile::tempdir().expect("homarr sqlite fixture");
+        let db_dir = root.path().join("db");
+        fs::create_dir(&db_dir).expect("homarr db dir");
+        let db = db_dir.join("db.sqlite");
+        let connection = Connection::open(&db).expect("create homarr sqlite");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE app (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    icon_url TEXT NOT NULL,
+                    href TEXT,
+                    ping_url TEXT
+                );
+                INSERT INTO app VALUES
+                    ('1', 'Plex', NULL, 'https://example.test/plex.png', 'http://192.168.1.10:32400/web', NULL),
+                    ('2', 'Notes', NULL, '/imgs/logo/logo.png', NULL, NULL),
+                    ('3', 'Evil', NULL, 'https://example.test/x.png', 'javascript:alert(1)', NULL),
+                    ('4', 'Plex copy', NULL, 'https://example.test/plex.png', 'http://192.168.1.10:32400/web', NULL),
+                    ('5', 'Radarr', NULL, '/api/user-medias/icon.png', 'http://192.168.1.10:7878', NULL);
+                "#,
+            )
+            .expect("seed homarr sqlite");
+        drop(connection);
+
+        let HomarrSqliteRead::Found(widgets) =
+            read_homarr_sqlite_catalog(root.path().to_str().expect("utf8 path"))
+        else {
+            panic!("expected a Homarr sqlite catalog");
+        };
+        let widgets = finalize_homarr_widgets(widgets);
+        assert_eq!(widgets.len(), 2);
+        assert_eq!(widgets[0]["name"], "Plex");
+        assert_eq!(widgets[0]["url"], "http://192.168.1.10:32400/web");
+        assert_eq!(widgets[0]["icon"], "https://example.test/plex.png");
+        assert_eq!(widgets[1]["name"], "Radarr");
+        assert_eq!(widgets[1]["url"], "http://192.168.1.10:7878");
+        assert_eq!(widgets[1]["icon"], Value::Null);
+    }
+
+    #[test]
+    fn homarr_sqlite_reads_camel_case_apps_table() {
+        let root = tempfile::tempdir().expect("homarr camel sqlite fixture");
+        let db = root.path().join("db.sqlite");
+        let connection = Connection::open(&db).expect("create camel homarr sqlite");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE apps (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    "iconUrl" TEXT NOT NULL,
+                    href TEXT
+                );
+                INSERT INTO apps VALUES
+                    ('1', 'Sonarr', 'https://example.test/sonarr.png', 'https://example.test:8989');
+                "#,
+            )
+            .expect("seed camel homarr sqlite");
+        drop(connection);
+
+        let HomarrSqliteRead::Found(widgets) =
+            read_homarr_sqlite_catalog(root.path().to_str().expect("utf8 path"))
+        else {
+            panic!("expected a Homarr sqlite catalog");
+        };
+        assert_eq!(widgets.len(), 1);
+        assert_eq!(widgets[0]["name"], "Sonarr");
+        assert_eq!(widgets[0]["icon"], "https://example.test/sonarr.png");
+    }
+
+    #[test]
+    fn homarr_sqlite_fails_closed_without_app_table() {
+        let root = tempfile::tempdir().expect("empty homarr sqlite fixture");
+        let db_dir = root.path().join("db");
+        fs::create_dir(&db_dir).expect("homarr db dir");
+        let db = db_dir.join("db.sqlite");
+        let connection = Connection::open(&db).expect("create empty sqlite");
+        connection
+            .execute_batch("CREATE TABLE item (id TEXT PRIMARY KEY, kind TEXT);")
+            .expect("seed unrelated table");
+        drop(connection);
+
+        let HomarrSqliteRead::Unreadable(note) =
+            read_homarr_sqlite_catalog(root.path().to_str().expect("utf8 path"))
+        else {
+            panic!("expected Homarr sqlite to fail closed");
+        };
+        assert!(note.contains("app table"));
     }
 
     #[test]

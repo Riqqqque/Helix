@@ -178,7 +178,7 @@ export function runDockerContainerAction(
 }
 
 export function getHomarrCatalog(csrfToken: string, signal?: AbortSignal): Promise<HomarrCatalog> {
-  return requestJson('/api/v1/docker/homarr', parseHomarrCatalog, { csrfToken, signal, timeoutMs: 20_000 });
+  return requestJson('/api/v1/docker/homarr', parseHomarrCatalog, { csrfToken, signal, timeoutMs: 30_000 });
 }
 
 export function portainerHref(hostname: string, panelPort: number | null, panelScheme: 'http' | 'https' | null): string | null {

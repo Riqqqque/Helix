@@ -102,12 +102,15 @@ and next activation. Automated tests never execute a reboot.
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/docker/inventory` | `system.view` | All Docker containers on the host, with CPU/memory when Docker reports them, plus a Portainer hint |
 | `POST` | `/api/v1/docker/actions` | `system.settings.write` | Start, stop, or restart one named container after typing that exact name |
-| `GET` | `/api/v1/docker/homarr` | `dashboard.customize` | Import classic Homarr JSON shortcuts that already have an http(s) address |
+| `GET` | `/api/v1/docker/homarr` | `dashboard.customize` | Import Homarr http(s) shortcuts from classic JSON or a SQLite app catalog |
 
 Helix talks to the Docker engine on the host. It does not proxy Portainer’s API.
 Open Portainer uses a published port when a Portainer container is detected.
-Dashboard and gateway container names stay protected. Homarr 1 sqlite catalogs
-fail closed with an honest note.
+Dashboard and gateway container names stay protected. Homarr import reads the
+container bind or volume mounts, then classic JSON if present, otherwise a
+read-only snapshot of `db/db.sqlite` when the `app`/`apps` table has `name` and
+`href`. Only http(s) addresses are returned. Relative Homarr icons, empty hrefs,
+and MySQL/Postgres Homarr catalogs fail closed.
 
 ### Security center
 

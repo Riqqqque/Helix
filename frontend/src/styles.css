@@ -7324,9 +7324,11 @@ textarea:focus {
 .home-homarr-item strong {
   display: block;
 }
-.home-homarr-item small {
-  color: var(--muted);
-  font-size: 11px;
+.home-homarr-item.is-present {
+  opacity: 0.72;
+}
+.home-homarr-item.is-present small {
+  font-style: italic;
 }
 .home-homarr-error {
   color: var(--warning);

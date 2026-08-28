@@ -43,10 +43,12 @@ layout with one widget and a layout at the configured maximum both stay usable.
 
 Available widgets are Clock, Host pulse, Live graphs, Servers, Storage, Docker,
 Weather, Notes, and Shortcut. Shortcuts accept only validated HTTP(S) URLs and
-open in a new tab. While editing, **Import from Homarr** pulls classic Homarr
-JSON shortcuts that already have an address. **Full screen** hides the sidebar
-and the top bar (Helix, refresh, theme, account). Exit full screen from the
-Home page button to bring them back.
+open in a new tab. While editing, **Import from Homarr** reads Homarr apps that
+already have an http(s) address. Current Homarr stores those in SQLite; older
+Homarr JSON configs still work. Relative icons, notes, and Homarr-only apps stay
+in Homarr. Shortcuts already on this Home are left unchecked. **Full screen**
+hides the sidebar and the top bar (Helix, refresh, theme, account). Exit full
+screen from the Home page button to bring them back.
 
 Overview can show the same live graphs behind a toggle. Those samples live in
 the browser; Helix does not keep a timeseries database.

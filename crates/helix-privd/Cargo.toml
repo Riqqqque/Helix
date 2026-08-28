@@ -23,6 +23,9 @@ fs2.workspace = true
 quick-xml.workspace = true
 rustix = { workspace = true, features = ["fs", "std"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rusqlite.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 
