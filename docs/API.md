@@ -355,9 +355,9 @@ Settings identify restart-required fields and report pending restart state.
 Marketplace profiles prevent plugin/mod loader mixing and require a matching
 game version and supported loader. A missing or negative Modrinth server-side
 flag is advisory: the API returns it for the UI warning, but does not block an
-otherwise matching JAR. Fabric `.mrpack` creation is the separate narrow
-server-safe path above; Forge, NeoForge, Quilt, CurseForge, Vanilla content
-installation, and broad/full-parity modpack support are not present.
+otherwise matching JAR. Modpack create is a separate server-safe subset from
+Modrinth `.mrpack` or public CurseForge `manifest.json` packs; it is not a full
+client copy and does not claim every upstream pack.
 
 ## Broker protocol boundary
 

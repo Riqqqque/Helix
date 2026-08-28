@@ -43,7 +43,7 @@ impl HostControl {
                 "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}".to_owned(),
             ];
             args.extend(running);
-            if let Ok(stats) = self.docker_command(&args, Duration::from_secs(20)) {
+            if let Ok(stats) = self.docker_command(&args, Duration::from_secs(12)) {
                 apply_docker_stats(&mut containers, &stats.stdout);
             }
         }
@@ -357,6 +357,7 @@ fn container_record(
     })
 }
 
+#[cfg(test)]
 fn parse_docker_ps(stdout: &str) -> Result<Vec<Value>, String> {
     Ok(parse_docker_listing(stdout))
 }

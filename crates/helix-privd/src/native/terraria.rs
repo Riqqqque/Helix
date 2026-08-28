@@ -6,7 +6,6 @@ pub(crate) const ENTRYPOINT: &str = include_str!("../../terraria/entrypoint.sh")
 pub(crate) const VANILLA_ARTIFACT_URL: &str =
     "https://terraria.org/api/download/pc-dedicated-server/terraria-server-1449.zip";
 pub(crate) const TMOD_ARTIFACT_URL: &str = "steam://1281930";
-pub(crate) const READY_MARKER: &str = ".helix-ready";
 pub(crate) const VANILLA_VERSION: &str = "1449";
 const EMPTY_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 

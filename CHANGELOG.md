@@ -17,7 +17,7 @@ binary or package release yet.
   fullscreen, live Overview/Home graphs, a Helix-only server filter, and hook
   resource chips. V Rising create is click-to-install with runtime cleanup
   when the last server is removed. Minecraft versions are a published-release
-  dropdown. The sidebar mark matches the GitHub/tab favicon.
+  dropdown. The login and sidebar wordmark is the HELIX text only.
 
 - Ten-crate Rust workspace with typed configuration, separate
   critical-state and replaceable-metrics SQLite domains, a versioned HTTP API,

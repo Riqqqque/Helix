@@ -1,12 +1,13 @@
 # Game Hosting and Capacity
 
-Helix has a native Docker-backed Minecraft manager for Paper, Purpur, Folia,
-Leaves, Fabric, and Vanilla. It can create and operate instances, retain bounded console
+Helix has a native Docker-backed manager for Minecraft (Paper, Purpur, Folia,
+Leaves, Fabric, Forge, NeoForge, Quilt, Pufferfish, Vanilla), V Rising, Valheim,
+and Terraria. It can create and operate instances, retain bounded console
 history, manage settings and backups, and install compatible Modrinth content
 for the supported plugin/mod profiles. “Start with a modpack” additionally
-creates a server-safe subset from a listed stable server-capable Fabric
-`.mrpack`; it does not promise client/full-pack parity. AMP remains a separate
-optional manager.
+creates a server-safe subset from Modrinth `.mrpack` or public CurseForge
+`manifest.json` packs; it does not promise client/full-pack parity. AMP remains a
+separate optional manager.
 
 That does not produce a universal player limit. Helix sits outside Minecraft's
 tick loop and player network path. Actual capacity depends on CPU single-thread

@@ -158,7 +158,7 @@ export function parseHomarrCatalog(value: unknown): HomarrCatalog {
 }
 
 export function getDockerInventory(csrfToken: string, signal?: AbortSignal): Promise<DockerInventory> {
-  return requestJson('/api/v1/docker/inventory', parseDockerInventory, { csrfToken, signal, timeoutMs: 25_000 });
+  return requestJson('/api/v1/docker/inventory', parseDockerInventory, { csrfToken, signal, timeoutMs: 40_000 });
 }
 
 export function runDockerContainerAction(

@@ -35,14 +35,16 @@ network evidence, files, native servers, and safe host actions, while managed
 games stay outside the dashboard process and player traffic path.
 
 Helix is still a private alpha. Broad/unattended package upgrades, signed
-self-update, public exposure, Forge/NeoForge/Quilt/CurseForge lifecycle support,
-and broad/full-pack modpack parity are not current features. Exact selected APT
-candidates have a guarded explicit path with no rollback claim. One narrow path creates a
-declared-hash-verified server-safe subset from listed stable server-capable
-Fabric `.mrpack` releases on Modrinth. Tailscale can sit in front of a separately
-constrained private entry point. Its Hook can install and start the exact
-service on eligible Debian/Ubuntu hosts, but Helix does not authenticate the
-tailnet or configure the gateway trust boundary.
+self-update, and public internet exposure are not current features. Native
+Minecraft create includes Paper, Purpur, Folia, Leaves, Fabric, Forge, NeoForge,
+Quilt, Pufferfish, and Vanilla. Modpack create can use Modrinth `.mrpack` or
+public CurseForge `manifest.json` packs as a server-safe subset, not a full
+client copy. Valheim and Terraria have native create with file-drop mods.
+Exact selected APT candidates have a guarded explicit path with no rollback
+claim. Tailscale can sit in front of a separately constrained private entry
+point. Its Hook can install and start the exact service on eligible
+Debian/Ubuntu hosts, but Helix does not authenticate the tailnet or configure
+the gateway trust boundary.
 
 Read the
 [full walkthrough](https://github.com/Riqqqque/Helix/blob/main/docs/HOW-HELIX-WORKS.md)

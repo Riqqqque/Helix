@@ -367,14 +367,15 @@ are rejected. Fresh same-filesystem staging is activated only after validation;
 failure removes the exact incomplete container, manifest, and instance.
 
 Server-optional and client-only files are excluded and counted. The result is a
-server-safe subset, not byte-for-byte full-pack parity. Forge, NeoForge, Quilt,
-unknown loaders, CurseForge, and broad modpack behavior remain unsupported.
+server-safe subset, not byte-for-byte full-pack parity. Unknown loaders and
+every upstream pack matrix remain unclaimed. CurseForge uses the public website
+catalog and CDN, not a stored owner API key.
 
 TLS and declared hashes protect specific transport/integrity properties; they
 do not prove an artifact is safe. Download size, provenance evidence,
 destination, replacement policy, restart behavior, and rollback still require
-review per integration. Broad dependency behavior, non-Fabric modpacks,
-CurseForge, and every upstream failure mode are not supported claims.
+review per integration. Broad dependency behavior and every upstream failure
+mode are not supported claims.
 
 Helix releases additionally require signed artifacts, checksums, SBOM/provenance
 where practical, trust-root rotation, key-compromise recovery, and rollback

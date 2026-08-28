@@ -25,9 +25,9 @@ review, and real Minecraft version matrices.
 
 Broad/unattended Package Apply, package rollback, and signed self-update are
 unavailable. Exact selected APT candidates can be applied after strict preflight
-and explicit confirmation. Public exposure is not supported. The Fabric path is
-not full-pack parity and does not support Forge, NeoForge, Quilt, unknown
-loaders, or CurseForge.
+and explicit confirmation. Public exposure is not supported. Modpack create is a server-safe subset from
+Modrinth or public CurseForge catalogs, not a full client copy. Unknown loaders
+and every upstream pack remain unclaimed.
 
 The Strand Kit can scaffold and validate a zero-capability preview manifest.
 No Strand can be installed or executed yet. Modular Home widgets are built into
