@@ -91,6 +91,7 @@ pub(crate) fn run_bounded_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn command_output_is_rejected_at_the_streaming_boundary() {
@@ -106,5 +107,23 @@ mod tests {
         .err()
         .expect("oversized output must be rejected");
         assert!(error.contains("too much output"));
+    }
+
+    #[test]
+    fn command_deadline_terminates_a_slow_child() {
+        let started = Instant::now();
+        let output = run_bounded_command(
+            Path::new("/usr/bin/timeout"),
+            Path::new("/bin/sh"),
+            &["-c".to_owned(), "sleep 30".to_owned()],
+            Duration::from_secs(1),
+            &[],
+            1024,
+        )
+        .expect("timeout wrapper should return the child status");
+
+        assert!(!output.status.success());
+        assert_eq!(output.status.code(), Some(124));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

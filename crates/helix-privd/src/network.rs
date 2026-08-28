@@ -1,4 +1,5 @@
 use crate::bounded_command::run_bounded_command;
+use crate::upnp::{ExternalAddressKind, UpnpGateway, classify_external_address};
 use helix_privd::{FirewallProtocol, FirewallRuleSpec};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -61,6 +62,8 @@ pub struct NetworkManager {
     last_mutation: Mutex<Option<Instant>>,
     mutation_cooldown: Duration,
     assume_binaries_available: bool,
+    exposure_mutation: Mutex<()>,
+    router_cache: Mutex<Option<(Instant, Result<UpnpGateway, String>)>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -192,6 +195,21 @@ struct FirewallRecord {
     undo_expires_at_unix_ms: Option<u64>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ServerExposureRecord {
+    schema_version: u32,
+    instance_id: String,
+    port: u16,
+    protocol: FirewallProtocol,
+    local_ip: Ipv4Addr,
+    external_ip: Ipv4Addr,
+    mapping_description: String,
+    firewall_rule_id: Option<String>,
+    created_at_unix_ms: u64,
+    verified_at_unix_ms: u64,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum FirewallRecordState {
@@ -215,6 +233,8 @@ impl NetworkManager {
             mutation: Mutex::new(()),
             last_mutation: Mutex::new(None),
             assume_binaries_available: false,
+            exposure_mutation: Mutex::new(()),
+            router_cache: Mutex::new(None),
         })
     }
 
@@ -235,6 +255,8 @@ impl NetworkManager {
             last_mutation: Mutex::new(None),
             mutation_cooldown: Duration::ZERO,
             assume_binaries_available: true,
+            exposure_mutation: Mutex::new(()),
+            router_cache: Mutex::new(None),
         })
     }
 
@@ -247,6 +269,14 @@ impl NetworkManager {
         let firewall_state_verified =
             firewall.installed && firewall.active && firewall.error.is_none();
         let managed_records = self.load_records_bounded();
+        let exposure_records = self.load_exposure_records_bounded();
+        let router = self.router_snapshot(false);
+        let private_ipv4 = router
+            .as_ref()
+            .ok()
+            .map(|gateway| gateway.local_ip)
+            .or_else(detect_private_ipv4);
+        let router_inventory = router_inventory_value(&router);
         let game_port_rows = game_ports
             .iter()
             .flat_map(|mapping| {
@@ -270,6 +300,60 @@ impl NetworkManager {
                         }))
                     } else {
                         None
+                    };
+                    let exposure = exposure_records.get(&mapping.instance_id).filter(|record| {
+                        protocol == "tcp"
+                            && record.port == mapping.port
+                            && record.protocol == FirewallProtocol::Tcp
+                    });
+                    let external_reachability = if let Some(record) = exposure {
+                        json!({
+                            "state": "router_mapping_confirmed",
+                            "reachable": Value::Null,
+                            "tested_from_external_network": false,
+                            "router_mapping_verified": true,
+                            "external_ip": record.external_ip,
+                            "join_address": format_join_address(record.external_ip, record.port),
+                            "verified_at_unix_ms": record.verified_at_unix_ms,
+                            "note": "The router confirmed Helix's exact TCP mapping. Helix has not tested this address from a separate external network."
+                        })
+                    } else if protocol == "udp" {
+                        json!({
+                            "state": "not_requested",
+                            "reachable": Value::Null,
+                            "tested_from_external_network": false,
+                            "note": "Minecraft player connections use TCP. UDP is not forwarded unless a separate feature explicitly needs it."
+                        })
+                    } else {
+                        match &router {
+                            Ok(gateway) if classify_external_address(gateway.external_ip) == ExternalAddressKind::Public => json!({
+                                "state": "setup_available",
+                                "reachable": Value::Null,
+                                "tested_from_external_network": false,
+                                "router_mapping_verified": false,
+                                "external_ip": gateway.external_ip,
+                                "join_address": format_join_address(gateway.external_ip, mapping.port),
+                                "note": "The router supports automatic setup, but this server does not have a Helix-owned mapping yet."
+                            }),
+                            Ok(gateway) => json!({
+                                "state": classify_external_address(gateway.external_ip).as_str(),
+                                "reachable": false,
+                                "tested_from_external_network": false,
+                                "router_mapping_verified": false,
+                                "external_ip": gateway.external_ip,
+                                "join_address": Value::Null,
+                                "note": "The router's WAN address is not globally routable, so port forwarding alone cannot provide a public join address."
+                            }),
+                            Err(error) => json!({
+                                "state": "automatic_setup_unavailable",
+                                "reachable": Value::Null,
+                                "tested_from_external_network": false,
+                                "router_mapping_verified": false,
+                                "external_ip": Value::Null,
+                                "join_address": Value::Null,
+                                "note": error
+                            })
+                        }
                     };
                     json!({
                         "instance_id": mapping.instance_id,
@@ -296,11 +380,8 @@ impl NetworkManager {
                                 "not_allowed_by_matching_rule"
                             }
                         },
-                        "external_reachability": {
-                            "state": "unverified",
-                            "reachable": Value::Null,
-                            "note": "Helix has not tested this port from outside the host or LAN. A listener, Docker publication, and UFW rule are separate evidence and do not prove end-to-end reachability."
-                        }
+                        "private_join_address": private_ipv4.map(|address| format_join_address(address, mapping.port)),
+                        "external_reachability": external_reachability
                     })
                 })
             })
@@ -358,6 +439,12 @@ impl NetworkManager {
         Ok(json!({
             "schema_version": 1,
             "collected_at_unix_ms": now_unix_ms(),
+            "addresses": {
+                "private_ipv4": private_ipv4,
+                "source": if router.is_ok() { "router_path" } else { "host_route" },
+                "note": "The private address is intended for devices on the same LAN. A Tailscale address, when present elsewhere in Helix, is separate."
+            },
+            "router": router_inventory,
             "listeners": {
                 "source": "linux_proc_net",
                 "items": listeners,
@@ -386,7 +473,7 @@ impl NetworkManager {
                 "helix_managed_rule_state": managed_rule_state,
                 "error": firewall.error,
                 "mutations_supported": firewall_state_verified,
-                "mutation_scope": "Helix creates, deletes, and restores only exact UUID-commented allow rules. Enabling an inactive firewall is a separate confirmed flow that first preserves the selected listening SSH port. Helix never resets UFW, changes its defaults, or exposes a port automatically.",
+                "mutation_scope": "Helix creates, deletes, and restores only exact UUID-commented allow rules. Enabling an inactive firewall is a separate confirmed flow that first preserves the selected listening SSH port. Public server setup creates only an exact Helix-owned TCP router mapping and a matching UFW rule when UFW is already active; it never enables UFW automatically.",
                 "inactive_note": if firewall.installed && firewall.error.is_none() && !firewall.active {
                     Value::String("UFW is inactive, so Helix does not claim any firewall rule makes a port open.".to_owned())
                 } else {
@@ -399,6 +486,201 @@ impl NetworkManager {
                 "tested_from_external_network": false
             }
         }))
+    }
+
+    pub fn set_server_exposure(
+        &self,
+        mapping: &GamePortMapping,
+        enabled: bool,
+    ) -> Result<Value, String> {
+        let id = mapping.instance_id.strip_prefix("helix:").ok_or_else(|| {
+            "automatic public access is available only for Helix-owned servers".to_owned()
+        })?;
+        validate_rule_id(id)?;
+        if mapping.port < 1_024 {
+            return Err("the server game port is invalid".to_owned());
+        }
+        let _exposure = self
+            .exposure_mutation
+            .lock()
+            .map_err(|_| "the server exposure lock is unavailable".to_owned())?;
+        let path = self.exposure_record_path(id)?;
+        if !enabled {
+            let record = read_exposure_record(&path, &mapping.instance_id)?;
+            if record.port != mapping.port || record.protocol != FirewallProtocol::Tcp {
+                return Err("the protected router mapping record does not match this server; nothing was removed".to_owned());
+            }
+            let gateway = self.router_snapshot(true)?;
+            if gateway.local_ip != record.local_ip
+                || !gateway.verify_tcp_mapping(record.port, &record.mapping_description)?
+            {
+                return Err("the router no longer reports the exact Helix-owned mapping; nothing was removed".to_owned());
+            }
+            gateway.delete_tcp_mapping(record.port)?;
+            if gateway
+                .verify_tcp_mapping(record.port, &record.mapping_description)
+                .unwrap_or(false)
+            {
+                return Err("the router still reports the Helix mapping after deletion".to_owned());
+            }
+            let mut firewall_warning = None;
+            if let Some(rule_id) = record.firewall_rule_id.as_deref()
+                && let Err(error) = self.delete_rule(rule_id)
+            {
+                firewall_warning = Some(format!(
+                    "the router mapping was removed, but the Helix UFW rule still needs attention: {error}"
+                ));
+            }
+            remove_record_durable(&path)?;
+            self.invalidate_router_cache();
+            return Ok(json!({
+                "instance_id": mapping.instance_id,
+                "enabled": false,
+                "router_mapping_removed": true,
+                "firewall_warning": firewall_warning,
+                "external_reachability": {
+                    "state": "not_configured",
+                    "reachable": Value::Null,
+                    "tested_from_external_network": false
+                }
+            }));
+        }
+
+        if path.exists() {
+            let record = read_exposure_record(&path, &mapping.instance_id)?;
+            let gateway = self.router_snapshot(true)?;
+            if record.port == mapping.port
+                && gateway.local_ip == record.local_ip
+                && gateway.verify_tcp_mapping(record.port, &record.mapping_description)?
+            {
+                return Ok(exposure_result(
+                    mapping,
+                    &record,
+                    true,
+                    "already_configured",
+                    None,
+                ));
+            }
+            return Err("a protected public-access record exists, but the router mapping has drifted; Helix did not overwrite it".to_owned());
+        }
+
+        let gateway = self.router_snapshot(true)?;
+        let address_kind = classify_external_address(gateway.external_ip);
+        if address_kind != ExternalAddressKind::Public {
+            return Err(match address_kind {
+                ExternalAddressKind::CarrierGradeNat => format!(
+                    "the router reports CGNAT address {}; automatic port forwarding cannot create a public join address through carrier-grade NAT",
+                    gateway.external_ip
+                ),
+                ExternalAddressKind::PrivateOrReserved => format!(
+                    "the router reports non-public WAN address {}; another router or upstream NAT must be configured first",
+                    gateway.external_ip
+                ),
+                ExternalAddressKind::Public => unreachable!("public handled above"),
+            });
+        }
+        let description = format!("Helix Minecraft {}", &id[..8]);
+        if gateway.tcp_mapping_exists(mapping.port)? {
+            return Err(format!(
+                "router TCP port {} already has a mapping; Helix will not overwrite an unowned router rule",
+                mapping.port
+            ));
+        }
+        gateway.add_tcp_mapping(mapping.port, &description)?;
+        if !gateway.verify_tcp_mapping(mapping.port, &description)? {
+            return Err(
+                "the router accepted the request but did not return the exact Helix mapping; Helix did not delete an unverified router rule"
+                    .to_owned(),
+            );
+        }
+
+        let firewall = self.ufw_snapshot()?;
+        let mut firewall_rule_id = None;
+        let firewall_state = if firewall.installed && firewall.error.is_none() && firewall.active {
+            match self.create_rule(FirewallRuleSpec {
+                name: format!("{} public server", mapping.name),
+                description: format!(
+                    "TCP game traffic for {} on port {}",
+                    mapping.name, mapping.port
+                ),
+                protocol: FirewallProtocol::Tcp,
+                port_start: mapping.port,
+                port_end: mapping.port,
+            }) {
+                Ok(value) => {
+                    firewall_rule_id = value
+                        .get("rule_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    "helix_rule_verified"
+                }
+                Err(error) => {
+                    let _ = gateway.delete_tcp_mapping(mapping.port);
+                    return Err(format!(
+                        "the router mapping was rolled back because the active host firewall rule could not be verified: {error}"
+                    ));
+                }
+            }
+        } else if firewall.installed && firewall.error.is_none() {
+            "ufw_inactive_not_blocking"
+        } else if !firewall.installed {
+            "ufw_unavailable"
+        } else {
+            let _ = gateway.delete_tcp_mapping(mapping.port);
+            return Err("the router mapping was rolled back because the host firewall state could not be verified".to_owned());
+        };
+        let now = now_unix_ms();
+        let record = ServerExposureRecord {
+            schema_version: 1,
+            instance_id: mapping.instance_id.clone(),
+            port: mapping.port,
+            protocol: FirewallProtocol::Tcp,
+            local_ip: gateway.local_ip,
+            external_ip: gateway.external_ip,
+            mapping_description: description,
+            firewall_rule_id: firewall_rule_id.clone(),
+            created_at_unix_ms: now,
+            verified_at_unix_ms: now,
+        };
+        if let Err(error) = write_exposure_record(&path, &record) {
+            let _ = gateway.delete_tcp_mapping(mapping.port);
+            if let Some(rule_id) = firewall_rule_id.as_deref() {
+                let _ = self.delete_rule(rule_id);
+            }
+            return Err(format!(
+                "public access was rolled back because its protected record could not be saved: {error}"
+            ));
+        }
+        self.invalidate_router_cache();
+        Ok(exposure_result(
+            mapping,
+            &record,
+            false,
+            "router_mapping_confirmed",
+            Some(firewall_state),
+        ))
+    }
+
+    fn router_snapshot(&self, force: bool) -> Result<UpnpGateway, String> {
+        let mut cache = self
+            .router_cache
+            .lock()
+            .map_err(|_| "the router discovery cache is unavailable".to_owned())?;
+        if !force
+            && let Some((collected, result)) = cache.as_ref()
+            && collected.elapsed() < Duration::from_secs(60)
+        {
+            return result.clone();
+        }
+        let result = UpnpGateway::discover();
+        *cache = Some((Instant::now(), result.clone()));
+        result
+    }
+
+    fn invalidate_router_cache(&self) {
+        if let Ok(mut cache) = self.router_cache.lock() {
+            *cache = None;
+        }
     }
 
     pub fn enable_ufw(&self, ssh_port: u16, confirmation: &str) -> Result<Value, String> {
@@ -1023,6 +1305,35 @@ impl NetworkManager {
         Ok(self.config.state_root.join(format!("{rule_id}.json")))
     }
 
+    fn exposure_record_path(&self, instance_uuid: &str) -> Result<PathBuf, String> {
+        validate_rule_id(instance_uuid)?;
+        Ok(self
+            .config
+            .state_root
+            .join(format!("exposure-{instance_uuid}.json")))
+    }
+
+    fn load_exposure_records_bounded(&self) -> HashMap<String, ServerExposureRecord> {
+        let Ok(entries) = fs::read_dir(&self.config.state_root) else {
+            return HashMap::new();
+        };
+        entries
+            .flatten()
+            .take(MAX_DOCKER_CONTAINERS)
+            .filter_map(|entry| {
+                let file_name = entry.file_name();
+                let uuid = file_name
+                    .to_str()?
+                    .strip_prefix("exposure-")?
+                    .strip_suffix(".json")?;
+                let instance_id = format!("helix:{uuid}");
+                read_exposure_record(&entry.path(), &instance_id)
+                    .ok()
+                    .map(|record| (instance_id, record))
+            })
+            .collect()
+    }
+
     fn load_records_bounded(&self) -> HashMap<String, FirewallRecord> {
         let Ok(entries) = fs::read_dir(&self.config.state_root) else {
             return HashMap::new();
@@ -1499,6 +1810,150 @@ fn attach_process_owners(proc_root: &Path, listeners: &mut [ListenerRecord]) {
     for listener in listeners {
         listener.process = owners.get(&listener.inode).cloned();
     }
+}
+
+fn detect_private_ipv4() -> Option<Ipv4Addr> {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+    match socket.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(address) if !address.is_unspecified() && !address.is_loopback() => {
+            Some(address)
+        }
+        _ => None,
+    }
+}
+
+fn format_join_address(address: Ipv4Addr, port: u16) -> String {
+    if port == 25_565 {
+        address.to_string()
+    } else {
+        format!("{address}:{port}")
+    }
+}
+
+fn router_inventory_value(router: &Result<UpnpGateway, String>) -> Value {
+    match router {
+        Ok(gateway) => {
+            let kind = classify_external_address(gateway.external_ip);
+            json!({
+                "automatic_port_forwarding_available": kind == ExternalAddressKind::Public,
+                "discovery": "upnp_igd",
+                "state": if kind == ExternalAddressKind::Public { "available" } else { kind.as_str() },
+                "external_ipv4": gateway.external_ip,
+                "external_address_kind": kind.as_str(),
+                "private_ipv4": gateway.local_ip,
+                "error": Value::Null,
+                "note": if kind == ExternalAddressKind::Public {
+                    "The router supports a Helix-owned TCP mapping. This does not prove reachability from an external network."
+                } else {
+                    "The router answered, but its WAN address is not globally routable. Port forwarding alone cannot provide public access."
+                }
+            })
+        }
+        Err(error) => json!({
+            "automatic_port_forwarding_available": false,
+            "discovery": "upnp_igd",
+            "state": "unavailable",
+            "external_ipv4": Value::Null,
+            "external_address_kind": "unknown",
+            "private_ipv4": detect_private_ipv4(),
+            "error": error,
+            "note": "Helix did not change the router. Enable UPnP on a trusted LAN router or configure a manual TCP port forward."
+        }),
+    }
+}
+
+fn exposure_result(
+    mapping: &GamePortMapping,
+    record: &ServerExposureRecord,
+    reused: bool,
+    state: &str,
+    firewall_state: Option<&str>,
+) -> Value {
+    json!({
+        "instance_id": mapping.instance_id,
+        "enabled": true,
+        "reused": reused,
+        "protocol": "tcp",
+        "port": record.port,
+        "private_ipv4": record.local_ip,
+        "private_join_address": format_join_address(record.local_ip, record.port),
+        "public_ipv4": record.external_ip,
+        "public_join_address": format_join_address(record.external_ip, record.port),
+        "firewall_state": firewall_state,
+        "external_reachability": {
+            "state": state,
+            "reachable": Value::Null,
+            "tested_from_external_network": false,
+            "router_mapping_verified": true,
+            "verified_at_unix_ms": record.verified_at_unix_ms,
+            "note": "The router confirmed Helix's exact TCP mapping. Test from a separate external network before treating it as end-to-end verified."
+        }
+    })
+}
+
+fn write_exposure_record(path: &Path, record: &ServerExposureRecord) -> Result<(), String> {
+    if record.schema_version != 1
+        || record.port < 1_024
+        || !record.instance_id.starts_with("helix:")
+        || record.mapping_description.is_empty()
+        || record.mapping_description.len() > 64
+    {
+        return Err("the public-access record is invalid".to_owned());
+    }
+    let body = serde_json::to_vec_pretty(record)
+        .map_err(|_| "could not encode public-access state".to_owned())?;
+    let temporary = path.with_extension(format!("partial.{}", Uuid::new_v4()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .map_err(|_| "could not stage public-access state".to_owned())?;
+        file.write_all(&body)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| "could not persist public-access state".to_owned())?;
+        fs::rename(&temporary, path)
+            .map_err(|_| "could not commit public-access state".to_owned())?;
+        fs::File::open(
+            path.parent()
+                .ok_or_else(|| "public-access path is invalid".to_owned())?,
+        )
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "could not sync public-access state".to_owned())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
+fn read_exposure_record(path: &Path, instance_id: &str) -> Result<ServerExposureRecord, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "the Helix public-access record does not exist".to_owned())?;
+    if !metadata.file_type().is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_RECORD_BYTES
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err("the Helix public-access record is invalid".to_owned());
+    }
+    let record: ServerExposureRecord = serde_json::from_slice(
+        &fs::read(path).map_err(|_| "could not read the Helix public-access record".to_owned())?,
+    )
+    .map_err(|_| "the Helix public-access record is invalid".to_owned())?;
+    if record.schema_version != 1
+        || record.instance_id != instance_id
+        || record.protocol != FirewallProtocol::Tcp
+        || record.port < 1_024
+        || record.mapping_description.is_empty()
+        || record.mapping_description.len() > 64
+    {
+        return Err("the Helix public-access record does not match this server".to_owned());
+    }
+    Ok(record)
 }
 
 fn prepare_state_root(path: &Path) -> Result<(), String> {

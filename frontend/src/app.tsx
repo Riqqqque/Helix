@@ -30,6 +30,7 @@ import { dashboardSectionForHash, type DashboardSectionId } from './navigation';
 import { preloadServersRoute, ServersRoute } from './servers-route';
 import { preloadSettingsRoute, SettingsRoute } from './settings-route';
 import { preloadTerminalRoute, TerminalRoute } from './terminal-route';
+import type { StorageAnalysisMode } from './storage-analysis-api';
 import {
   applyThemePreference,
   readThemePreference,
@@ -97,16 +98,18 @@ function useDashboardData(
   const [inventory, setInventory] = useState<Resource<HostInventory>>(EMPTY_RESOURCE);
   const [servers, setServers] = useState<Resource<ManagedServer[]>>(EMPTY_RESOURCE);
   const [integration, setIntegration] = useState<Resource<HostIntegration>>(EMPTY_RESOURCE);
-  const inFlight = useRef(false);
+  const liveInFlight = useRef(false);
+  const integrationGeneration = useRef(0);
   const mounted = useRef(true);
-  const controller = useRef<AbortController | null>(null);
+  const liveController = useRef<AbortController | null>(null);
+  const integrationController = useRef<AbortController | null>(null);
 
-  const refresh = useCallback(async (): Promise<void> => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    controller.current?.abort();
+  const refreshLive = useCallback(async (): Promise<void> => {
+    if (liveInFlight.current) return;
+    liveInFlight.current = true;
+    liveController.current?.abort();
     const nextController = new AbortController();
-    controller.current = nextController;
+    liveController.current = nextController;
     const markRefreshing = <T,>(current: Resource<T>): Resource<T> => ({
       ...current,
       phase: current.data === null ? 'loading' : 'refreshing',
@@ -115,20 +118,18 @@ function useDashboardData(
     setOverview(markRefreshing);
     setInventory(markRefreshing);
     setServers(markRefreshing);
-    setIntegration(markRefreshing);
 
     const results = await Promise.allSettled([
       getSystemOverview(csrfToken, nextController.signal),
       getHostInventory(csrfToken, nextController.signal),
       getServers(csrfToken, nextController.signal),
-      getHostIntegration(csrfToken, nextController.signal),
     ]);
     if (!mounted.current || nextController.signal.aborted) {
-      inFlight.current = false;
+      liveInFlight.current = false;
       return;
     }
     if (results.some((result) => result.status === 'rejected' && isSessionError(result.reason))) {
-      inFlight.current = false;
+      liveInFlight.current = false;
       onSessionExpired();
       return;
     }
@@ -149,25 +150,75 @@ function useDashboardData(
     apply(results[0], setOverview);
     apply(results[1], setInventory);
     apply(results[2], setServers);
-    apply(results[3], setIntegration);
-    inFlight.current = false;
+    liveInFlight.current = false;
   }, [csrfToken, onSessionExpired]);
+
+  const refreshIntegration = useCallback(async (): Promise<void> => {
+    integrationController.current?.abort();
+    const generation = integrationGeneration.current + 1;
+    integrationGeneration.current = generation;
+    const nextController = new AbortController();
+    integrationController.current = nextController;
+    setIntegration((current) => ({
+      ...current,
+      phase: current.data === null ? 'loading' : 'refreshing',
+      error: null,
+    }));
+    try {
+      const next = await getHostIntegration(csrfToken, nextController.signal);
+      if (!mounted.current || nextController.signal.aborted || integrationGeneration.current !== generation) return;
+      setIntegration({ data: next, phase: 'ready', error: null });
+    } catch (error) {
+      if (!mounted.current || nextController.signal.aborted || integrationGeneration.current !== generation) return;
+      if (isSessionError(error)) onSessionExpired();
+      else {
+        setIntegration((current) => ({
+          data: current.data,
+          phase: current.data === null ? 'error' : 'stale',
+          error: describeError(error),
+        }));
+      }
+    }
+  }, [csrfToken, onSessionExpired]);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    await Promise.all([refreshLive(), refreshIntegration()]);
+  }, [refreshIntegration, refreshLive]);
 
   useEffect(() => {
     mounted.current = true;
-    void refresh();
+    void refreshLive();
     const refreshWhenVisible = (): void => {
-      if (document.visibilityState !== 'hidden') void refresh();
+      if (document.visibilityState !== 'hidden') void refreshLive();
     };
     const timer = window.setInterval(refreshWhenVisible, refreshIntervalMs);
     document.addEventListener('visibilitychange', refreshWhenVisible);
     return () => {
-      mounted.current = false;
-      controller.current?.abort();
+      liveController.current?.abort();
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
-  }, [refresh, refreshIntervalMs]);
+  }, [refreshIntervalMs, refreshLive]);
+
+  useEffect(() => {
+    void refreshIntegration();
+    const refreshWhenVisible = (): void => {
+      if (document.visibilityState !== 'hidden') void refreshIntegration();
+    };
+    const timer = window.setInterval(refreshWhenVisible, 30_000);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      integrationController.current?.abort();
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [refreshIntegration]);
+
+  useEffect(() => () => {
+    mounted.current = false;
+    liveController.current?.abort();
+    integrationController.current?.abort();
+  }, []);
 
   return {
     overview,
@@ -315,7 +366,6 @@ function Topbar({
   section,
   hostname,
   refreshedAt,
-  refreshing,
   user,
   onRefresh,
   onLogout,
@@ -325,7 +375,6 @@ function Topbar({
   section: DashboardSectionId;
   hostname: string;
   refreshedAt: number | null;
-  refreshing: boolean;
   user: AuthenticatedUser;
   onRefresh: () => Promise<void>;
   onLogout: () => Promise<void>;
@@ -333,6 +382,16 @@ function Topbar({
   onThemeChange: (theme: ThemePreference) => void;
 }) {
   const item = navigation.find((entry) => entry.id === section) ?? navigation[0]!;
+  const [manualRefresh, setManualRefresh] = useState(false);
+  const refreshNow = async (): Promise<void> => {
+    if (manualRefresh) return;
+    setManualRefresh(true);
+    try {
+      await onRefresh();
+    } finally {
+      setManualRefresh(false);
+    }
+  };
   return (
     <header class="topbar">
       <div class="topbar-title">
@@ -342,7 +401,7 @@ function Topbar({
       </div>
       <div class="topbar-actions">
         {refreshedAt !== null && <span class="last-update">Updated {new Date(refreshedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
-        <button class="icon-button" type="button" disabled={refreshing} onClick={() => void onRefresh()} aria-label="Refresh dashboard" aria-busy={refreshing}>
+        <button class="icon-button" type="button" disabled={manualRefresh} onClick={() => void refreshNow()} aria-label="Refresh dashboard" aria-busy={manualRefresh}>
           <Icon name="refresh" />
         </button>
         <ThemeMenu theme={theme} onChange={onThemeChange} />
@@ -372,7 +431,9 @@ function OverviewPage({ data }: { data: DashboardData }) {
   const helixErrors = integration.data?.errors ?? [];
   return (
     <div class="page page--overview">
-      <PageHead title="Overview" detail="The host, storage, and game workloads in one place." />
+      <PageHead title="Overview" detail={overview.data?.hostname
+        ? `${overview.data.hostname} — host, storage, and game workloads in one place.`
+        : 'The host, storage, and game workloads in one place.'} />
       <InlineError message={overview.error ?? inventory.error ?? servers.error ?? integration.error} />
       {criticalMounts.map((mount) => (
         <a class="capacity-alert" href="#storage" key={mount.target}>
@@ -428,7 +489,15 @@ function OverviewPage({ data }: { data: DashboardData }) {
   );
 }
 
-function DiskMap({ inventory, onBrowse }: { inventory: HostInventory | null; onBrowse: (path: string) => void }) {
+export function DiskMap({
+  inventory,
+  onBrowse,
+  onAnalyze,
+}: {
+  inventory: HostInventory | null;
+  onBrowse: (path: string) => void;
+  onAnalyze: (path: string) => void;
+}) {
   const disks = inventory?.disks.filter((disk) => disk.deviceType === 'disk') ?? [];
   return (
     <section class="disk-map">
@@ -436,11 +505,12 @@ function DiskMap({ inventory, onBrowse }: { inventory: HostInventory | null; onB
         const mounts = inventory?.mounts.filter((mount) => disk.path !== null && mount.source.startsWith(disk.path)) ?? [];
         const primary = mounts.sort((a, b) => b.sizeBytes - a.sizeBytes)[0];
         return (
-          <button type="button" class="disk-tile" key={disk.name} onClick={() => primary !== undefined && onBrowse(primary.target)} disabled={primary === undefined}>
+          <article class={'disk-tile' + (primary === undefined ? ' is-unmounted' : '')} key={disk.name}>
             <div class="disk-tile-icon"><Icon name="storage" size={22} /></div>
             <div class="disk-tile-copy"><span>{disk.model?.trim() || disk.name}</span><strong>{formatBytes(disk.sizeBytes)}</strong><small>{primary === undefined ? 'Not mounted' : `${primary.target} · ${formatBytes(primary.availableBytes)} free`}</small></div>
             {primary !== undefined && <div class="disk-tile-usage"><span>{formatPercent(primary.usePercent)}</span><ProgressBar value={primary.usePercent} tone={toneForPercent(primary.usePercent)} /></div>}
-          </button>
+            {primary !== undefined && <div class="disk-tile-actions"><button class="button button--quiet" type="button" onClick={() => onBrowse(primary.target)}><Icon name="folder" size={14} />Browse files</button><button class="button button--primary" type="button" onClick={() => onAnalyze(primary.target)}><Icon name="search" size={14} />Analyze space</button></div>}
+          </article>
         );
       })}
     </section>
@@ -449,7 +519,9 @@ function DiskMap({ inventory, onBrowse }: { inventory: HostInventory | null; onB
 
 function StoragePage({ data, csrfToken, onSessionExpired }: { data: DashboardData; csrfToken: string; onSessionExpired: () => void }) {
   const [browsePath, setBrowsePath] = useState('/');
-  return <div class="page page--storage"><PageHead title="Storage" detail="Every mounted drive and a file manager for the host." /><InlineError message={data.inventory.error} /><DiskMap inventory={data.inventory.data} onBrowse={setBrowsePath} /><div class="section-title section-title--spaced"><div><h2>Files <InfoTip text="Helix can browse the host but only changes files inside storage roots allowed by the privileged broker. Delete actions move items into a recoverable .helix-trash folder." /></h2><p>Browse the whole host. Changes are limited to configured storage roots.</p></div></div><FileManagerRoute csrfToken={csrfToken} onSessionExpired={onSessionExpired} initialPath={browsePath} /></div>;
+  const [analysis, setAnalysis] = useState<{ path: string; mode: StorageAnalysisMode } | null>(null);
+  const openDriveAnalysis = (path: string): void => setAnalysis({ path, mode: 'thorough' });
+  return <div class="page page--storage"><PageHead title="Storage" detail="See what is using each drive, then manage files safely." /><InlineError message={data.inventory.error} /><section class="storage-space-intro"><div><span class="eyebrow">SPACE ANALYZER</span><h2>Find what’s using your drive</h2><p>Choose <strong>Analyze space</strong> on any mounted drive. Helix reads filesystem metadata in the background and ranks the files and folder trees consuming the most disk space.</p></div><div class="storage-space-intro__facts"><span><Icon name="activity" size={14} />Low-impact scan</span><span><Icon name="storage" size={14} />Allocated disk usage</span><span><Icon name="check" size={14} />Read-only until you choose trash</span></div></section><DiskMap inventory={data.inventory.data} onBrowse={setBrowsePath} onAnalyze={openDriveAnalysis} /><div class="section-title section-title--spaced"><div><h2>Files <InfoTip text="Helix can browse the host but only changes files inside storage roots allowed by the privileged broker. Delete actions move items into a recoverable .helix-trash folder." /></h2><p>Browse the whole host. Changes are limited to configured storage roots.</p></div><button class="button button--quiet" type="button" onClick={() => setAnalysis({ path: browsePath, mode: 'quick' })}><Icon name="search" size={15} />Analyze current folder</button></div><FileManagerRoute csrfToken={csrfToken} onSessionExpired={onSessionExpired} initialPath={browsePath} analysis={analysis} onAnalysisClose={() => setAnalysis(null)} /></div>;
 }
 
 function NetworkPage({ data, csrfToken, canManageFirewall, onSessionExpired }: { data: DashboardData; csrfToken: string; canManageFirewall: boolean; onSessionExpired: () => void }) {
@@ -530,5 +602,5 @@ export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated,
     dashboardPreferences.setMetricsRefreshMs(next);
   };
 
-  return <><a class="skip-link" href="#main-content">Skip to content</a><div class="dashboard-shell"><Sidebar active={active} order={navigationOrder} onOrderChange={changeNavigationOrder} /><div class="dashboard-workspace"><Topbar section={active} hostname={hostname} refreshedAt={refreshedAt} refreshing={data.isRefreshing} user={user} onRefresh={data.refresh} onLogout={onLogout} theme={theme} onThemeChange={setTheme} /><MobileNav active={active} order={navigationOrder} /><main id="main-content" tabIndex={-1}>{active === 'overview' && <OverviewPage data={data} />}{active === 'home' && <HomeRoute overview={data.overview.data} inventory={data.inventory.data} servers={data.servers.data ?? []} templates={dashboardPreferences.homeTemplates} activeHomeId={dashboardPreferences.activeHomeId} syncStatus={dashboardPreferences.syncStatus} onHomeChange={dashboardPreferences.setHomeState} csrfToken={csrfToken} />}{active === 'storage' && <StoragePage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}{active === 'network' && <NetworkPage data={data} csrfToken={csrfToken} canManageFirewall={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} />}{active === 'host' && <HostPage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}{active === 'terminal' && <TerminalRoute csrfToken={csrfToken} canOpen={user.capabilities.includes('terminal.open')} onSessionExpired={onSessionExpired} />}{active === 'servers' && <ServersRoute data={data} csrfToken={csrfToken} canManageServers={user.capabilities.includes('games.manage')} canManageBackups={user.capabilities.includes('games.backups.manage')} onSessionExpired={onSessionExpired} />}{active === 'hooks' && <HooksRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}{active === 'settings' && <SettingsRoute user={user} csrfToken={csrfToken} theme={theme} refreshIntervalMs={refreshIntervalMs} navigationOrder={navigationOrder} colors={dashboardPreferences.colors} preferenceSyncStatus={dashboardPreferences.syncStatus} hostIntegration={data.integration} onThemeChange={setTheme} onRefreshIntervalChange={changeRefreshInterval} onNavigationOrderChange={changeNavigationOrder} onColorsChange={dashboardPreferences.setColors} onAccountUpdated={onAccountUpdated} onHostIntegrationRefresh={data.refresh} />}</main></div></div></>;
+  return <><a class="skip-link" href="#main-content">Skip to content</a><div class="dashboard-shell"><Sidebar active={active} order={navigationOrder} onOrderChange={changeNavigationOrder} /><div class="dashboard-workspace"><Topbar section={active} hostname={hostname} refreshedAt={refreshedAt} user={user} onRefresh={data.refresh} onLogout={onLogout} theme={theme} onThemeChange={setTheme} /><MobileNav active={active} order={navigationOrder} /><main id="main-content" tabIndex={-1}>{active === 'overview' && <OverviewPage data={data} />}{active === 'home' && <HomeRoute overview={data.overview.data} inventory={data.inventory.data} servers={data.servers.data ?? []} displayName={user.displayName} templates={dashboardPreferences.homeTemplates} activeHomeId={dashboardPreferences.activeHomeId} syncStatus={dashboardPreferences.syncStatus} onHomeChange={dashboardPreferences.setHomeState} csrfToken={csrfToken} />}{active === 'storage' && <StoragePage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}{active === 'network' && <NetworkPage data={data} csrfToken={csrfToken} canManageFirewall={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} />}{active === 'host' && <HostPage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}{active === 'terminal' && <TerminalRoute csrfToken={csrfToken} canOpen={user.capabilities.includes('terminal.open')} onSessionExpired={onSessionExpired} />}{active === 'servers' && <ServersRoute data={data} csrfToken={csrfToken} canManageServers={user.capabilities.includes('games.manage')} canManageBackups={user.capabilities.includes('games.backups.manage')} canManageNetwork={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} />}{active === 'hooks' && <HooksRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}{active === 'settings' && <SettingsRoute user={user} csrfToken={csrfToken} theme={theme} refreshIntervalMs={refreshIntervalMs} navigationOrder={navigationOrder} colors={dashboardPreferences.colors} preferenceSyncStatus={dashboardPreferences.syncStatus} hostIntegration={data.integration} onThemeChange={setTheme} onRefreshIntervalChange={changeRefreshInterval} onNavigationOrderChange={changeNavigationOrder} onColorsChange={dashboardPreferences.setColors} onAccountUpdated={onAccountUpdated} onHostIntegrationRefresh={data.refresh} />}</main></div></div></>;
 }

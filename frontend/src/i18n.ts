@@ -28,10 +28,10 @@ const englishMessages = {
   'auth.setup.loginName': 'Login name',
   'auth.setup.displayName': 'Display name',
   'auth.setup.displayNameHelp':
-    'Use 1–128 characters. The server also applies a UTF-8 size limit.',
+    'This is the name Helix shows on the dashboard. Use 1–128 characters.',
   'auth.setup.password': 'Owner password',
   'auth.setup.passwordHelp':
-    'Use 15–256 characters. Avoid Helix, your login or display name, obvious repetition, and common passwords. Spaces and Unicode are supported.',
+    'Use 13–256 characters. Avoid Helix, your login or display name, obvious repetition, and common passwords. Spaces and Unicode are supported.',
   'auth.setup.confirmPassword': 'Confirm password',
   'auth.setup.submit': 'Create owner and continue',
   'auth.setup.submitting': 'Creating owner…',
@@ -58,7 +58,7 @@ const englishMessages = {
     'The display name cannot contain control characters.',
   'auth.login.eyebrow': 'Local control plane',
   'auth.login.title': 'Welcome back.',
-  'auth.login.detail': "Sign in to see this server's live Helix dashboard.",
+  'auth.login.detail': 'Sign in to your Helix on this host.',
   'auth.login.loginName': 'Login name',
   'auth.login.password': 'Password',
   'auth.login.submit': 'Sign in',

@@ -22,6 +22,7 @@ import './storage-analyzer.css';
 
 const POLL_INTERVAL_MS = 1_000;
 const RESULT_PAGE_SIZE = 50;
+const RESUMABLE_JOB_PREFIX = 'helix.storage-analysis.v1.';
 const countFormat = new Intl.NumberFormat();
 
 export type StorageAnalysisSort = 'size-desc' | 'size-asc' | 'name-asc' | 'path-asc';
@@ -29,10 +30,43 @@ type ResultList = 'files' | 'recursive' | 'immediate';
 
 export interface StorageAnalyzerProps {
   path: string;
+  initialMode?: StorageAnalysisMode;
   csrfToken: string;
   onClose: () => void;
   onNavigate: (path: string) => void;
   onSessionExpired: () => void;
+}
+
+function resumableJobKey(path: string): string {
+  return RESUMABLE_JOB_PREFIX + encodeURIComponent(path);
+}
+
+function readResumableJob(path: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const jobId = window.localStorage.getItem(resumableJobKey(path));
+    return jobId !== null && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(jobId)
+      ? jobId.toLowerCase()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberResumableJob(path: string, jobId: string): void {
+  try {
+    window.localStorage.setItem(resumableJobKey(path), jobId);
+  } catch {
+    // Storage can be disabled; the live scan still works normally.
+  }
+}
+
+function forgetResumableJob(path: string): void {
+  try {
+    window.localStorage.removeItem(resumableJobKey(path));
+  } catch {
+    // Storage can be disabled; there is nothing else to clean up.
+  }
 }
 
 function describeError(error: unknown): string {
@@ -60,7 +94,7 @@ export function sortStorageAnalysisFiles(
       return compareText(left.name, right.name) || compareText(left.path, right.path);
     }
     if (sort === 'path-asc') return compareText(left.path, right.path);
-    const size = left.bytes === right.bytes ? 0 : left.bytes < right.bytes ? -1 : 1;
+    const size = left.allocatedBytes === right.allocatedBytes ? 0 : left.allocatedBytes < right.allocatedBytes ? -1 : 1;
     return (sort === 'size-asc' ? size : -size) || compareText(left.path, right.path);
   });
 }
@@ -75,8 +109,8 @@ export function sortStorageAnalysisFolders(
       return compareText(left.name, right.name) || compareText(left.path, right.path);
     }
     if (sort === 'path-asc') return compareText(left.path, right.path);
-    const leftBytes = metric === 'recursive' ? left.recursiveBytes : left.immediateBytes;
-    const rightBytes = metric === 'recursive' ? right.recursiveBytes : right.immediateBytes;
+    const leftBytes = metric === 'recursive' ? left.recursiveAllocatedBytes : left.immediateAllocatedBytes;
+    const rightBytes = metric === 'recursive' ? right.recursiveAllocatedBytes : right.immediateAllocatedBytes;
     const size = leftBytes === rightBytes ? 0 : leftBytes < rightBytes ? -1 : 1;
     return (sort === 'size-asc' ? size : -size) || compareText(left.path, right.path);
   });
@@ -93,7 +127,8 @@ export function storageResultNavigationPath(
 function skippedTotal(result: StorageAnalysisResult): number {
   const skipped = result.skipped;
   return skipped.restrictedPaths + skipped.symbolicLinks + skipped.otherFilesystems +
-    skipped.specialFiles + skipped.depthLimitedDirectories + skipped.unrepresentableNames;
+    skipped.specialFiles + skipped.depthLimitedDirectories + skipped.unrepresentableNames +
+    skipped.hardLinkAliases;
 }
 
 function omittedTotal(result: StorageAnalysisResult): number {
@@ -151,6 +186,7 @@ function ResultDetails({ result }: { result: StorageAnalysisResult }) {
           <div><dt>Special files</dt><dd>{countFormat.format(skipped.specialFiles)}</dd></div>
           <div><dt>Depth-limited folders</dt><dd>{countFormat.format(skipped.depthLimitedDirectories)}</dd></div>
           <div><dt>Unrepresentable names</dt><dd>{countFormat.format(skipped.unrepresentableNames)}</dd></div>
+          <div><dt>Duplicate hard links</dt><dd>{countFormat.format(skipped.hardLinkAliases)}</dd></div>
         </dl>
         <p>
           {result.limits.mode === 'thorough' ? 'Thorough' : 'Quick'} · metadata only · {countFormat.format(result.limits.maxEntries)} entries · {countFormat.format(result.limits.maxDurationMs / 1_000)} seconds · depth {countFormat.format(result.limits.maxDepth)} · no symlinks · target filesystem only
@@ -180,11 +216,12 @@ function FileRows({
   return (
     <div class="storage-analysis-table-wrap">
       <table class="storage-analysis-table">
-        <thead><tr><th>File</th><th>Apparent size</th><th>Type</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <thead><tr><th>File</th><th>Disk usage</th><th>Logical size</th><th>Type</th><th><span class="sr-only">Actions</span></th></tr></thead>
         <tbody>{files.map((file) => (
           <tr key={file.path}>
             <td><span class="storage-analysis-entry"><Icon name="file" size={16} /><span><strong>{file.name}</strong><code>{file.path}</code></span></span></td>
-            <td><strong>{formatBytes(file.bytes)}</strong></td>
+            <td><strong>{formatBytes(file.allocatedBytes)}</strong></td>
+            <td>{formatBytes(file.bytes)}</td>
             <td>File</td>
             <td><span class="storage-analysis-row-actions"><button class="button button--quiet" type="button" onClick={() => onNavigate(storageResultNavigationPath(file))}><Icon name="folder" size={14} />Show in files</button>{onTrashRequest !== undefined && <button class="button button--danger-quiet" type="button" onClick={() => onTrashRequest(file)}><Icon name="trash" size={14} />Move to trash</button>}</span></td>
           </tr>
@@ -206,12 +243,12 @@ function FolderRows({
   return (
     <div class="storage-analysis-table-wrap">
       <table class="storage-analysis-table storage-analysis-table--folders">
-        <thead><tr><th>Folder</th><th>{metric === 'recursive' ? 'Recursive total' : 'Immediate total'}</th><th>{metric === 'recursive' ? 'Immediate' : 'Recursive'}</th><th>Coverage</th><th><span class="sr-only">Action</span></th></tr></thead>
+        <thead><tr><th>Folder</th><th>Disk usage</th><th>Logical size</th><th>Coverage</th><th><span class="sr-only">Action</span></th></tr></thead>
         <tbody>{folders.map((folder) => (
           <tr key={folder.path}>
             <td><span class="storage-analysis-entry"><Icon name="folder" size={16} /><span><strong>{folder.name}</strong><code>{folder.path}</code></span></span></td>
-            <td><strong>{formatBytes(metric === 'recursive' ? folder.recursiveBytes : folder.immediateBytes)}</strong></td>
-            <td>{formatBytes(metric === 'recursive' ? folder.immediateBytes : folder.recursiveBytes)}</td>
+            <td><strong>{formatBytes(metric === 'recursive' ? folder.recursiveAllocatedBytes : folder.immediateAllocatedBytes)}</strong></td>
+            <td>{formatBytes(metric === 'recursive' ? folder.recursiveBytes : folder.immediateBytes)}</td>
             <td><span class="storage-analysis-coverages"><Completeness complete={folder.immediateComplete} label="Direct" /><Completeness complete={folder.recursiveComplete} label="Tree" /></span></td>
             <td><button class="button button--quiet" type="button" onClick={() => onNavigate(storageResultNavigationPath(folder))}><Icon name="folder" size={14} />Open folder</button></td>
           </tr>
@@ -263,10 +300,10 @@ export function StorageAnalysisResults({
     <div class="storage-analysis-results">
       <ResultNotice result={result} />
       <div class="storage-analysis-summary">
-        <div><span>Apparent bytes analyzed <InfoTip text="Logical file length from metadata. Sparse allocation is not measured, and hard links can be counted once per directory entry." /></span><strong>{formatBytes(result.apparentBytesScanned)}</strong></div>
+        <div><span>Disk space found <InfoTip text="Filesystem blocks allocated to regular files. This handles sparse files correctly; hard-linked data can appear at more than one path, and filesystem metadata is not included." /></span><strong>{formatBytes(result.allocatedBytesScanned)}</strong></div>
+        <div><span>Logical data size <InfoTip text="The combined logical length reported by file metadata. Sparse files can be logically larger than the disk space they consume." /></span><strong>{formatBytes(result.apparentBytesScanned)}</strong></div>
         <div><span>Filesystem errors <InfoTip text="Entries Helix could not inspect because permissions, concurrent file changes, metadata failures, or size overflow made a trustworthy total impossible." /></span><strong>{countFormat.format(result.errors.total)}</strong></div>
         <div><span>Skipped entries <InfoTip text="Protected paths, symbolic links, other filesystems, special files, depth-limited folders, and names the API cannot safely represent are never followed or guessed." /></span><strong>{countFormat.format(skippedTotal(result))}</strong></div>
-        <div><span>Ranking rows omitted <InfoTip text="Helix bounds every result list and the full response size. Omitted rows are counted even though they are not shown." /></span><strong>{countFormat.format(omittedTotal(result))}</strong></div>
       </div>
       <ResultDetails result={result} />
       <div class="storage-analysis-definitions"><span>Folder trees <InfoTip text="Recursive totals include regular files in the folder and every scanned descendant folder." /></span><span>Direct contents <InfoTip text="Immediate totals include only regular files directly inside each folder, not files in child folders." /></span></div>
@@ -332,7 +369,7 @@ function ScanStatus({ status, waiting }: { status: StorageAnalysisStatus | null;
         <div><span>Entries</span><strong>{countFormat.format(progress?.entriesScanned ?? 0)}</strong></div>
         <div><span>Files</span><strong>{countFormat.format(progress?.filesScanned ?? 0)}</strong></div>
         <div><span>Folders</span><strong>{countFormat.format(progress?.directoriesScanned ?? 0)}</strong></div>
-        <div><span>Apparent bytes</span><strong>{formatBytes(progress?.bytesScanned ?? 0n)}</strong></div>
+        <div><span>Disk usage found</span><strong>{formatBytes(progress?.allocatedBytesScanned ?? 0n)}</strong></div>
       </div>
       {!terminal && <div class="storage-analysis-budgets"><span><i style={{ width: String(progress?.entryBudgetPercent ?? 0) + '%' }} /><small>Entry limit {progress?.entryBudgetPercent ?? 0}%</small></span><span><i style={{ width: String(progress?.durationBudgetPercent ?? 0) + '%' }} /><small>Time limit {progress?.durationBudgetPercent ?? 0}%</small></span></div>}
     </div>
@@ -372,18 +409,19 @@ function IdleScan({
 
 export function StorageAnalyzer({
   path,
+  initialMode = 'quick',
   csrfToken,
   onClose,
   onNavigate,
   onSessionExpired,
 }: StorageAnalyzerProps) {
-  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobId, setJobId] = useState<string | null>(() => readResumableJob(path));
   const [status, setStatus] = useState<StorageAnalysisStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollCycle, setPollCycle] = useState(0);
-  const [mode, setMode] = useState<StorageAnalysisMode>('quick');
+  const [mode, setMode] = useState<StorageAnalysisMode>(initialMode);
   const [trashTarget, setTrashTarget] = useState<StorageAnalysisFile | null>(null);
   const [trashBusy, setTrashBusy] = useState(false);
   const [trashedPaths, setTrashedPaths] = useState<ReadonlySet<string>>(() => new Set());
@@ -430,7 +468,10 @@ export function StorageAnalyzer({
     setTrashedPaths(new Set());
     try {
       const dispatch = await startStorageAnalysis(path, csrfToken, mode, controller.signal);
-      if (!controller.signal.aborted) setJobId(dispatch.jobId);
+      if (!controller.signal.aborted) {
+        rememberResumableJob(path, dispatch.jobId);
+        setJobId(dispatch.jobId);
+      }
     } catch (requestError) {
       if (controller.signal.aborted) return;
       if (isSessionError(requestError)) onSessionExpired();
@@ -483,8 +524,9 @@ export function StorageAnalyzer({
           )}
         </div>
         <footer class="storage-analysis-footer">
-          <span>{active ? 'Closing this window does not cancel the bounded background job.' : trashedPaths.size > 0 ? `${countFormat.format(trashedPaths.size)} item${trashedPaths.size === 1 ? '' : 's'} moved to recoverable trash.` : 'The scan itself never changes files or folders.'}</span>
+          <span>{active ? 'Closing this window does not cancel the scan. Reopen this drive to resume its progress.' : trashedPaths.size > 0 ? `${countFormat.format(trashedPaths.size)} item${trashedPaths.size === 1 ? '' : 's'} moved to recoverable trash.` : 'The scan itself never changes files or folders.'}</span>
           <div>
+            {jobId !== null && status === null && error !== null && <button class="button button--quiet" type="button" onClick={() => { forgetResumableJob(path); setJobId(null); setError(null); }}>Start fresh</button>}
             {active && <button class="button button--danger-quiet" type="button" disabled={cancelling || status?.cancelRequested === true} onClick={() => void cancel()}><Icon name="stop" size={14} />{status?.cancelRequested === true || cancelling ? 'Stopping…' : 'Cancel scan'}</button>}
             {status !== null && !isActiveState(status.state) && <button class="button button--quiet" type="button" onClick={() => void begin()}><Icon name="refresh" size={14} />Scan again</button>}
             <button class="button" type="button" onClick={onClose}>Close</button>

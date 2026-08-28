@@ -68,6 +68,16 @@ function compatibleVersion(version: MarketplaceVersion, detail: MarketplaceProje
     && version.loaders.some((loader) => detail.compatibility.acceptedLoaders.includes(loader));
 }
 
+function serverMetadataWarning(detail: MarketplaceProjectDetail): string | null {
+  if (detail.project.serverSide === 'unsupported') {
+    return 'Modrinth marks this project as unsupported on dedicated servers. Helix will still install the selected JAR because its loader and Minecraft version match, but the project may not work here.';
+  }
+  if (detail.project.serverSide === 'unknown') {
+    return 'This project does not declare dedicated-server support. Helix will still install the selected JAR because its loader and Minecraft version match.';
+  }
+  return null;
+}
+
 function ResultLettermark({ title, kind, iconUrl = null }: { title: string; kind: 'plugin' | 'mod'; iconUrl?: string | null }) {
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [iconUrl]);
@@ -121,14 +131,14 @@ function SearchResults({
   onRetry: () => void;
 }) {
   if (loading && page === null) {
-    return <div class="marketplace-state" role="status"><Icon name="refresh" class="is-spinning" /><strong>Finding compatible projects</strong><span>Modrinth results are being filtered for this exact server.</span></div>;
+    return <div class="marketplace-state" role="status"><Icon name="refresh" class="is-spinning" /><strong>Finding matching projects</strong><span>Modrinth results are being filtered by this server’s loader and Minecraft version.</span></div>;
   }
   if (error !== null) {
     return <div class="marketplace-state marketplace-state--error" role="alert"><Icon name="warning" /><strong>Search unavailable</strong><span>{error}</span><button class="button button--primary" type="button" onClick={onRetry}>Try again</button></div>;
   }
   if (page === null) return null;
   if (page.hits.length === 0) {
-    return <div class="marketplace-state"><Icon name="search" /><strong>No compatible projects found</strong><span>Try a broader name. Helix will not show content that does not match this server.</span></div>;
+    return <div class="marketplace-state"><Icon name="search" /><strong>No matching projects found</strong><span>Try a broader name. Helix still requires the correct loader and Minecraft version.</span></div>;
   }
   return <div class={`marketplace-results${loading ? ' is-refreshing' : ''}`} aria-busy={loading}>{page.hits.map((hit) => <SearchCard key={hit.projectId} hit={hit} kind={page.compatibility.contentKind} onOpen={() => onOpen(hit)} />)}</div>;
 }
@@ -194,6 +204,7 @@ function InstallDialog({
   const installedRefresh = useRef(false);
   const active = dispatching || (error === null && (job?.status === 'queued' || job?.status === 'running'));
   const runtimeCopy = marketplaceInstallRuntimeCopy(server.status);
+  const metadataWarning = serverMetadataWarning(detail);
 
   useEffect(() => {
     if (jobId === null) return;
@@ -266,9 +277,10 @@ function InstallDialog({
         <ul class="marketplace-safety-list">
           <li><Icon name="check" size={15} /><span><strong>Required dependencies are resolved automatically.</strong> Optional dependencies stay uninstalled and will be listed afterward.</span></li>
           <li><Icon name="backup" size={15} /><span><strong>Files are changed only after a safety backup.</strong> {runtimeCopy.backup}</span></li>
-          <li><Icon name="check" size={15} /><span><strong>Every downloaded file is SHA-512 verified.</strong> Helix only keeps compatible server-side content from Modrinth.</span></li>
+          <li><Icon name="check" size={15} /><span><strong>Every downloaded file is SHA-512 verified.</strong> Helix writes the selected JAR only to <code>{detail.compatibility.installDirectory}/</code>.</span></li>
           <li><Icon name="restart" size={15} /><span><strong>Runtime validation follows the server’s current state.</strong> {runtimeCopy.validation}</span></li>
         </ul>
+        {metadataWarning !== null && <div class="marketplace-note marketplace-note--warning"><Icon name="warning" size={14} />{metadataWarning}</div>}
         <label class="check-row marketplace-confirm-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.currentTarget.checked)} /><span><strong>Install this exact version</strong><small>I understand the server may briefly stop or restart.</small></span></label>
         <InlineError message={error} />
         <div class="dialog-actions"><button class="button button--quiet" type="button" onClick={onClose}>Cancel</button><button class="button button--primary" type="button" disabled={!confirmed || dispatching} onClick={() => void install()}>{dispatching ? 'Queuing…' : `Install ${detail.compatibility.contentKind}`}</button></div>
@@ -318,6 +330,7 @@ function ProjectView({
   if (error !== null || detail === null) return <div class="marketplace-project-state"><button class="back-link" type="button" onClick={onBack}><Icon name="back" size={15} />Marketplace</button><div class="marketplace-state marketplace-state--error" role="alert"><Icon name="warning" /><strong>Project unavailable</strong><span>{error ?? 'The project did not return a usable response.'}</span><button class="button button--primary" type="button" onClick={onRetry}>Try again</button></div></div>;
   const selectedVersion = detail.versions.find((version) => version.id === selectedVersionId) ?? null;
   const installable = selectedVersion !== null && compatibleVersion(selectedVersion, detail);
+  const metadataWarning = serverMetadataWarning(detail);
   const body = detail.project.body ?? detail.project.description ?? 'This project did not provide a longer description.';
   const shownBody = bodyExpanded || body.length <= BODY_PREVIEW_CHARS ? body : `${body.slice(0, BODY_PREVIEW_CHARS)}\n\n…`;
   return (
@@ -334,6 +347,7 @@ function ProjectView({
           <div><span class="eyebrow">EXACT COMPATIBILITY</span><h3>Choose a version</h3><p>Only versions returned for {detail.compatibility.serverSoftware} {detail.compatibility.minecraftVersion} are available.</p></div>
           <label class="field"><span>Version</span><select value={selectedVersionId} onChange={(event) => onVersionChange(event.currentTarget.value)}><option value="">Select a compatible version</option>{detail.versions.map((version) => <option key={version.id} value={version.id} disabled={!version.hasPrimaryFile}>{version.versionNumber} · {version.versionType}{version.hasPrimaryFile ? '' : ' · no primary file'}</option>)}</select></label>
           {selectedVersion !== null && <VersionFacts version={selectedVersion} />}
+          {metadataWarning !== null && <div class="marketplace-note marketplace-note--warning"><Icon name="warning" size={14} />{metadataWarning}</div>}
           {detail.versionResultsTruncated && <div class="marketplace-note"><Icon name="info" size={14} />Showing the newest 100 compatible versions.</div>}
           {!detail.versions.some((version) => version.versionType === 'release' && version.hasPrimaryFile) && <div class="marketplace-note marketplace-note--warning"><Icon name="warning" size={14} />No release is available. Select a beta or alpha explicitly if you accept that channel.</div>}
           {!canManageServers && <div class="marketplace-note"><Icon name="info" size={14} />Your account can browse compatible content but cannot install it.</div>}
@@ -438,10 +452,10 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
   const canGoNext = page !== null && lastResult < page.totalHits && page.offset + page.limit <= 10_000;
   return (
     <section class="server-tool marketplace-panel" ref={searchTop}>
-      <header class="marketplace-head"><div><span class="eyebrow">CURATED FROM MODRINTH</span><h2>{profile.contentKind === 'plugin' ? 'Plugin marketplace' : 'Mod marketplace'}</h2><p>Browse only server-side content compatible with this exact Minecraft runtime.</p></div><a class="marketplace-modrinth" href="https://modrinth.com" target="_blank" rel="noreferrer">Powered by Modrinth <Icon name="external" size={13} /></a></header>
+      <header class="marketplace-head"><div><span class="eyebrow">FROM MODRINTH</span><h2>{profile.contentKind === 'plugin' ? 'Plugin marketplace' : 'Mod marketplace'}</h2><p>Browse projects for this loader and Minecraft version. Missing server-side metadata is shown as a warning, not a dead end.</p></div><a class="marketplace-modrinth" href="https://modrinth.com" target="_blank" rel="noreferrer">Powered by Modrinth <Icon name="external" size={13} /></a></header>
       {page !== null && <CompatibilityBar page={page} />}
       <label class="marketplace-search"><Icon name="search" size={18} /><span class="sr-only">Search compatible projects</span><input type="search" value={draftQuery} maxlength={120} autocomplete="off" placeholder={`Search ${profile.contentKind === 'plugin' ? 'plugins' : 'mods'} by name`} onInput={(event) => setDraftQuery(event.currentTarget.value)} />{draftQuery.length > 0 && <button type="button" onClick={() => setDraftQuery('')} aria-label="Clear marketplace search"><Icon name="close" size={15} /></button>}</label>
-      <div class="marketplace-results-head"><div><strong>{page === null ? 'Compatible projects' : `${wholeNumber.format(page.totalHits)} compatible project${page.totalHits === 1 ? '' : 's'}`}</strong><span>{query.length === 0 ? 'Popular results for this server' : `Results for “${query}”`}</span></div>{page !== null && page.totalHits > 0 && <span>{firstResult}–{lastResult} of {wholeNumber.format(page.totalHits)}</span>}</div>
+      <div class="marketplace-results-head"><div><strong>{page === null ? 'Matching projects' : `${wholeNumber.format(page.totalHits)} matching project${page.totalHits === 1 ? '' : 's'}`}</strong><span>{query.length === 0 ? 'Popular results for this server' : `Results for “${query}”`}</span></div>{page !== null && page.totalHits > 0 && <span>{firstResult}–{lastResult} of {wholeNumber.format(page.totalHits)}</span>}</div>
       <SearchResults page={page} loading={searching} error={searchError} onOpen={loadProject} onRetry={() => setSearchRevision((value) => value + 1)} />
       {page !== null && page.totalHits > 0 && <nav class="marketplace-pagination" aria-label="Marketplace result pages"><button class="button button--quiet" type="button" disabled={searching || page.offset === 0} onClick={() => { setOffset(Math.max(0, page.offset - page.limit)); searchTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}><Icon name="back" size={14} />Previous</button><span>Showing {firstResult}–{lastResult}</span><button class="button button--quiet" type="button" disabled={searching || !canGoNext} onClick={() => { setOffset(page.offset + page.limit); searchTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Next<Icon name="chevron" size={14} /></button></nav>}
       <footer class="marketplace-attribution">Results, metadata, and artwork come from <a href="https://modrinth.com" target="_blank" rel="noreferrer">Modrinth <Icon name="external" size={12} /></a>. Artwork is fetched through Helix’s bounded image proxy instead of connecting the browser directly to arbitrary image hosts.</footer>

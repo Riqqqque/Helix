@@ -31,6 +31,7 @@ interface HomeLiveData {
 
 export interface HomePageProps extends HomeLiveData {
   csrfToken: string;
+  displayName: string;
   templates: HomeTemplate[];
   activeHomeId: string;
   syncStatus: 'loading' | 'synced' | 'saving' | 'local';
@@ -172,17 +173,14 @@ function WeatherWidget({ widget, editing, onChange, csrfToken }: {
     return () => controller.abort();
   }, [configuration.location, configuration.unit, csrfToken]);
 
-  if (editing) {
+  if (editing || configuration.location.length < 2) {
     return (
       <div class="home-weather-editor">
         <label><span>City or postal code</span><input value={configuration.location} maxLength={120} placeholder="Denver, Colorado" onInput={(event) => onChange({ content: serializeWeatherWidgetConfiguration({ ...configuration, location: event.currentTarget.value }) })} /></label>
         <label><span>Temperature</span><select value={configuration.unit} onChange={(event) => onChange({ content: serializeWeatherWidgetConfiguration({ ...configuration, unit: event.currentTarget.value === 'celsius' ? 'celsius' : 'fahrenheit' }) })}><option value="fahrenheit">Fahrenheit</option><option value="celsius">Celsius</option></select></label>
-        <small>Location is resolved by Helix through Open-Meteo. Browser location access stays off.</small>
+        <small>Type your city. Helix looks it up through Open-Meteo. Browser location access stays off.</small>
       </div>
     );
-  }
-  if (configuration.location.length < 2) {
-    return <div class="home-widget__empty">Turn on edit mode and choose a weather location.</div>;
   }
   if (error !== null) {
     return <div class="home-weather-state"><Icon name="warning" /><strong>Weather unavailable</strong><span>{error}</span></div>;
@@ -238,7 +236,7 @@ function ServersWidget({ servers }: Pick<HomePageProps, 'servers'>) {
           <span>{server.manager === 'helix' ? 'Helix' : 'AMP'}</span>
         </a>
       ))}
-      {ordered.length === 0 && <div class="home-widget__empty">No game servers reported.</div>}
+      {ordered.length === 0 && <div class="home-widget__empty">No servers yet. <a href="#servers">Open Servers</a> to create the first native instance.</div>}
     </div>
   );
 }
@@ -352,7 +350,7 @@ function WidgetSettings({ widget, onChange, onClose }: {
         <label><span>Height</span><select value={widget.height} onChange={(event) => onChange({ height: event.currentTarget.value as HomeWidget['height'] })}><option value="short">Short</option><option value="medium">Medium</option><option value="tall">Tall</option></select></label>
         <label><span>Accent</span><span class="home-color-control"><input type="color" value={widget.color || '#d7f64d'} onInput={(event) => onChange({ color: event.currentTarget.value.toLowerCase() })} /><button type="button" onClick={() => onChange({ color: '' })}>Use Home color</button></span></label>
       </div>
-      {note !== null && <label class="home-widget-toggle"><input type="checkbox" checked={note.editableOutsideLayout} onChange={(event) => onChange({ content: serializeNoteWidgetConfiguration({ ...note, editableOutsideLayout: event.currentTarget.checked }) })} /><span><strong>Quick editing</strong><small>Allow this note to be edited without turning on layout mode.</small></span></label>}
+      {note !== null && <label class="home-widget-toggle"><input class="toggle-input" type="checkbox" checked={note.editableOutsideLayout} onChange={(event) => onChange({ content: serializeNoteWidgetConfiguration({ ...note, editableOutsideLayout: event.currentTarget.checked }) })} /><span><strong>Quick editing</strong><small>Allow this note to be edited without turning on layout mode.</small></span></label>}
     </div>
   );
 }
@@ -432,13 +430,14 @@ function HomeTemplatePanel({ templates, activeHomeId, onHomeChange, onClose }: {
   );
 }
 
-export function HomePage({ overview, inventory, servers, templates, activeHomeId, syncStatus, onHomeChange, csrfToken }: HomePageProps) {
+export function HomePage({ overview, inventory, servers, displayName, templates, activeHomeId, syncStatus, onHomeChange, csrfToken }: HomePageProps) {
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [settingsWidgetId, setSettingsWidgetId] = useState<string | null>(null);
   const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [dropPlacement, setDropPlacement] = useState<'before' | 'after'>('before');
   const activeTemplate = templates.find((template) => template.id === activeHomeId) ?? templates[0]!;
   const widgets = activeTemplate.widgets;
 
@@ -459,12 +458,13 @@ export function HomePage({ overview, inventory, servers, templates, activeHomeId
   const finishDrag = (): void => {
     setDraggedWidgetId(null);
     setDropTargetId(null);
+    setDropPlacement('before');
   };
 
   return (
     <div class="page page--home" style={{ '--home-accent': activeTemplate.accent }}>
       <div class="page-head home-page-head">
-        <div><span class="eyebrow">{activeTemplate.name}</span><h1>Home</h1><p>Your at-a-glance workspace. Arrange it around how you run this host.</p></div>
+        <div><span class="eyebrow">{activeTemplate.name}</span><h1>Home</h1><p>{displayName.trim().length > 0 ? `Welcome, ${displayName.trim()}. Arrange this workspace around how you run this host.` : 'Your at-a-glance workspace. Arrange it around how you run this host.'}</p></div>
         <div class="page-head-actions home-page-actions">
           {editing && <button class="button button--quiet" type="button" onClick={() => setAdding((value) => !value)}><Icon name="plus" size={15} />Add widget</button>}
           <button class={`button${templatesOpen ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={templatesOpen} onClick={() => setTemplatesOpen((value) => !value)}><Icon name="home" size={15} />Homes</button>
@@ -483,12 +483,24 @@ export function HomePage({ overview, inventory, servers, templates, activeHomeId
       <section class={`home-grid${editing ? ' is-editing' : ''}`} aria-label="Home widgets">
         {widgets.map((widget, index) => (
           <article
-            class={`home-widget home-widget--${widget.size} home-widget--height-${widget.height}${draggedWidgetId === widget.id ? ' is-dragging' : ''}${dropTargetId === widget.id ? ' is-drop-target' : ''}`}
+            class={`home-widget home-widget--${widget.size} home-widget--height-${widget.height}${draggedWidgetId === widget.id ? ' is-dragging' : ''}${dropTargetId === widget.id ? ` is-drop-${dropPlacement}` : ''}`}
             key={widget.id}
             style={widget.color.length > 0 ? { '--widget-accent': widget.color } : undefined}
-            onDragOver={(event) => { if (editing && draggedWidgetId !== null && draggedWidgetId !== widget.id) { event.preventDefault(); setDropTargetId(widget.id); } }}
+            onDragOver={(event) => {
+              if (!editing || draggedWidgetId === null || draggedWidgetId === widget.id) return;
+              event.preventDefault();
+              const bounds = event.currentTarget.getBoundingClientRect();
+              const verticalLayout = bounds.width >= window.innerWidth * 0.7;
+              const placement = verticalLayout
+                ? (event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after')
+                : (event.clientX < bounds.left + bounds.width / 2 ? 'before' : 'after');
+              setDropTargetId(widget.id);
+              setDropPlacement(placement);
+              if (event.clientY < 72) window.scrollBy({ top: -18, behavior: 'auto' });
+              else if (event.clientY > window.innerHeight - 72) window.scrollBy({ top: 18, behavior: 'auto' });
+            }}
             onDragLeave={() => { if (dropTargetId === widget.id) setDropTargetId(null); }}
-            onDrop={(event) => { event.preventDefault(); if (draggedWidgetId !== null) changeWidgets((current) => reorderHomeWidgets(current, draggedWidgetId, widget.id)); finishDrag(); }}
+            onDrop={(event) => { event.preventDefault(); if (draggedWidgetId !== null) changeWidgets((current) => reorderHomeWidgets(current, draggedWidgetId, widget.id, dropPlacement)); finishDrag(); }}
           >
             <header>
               <div><Icon name={widgetIcons[widget.kind]} size={16} />{editing ? <input class="home-widget__title-input" value={widget.title} maxLength={80} aria-label={`${widget.kind} widget title`} onInput={(event) => updateWidget(widget.id, { title: event.currentTarget.value })} /> : <h2>{widget.title}</h2>}</div>

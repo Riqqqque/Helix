@@ -39,8 +39,10 @@ configured, and installed on the host separately.
 - The gateway discards forwarded-client headers rather than trusting an
   undeclared proxy chain.
 - The broker configuration names exact managed roots, native state/instance/
-  backup roots, Docker binary, optional AMP credential file, and durable
-  network-rule state.
+  backup roots, custom executable-import roots, Docker binary, optional AMP
+  credential file, and durable network-rule state. Broad read-only browsing of
+  `/` is never inherited as a custom JAR import root; set
+  `native.custom_artifact_roots` to explicit mount or storage paths instead.
 - The broker service sandbox grants configured content roots explicitly. Hosts
   that enable selected APT updates, UFW mutations, or recurring reboot schedules
   must also retain the reviewed `/boot`, `/etc`, `/usr`, and `/var` exceptions
@@ -74,7 +76,11 @@ Before starting anything:
    record both numeric GIDs. Never reuse the broker group for the terminal.
 3. Choose absolute, private broker state, instance, backup, and managed-storage
    roots. Do not reuse a personal home directory or copy example roots blindly.
-4. Create a root-owned broker configuration readable only by root.
+4. Create a root-owned broker configuration readable only by root. Start from
+   `deploy/privd.example.json` and install it at `/etc/helix/privd.json` mode
+   `0600`. Replace every example `/srv/...` path with directories that already
+   exist on this host. The example `analysis_roots` of `/` is for largest-file
+   analysis, not a custom-JAR import boundary.
 5. Review the systemd unit's user, group, socket/state directories, executable,
    and `ReadWritePaths` against those exact choices.
 6. Keep the deployment `.env` operator-owned and mode `0600`.
@@ -132,8 +138,10 @@ report unavailable without affecting other pages.
 
 ## Configure the private gateway
 
-Copy `.env.example` to `.env`, then replace every example value. At minimum,
-set:
+Copy `.env.example` to `.env`, then replace every example value. The sample
+uses `192.168.1.10` and `192.168.1.0/24` only as visible placeholders. Put this
+server's private IPv4, the origin you will type in a browser, and the subnet
+those browsers sit on. At minimum, set:
 
 - `HELIX_LAN_BIND_ADDRESS` to one exact private host address;
 - `HELIX_LAN_PORT` to the chosen private port;
@@ -199,13 +207,15 @@ docker compose up -d --wait
 ```
 
 The daemon stays stopped while the offline token is replaced. The token expires
-after 15 minutes and is consumed by the first successful owner claim. Do not put
-the token or password in `.env`, Compose, shell history, logs, screenshots, or
-source.
+after 15 minutes and is consumed by the first successful owner claim. Create
+the owner with a login you will remember and a display name; Home greets that
+name. Do not put the token or password in `.env`, Compose, shell history, logs,
+screenshots, or source.
 
 After enrollment, verify login, protected reads, logout/login, broker status,
 and that disabled or unavailable integrations say why rather than reporting
-success.
+success. Then set your weather city, use the Home scratchpad, and create the
+first native server from Servers rather than expecting demo workloads.
 
 ## Verify the boundary
 
@@ -229,10 +239,12 @@ recreation can reapply the policy declared in `compose.yaml`.
 ## Tailscale
 
 Helix can accept a second exact Host, Origin, and client CIDR for an already
-configured private Tailscale route. It does not install, enable, authenticate,
-or reconfigure Tailscale. Do not trust the whole carrier address range merely
-because one expected node uses it, and do not treat Tailscale compatibility as
-proof that remote access was configured or reviewed.
+configured private Tailscale route. The optional Hook installer can add the
+exact signed repository, install the exact package, and enable the service on
+eligible Debian/Ubuntu hosts. It does not authenticate the tailnet or configure
+the gateway's Host, Origin, or CIDR policy. Do not trust the whole carrier
+address range merely because one expected node uses it, and do not treat
+Tailscale compatibility as proof that remote access was configured or reviewed.
 
 ## Backup and rollback
 

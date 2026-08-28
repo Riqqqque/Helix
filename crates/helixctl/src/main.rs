@@ -546,6 +546,10 @@ fn install_setup_token(data_dir: &Path, output: &mut impl io::Write) -> Result<(
             )?;
             writeln!(
                 output,
+                "Then create the owner with a login you will remember and a display name Helix can greet you with."
+            )?;
+            writeln!(
+                output,
                 "Running this command again invalidates the previous setup token."
             )?;
         }
@@ -764,6 +768,8 @@ mod tests {
 
         assert_ne!(first_token, second_token);
         assert!(!second_text.contains(&first_token));
+        assert!(first_text.contains("display name"));
+        assert!(first_text.contains("15 minutes"));
     }
 
     #[test]

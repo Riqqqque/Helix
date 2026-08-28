@@ -80,6 +80,21 @@ marketplace matrices are still release gates. See
 [the verified state](PROGRESS.md) for the distinction between implemented and
 validated.
 
+## Run it
+
+There is no supported binary installer. Use the source:
+
+1. **Loopback preview** on the machine you cloned — owner setup, Home, and
+   read-only dashboard pages. Host controls stay unavailable until the Linux
+   broker is configured.
+2. **Private LAN on a Linux server** — copy `.env.example` to `.env` and
+   `deploy/privd.example.json` to the host broker config, then replace every
+   placeholder with *that* host's address, groups, and storage roots.
+
+The walkthrough is [Getting Started](docs/wiki/Getting-Started.md). The exact
+Compose and systemd boundary is
+[Container deployment](docs/CONTAINER-DEPLOYMENT.md).
+
 ## Honest limits
 
 Helix does not currently:

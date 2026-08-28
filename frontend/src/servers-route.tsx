@@ -9,6 +9,7 @@ export interface ServersRouteProps {
   csrfToken: string;
   canManageServers: boolean;
   canManageBackups: boolean;
+  canManageNetwork: boolean;
   onSessionExpired: () => void;
 }
 

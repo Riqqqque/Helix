@@ -1,4 +1,5 @@
 import {
+  ApiError,
   expectArray,
   expectNumber,
   expectRecord,
@@ -162,7 +163,7 @@ export interface ManagedServer {
 }
 
 export type ServerAction = 'start' | 'stop' | 'restart' | 'update' | 'backup';
-export type MinecraftSoftware = 'vanilla' | 'paper' | 'purpur' | 'folia' | 'fabric' | 'neoforge';
+export type MinecraftSoftware = 'custom' | 'vanilla' | 'paper' | 'purpur' | 'folia' | 'fabric' | 'neoforge';
 
 export interface MinecraftCreateInput {
   name: string;
@@ -170,9 +171,29 @@ export interface MinecraftCreateInput {
   version: string;
   memory_mb: number;
   max_players: number;
-  game_port: number;
+  game_port?: number;
+  network_exposure: 'private' | 'public';
   start_on_boot: boolean;
   eula_accepted: boolean;
+  custom_jar?: {
+    source_path: string;
+    java_version: 17 | 21 | 25;
+  };
+}
+
+export interface GamePortRange {
+  start: number;
+  end: number;
+}
+
+export interface GamePortPolicy {
+  ranges: GamePortRange[];
+  ports: number[];
+  autoForwardOnCreate: boolean;
+  capacity: number;
+  assignedPorts: number[];
+  availableCount: number;
+  nextAvailablePort: number | null;
 }
 
 export interface BrokerJob {
@@ -933,12 +954,70 @@ export function createMinecraftServer(input: MinecraftCreateInput, csrfToken: st
   }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
 }
 
+function parseGamePortPolicy(value: unknown): GamePortPolicy {
+  const root = expectRecord(value, 'game port policy');
+  if (number(root, 'schema_version') !== 1) throw new ApiError('Unsupported game port policy schema.');
+  const policy = expectRecord(root.policy, 'game port policy details');
+  if (expectString(policy, 'game', 'game port policy details') !== 'minecraft') {
+    throw new ApiError('Game port policy returned the wrong game.');
+  }
+  const ranges = expectArray(policy, 'ranges', 'game port policy details', 32).map((value) => {
+    const range = expectRecord(value, 'game port range');
+    return { start: number(range, 'start'), end: number(range, 'end') };
+  });
+  return {
+    ranges,
+    ports: expectArray(policy, 'ports', 'game port policy details', 256).map((value) => {
+      if (typeof value !== 'number' || !Number.isInteger(value)) throw new ApiError('Game port policy returned an invalid port.');
+      return value;
+    }),
+    autoForwardOnCreate: boolean(policy, 'auto_forward_on_create'),
+    capacity: number(root, 'capacity'),
+    assignedPorts: expectArray(root, 'assigned_ports', 'game port policy', 4096).map((value) => {
+      if (typeof value !== 'number' || !Number.isInteger(value)) throw new ApiError('Game port policy returned an invalid assigned port.');
+      return value;
+    }),
+    availableCount: number(root, 'available_count'),
+    nextAvailablePort: nullableNumber(root, 'next_available_port'),
+  };
+}
+
+export function getMinecraftPortPolicy(csrfToken: string, signal?: AbortSignal): Promise<GamePortPolicy> {
+  return requestJson('/api/v1/servers/port-policies/minecraft', parseGamePortPolicy, { csrfToken, signal });
+}
+
+export function saveMinecraftPortPolicy(
+  input: Pick<GamePortPolicy, 'ranges' | 'ports' | 'autoForwardOnCreate'>,
+  csrfToken: string,
+): Promise<GamePortPolicy> {
+  return requestJson('/api/v1/servers/port-policies/minecraft', parseGamePortPolicy, {
+    method: 'PUT',
+    body: {
+      game: 'minecraft',
+      ranges: input.ranges,
+      ports: input.ports,
+      auto_forward_on_create: input.autoForwardOnCreate,
+    },
+    csrfToken,
+  });
+}
+
+export function setServerNetworkExposure(
+  id: string,
+  enabled: boolean,
+  csrfToken: string,
+): Promise<unknown> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/network`, (value) => value, {
+    method: 'PUT', body: { enabled }, csrfToken, timeoutMs: 30_000,
+  });
+}
+
 export function getJob(jobId: string, csrfToken: string, signal?: AbortSignal): Promise<BrokerJob> {
   return requestJson(`/api/v1/jobs/${encodeURIComponent(jobId)}`, parseJob, { csrfToken, signal });
 }
 
 export function getServerDetail(id: string, csrfToken: string, signal?: AbortSignal): Promise<NativeServerDetail> {
-  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}`, parseNativeServerDetail, { csrfToken, signal });
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}`, parseNativeServerDetail, { csrfToken, signal, timeoutMs: 30_000 });
 }
 
 export function getServerLogs(id: string, csrfToken: string, signal?: AbortSignal): Promise<ServerLogSnapshot> {

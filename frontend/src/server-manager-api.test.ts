@@ -3,8 +3,8 @@ import { getServerManagerReadiness, parseServerManagerReadiness } from './server
 
 const entry = (id: string, installable: boolean) => ({
   id,
-  name: id === 'paper' ? 'Paper' : 'NeoForge',
-  kind: id === 'paper' ? 'plugin_server' : 'mod_server',
+  name: id === 'paper' ? 'Paper' : id === 'custom' ? 'Custom JAR' : 'NeoForge',
+  kind: id === 'paper' ? 'plugin_server' : id === 'custom' ? 'custom_server' : 'mod_server',
   status: installable ? 'ready' : 'validation_pending',
   installable,
   recommended: id === 'paper',
@@ -62,5 +62,18 @@ describe('native server manager readiness', () => {
     await getServerManagerReadiness('csrf');
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/servers/manager/readiness');
     expect((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).toMatchObject({ 'X-Helix-CSRF': 'csrf' });
+  });
+
+  it('accepts a ready custom JAR import only when the catalog agrees', () => {
+    const parsed = parseServerManagerReadiness({
+      ...readiness,
+      supported_minecraft_software: ['paper', 'custom'],
+      minecraft_software_catalog: [entry('paper', true), entry('custom', true), entry('neoforge', false)],
+    });
+    expect(parsed.availability).toBe('ready');
+    if (parsed.availability === 'ready') {
+      expect(parsed.supportedMinecraftSoftware).toContain('custom');
+      expect(parsed.minecraftSoftwareCatalog[1]).toMatchObject({ kind: 'custom_server', installable: true });
+    }
   });
 });

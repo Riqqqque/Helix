@@ -8,6 +8,21 @@ import type { SystemPackageInventory } from "./package-api";
 const ruleId = "6b8f95ce-9c58-4c4c-b232-627a29ca1c03";
 const network: NetworkInventory = {
   collectedAtUnixMs: 1_800_000_000_000,
+  addresses: {
+    privateIpv4: "192.168.1.20",
+    source: "router_path",
+    note: "LAN address.",
+  },
+  router: {
+    automaticPortForwardingAvailable: true,
+    discovery: "upnp_igd",
+    state: "available",
+    externalIpv4: "203.0.113.8",
+    externalAddressKind: "public",
+    privateIpv4: "192.168.1.20",
+    error: null,
+    note: "Router available.",
+  },
   listeners: {
     source: "linux_proc_net",
     items: [
@@ -98,9 +113,15 @@ const network: NetworkInventory = {
         allowed: true,
         state: "allowed",
       },
+      privateJoinAddress: "192.168.1.20:25565",
       externalReachability: {
-        state: "unverified",
+        state: "setup_available",
         reachable: null,
+        testedFromExternalNetwork: false,
+        routerMappingVerified: false,
+        externalIp: "203.0.113.8",
+        joinAddress: "203.0.113.8:25565",
+        verifiedAtUnixMs: null,
         note: "Not tested externally.",
       },
     },

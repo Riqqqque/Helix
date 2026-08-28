@@ -19,6 +19,7 @@ unicode-normalization.workspace = true
 uuid.workspace = true
 zip.workspace = true
 fs2.workspace = true
+quick-xml.workspace = true
 rustix = { workspace = true, features = ["fs", "std"] }
 
 [dev-dependencies]

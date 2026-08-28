@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  getMinecraftPortPolicy,
   getDirectory,
   getServerBackups,
   getServerDetail,
@@ -7,6 +8,8 @@ import {
   parseMinecraftSettingsSaveResult,
   restoreTrashedServerBackup,
   runServerAction,
+  saveMinecraftPortPolicy,
+  setServerNetworkExposure,
   saveServerSettings,
   trashServerBackup,
   type MinecraftSettings,
@@ -116,6 +119,51 @@ function wireSettings(value = settings): Record<string, unknown> {
 }
 
 describe('native server API', () => {
+  it('reads and writes bounded Minecraft port pools and the exposure toggle', async () => {
+    const response = {
+      schema_version: 1,
+      policy: {
+        game: 'minecraft',
+        ranges: [{ start: 25565, end: 25574 }],
+        ports: [25600],
+        auto_forward_on_create: true,
+      },
+      capacity: 11,
+      assigned_ports: [25565],
+      available_count: 10,
+      next_available_port: 25600,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ enabled: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getMinecraftPortPolicy('csrf')).resolves.toMatchObject({
+      nextAvailablePort: 25600,
+      autoForwardOnCreate: true,
+      availableCount: 10,
+    });
+    await saveMinecraftPortPolicy({
+      ranges: [{ start: 25565, end: 25574 }],
+      ports: [25600],
+      autoForwardOnCreate: true,
+    }, 'csrf');
+    await setServerNetworkExposure('helix:server-id', true, 'csrf');
+
+    const [, policyRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(policyRequest.method).toBe('PUT');
+    expect(JSON.parse(String(policyRequest.body))).toEqual({
+      game: 'minecraft',
+      ranges: [{ start: 25565, end: 25574 }],
+      ports: [25600],
+      auto_forward_on_create: true,
+    });
+    const [exposurePath, exposureRequest] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(exposurePath).toContain('helix%3Aserver-id/network');
+    expect(JSON.parse(String(exposureRequest.body))).toEqual({ enabled: true });
+  });
+
   it('parses a background action job without waiting for the work', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ job_id: 'ccf645d5-7896-4659-bc71-6f177efb589d' }), { status: 200 }),

@@ -9,20 +9,27 @@ import {
 import { ApiError } from "./api";
 import {
   createMinecraftServer,
+  getDirectory,
   getTrashedNativeServers,
   getServerBackups,
   getServerDetail,
   getServerLogs,
+  getMinecraftPortPolicy,
   restoreServerBackup,
   restoreTrashedServerBackup,
   restoreTrashedNativeServer,
   runServerAction,
   saveServerSettings,
   sendConsoleCommand,
+  saveMinecraftPortPolicy,
+  setServerNetworkExposure,
   trashServerBackup,
   trashNativeServer,
   type BrokerJob,
+  type DirectoryListing,
   type HostInventory,
+  type GamePortPolicy,
+  type GamePortRange,
   type ManagedServer,
   type MinecraftSettings,
   type MinecraftSettingField,
@@ -262,7 +269,238 @@ function MinecraftSoftwarePicker({
   );
 }
 
-type MinecraftCreateMode = "software" | "modpack";
+type MinecraftCreateMode = "software" | "modpack" | "custom";
+
+function CustomJarBrowser({
+  csrfToken,
+  selectedPath,
+  onSelect,
+  onClose,
+  onSessionExpired,
+}: {
+  csrfToken: string;
+  selectedPath: string;
+  onSelect: (path: string) => void;
+  onClose: () => void;
+  onSessionExpired: () => void;
+}) {
+  const [path, setPath] = useState("/");
+  const [listing, setListing] = useState<DirectoryListing | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [cursors, setCursors] = useState<Array<string | null>>([null]);
+  const activeLoad = useRef<AbortController | null>(null);
+
+  const load = useCallback(
+    async (
+      nextPath: string,
+      cursor: string | null = null,
+      nextPage = 0,
+    ): Promise<void> => {
+      activeLoad.current?.abort();
+      const controller = new AbortController();
+      activeLoad.current = controller;
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await getDirectory(
+          nextPath,
+          csrfToken,
+          cursor,
+          100,
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        setListing(result);
+        setPath(result.path);
+        setPage(nextPage);
+      } catch (requestError) {
+        if (controller.signal.aborted) return;
+        if (isSessionError(requestError)) onSessionExpired();
+        else setError(describeError(requestError));
+      } finally {
+        if (activeLoad.current === controller) {
+          activeLoad.current = null;
+          setLoading(false);
+        }
+      }
+    },
+    [csrfToken, onSessionExpired],
+  );
+
+  const navigate = useCallback(
+    (nextPath: string): void => {
+      setCursors([null]);
+      void load(nextPath);
+    },
+    [load],
+  );
+
+  useEffect(() => {
+    void load("/");
+    return () => activeLoad.current?.abort();
+  }, [load]);
+
+  const entries =
+    listing?.entries.filter(
+      (entry) =>
+        entry.kind === "directory" ||
+        (entry.kind === "file" && /\.jar$/iu.test(entry.name)),
+    ) ?? [];
+  const crumbs =
+    path === "/" ? ["/"] : ["/", ...path.split("/").filter(Boolean)];
+  const showPrevious = page > 0;
+  const showNext = listing?.hasMore === true && listing.nextCursor !== null;
+
+  const nextPage = (): void => {
+    if (!showNext || listing?.nextCursor === null || listing === null) return;
+    const nextCursor = listing.nextCursor;
+    const nextPageIndex = page + 1;
+    setCursors((current) => [
+      ...current.slice(0, nextPageIndex),
+      nextCursor,
+    ]);
+    void load(path, nextCursor, nextPageIndex);
+  };
+
+  const previousPage = (): void => {
+    if (!showPrevious) return;
+    const previousPageIndex = page - 1;
+    void load(path, cursors[previousPageIndex] ?? null, previousPageIndex);
+  };
+
+  return (
+    <section
+      class="custom-jar-browser"
+      aria-busy={loading}
+      aria-label="Choose a server JAR from Storage"
+    >
+      <header>
+        <div>
+          <strong>Choose from Storage</strong>
+          <span>Folders and runnable JAR files only</span>
+        </div>
+        <button
+          class="icon-button"
+          type="button"
+          onClick={onClose}
+          aria-label="Close Storage browser"
+        >
+          <Icon name="close" size={16} />
+        </button>
+      </header>
+      <div class="custom-jar-browser__crumbs" aria-label="Current folder">
+        {crumbs.map((crumb, index) => {
+          const target =
+            index === 0
+              ? "/"
+              : `/${crumbs.slice(1, index + 1).join("/")}`;
+          return (
+            <span key={`${crumb}-${index}`}>
+              <button type="button" onClick={() => navigate(target)}>
+                {crumb}
+              </button>
+              {index < crumbs.length - 1 && (
+                <Icon name="chevron" size={11} />
+              )}
+            </span>
+          );
+        })}
+      </div>
+      <InlineError message={error} />
+      <div class="custom-jar-browser__list">
+        {listing?.parent !== null && listing !== null && (
+          <button
+            type="button"
+            onClick={() =>
+              listing.parent !== null && navigate(listing.parent)
+            }
+          >
+            <Icon name="folder" size={17} />
+            <span>
+              <strong>..</strong>
+              <small>Parent folder</small>
+            </span>
+            <Icon name="chevron" size={13} />
+          </button>
+        )}
+        {entries.map((entry) =>
+          entry.kind === "directory" ? (
+            <button
+              type="button"
+              key={entry.path}
+              onClick={() => navigate(entry.path)}
+            >
+              <Icon name="folder" size={17} />
+              <span>
+                <strong>{entry.name}</strong>
+                <small>Folder</small>
+              </span>
+              <Icon name="chevron" size={13} />
+            </button>
+          ) : (
+            <button
+              class={selectedPath === entry.path ? "is-selected" : ""}
+              type="button"
+              key={entry.path}
+              onClick={() => onSelect(entry.path)}
+            >
+              <Icon name="file" size={17} />
+              <span>
+                <strong>{entry.name}</strong>
+                <small>{formatBytes(entry.sizeBytes)} · Server JAR</small>
+              </span>
+              <Icon
+                name={selectedPath === entry.path ? "check" : "plus"}
+                size={13}
+              />
+            </button>
+          ),
+        )}
+        {loading && (
+          <div class="custom-jar-browser__state">
+            <Icon name="refresh" class="is-spinning" size={16} />
+            Reading {path}…
+          </div>
+        )}
+        {!loading && entries.length === 0 && (
+          <div class="custom-jar-browser__state">
+            No folders or JAR files on this page.
+          </div>
+        )}
+      </div>
+      <footer>
+        <span>
+          Page {page + 1} · {listing?.totalEntries.toLocaleString() ?? 0} total
+          items
+        </span>
+        <div>
+          <button
+            class="button button--quiet"
+            type="button"
+            disabled={loading || !showPrevious}
+            onClick={previousPage}
+          >
+            Previous
+          </button>
+          <button
+            class="button button--quiet"
+            type="button"
+            disabled={loading || !showNext}
+            onClick={nextPage}
+          >
+            Next
+          </button>
+        </div>
+      </footer>
+      <small>
+        Helix still verifies the selected path against its configured Storage
+        roots before copying anything.
+      </small>
+    </section>
+  );
+}
 
 export function serverActionDescription(
   server: ManagedServer,
@@ -303,18 +541,165 @@ export function canRunBackupMutation(
   return canManageBackups && recoverableTrashAvailable;
 }
 
+function parsePortRanges(input: string): GamePortRange[] {
+  const tokens = input.split(/[\s,]+/u).map((value) => value.trim()).filter(Boolean);
+  if (tokens.length === 0) throw new Error("Add at least one port range or individual port.");
+  return tokens.map((token) => {
+    const match = /^(\d{1,5})(?:-(\d{1,5}))?$/u.exec(token);
+    if (match === null) throw new Error(`“${token}” is not a port or range.`);
+    const start = Number(match[1]);
+    const end = Number(match[2] ?? match[1]);
+    if (start < 1024 || end > 65535 || end < start) {
+      throw new Error(`“${token}” must be an ordered range inside 1024–65535.`);
+    }
+    return { start, end };
+  });
+}
+
+function parseIndividualPorts(input: string): number[] {
+  if (input.trim().length === 0) return [];
+  return input.split(/[\s,]+/u).map((token) => {
+    const port = Number(token);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      throw new Error(`“${token}” is not a port inside 1024–65535.`);
+    }
+    return port;
+  });
+}
+
+function PortPoolDialog({
+  csrfToken,
+  canManageNetwork,
+  onClose,
+  onSessionExpired,
+}: {
+  csrfToken: string;
+  canManageNetwork: boolean;
+  onClose: () => void;
+  onSessionExpired: () => void;
+}) {
+  const [policy, setPolicy] = useState<GamePortPolicy | null>(null);
+  const [ranges, setRanges] = useState("");
+  const [ports, setPorts] = useState("");
+  const [autoForward, setAutoForward] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void getMinecraftPortPolicy(csrfToken, controller.signal)
+      .then((value) => {
+        setPolicy(value);
+        setRanges(value.ranges.map((range) => `${range.start}-${range.end}`).join(", "));
+        setPorts(value.ports.join(", "));
+        setAutoForward(value.autoForwardOnCreate && canManageNetwork);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (isSessionError(requestError)) onSessionExpired();
+        else setError(describeError(requestError));
+      });
+    return () => controller.abort();
+  }, [canManageNetwork, csrfToken, onSessionExpired]);
+
+  const save = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const parsedRanges = ranges.trim().length === 0 ? [] : parsePortRanges(ranges);
+      const parsedPorts = parseIndividualPorts(ports);
+      if (parsedRanges.length === 0 && parsedPorts.length === 0) {
+        throw new Error("Add at least one port or port range.");
+      }
+      const saved = await saveMinecraftPortPolicy(
+        { ranges: parsedRanges, ports: parsedPorts, autoForwardOnCreate: autoForward },
+        csrfToken,
+      );
+      setPolicy(saved);
+      setRanges(saved.ranges.map((range) => `${range.start}-${range.end}`).join(", "));
+      setPorts(saved.ports.join(", "));
+      onClose();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog title="Minecraft port pool" onClose={onClose} wide>
+      <div class="port-pool-summary">
+        <div><strong>{policy?.capacity ?? "—"}</strong><span>configured</span></div>
+        <div><strong>{policy?.availableCount ?? "—"}</strong><span>unassigned</span></div>
+        <div><strong>{policy?.nextAvailablePort ?? "—"}</strong><span>next port</span></div>
+      </div>
+      <p class="dialog-intro">
+        Automatic server creation takes individual ports first, then walks each range in order. It also skips ports already assigned to Helix or currently bound on the host.
+      </p>
+      <div class="form-grid">
+        <label class="field field--wide">
+          <span>Port ranges</span>
+          <input
+            value={ranges}
+            disabled={busy || policy === null}
+            onInput={(event) => setRanges(event.currentTarget.value)}
+            placeholder="25565-25599, 25610-25619"
+          />
+          <small>Separate ranges with commas or spaces. A single port is accepted here too.</small>
+        </label>
+        <label class="field field--wide">
+          <span>Priority ports</span>
+          <input
+            value={ports}
+            disabled={busy || policy === null}
+            onInput={(event) => setPorts(event.currentTarget.value)}
+            placeholder="25565, 25570, 25580"
+          />
+          <small>Optional. These are tried before the ranges; duplicates are removed safely.</small>
+        </label>
+      </div>
+      <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
+        <input
+          class="toggle-input"
+          type="checkbox"
+          checked={autoForward}
+          disabled={busy || policy === null || !canManageNetwork}
+          onChange={(event) => setAutoForward(event.currentTarget.checked)}
+        />
+        <span>
+          <strong>Default new Minecraft servers to public setup</strong>
+          <small>
+            {canManageNetwork
+              ? "The creation review still shows this choice. Helix will never enable UFW or overwrite an unowned router mapping."
+              : "Requires network.firewall.write permission."}
+          </small>
+        </span>
+      </label>
+      <InlineError message={error} />
+      <div class="dialog-actions">
+        <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
+        <button class="button button--primary" type="button" disabled={busy || policy === null} onClick={() => void save()}>
+          {busy ? "Saving…" : "Save port pool"}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 function CreateServerDialog({
   csrfToken,
   servers,
   onClose,
   onComplete,
   onSessionExpired,
+  canManageNetwork,
 }: {
   csrfToken: string;
   servers: ManagedServer[];
   onClose: () => void;
   onComplete: () => Promise<void>;
   onSessionExpired: () => void;
+  canManageNetwork: boolean;
 }) {
   const [step, setStep] = useState<1 | 2>(1);
   const [mode, setMode] = useState<MinecraftCreateMode>("software");
@@ -322,9 +707,15 @@ function CreateServerDialog({
   const [software, setSoftware] = useState<MinecraftSoftware>("paper");
   const [version, setVersion] = useState("latest");
   const [modpack, setModpack] = useState<ModpackSelection | null>(null);
+  const [customJarPath, setCustomJarPath] = useState("");
+  const [customBrowserOpen, setCustomBrowserOpen] = useState(false);
+  const [customJavaVersion, setCustomJavaVersion] = useState<17 | 21 | 25>(21);
   const [memory, setMemory] = useState(4096);
   const [players, setPlayers] = useState(20);
   const [port, setPort] = useState(() => nextMinecraftPort(servers));
+  const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
+  const [portPolicy, setPortPolicy] = useState<GamePortPolicy | null>(null);
+  const [publicAccess, setPublicAccess] = useState(false);
   const [startOnBoot, setStartOnBoot] = useState(true);
   const [eula, setEula] = useState(false);
   const [job, setJob] = useState<BrokerJob | null>(null);
@@ -354,6 +745,22 @@ function CreateServerDialog({
     return () => controller.abort();
   }, [csrfToken, onSessionExpired]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    void getMinecraftPortPolicy(csrfToken, controller.signal)
+      .then((policy) => {
+        setPortPolicy(policy);
+        if (policy.nextAvailablePort !== null) setPort(policy.nextAvailablePort);
+        setPublicAccess(canManageNetwork && policy.autoForwardOnCreate);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (isSessionError(requestError)) onSessionExpired();
+        else setError(describeError(requestError));
+      });
+    return () => controller.abort();
+  }, [canManageNetwork, csrfToken, onSessionExpired]);
+
   const polling = useJobPolling({
     job,
     csrfToken,
@@ -368,11 +775,25 @@ function CreateServerDialog({
   const softwareReady =
     readiness?.availability === "ready" &&
     readiness.supportedMinecraftSoftware.some((id) => id === software);
+  const customReady =
+    readiness?.availability === "ready" &&
+    readiness.supportedMinecraftSoftware.includes("custom");
+  const customInputReady =
+    customReady &&
+    customJarPath.trim().startsWith("/") &&
+    /\.jar$/iu.test(customJarPath.trim()) &&
+    version.trim().length > 0 &&
+    !version.trim().toLowerCase().includes("latest");
   const canReview =
     name.trim().length >= 2 &&
     (mode === "modpack"
       ? fabricReady && modpack !== null
-      : softwareReady && version.trim().length > 0);
+      : mode === "custom"
+        ? customInputReady
+        : softwareReady && version.trim().length > 0) &&
+    (portMode === "automatic"
+      ? portPolicy?.nextAvailablePort !== null && portPolicy?.nextAvailablePort !== undefined
+      : Number.isInteger(port) && port >= 1024 && port <= 65535);
 
   const selectMode = (next: MinecraftCreateMode): void => {
     setMode(next);
@@ -395,7 +816,8 @@ function CreateServerDialog({
             name: name.trim(),
             memory_mb: memory,
             max_players: players,
-            game_port: port,
+            ...(portMode === "manual" ? { game_port: port } : {}),
+            network_exposure: publicAccess ? "public" : "private",
             start_on_boot: startOnBoot,
             eula_accepted: eula,
             project_id: modpack.projectId,
@@ -415,19 +837,30 @@ function CreateServerDialog({
           error: null,
         });
       } else {
-        if (!softwareReady)
+        if (mode === "software" && !softwareReady)
           throw new Error(
             "This server software is not installable on this host.",
           );
+        if (mode === "custom" && !customInputReady)
+          throw new Error(
+            "Choose an existing .jar inside a Helix Storage root, an explicit Minecraft version, and a supported Java runtime.",
+          );
         const input: MinecraftCreateInput = {
           name: name.trim(),
-          software,
+          software: mode === "custom" ? "custom" : software,
           version: version.trim(),
           memory_mb: memory,
           max_players: players,
-          game_port: port,
+          ...(portMode === "manual" ? { game_port: port } : {}),
+          network_exposure: publicAccess ? "public" : "private",
           start_on_boot: startOnBoot,
           eula_accepted: eula,
+          ...(mode === "custom" ? {
+            custom_jar: {
+              source_path: customJarPath.trim(),
+              java_version: customJavaVersion,
+            },
+          } : {}),
         };
         const result = await createMinecraftServer(input, csrfToken);
         setJob({
@@ -461,6 +894,20 @@ function CreateServerDialog({
         modpackResult = null;
       }
     }
+    const resultRecord =
+      typeof job.result === "object" && job.result !== null
+        ? (job.result as Record<string, unknown>)
+        : null;
+    const networkResult =
+      typeof resultRecord?.network_exposure === "object" && resultRecord.network_exposure !== null
+        ? (resultRecord.network_exposure as Record<string, unknown>)
+        : null;
+    const publicJoin =
+      typeof networkResult?.public_join_address === "string"
+        ? networkResult.public_join_address
+        : null;
+    const publicSetupError =
+      typeof networkResult?.error === "string" ? networkResult.error : null;
     return (
       <Dialog
         title={
@@ -523,6 +970,17 @@ function CreateServerDialog({
               </span>
             </div>
           )}
+          {job.status === "complete" && publicAccess && (
+            <div class={`creation-network-result ${publicJoin === null ? "is-warning" : "is-ready"}`}>
+              <Icon name={publicJoin === null ? "warning" : "network"} size={16} />
+              <span>
+                <strong>{publicJoin === null ? "Server online · public access needs attention" : publicJoin}</strong>
+                {publicJoin === null
+                  ? (publicSetupError ?? "Open the server’s Join section to retry automatic public setup.")
+                  : "Router mapping confirmed. Test this address from a separate external network before sharing it broadly."}
+              </span>
+            </div>
+          )}
         </div>
         <InlineError message={polling.error ?? error} />
         <div class="dialog-actions">
@@ -572,8 +1030,13 @@ function CreateServerDialog({
             aria-selected={mode === "software"}
             onClick={() => selectMode("software")}
           >
-            <strong>Choose server software</strong>
-            <span>Paper, Purpur, Folia, Fabric, or Vanilla</span>
+            <span class="create-mode-icon">
+              <Icon name="servers" size={18} />
+            </span>
+            <span class="create-mode-copy">
+              <strong>Choose server software</strong>
+              <small>Paper, Purpur, Folia, Fabric, or Vanilla</small>
+            </span>
           </button>
           <button
             class={mode === "modpack" ? "is-selected" : ""}
@@ -582,8 +1045,28 @@ function CreateServerDialog({
             aria-selected={mode === "modpack"}
             onClick={() => selectMode("modpack")}
           >
-            <strong>Start with a modpack</strong>
-            <span>A stable, server-capable Fabric pack from Modrinth</span>
+            <span class="create-mode-icon">
+              <Icon name="plus" size={18} />
+            </span>
+            <span class="create-mode-copy">
+              <strong>Start with a modpack</strong>
+              <small>A server-capable Fabric pack from Modrinth</small>
+            </span>
+          </button>
+          <button
+            class={mode === "custom" ? "is-selected" : ""}
+            type="button"
+            role="tab"
+            aria-selected={mode === "custom"}
+            onClick={() => selectMode("custom")}
+          >
+            <span class="create-mode-icon">
+              <Icon name="file" size={18} />
+            </span>
+            <span class="create-mode-copy">
+              <strong>Use your own JAR</strong>
+              <small>Import a server JAR already available in Storage</small>
+            </span>
           </button>
         </div>
       )}
@@ -629,6 +1112,91 @@ function CreateServerDialog({
                   />
                 </label>
               </>
+            ) : mode === "custom" ? (
+              <>
+                <div
+                  class={`software-readiness-note field--wide ${customReady ? "" : "is-error"}`}
+                  role="status"
+                >
+                  <Icon name={customReady ? "check" : "warning"} size={16} />
+                  <span>
+                    {readiness === null
+                      ? "Checking the protected local import path…"
+                      : customReady
+                        ? "Custom JAR import is ready. Helix copies the file into a private container workspace; the original stays untouched."
+                        : "Custom JAR import is unavailable because the native manager or its Storage roots are not ready."}
+                  </span>
+                </div>
+                <div class="field field--wide">
+                  <div class="field-heading">
+                    <label for="custom-server-jar">Server JAR path</label>
+                    <button
+                      class="field-inline-action"
+                      type="button"
+                      disabled={!customReady}
+                      onClick={() => setCustomBrowserOpen((open) => !open)}
+                    >
+                      <Icon name="folder" size={14} />
+                      {customBrowserOpen ? "Close browser" : "Browse Storage"}
+                    </button>
+                  </div>
+                  <input
+                    id="custom-server-jar"
+                    required
+                    value={customJarPath}
+                    onInput={(event) =>
+                      setCustomJarPath(event.currentTarget.value)
+                    }
+                    placeholder="/path/visible/in/helix/server.jar"
+                    autocomplete="off"
+                    autocapitalize="none"
+                    spellcheck={false}
+                  />
+                  <small>
+                    Use an absolute <code>.jar</code> path inside a drive or
+                    folder shown in Storage. Helix rejects symlinks, paths
+                    outside managed roots, and files larger than 768 MiB.
+                  </small>
+                </div>
+                {customBrowserOpen && customReady && (
+                  <CustomJarBrowser
+                    csrfToken={csrfToken}
+                    selectedPath={customJarPath}
+                    onSelect={(path) => {
+                      setCustomJarPath(path);
+                      setCustomBrowserOpen(false);
+                    }}
+                    onClose={() => setCustomBrowserOpen(false)}
+                    onSessionExpired={onSessionExpired}
+                  />
+                )}
+                <label class="field">
+                  <span>Minecraft version</span>
+                  <input
+                    required
+                    value={version}
+                    onInput={(event) => setVersion(event.currentTarget.value)}
+                    placeholder="1.21.8"
+                  />
+                  <small>Enter the exact version; “latest” is not accepted.</small>
+                </label>
+                <label class="field">
+                  <span>Java runtime</span>
+                  <select
+                    value={customJavaVersion}
+                    onChange={(event) =>
+                      setCustomJavaVersion(
+                        Number(event.currentTarget.value) as 17 | 21 | 25,
+                      )
+                    }
+                  >
+                    <option value="17">Java 17</option>
+                    <option value="21">Java 21</option>
+                    <option value="25">Java 25</option>
+                  </select>
+                  <small>Match the requirement published with your server JAR.</small>
+                </label>
+              </>
             ) : (
               <>
                 <div
@@ -651,17 +1219,49 @@ function CreateServerDialog({
                 />
               </>
             )}
-            <label class="field">
-              <span>Game port</span>
-              <input
-                type="number"
-                min="1024"
-                max="65535"
-                required
-                value={port}
-                onInput={(event) => setPort(event.currentTarget.valueAsNumber)}
-              />
-            </label>
+            <fieldset class="port-choice field--wide">
+              <legend>Game port</legend>
+              <label class={portMode === "automatic" ? "is-selected" : ""}>
+                <input
+                  type="radio"
+                  name="port-mode"
+                  checked={portMode === "automatic"}
+                  onChange={() => setPortMode("automatic")}
+                />
+                <span>
+                  <strong>Automatic from Minecraft pool</strong>
+                  <small>
+                    {portPolicy?.nextAvailablePort === null
+                      ? "No free port remains in the current pool."
+                      : portPolicy === null
+                        ? "Checking the configured pool…"
+                        : `Next available: ${portPolicy.nextAvailablePort} · ${portPolicy.availableCount} of ${portPolicy.capacity} unassigned`}
+                  </small>
+                </span>
+              </label>
+              <label class={portMode === "manual" ? "is-selected" : ""}>
+                <input
+                  type="radio"
+                  name="port-mode"
+                  checked={portMode === "manual"}
+                  onChange={() => setPortMode("manual")}
+                />
+                <span>
+                  <strong>Choose a specific port</strong>
+                  <small>Helix will reject a port already assigned or bound on the host.</small>
+                </span>
+                <input
+                  aria-label="Specific game port"
+                  type="number"
+                  min="1024"
+                  max="65535"
+                  disabled={portMode !== "manual"}
+                  required={portMode === "manual"}
+                  value={port}
+                  onInput={(event) => setPort(event.currentTarget.valueAsNumber)}
+                />
+              </label>
+            </fieldset>
             <label class="field">
               <span>Memory</span>
               <select
@@ -720,7 +1320,9 @@ function CreateServerDialog({
               <dd>
                 {mode === "modpack"
                   ? `${modpack?.projectTitle ?? ""} ${modpack?.versionNumber ?? ""}`
-                  : `${minecraftCreateSoftwareOptions.find((option) => option.id === software)?.name ?? software} ${version}`}
+                  : mode === "custom"
+                    ? `Custom JAR · Minecraft ${version} · Java ${customJavaVersion}`
+                    : `${minecraftCreateSoftwareOptions.find((option) => option.id === software)?.name ?? software} ${version}`}
               </dd>
             </div>
             <div>
@@ -731,7 +1333,15 @@ function CreateServerDialog({
             </div>
             <div>
               <dt>Port</dt>
-              <dd>{port}</dd>
+              <dd>
+                {portMode === "automatic"
+                  ? `${portPolicy?.nextAvailablePort ?? "Next free"} · automatic`
+                  : `${port} · specific`}
+              </dd>
+            </div>
+            <div>
+              <dt>Player access</dt>
+              <dd>{publicAccess ? "LAN + automatic public setup" : "Private / LAN"}</dd>
             </div>
           </dl>
           {mode === "modpack" && modpack !== null && (
@@ -747,8 +1357,21 @@ function CreateServerDialog({
               </span>
             </div>
           )}
+          {mode === "custom" && (
+            <div class="modpack-compatibility-note">
+              <Icon name="info" size={16} />
+              <span>
+                <strong>Local artifact, isolated runtime</strong>
+                Helix verifies the path and size, hashes a private copy, pins
+                the chosen Java container, and rolls back a failed first boot.
+                The JAR publisher and Minecraft compatibility cannot be
+                verified automatically, so future JAR updates stay manual.
+              </span>
+            </div>
+          )}
           <label class="check-row">
             <input
+              class="toggle-input"
               type="checkbox"
               checked={startOnBoot}
               onChange={(event) => setStartOnBoot(event.currentTarget.checked)}
@@ -758,6 +1381,23 @@ function CreateServerDialog({
               <small>
                 Helix will restore this workload after Docker or the host
                 restarts.
+              </small>
+            </span>
+          </label>
+          <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
+            <input
+              class="toggle-input"
+              type="checkbox"
+              checked={publicAccess}
+              disabled={!canManageNetwork}
+              onChange={(event) => setPublicAccess(event.currentTarget.checked)}
+            />
+            <span>
+              <strong>Set up public player access</strong>
+              <small>
+                {canManageNetwork
+                  ? "After Minecraft is online, Helix will request and verify an exact TCP mapping from a compatible UPnP router. If UFW is active, Helix also creates a matching owned rule."
+                  : "Requires network.firewall.write permission. The server can still be created for LAN or private-network access."}
               </small>
             </span>
           </label>
@@ -786,7 +1426,9 @@ function CreateServerDialog({
             <span>
               {mode === "modpack"
                 ? "Only opaque Modrinth project and version IDs leave the browser. The broker re-resolves all metadata and will never activate Forge, NeoForge, Quilt, client-only content, unsafe archive paths, or an unverified download."
-                : "Helix will resolve a supported build and Java runtime, verify the download, isolate the workload, write the configuration, reserve the ports, and start Minecraft."}
+                : mode === "custom"
+                  ? "Helix will import a private copy, pin its SHA-256 and Java runtime, isolate it as an unprivileged container, reserve the ports, write the Minecraft configuration, and start it. Your source file is never modified."
+                  : "Helix will resolve a supported build and Java runtime, verify the download, isolate the workload, write the configuration, reserve the ports, and start Minecraft."}
             </span>
           </div>
           <div class="dialog-actions">
@@ -1106,7 +1748,8 @@ function ServerRow({
                 Backup
               </button>
             )}
-            {server.manager === "helix" && (
+            {server.manager === "helix" &&
+              server.software.toLowerCase() !== "custom jar" && (
               <button
                 type="button"
                 disabled={!canManageServers}
@@ -1450,6 +2093,7 @@ function ConsolePanel({
         </div>
         <label>
           <input
+            class="toggle-input"
             type="checkbox"
             checked={live}
             onChange={(event) => setLive(event.currentTarget.checked)}
@@ -1957,6 +2601,7 @@ function LogsPanel({
         <div class="log-actions">
           <label>
             <input
+              class="toggle-input"
               type="checkbox"
               checked={live}
               onChange={(event) => setLive(event.currentTarget.checked)}
@@ -2755,6 +3400,7 @@ function NativeServerPage({
   csrfToken,
   canManageServers,
   canManageBackups,
+  canManageNetwork,
   hostInventory,
   onBack,
   onRefresh,
@@ -2765,6 +3411,7 @@ function NativeServerPage({
   csrfToken: string;
   canManageServers: boolean;
   canManageBackups: boolean;
+  canManageNetwork: boolean;
   hostInventory: HostInventory | null;
   onBack: () => void;
   onRefresh: () => Promise<void>;
@@ -2781,17 +3428,35 @@ function NativeServerPage({
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [restartSuccessRevision, setRestartSuccessRevision] = useState(0);
-  const load = useCallback(async (): Promise<void> => {
+  const [exposureBusy, setExposureBusy] = useState(false);
+  const detailLoad = useRef<Promise<void> | null>(null);
+  const detailController = useRef<AbortController | null>(null);
+  const load = useCallback((force = false): Promise<void> => {
+    if (!force && detailLoad.current !== null) return detailLoad.current;
+    if (force) detailController.current?.abort();
+    const controller = new AbortController();
+    detailController.current = controller;
+    const request = (async (): Promise<void> => {
     try {
-      setDetail(await getServerDetail(server.id, csrfToken));
+      setDetail(await getServerDetail(server.id, csrfToken, controller.signal));
       setError(null);
     } catch (requestError) {
+      if (controller.signal.aborted) return;
       if (isSessionError(requestError)) onSessionExpired();
       else setError(describeError(requestError));
+    } finally {
+      if (detailController.current === controller) {
+        detailController.current = null;
+        detailLoad.current = null;
+      }
     }
+    })();
+    detailLoad.current = request;
+    return request;
   }, [csrfToken, onSessionExpired, server.id]);
   useEffect(() => {
     void load();
+    return () => detailController.current?.abort();
   }, [load]);
   useEffect(() => {
     const controller = new AbortController();
@@ -2810,11 +3475,11 @@ function NativeServerPage({
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "hidden") void load();
-    }, refreshIntervalMs);
+    }, Math.max(refreshIntervalMs, 5_000));
     return () => window.clearInterval(timer);
   }, [load, refreshIntervalMs]);
   const refresh = useCallback(async (): Promise<void> => {
-    await Promise.all([load(), onRefresh()]);
+    await Promise.all([load(true), onRefresh()]);
     setRefreshKey((value) => value + 1);
   }, [load, onRefresh]);
   const completePendingAction = useCallback(async (): Promise<void> => {
@@ -2836,9 +3501,6 @@ function NativeServerPage({
       </div>
     );
   const online = detail.status === "online";
-  const dashboardHost =
-    typeof window === "undefined" ? "server" : window.location.hostname;
-  const joinAddress = formatJoinAddress(dashboardHost, detail.gamePort);
   const tailscaleAddress =
     hostInventory?.interfaces
       .find((item) => item.name.toLowerCase().startsWith("tailscale"))
@@ -2851,6 +3513,27 @@ function NativeServerPage({
   const udpEvidence = network?.gamePorts.find(
     (item) => item.instanceId === detail.id && item.protocol === "udp",
   );
+  const joinAddress =
+    tcpEvidence?.privateJoinAddress ??
+    (network?.addresses.privateIpv4 === null || network?.addresses.privateIpv4 === undefined
+      ? "Private address unavailable"
+      : formatJoinAddress(network.addresses.privateIpv4, detail.gamePort));
+  const publicEvidence = tcpEvidence?.externalReachability;
+  const publicConfigured = publicEvidence?.state === "router_mapping_confirmed";
+  const publicJoinAddress = publicEvidence?.joinAddress ?? null;
+  const updateExposure = async (enabled: boolean): Promise<void> => {
+    setExposureBusy(true);
+    setNetworkError(null);
+    try {
+      await setServerNetworkExposure(detail.id, enabled, csrfToken);
+      await refresh();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setNetworkError(describeError(requestError));
+    } finally {
+      setExposureBusy(false);
+    }
+  };
   const tcpDiagnostic = portDiagnostic(tcpEvidence);
   const udpDiagnostic = portDiagnostic(udpEvidence);
   const manageTitle = canManageServers
@@ -3005,14 +3688,48 @@ function NativeServerPage({
                 </article>
                 <article>
                   <span>PUBLIC INTERNET</span>
-                  <strong>Not externally verified</strong>
+                  <strong>
+                    {publicConfigured && publicJoinAddress !== null
+                      ? publicJoinAddress
+                      : publicEvidence?.state === "carrier_grade_nat"
+                        ? "Blocked by CGNAT"
+                        : publicEvidence?.state === "private_or_reserved"
+                          ? "Upstream NAT detected"
+                          : publicEvidence?.state === "setup_available"
+                            ? "Ready to set up"
+                            : "Automatic setup unavailable"}
+                  </strong>
                   <small>
-                    Helix will not invent a public address. Router forwarding,
-                    CGNAT, and ISP policy still need outside evidence.
+                    {publicEvidence?.note ?? "Refresh Network to check the router and public address."}
                   </small>
-                  <a href="#network">Review Network</a>
+                  {publicConfigured && publicJoinAddress !== null && (
+                    <button type="button" onClick={() => void navigator.clipboard?.writeText(publicJoinAddress)}>Copy</button>
+                  )}
+                  {publicEvidence?.state === "setup_available" && (
+                    <button
+                      class="button button--small"
+                      type="button"
+                      disabled={exposureBusy || !canManageNetwork}
+                      title={canManageNetwork ? undefined : "Requires network.firewall.write permission"}
+                      onClick={() => void updateExposure(true)}
+                    >
+                      {exposureBusy ? "Setting up…" : "Set up public access"}
+                    </button>
+                  )}
+                  {publicConfigured && (
+                    <button
+                      class="button button--small button--quiet"
+                      type="button"
+                      disabled={exposureBusy || !canManageNetwork}
+                      onClick={() => void updateExposure(false)}
+                    >
+                      {exposureBusy ? "Removing…" : "Remove forwarding"}
+                    </button>
+                  )}
+                  {!publicConfigured && publicEvidence?.state !== "setup_available" && <a href="#network">Review Network</a>}
                 </article>
               </div>
+              <InlineError message={networkError} />
               <div class="join-evidence">
                 <span
                   class={`state-label state-label--${tcpDiagnostic.tone}`}
@@ -3175,16 +3892,26 @@ function NativeServerPage({
                 </p>
               </div>
               <div class="advanced-actions">
-                <button
-                  class="button button--quiet"
-                  type="button"
-                  disabled={!canManageServers}
-                  title={manageTitle}
-                  onClick={() => setPending("update")}
-                >
-                  <Icon name="update" size={15} />
-                  Check for update
-                </button>
+                {detail.software.toLowerCase() === "custom jar" ? (
+                  <span
+                    class="advanced-update-note"
+                    title="Replace a custom JAR through a reviewed backup and manual migration. Helix cannot verify its publisher or choose a compatible replacement automatically."
+                  >
+                    <Icon name="info" size={15} />
+                    Manual JAR updates
+                  </span>
+                ) : (
+                  <button
+                    class="button button--quiet"
+                    type="button"
+                    disabled={!canManageServers}
+                    title={manageTitle}
+                    onClick={() => setPending("update")}
+                  >
+                    <Icon name="update" size={15} />
+                    Check for update
+                  </button>
+                )}
                 <button
                   class="button button--danger-quiet"
                   type="button"
@@ -3645,17 +4372,17 @@ function NewServerChooser({
               production-ready.
             </small>
           </span>
-          <em>Linux validation pending</em>
+          <em>Not available on Linux</em>
         </article>
       </div>
       <div class="server-platform-note">
         <Icon name="info" size={16} />
         <span>
-          <strong>Why V Rising is not one-click yet</strong>The game needs two
-          UDP ports, separate persistent settings and saves, SteamCMD updates,
-          Wine lifecycle validation, and tested rollback on Linux. The game
-          category is reserved, but creation stays disabled until that path
-          passes the same safety gates as Minecraft.
+          <strong>This is not a host setup problem</strong>The official V Rising
+          dedicated server is currently Windows-only. A Linux option would
+          depend on Wine, two UDP ports, persistent settings and saves,
+          SteamCMD updates, and tested rollback. Helix leaves creation disabled
+          instead of presenting a fake “fix” for an unverified runtime.
         </span>
       </div>
       <div class="dialog-actions">
@@ -3672,16 +4399,19 @@ export function ServersPage({
   csrfToken,
   canManageServers,
   canManageBackups,
+  canManageNetwork,
   onSessionExpired,
 }: {
   data: DashboardData;
   csrfToken: string;
   canManageServers: boolean;
   canManageBackups: boolean;
+  canManageNetwork: boolean;
   onSessionExpired: () => void;
 }) {
   const [chooseGame, setChooseGame] = useState(false);
   const [creatingMinecraft, setCreatingMinecraft] = useState(false);
+  const [portPoolOpen, setPortPoolOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<ServerFilter>("all");
   const [hiddenImported, setHiddenImported] = useState<string[]>(
@@ -3749,6 +4479,7 @@ export function ServersPage({
         csrfToken={csrfToken}
         canManageServers={canManageServers}
         canManageBackups={canManageBackups}
+        canManageNetwork={canManageNetwork}
         hostInventory={data.inventory.data}
         onBack={() => setSelectedId(null)}
         onRefresh={data.refresh}
@@ -3786,18 +4517,30 @@ export function ServersPage({
         title="Servers"
         detail="Native game hosting and clearly separated external connections."
         actions={
-          <button
-            class="button button--primary button--create"
-            type="button"
-            disabled={!canManageServers}
-            title={
-              canManageServers ? undefined : "Requires games.manage permission"
-            }
-            onClick={() => setChooseGame(true)}
-          >
-            <Icon name="plus" />
-            New server
-          </button>
+          <>
+            <button
+              class="button button--quiet"
+              type="button"
+              disabled={!canManageServers}
+              title={canManageServers ? undefined : "Requires games.manage permission"}
+              onClick={() => setPortPoolOpen(true)}
+            >
+              <Icon name="network" />
+              Port pools
+            </button>
+            <button
+              class="button button--primary button--create"
+              type="button"
+              disabled={!canManageServers}
+              title={
+                canManageServers ? undefined : "Requires games.manage permission"
+              }
+              onClick={() => setChooseGame(true)}
+            >
+              <Icon name="plus" />
+              New server
+            </button>
+          </>
         }
       />
       <InlineError message={data.servers.error ?? removedError} />
@@ -3875,10 +4618,15 @@ export function ServersPage({
         {data.servers.phase !== "loading" && visibleServers.length === 0 && (
           <div class="empty-state">
             <Icon name="servers" size={28} />
-            <strong>No servers in this view</strong>
+            <strong>
+              {servers.length === 0
+                ? "No servers yet"
+                : "No servers in this view"}
+            </strong>
             <span>
-              Create a native server, change the filter, or restore a hidden
-              connection below.
+              {servers.length === 0
+                ? "Create a native Minecraft server with New server. Helix Native stays separate from any AMP import."
+                : "Create a native server, change the filter, or restore a hidden connection below."}
             </span>
           </div>
         )}
@@ -3959,6 +4707,15 @@ export function ServersPage({
             await data.refresh();
             await loadRemoved();
           }}
+          onSessionExpired={onSessionExpired}
+          canManageNetwork={canManageNetwork}
+        />
+      )}
+      {portPoolOpen && (
+        <PortPoolDialog
+          csrfToken={csrfToken}
+          canManageNetwork={canManageNetwork}
+          onClose={() => setPortPoolOpen(false)}
           onSessionExpired={onSessionExpired}
         />
       )}

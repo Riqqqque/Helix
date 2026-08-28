@@ -39,6 +39,7 @@ export interface StorageAnalysisProgress {
   filesScanned: number;
   directoriesScanned: number;
   bytesScanned: bigint;
+  allocatedBytesScanned: bigint;
 }
 
 export interface StorageAnalysisFile {
@@ -46,6 +47,7 @@ export interface StorageAnalysisFile {
   name: string;
   type: 'file';
   bytes: bigint;
+  allocatedBytes: bigint;
 }
 
 export interface StorageAnalysisFolder {
@@ -54,6 +56,8 @@ export interface StorageAnalysisFolder {
   type: 'directory';
   immediateBytes: bigint;
   recursiveBytes: bigint;
+  immediateAllocatedBytes: bigint;
+  recursiveAllocatedBytes: bigint;
   immediateComplete: boolean;
   recursiveComplete: boolean;
 }
@@ -73,6 +77,7 @@ export interface StorageAnalysisSkipped {
   specialFiles: number;
   depthLimitedDirectories: number;
   unrepresentableNames: number;
+  hardLinkAliases: number;
 }
 
 export interface StorageAnalysisLimits {
@@ -89,6 +94,7 @@ export interface StorageAnalysisLimits {
 export interface StorageAnalysisResult {
   rootPath: string;
   apparentBytesScanned: bigint;
+  allocatedBytesScanned: bigint;
   truncated: boolean;
   stopReason: StorageAnalysisStopReason | null;
   errors: StorageAnalysisErrors;
@@ -230,6 +236,7 @@ function parseProgress(value: unknown): StorageAnalysisProgress {
     filesScanned: count(record, 'files_scanned', context),
     directoriesScanned: count(record, 'directories_scanned', context, MAX_ENTRIES + 1),
     bytesScanned: u64(record, 'bytes_scanned', context),
+    allocatedBytesScanned: u64(record, 'allocated_bytes_scanned', context),
   };
 }
 
@@ -243,6 +250,7 @@ function parseFile(value: unknown, index: number): StorageAnalysisFile {
     name: safeName(record, 'name', context, path),
     type: 'file',
     bytes: u64(record, 'bytes', context),
+    allocatedBytes: u64(record, 'allocated_bytes', context),
   };
 }
 
@@ -257,6 +265,8 @@ function parseFolder(value: unknown, index: number, list: string): StorageAnalys
     type: 'directory',
     immediateBytes: u64(record, 'immediate_bytes', context),
     recursiveBytes: u64(record, 'recursive_bytes', context),
+    immediateAllocatedBytes: u64(record, 'immediate_allocated_bytes', context),
+    recursiveAllocatedBytes: u64(record, 'recursive_allocated_bytes', context),
     immediateComplete: boolean(record, 'immediate_complete', context),
     recursiveComplete: boolean(record, 'recursive_complete', context),
   };
@@ -291,6 +301,7 @@ function parseSkipped(value: unknown): StorageAnalysisSkipped {
     specialFiles: count(record, 'special_files', context),
     depthLimitedDirectories: count(record, 'depth_limited_directories', context),
     unrepresentableNames: count(record, 'unrepresentable_names', context),
+    hardLinkAliases: count(record, 'hard_link_aliases', context),
   };
 }
 
@@ -366,6 +377,7 @@ function parseResult(value: unknown): StorageAnalysisResult {
   const result = {
     rootPath: safePath(record, 'root_path', context),
     apparentBytesScanned: u64(record, 'apparent_bytes_scanned', context),
+    allocatedBytesScanned: u64(record, 'allocated_bytes_scanned', context),
     truncated: boolean(record, 'truncated', context),
     stopReason: stopReason as StorageAnalysisStopReason | null,
     errors: parseErrors(record.errors),
@@ -460,6 +472,7 @@ export function parseStorageAnalysisStatus(value: unknown): StorageAnalysisStatu
       progress.percent !== 100 ||
       status.result.rootPath !== status.requestedPath ||
       status.result.apparentBytesScanned !== progress.bytesScanned ||
+      status.result.allocatedBytesScanned !== progress.allocatedBytesScanned ||
       (jobState === 'cancelled') !== (status.result.stopReason === 'cancelled')
     ) {
       throw new ApiError(`${context} returned inconsistent terminal state.`);

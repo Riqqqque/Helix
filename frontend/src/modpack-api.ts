@@ -88,7 +88,8 @@ export interface MinecraftModpackCreateInput {
   name: string;
   memory_mb: number;
   max_players: number;
-  game_port: number;
+  game_port?: number;
+  network_exposure: 'private' | 'public';
   start_on_boot: boolean;
   eula_accepted: boolean;
   project_id: string;

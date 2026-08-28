@@ -21,9 +21,10 @@ use axum::{
 };
 use helix_core::{DatabaseStatus, HealthReport, HealthStatus, VERSION, unix_timestamp_ms};
 use helix_privd::{
-    BrokerClient, BrokerClientError, BrokerRequest, FirewallRuleSpec, HookServiceAction,
-    MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch,
-    PackageUpdateCandidate, RecurringRebootSpec, ServerAction, StorageAnalysisMode,
+    BrokerClient, BrokerClientError, BrokerRequest, FirewallRuleSpec, GameKind, GamePortPolicySpec,
+    HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch,
+    PackageUpdateCandidate, RecurringRebootSpec, ServerAction, ServerNetworkExposure,
+    StorageAnalysisMode,
 };
 use helix_state::{
     DatabaseSet, ServerAppearanceUpdateOutcome, UserPreferencesRecord, UserPreferencesUpdateInput,
@@ -279,6 +280,12 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         )
         .route("/system/packages/jobs/{job_id}", get(system_package_job))
         .route("/hooks", get(hook_inventory))
+        .route(
+            "/hooks/{hook_id}/install/preflight",
+            get(hook_install_preflight),
+        )
+        .route("/hooks/{hook_id}/install", post(install_hook))
+        .route("/hooks/jobs/{job_id}", get(hook_install_job))
         .route("/hooks/{hook_id}/actions", post(manage_hook_service))
         .route("/marketplace/modrinth/image", get(marketplace_image))
         .route("/files", get(list_directory))
@@ -305,6 +312,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         )
         .route("/servers/inventory-health", get(server_inventory_health))
         .route("/servers/manager/readiness", get(game_hosting_readiness))
+        .route(
+            "/servers/port-policies/minecraft",
+            get(minecraft_port_policy).put(set_minecraft_port_policy),
+        )
         .route("/servers/minecraft", post(create_minecraft))
         .route(
             "/servers/minecraft/modpacks/search",
@@ -366,6 +377,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             post(restore_trashed_server_backup),
         )
         .route("/servers/{instance_id}/actions", post(server_action))
+        .route(
+            "/servers/{instance_id}/network",
+            put(set_server_network_exposure),
+        )
         .route("/servers/{instance_id}/remove", post(trash_native_server))
         .route("/jobs/{job_id}", get(job_status))
         .layer(DefaultBodyLimit::max(FILE_API_BODY_LIMIT_BYTES));
@@ -665,7 +680,10 @@ async fn marketplace_image(
     headers: HeaderMap,
     query: Result<Query<MarketplaceImageQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
-    auth::require_capability(&state, &headers, "games.view").await?;
+    // Image elements cannot attach Helix's in-memory CSRF proof. This is a
+    // read-only, same-origin, allowlisted media proxy, so the authenticated
+    // session and exact capability are sufficient here.
+    auth::require_capability_without_csrf(&state, &headers, "games.view").await?;
     let Query(query) = query.map_err(|_| ApiError::NotFound)?;
     marketplace_media::validate_path(&query.path).map_err(|_| ApiError::NotFound)?;
     let permit = Arc::clone(&state.marketplace_media_workers)
@@ -1237,6 +1255,12 @@ struct ServerActionBody {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ServerNetworkExposureBody {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RemoveNativeServerBody {
     confirmation_name: String,
 }
@@ -1297,6 +1321,13 @@ struct StartOnBootBody {
 #[serde(deny_unknown_fields)]
 struct HookServiceActionBody {
     action: HookServiceAction,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HookInstallBody {
+    confirmation: String,
+    repository_change_acknowledged: bool,
 }
 
 #[derive(Deserialize)]
@@ -1425,6 +1456,36 @@ async fn network_inventory(
     broker_json(&state, BrokerRequest::NetworkInventory {}).await
 }
 
+async fn minecraft_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    broker_json(
+        &state,
+        BrokerRequest::GamePortPolicy {
+            game: GameKind::Minecraft,
+        },
+    )
+    .await
+}
+
+async fn set_minecraft_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<GamePortPolicySpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(policy) = body.map_err(auth::map_json_rejection)?;
+    if policy.game != GameKind::Minecraft {
+        return Err(ApiError::BrokerRejected(
+            "the policy game must match Minecraft".to_owned(),
+        ));
+    }
+    broker_json(&state, BrokerRequest::SetGamePortPolicy { policy }).await
+}
+
 async fn create_firewall_rule(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -1527,6 +1588,44 @@ async fn hook_inventory(
 ) -> Result<impl IntoResponse, ApiError> {
     auth::require_capability(&state, &headers, "system.view").await?;
     broker_json(&state, BrokerRequest::HookInventory {}).await
+}
+
+async fn hook_install_preflight(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(hook_id): RoutePath<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "system.view").await?;
+    broker_json(&state, BrokerRequest::HookInstallPreflight { hook_id }).await
+}
+
+async fn install_hook(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(hook_id): RoutePath<String>,
+    body: Result<Json<HookInstallBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "system.settings.write").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::InstallHook {
+            hook_id,
+            confirmation: body.confirmation,
+            repository_change_acknowledged: body.repository_change_acknowledged,
+        },
+    )
+    .await
+}
+
+async fn hook_install_job(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(job_id): RoutePath<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "system.view").await?;
+    broker_json(&state, BrokerRequest::JobStatus { job_id }).await
 }
 
 async fn manage_hook_service(
@@ -2134,6 +2233,26 @@ async fn server_action(
     .await
 }
 
+async fn set_server_network_exposure(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<ServerNetworkExposureBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetServerNetworkExposure {
+            instance_id,
+            enabled: body.enabled,
+        },
+    )
+    .await
+}
+
 async fn server_marketplace_search(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -2197,6 +2316,9 @@ async fn create_minecraft(
     auth::validate_post_headers(&headers)?;
     auth::require_capability(&state, &headers, "games.manage").await?;
     let Json(spec) = body.map_err(auth::map_json_rejection)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
     broker_json(&state, BrokerRequest::CreateMinecraft { spec }).await
 }
 
@@ -2238,6 +2360,9 @@ async fn create_minecraft_modpack(
     auth::validate_post_headers(&headers)?;
     auth::require_capability(&state, &headers, "games.manage").await?;
     let Json(spec) = body.map_err(auth::map_json_rejection)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
     broker_json(&state, BrokerRequest::CreateMinecraftModpack { spec }).await
 }
 
@@ -2725,7 +2850,7 @@ mod tests {
     use tokio::sync::Semaphore;
     use tower::ServiceExt;
 
-    const PASSWORD: &str = "V7!quartz-Meteor#29";
+    const PASSWORD: &str = "V7!quartz-Meteor#29"; // codeql[rust/hard-coded-cryptographic-value]
 
     struct TestApp {
         app: Router,
@@ -3466,7 +3591,7 @@ mod tests {
 
     #[tokio::test]
     async fn owner_can_replace_login_and_password_with_current_password_proof() {
-        const REPLACEMENT_PASSWORD: &str = "G8!cobalt-Horizon#54";
+        const REPLACEMENT_PASSWORD: &str = "G8!cobalt-Horizon#54"; // codeql[rust/hard-coded-cryptographic-value]
 
         let context = test_app(DatabaseStatus::Ok).await;
         let bootstrap = install_bootstrap(&context);
@@ -3688,7 +3813,7 @@ mod tests {
 
     #[tokio::test]
     async fn identity_only_changes_revalidate_the_verified_password_context() {
-        const CURRENT_PASSWORD: &str = "cobalt-sky-92";
+        const CURRENT_PASSWORD: &str = "cobalt-sky-92"; // codeql[rust/hard-coded-cryptographic-value]
 
         let context = test_app(DatabaseStatus::Ok).await;
         let bootstrap = install_bootstrap(&context);
@@ -4142,6 +4267,8 @@ mod tests {
             "/api/v1/host/integration",
             "/api/v1/host/reboot/preflight",
             "/api/v1/hooks",
+            "/api/v1/hooks/tailscale/install/preflight",
+            "/api/v1/hooks/jobs/8953dc16-3891-42bf-802f-711b3ba2965a",
             "/api/v1/servers/helix:test/logs/history?lines=500",
         ] {
             let response = context
@@ -4265,6 +4392,45 @@ mod tests {
             .await
             .expect("hook action response");
         assert_eq!(hook_action.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let hook_install_without_csrf = context
+            .app
+            .clone()
+            .oneshot(with_cookie(
+                post_json(
+                    "/api/v1/hooks/tailscale/install",
+                    &json!({
+                        "confirmation": "tailscale",
+                        "repository_change_acknowledged": true
+                    }),
+                    50,
+                ),
+                &client.cookie,
+            ))
+            .await
+            .expect("missing hook install CSRF response");
+        assert_eq!(hook_install_without_csrf.status(), StatusCode::FORBIDDEN);
+
+        let hook_install = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    post_json(
+                        "/api/v1/hooks/tailscale/install",
+                        &json!({
+                            "confirmation": "tailscale",
+                            "repository_change_acknowledged": true
+                        }),
+                        51,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("hook install route response");
+        assert_eq!(hook_install.status(), StatusCode::SERVICE_UNAVAILABLE);
 
         let reboot = context
             .app
@@ -4648,6 +4814,27 @@ mod tests {
             ),
             with_csrf(
                 with_cookie(
+                    get("/api/v1/hooks/tailscale/install/preflight"),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ),
+            with_csrf(
+                with_cookie(
+                    post_json(
+                        "/api/v1/hooks/tailscale/install",
+                        &json!({
+                            "confirmation": "tailscale",
+                            "repository_change_acknowledged": true
+                        }),
+                        44,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ),
+            with_csrf(
+                with_cookie(
                     get("/api/v1/servers/helix:test/logs/history?lines=20"),
                     &client.cookie,
                 ),
@@ -5018,6 +5205,63 @@ mod tests {
                 "authorization_denied"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn marketplace_images_use_session_auth_without_a_header_images_cannot_send() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let bootstrap = install_bootstrap(&context);
+        let client = claim_owner(&context, &bootstrap).await;
+
+        let unauthenticated = context
+            .app
+            .clone()
+            .oneshot(get(
+                "/api/v1/marketplace/modrinth/image?path=invalid-provider-path",
+            ))
+            .await
+            .expect("unauthenticated marketplace image response");
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+        let authenticated_without_csrf = context
+            .app
+            .clone()
+            .oneshot(with_cookie(
+                get("/api/v1/marketplace/modrinth/image?path=invalid-provider-path"),
+                &client.cookie,
+            ))
+            .await
+            .expect("authenticated marketplace image response");
+        assert_eq!(authenticated_without_csrf.status(), StatusCode::NOT_FOUND);
+
+        let forbidden_context = test_app(DatabaseStatus::Ok).await;
+        let connection = rusqlite::Connection::open(
+            forbidden_context
+                .data
+                .path()
+                .join("state")
+                .join("helix-state.db"),
+        )
+        .expect("open state database");
+        connection
+            .execute(
+                "DELETE FROM role_capabilities WHERE capability = 'games.view'",
+                [],
+            )
+            .expect("remove games view capability");
+        drop(connection);
+        let forbidden_bootstrap = install_bootstrap(&forbidden_context);
+        let forbidden_client = claim_owner(&forbidden_context, &forbidden_bootstrap).await;
+        let forbidden = forbidden_context
+            .app
+            .clone()
+            .oneshot(with_cookie(
+                get("/api/v1/marketplace/modrinth/image?path=invalid-provider-path"),
+                &forbidden_client.cookie,
+            ))
+            .await
+            .expect("marketplace image capability response");
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

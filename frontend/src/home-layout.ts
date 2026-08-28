@@ -51,7 +51,16 @@ export const defaultHomeWidgets: ReadonlyArray<HomeWidget> = [
   { id: 'host', kind: 'host', size: 'wide', height: 'medium', title: 'Host pulse', content: '', url: '', color: '' },
   { id: 'servers', kind: 'servers', size: 'wide', height: 'medium', title: 'Servers', content: '', url: '', color: '' },
   { id: 'storage', kind: 'storage', size: 'wide', height: 'medium', title: 'Storage', content: '', url: '', color: '' },
-  { id: 'notes', kind: 'note', size: 'compact', height: 'medium', title: 'Notes', content: '', url: '', color: '' },
+  {
+    id: 'notes',
+    kind: 'note',
+    size: 'compact',
+    height: 'medium',
+    title: 'Notes',
+    content: '{"version":1,"activePageId":"page-1","editableOutsideLayout":true,"pages":[{"id":"page-1","title":"Scratchpad","content":"This note stays with your owner account. Use it for ISP details, port forwards, or weekend plans. Keep passwords in a password manager."}]}',
+    url: '',
+    color: '',
+  },
 ];
 
 export const defaultHomeTemplates: ReadonlyArray<HomeTemplate> = [{
@@ -324,13 +333,15 @@ export function reorderHomeWidgets(
   widgets: readonly HomeWidget[],
   sourceId: string,
   targetId: string,
+  placement: 'before' | 'after' = 'before',
 ): HomeWidget[] {
   const next = widgets.map((widget) => ({ ...widget }));
   const source = next.findIndex((widget) => widget.id === sourceId);
-  const target = next.findIndex((widget) => widget.id === targetId);
-  if (source < 0 || target < 0 || source === target) return next;
+  if (source < 0 || sourceId === targetId) return next;
   const [moved] = next.splice(source, 1);
-  if (moved !== undefined) next.splice(target, 0, moved);
+  const target = next.findIndex((widget) => widget.id === targetId);
+  if (moved === undefined || target < 0) return widgets.map((widget) => ({ ...widget }));
+  next.splice(target + (placement === 'after' ? 1 : 0), 0, moved);
   return next;
 }
 

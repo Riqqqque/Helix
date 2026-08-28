@@ -1,5 +1,13 @@
 # Dashboard and Home
 
+## First Home
+
+A new owner starts with clock, weather, host, servers, storage, and a scratchpad
+note. Home greets the display name from owner setup. Type a city on the weather
+widget without entering layout mode, write in the note, then use **Edit layout**
+for shortcuts and arrangement. Nothing is pre-filled with a fake city or demo
+server.
+
 ## Navigation and refresh
 
 Overview, Home, Storage, Network, Host, Terminal, Servers, and Hooks are full

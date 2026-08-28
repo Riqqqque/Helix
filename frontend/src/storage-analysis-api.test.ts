@@ -28,11 +28,13 @@ const progress = {
   files_scanned: 20,
   directories_scanned: 6,
   bytes_scanned: '18446744073709551615',
+  allocated_bytes_scanned: '1099511627776',
 };
 
 const result = {
   root_path: '/srv/media',
   apparent_bytes_scanned: '18446744073709551615',
+  allocated_bytes_scanned: '1099511627776',
   truncated: true,
   stop_reason: 'entry_limit',
   errors: {
@@ -49,6 +51,7 @@ const result = {
     special_files: 0,
     depth_limited_directories: 0,
     unrepresentable_names: 0,
+    hard_link_aliases: 0,
   },
   file_results_omitted: 4,
   recursive_folder_results_omitted: 2,
@@ -59,6 +62,7 @@ const result = {
     name: 'movie.mkv',
     type: 'file',
     bytes: '10995116277760',
+    allocated_bytes: '10737418240',
   }],
   largest_folders_by_recursive_bytes: [{
     path: '/srv/media/shows',
@@ -66,6 +70,8 @@ const result = {
     type: 'directory',
     immediate_bytes: '1024',
     recursive_bytes: '21990232555520',
+    immediate_allocated_bytes: '1024',
+    recursive_allocated_bytes: '107374182400',
     immediate_complete: true,
     recursive_complete: false,
   }],
@@ -75,6 +81,8 @@ const result = {
     type: 'directory',
     immediate_bytes: '10995116277760',
     recursive_bytes: '10995116277760',
+    immediate_allocated_bytes: '53687091200',
+    recursive_allocated_bytes: '53687091200',
     immediate_complete: true,
     recursive_complete: true,
   }],
@@ -120,6 +128,7 @@ describe('storage analysis API contract', () => {
     const parsed = parseStorageAnalysisStatus(terminalStatus());
 
     expect(parsed.progress.bytesScanned).toBe(18_446_744_073_709_551_615n);
+    expect(parsed.progress.allocatedBytesScanned).toBe(1_099_511_627_776n);
     expect(parsed.result).toMatchObject({
       truncated: true,
       stopReason: 'entry_limit',
@@ -129,9 +138,11 @@ describe('storage analysis API contract', () => {
     expect(parsed.result?.largestFiles[0]).toMatchObject({
       name: 'movie.mkv',
       bytes: 10_995_116_277_760n,
+      allocatedBytes: 10_737_418_240n,
     });
     expect(parsed.result?.largestFoldersByRecursiveBytes[0]).toMatchObject({
       recursiveBytes: 21_990_232_555_520n,
+      recursiveAllocatedBytes: 107_374_182_400n,
       recursiveComplete: false,
     });
   });
@@ -210,6 +221,7 @@ describe('storage analysis API contract', () => {
       name: `${index}.bin`,
       type: 'file' as const,
       bytes: String(index),
+      allocated_bytes: String(index),
     }));
     expect(() => parseStorageAnalysisStatus(tooManyRows)).toThrow(/largest_files/i);
   });

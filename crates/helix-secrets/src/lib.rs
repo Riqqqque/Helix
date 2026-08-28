@@ -1233,10 +1233,15 @@ mod tests {
         ] {
             if path.exists() {
                 let raw = fs::read(&path).expect("read database artifact");
-                assert!(!contains_bytes(&raw, canary), "canary appeared in {path:?}");
+                let leaked_canary = contains_bytes(&raw, canary);
+                let leaked_master_key = contains_bytes(&raw, &master_key);
                 assert!(
-                    !contains_bytes(&raw, &master_key),
-                    "master key appeared in {path:?}"
+                    !leaked_canary,
+                    "plaintext canary appeared in a database artifact"
+                );
+                assert!(
+                    !leaked_master_key,
+                    "master key material appeared in a database artifact"
                 );
             }
         }

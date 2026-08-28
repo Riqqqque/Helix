@@ -21,6 +21,10 @@ export function loadStorageAnalyzer(): Promise<AnalyzerComponent> {
   return pendingAnalyzer;
 }
 
+export function preloadStorageAnalyzer(): void {
+  void loadStorageAnalyzer().catch(() => undefined);
+}
+
 export function StorageAnalyzerRoute(props: StorageAnalyzerProps) {
   const [Analyzer, setAnalyzer] = useState<AnalyzerComponent | null>(() => loadedAnalyzer);
   const [error, setError] = useState<string | null>(null);

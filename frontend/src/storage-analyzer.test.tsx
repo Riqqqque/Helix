@@ -14,9 +14,9 @@ import type {
 } from './storage-analysis-api';
 
 const files: StorageAnalysisFile[] = [
-  { path: '/srv/media/small.bin', name: 'small.bin', type: 'file', bytes: 12n },
-  { path: '/srv/media/large.bin', name: 'large.bin', type: 'file', bytes: 9_007_199_254_740_999n },
-  { path: '/srv/media/alpha.bin', name: 'alpha.bin', type: 'file', bytes: 512n },
+  { path: '/srv/media/small.bin', name: 'small.bin', type: 'file', bytes: 12n, allocatedBytes: 4_096n },
+  { path: '/srv/media/large.bin', name: 'large.bin', type: 'file', bytes: 9_007_199_254_740_999n, allocatedBytes: 8_192n },
+  { path: '/srv/media/alpha.bin', name: 'alpha.bin', type: 'file', bytes: 512n, allocatedBytes: 16_384n },
 ];
 const folders: StorageAnalysisFolder[] = [
   {
@@ -25,6 +25,8 @@ const folders: StorageAnalysisFolder[] = [
     type: 'directory',
     immediateBytes: 10_000n,
     recursiveBytes: 11_000n,
+    immediateAllocatedBytes: 20_000n,
+    recursiveAllocatedBytes: 21_000n,
     immediateComplete: true,
     recursiveComplete: true,
   },
@@ -34,6 +36,8 @@ const folders: StorageAnalysisFolder[] = [
     type: 'directory',
     immediateBytes: 100n,
     recursiveBytes: 50_000n,
+    immediateAllocatedBytes: 4_096n,
+    recursiveAllocatedBytes: 65_536n,
     immediateComplete: true,
     recursiveComplete: false,
   },
@@ -41,6 +45,7 @@ const folders: StorageAnalysisFolder[] = [
 const result: StorageAnalysisResult = {
   rootPath: '/srv/media',
   apparentBytesScanned: 61_000n,
+  allocatedBytesScanned: 86_536n,
   truncated: true,
   stopReason: 'entry_limit',
   errors: {
@@ -57,6 +62,7 @@ const result: StorageAnalysisResult = {
     specialFiles: 0,
     depthLimitedDirectories: 0,
     unrepresentableNames: 0,
+    hardLinkAliases: 0,
   },
   fileResultsOmitted: 7,
   recursiveFolderResultsOmitted: 3,
@@ -104,8 +110,8 @@ describe('Storage analyzer', () => {
 
   it('sorts exact bigint sizes without mutating backend order', () => {
     expect(sortStorageAnalysisFiles(files, 'size-desc').map((file) => file.name)).toEqual([
-      'large.bin',
       'alpha.bin',
+      'large.bin',
       'small.bin',
     ]);
     expect(sortStorageAnalysisFiles(files, 'name-asc').map((file) => file.name)).toEqual([
@@ -133,11 +139,12 @@ describe('Storage analyzer', () => {
     expect(markup).toContain('Changed during scan');
     expect(markup).toContain('entries were excluded');
     expect(markup).toContain('largest ranking rows are retained');
-    expect(markup).toContain('Apparent bytes analyzed');
+    expect(markup).toContain('Disk space found');
+    expect(markup).toContain('Logical data size');
     expect(markup).toContain('large.bin');
     expect(markup).toContain('Show in files');
     expect(markup).toContain('Move to trash');
-    expect(markup).toContain('Logical file length from metadata');
+    expect(markup).toContain('Filesystem blocks allocated to regular files');
   });
 
   it('does not call a completed top-N ranking a partial filesystem scan', () => {

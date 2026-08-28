@@ -95,8 +95,7 @@ impl NativeManager {
                 .accepted_loaders
                 .iter()
                 .map(|loader| format!("categories:{loader}"))
-                .collect::<Vec<_>>(),
-            ["server_side:required", "server_side:optional"]
+                .collect::<Vec<_>>()
         ]);
         let facets = serde_json::to_string(&facets)
             .map_err(|_| "could not encode the marketplace filter".to_owned())?;
@@ -118,7 +117,7 @@ impl NativeManager {
         let manifest = self.load_manifest(native_id(instance_id))?;
         let profile = content_profile(manifest.software)?;
         let project = self.fetch_modrinth_project(project_id)?;
-        validate_project_compatibility(&project, &profile)?;
+        validate_project_platform(&project, &profile)?;
         let resolved_project_id = required_text(&project, "id", 64)?;
         validate_modrinth_id(&resolved_project_id, "project")?;
         let versions = self.compatible_modrinth_versions(
@@ -153,7 +152,7 @@ impl NativeManager {
                 "body": optional_text_chars(&project, "body", MAX_PROJECT_BODY_CHARS),
                 "project_type": required_text(&project, "project_type", 32)?,
                 "content_kind": profile.kind,
-                "server_side": required_text(&project, "server_side", 32)?,
+                "server_side": optional_text(&project, "server_side", 32).unwrap_or_else(|| "unknown".to_owned()),
                 "downloads": project.get("downloads").and_then(Value::as_u64).unwrap_or(0),
                 "followers": project.get("followers").and_then(Value::as_u64).unwrap_or(0),
                 "license": project.pointer("/license/name").and_then(Value::as_str).map(|value| clean_text(value, 128)),
@@ -368,7 +367,7 @@ impl NativeManager {
             }
 
             let project = self.fetch_modrinth_project(&project_id)?;
-            validate_project_compatibility(&project, profile)?;
+            validate_project_platform(&project, profile)?;
             validate_version_compatibility(&version, minecraft_version, profile)?;
             let file = select_primary_file(&version)?;
             let mut optional_dependencies = Vec::new();
@@ -587,6 +586,10 @@ impl NativeManager {
 
 fn content_profile(software: MinecraftSoftware) -> Result<ContentProfile, String> {
     match software {
+        MinecraftSoftware::Custom => Err(
+            "Custom JAR compatibility is unknown; install add-ons manually only after checking the JAR publisher's loader and Minecraft version"
+                .to_owned(),
+        ),
         MinecraftSoftware::Paper => Ok(ContentProfile {
             kind: "plugin",
             search_project_type: "plugin",
@@ -727,7 +730,7 @@ fn sanitize_search_response(
     }))
 }
 
-fn validate_project_compatibility(project: &Value, profile: &ContentProfile) -> Result<(), String> {
+fn validate_project_platform(project: &Value, profile: &ContentProfile) -> Result<(), String> {
     let project_type = required_text(project, "project_type", 32)?;
     if project_type != "mod" {
         return Err(format!(
@@ -749,11 +752,7 @@ fn validate_project_compatibility(project: &Value, profile: &ContentProfile) -> 
     }) {
         return Err("this project does not support the server's software family".to_owned());
     }
-    match required_text(project, "server_side", 32)?.as_str() {
-        "required" | "optional" => Ok(()),
-        "unsupported" => Err("this project does not run on a server".to_owned()),
-        _ => Err("this project has not declared safe server compatibility".to_owned()),
-    }
+    Ok(())
 }
 
 fn validate_version_compatibility(
@@ -788,11 +787,6 @@ fn validate_version_compatibility(
         return Err(
             "the selected content version does not support this server software".to_owned(),
         );
-    }
-    if let Some(environment) = version.get("environment").and_then(Value::as_str)
-        && matches!(environment, "client_only" | "singleplayer_only")
-    {
-        return Err("the selected content version cannot run on a dedicated server".to_owned());
     }
     Ok(())
 }
@@ -1234,22 +1228,27 @@ mod tests {
     }
 
     #[test]
-    fn modrinth_plugin_projects_use_loader_metadata_as_the_boundary() {
+    fn modrinth_projects_use_loader_metadata_as_the_boundary() {
         let project = json!({
             "project_type": "mod",
             "loaders": ["bukkit", "paper", "purpur", "spigot"],
             "server_side": "required"
         });
         let paper = content_profile(MinecraftSoftware::Paper).unwrap();
-        assert!(validate_project_compatibility(&project, &paper).is_ok());
+        assert!(validate_project_platform(&project, &paper).is_ok());
         let fabric = content_profile(MinecraftSoftware::Fabric).unwrap();
-        assert!(validate_project_compatibility(&project, &fabric).is_err());
+        assert!(validate_project_platform(&project, &fabric).is_err());
         let client_only = json!({
             "project_type": "mod",
             "loaders": ["fabric"],
             "server_side": "unsupported"
         });
-        assert!(validate_project_compatibility(&client_only, &fabric).is_err());
+        assert!(validate_project_platform(&client_only, &fabric).is_ok());
+        let missing_server_metadata = json!({
+            "project_type": "mod",
+            "loaders": ["fabric"]
+        });
+        assert!(validate_project_platform(&missing_server_metadata, &fabric).is_ok());
     }
 
     #[test]
@@ -1271,7 +1270,7 @@ mod tests {
             "loaders": ["fabric"],
             "environment": "client_only"
         });
-        assert!(validate_version_compatibility(&client_only, "1.21.11", &profile).is_err());
+        assert!(validate_version_compatibility(&client_only, "1.21.11", &profile).is_ok());
     }
 
     #[test]

@@ -2,7 +2,7 @@ use helix_privd::StorageAnalysisMode;
 use serde::Serialize;
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{BinaryHeap, HashMap},
+    collections::{BinaryHeap, HashMap, HashSet},
     ffi::{CStr, CString, OsStr},
     fs::{self, File, OpenOptions},
     io::{self, Read as _, Write as _},
@@ -22,6 +22,7 @@ use uuid::Uuid;
 const MIN_DIRECTORY_PAGE_ENTRIES: u16 = 25;
 const MAX_DIRECTORY_PAGE_ENTRIES: u16 = 200;
 const MAX_TEXT_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const MAX_CONFIGURED_ROOTS: usize = 32;
 const BLOCKED_ROOTS: &[&str] = &["/proc", "/sys", "/dev", "/run"];
 const BLOCKED_FILES: &[&str] = &[
     "/etc/shadow",
@@ -84,6 +85,9 @@ impl FileManager {
     pub fn new(roots: Vec<PathBuf>) -> Result<Self, String> {
         if roots.is_empty() {
             return Err("at least one managed root is required".to_owned());
+        }
+        if roots.len() > MAX_CONFIGURED_ROOTS {
+            return Err("too many managed roots are configured".to_owned());
         }
         let mut managed_roots = roots
             .into_iter()
@@ -542,6 +546,8 @@ pub struct StorageAnalysisProgress {
     pub directories_scanned: u64,
     #[serde(serialize_with = "serialize_u64_decimal")]
     pub bytes_scanned: u64,
+    #[serde(serialize_with = "serialize_u64_decimal")]
+    pub allocated_bytes_scanned: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -573,6 +579,8 @@ pub struct StorageAnalysisFile {
     pub kind: StorageAnalysisEntryKind,
     #[serde(serialize_with = "serialize_u64_decimal")]
     pub bytes: u64,
+    #[serde(serialize_with = "serialize_u64_decimal")]
+    pub allocated_bytes: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -585,6 +593,10 @@ pub struct StorageAnalysisFolder {
     pub immediate_bytes: u64,
     #[serde(serialize_with = "serialize_u64_decimal")]
     pub recursive_bytes: u64,
+    #[serde(serialize_with = "serialize_u64_decimal")]
+    pub immediate_allocated_bytes: u64,
+    #[serde(serialize_with = "serialize_u64_decimal")]
+    pub recursive_allocated_bytes: u64,
     pub immediate_complete: bool,
     pub recursive_complete: bool,
 }
@@ -606,6 +618,7 @@ pub struct StorageAnalysisSkipped {
     pub special_files: u64,
     pub depth_limited_directories: u64,
     pub unrepresentable_names: u64,
+    pub hard_link_aliases: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -633,6 +646,8 @@ pub struct StorageAnalysisResult {
     pub root_path: String,
     #[serde(serialize_with = "serialize_u64_decimal")]
     pub apparent_bytes_scanned: u64,
+    #[serde(serialize_with = "serialize_u64_decimal")]
+    pub allocated_bytes_scanned: u64,
     pub truncated: bool,
     pub stop_reason: Option<StorageAnalysisStopReason>,
     pub errors: StorageAnalysisErrors,
@@ -653,8 +668,9 @@ struct RankedFile(StorageAnalysisFile);
 impl Ord for RankedFile {
     fn cmp(&self, other: &Self) -> Ordering {
         self.0
-            .bytes
-            .cmp(&other.0.bytes)
+            .allocated_bytes
+            .cmp(&other.0.allocated_bytes)
+            .then_with(|| self.0.bytes.cmp(&other.0.bytes))
             .then_with(|| self.0.path.cmp(&other.0.path))
     }
 }
@@ -702,12 +718,15 @@ struct StorageScan {
     largest_files: BinaryHeap<Reverse<RankedFile>>,
     recursive_folders: BinaryHeap<Reverse<RankedFolder>>,
     immediate_folders: BinaryHeap<Reverse<RankedFolder>>,
+    hard_link_inodes: HashSet<(u64, u64)>,
 }
 
 #[derive(Clone, Copy)]
 struct DirectoryTotals {
     immediate_bytes: u64,
     recursive_bytes: u64,
+    immediate_allocated_bytes: u64,
+    recursive_allocated_bytes: u64,
     immediate_complete: bool,
     recursive_complete: bool,
 }
@@ -734,6 +753,9 @@ impl StorageAnalysisManager {
         if roots.is_empty() {
             return Err("at least one managed root is required".to_owned());
         }
+        if roots.len() > MAX_CONFIGURED_ROOTS {
+            return Err("too many analysis roots are configured".to_owned());
+        }
         for limits in [quick_limits, thorough_limits] {
             if limits.max_entries == 0
                 || limits.max_results_per_list == 0
@@ -745,7 +767,7 @@ impl StorageAnalysisManager {
             }
         }
 
-        let mut opened = Vec::with_capacity(roots.len());
+        let mut opened = Vec::new();
         for configured in roots {
             let path = normalize_absolute_analysis_path(&configured)?;
             ensure_visible(&path)?;
@@ -909,7 +931,10 @@ impl StorageAnalysisManager {
         let relative = normalized
             .strip_prefix(&root.path)
             .map_err(|_| "the selected path is outside a managed storage root".to_owned())?;
-        let mut descriptor = rustix::io::dup(root.descriptor.as_ref())
+        // `dup` would share the directory stream offset with the retained root
+        // descriptor. Opening `.` creates a fresh file description so every
+        // analysis starts at the beginning of the directory.
+        let mut descriptor = open_directory_at(&root.descriptor, c".")
             .map_err(|_| "the storage analysis target is unavailable".to_owned())?;
         for component in relative.components() {
             let std::path::Component::Normal(name) = component else {
@@ -979,6 +1004,7 @@ fn run_storage_analysis_job(worker: StorageAnalysisWorker) {
         largest_files: BinaryHeap::new(),
         recursive_folders: BinaryHeap::new(),
         immediate_folders: BinaryHeap::new(),
+        hard_link_inodes: HashSet::new(),
     };
     let root_totals = scan.scan_directory(descriptor, &root_path, 0);
     scan.keep_folder(&root_path, root_totals);
@@ -1032,6 +1058,8 @@ impl StorageScan {
         let mut totals = DirectoryTotals {
             immediate_bytes: 0,
             recursive_bytes: 0,
+            immediate_allocated_bytes: 0,
+            recursive_allocated_bytes: 0,
             immediate_complete: true,
             recursive_complete: true,
         };
@@ -1101,6 +1129,18 @@ impl StorageScan {
                 continue;
             }
             if kind.is_file() {
+                self.files_seen = self.files_seen.saturating_add(1);
+                self.progress.files_scanned = self.progress.files_scanned.saturating_add(1);
+                if metadata.st_nlink > 1
+                    && !self
+                        .hard_link_inodes
+                        .insert((metadata.st_dev, metadata.st_ino))
+                {
+                    self.skipped.hard_link_aliases =
+                        self.skipped.hard_link_aliases.saturating_add(1);
+                    self.publish_progress(false);
+                    continue;
+                }
                 let Ok(bytes) = u64::try_from(metadata.st_size) else {
                     self.record_size_overflow();
                     totals.immediate_complete = false;
@@ -1108,11 +1148,25 @@ impl StorageScan {
                     self.publish_progress(false);
                     continue;
                 };
-                self.files_seen = self.files_seen.saturating_add(1);
-                self.progress.files_scanned = self.progress.files_scanned.saturating_add(1);
+                let Some(allocated_bytes) = u64::try_from(metadata.st_blocks)
+                    .ok()
+                    .and_then(|blocks| blocks.checked_mul(512))
+                else {
+                    self.record_size_overflow();
+                    totals.immediate_complete = false;
+                    totals.recursive_complete = false;
+                    self.publish_progress(false);
+                    continue;
+                };
                 let scanned_bytes = self.progress.bytes_scanned;
                 self.progress.bytes_scanned =
                     self.add_bytes(scanned_bytes, bytes, &mut totals.immediate_complete);
+                let scanned_allocated_bytes = self.progress.allocated_bytes_scanned;
+                self.progress.allocated_bytes_scanned = self.add_bytes(
+                    scanned_allocated_bytes,
+                    allocated_bytes,
+                    &mut totals.immediate_complete,
+                );
                 totals.immediate_bytes = self.add_bytes(
                     totals.immediate_bytes,
                     bytes,
@@ -1123,12 +1177,23 @@ impl StorageScan {
                     bytes,
                     &mut totals.recursive_complete,
                 );
+                totals.immediate_allocated_bytes = self.add_bytes(
+                    totals.immediate_allocated_bytes,
+                    allocated_bytes,
+                    &mut totals.immediate_complete,
+                );
+                totals.recursive_allocated_bytes = self.add_bytes(
+                    totals.recursive_allocated_bytes,
+                    allocated_bytes,
+                    &mut totals.recursive_complete,
+                );
                 if let Some((path, name)) = representable_analysis_path(&child_path) {
                     self.keep_file(StorageAnalysisFile {
                         path,
                         name,
                         kind: StorageAnalysisEntryKind::File,
                         bytes,
+                        allocated_bytes,
                     });
                 } else {
                     self.skipped.unrepresentable_names =
@@ -1156,6 +1221,11 @@ impl StorageScan {
                 totals.recursive_bytes = self.add_bytes(
                     totals.recursive_bytes,
                     child.recursive_bytes,
+                    &mut totals.recursive_complete,
+                );
+                totals.recursive_allocated_bytes = self.add_bytes(
+                    totals.recursive_allocated_bytes,
+                    child.recursive_allocated_bytes,
                     &mut totals.recursive_complete,
                 );
                 totals.recursive_complete &= child.recursive_complete;
@@ -1238,18 +1308,20 @@ impl StorageScan {
             kind: StorageAnalysisEntryKind::Directory,
             immediate_bytes: totals.immediate_bytes,
             recursive_bytes: totals.recursive_bytes,
+            immediate_allocated_bytes: totals.immediate_allocated_bytes,
+            recursive_allocated_bytes: totals.recursive_allocated_bytes,
             immediate_complete: totals.immediate_complete,
             recursive_complete: totals.recursive_complete,
         };
         self.recursive_folders.push(Reverse(RankedFolder {
-            bytes: folder.recursive_bytes,
+            bytes: folder.recursive_allocated_bytes,
             folder: folder.clone(),
         }));
         if self.recursive_folders.len() > self.limits.max_results_per_list {
             self.recursive_folders.pop();
         }
         self.immediate_folders.push(Reverse(RankedFolder {
-            bytes: folder.immediate_bytes,
+            bytes: folder.immediate_allocated_bytes,
             folder,
         }));
         if self.immediate_folders.len() > self.limits.max_results_per_list {
@@ -1295,8 +1367,9 @@ impl StorageScan {
             .collect::<Vec<_>>();
         largest_files.sort_by(|left, right| {
             right
-                .bytes
-                .cmp(&left.bytes)
+                .allocated_bytes
+                .cmp(&left.allocated_bytes)
+                .then_with(|| right.bytes.cmp(&left.bytes))
                 .then_with(|| left.path.cmp(&right.path))
         });
         let mut recursive_folders = self
@@ -1306,8 +1379,9 @@ impl StorageScan {
             .collect::<Vec<_>>();
         recursive_folders.sort_by(|left, right| {
             right
-                .recursive_bytes
-                .cmp(&left.recursive_bytes)
+                .recursive_allocated_bytes
+                .cmp(&left.recursive_allocated_bytes)
+                .then_with(|| right.recursive_bytes.cmp(&left.recursive_bytes))
                 .then_with(|| left.path.cmp(&right.path))
         });
         let mut immediate_folders = self
@@ -1317,8 +1391,9 @@ impl StorageScan {
             .collect::<Vec<_>>();
         immediate_folders.sort_by(|left, right| {
             right
-                .immediate_bytes
-                .cmp(&left.immediate_bytes)
+                .immediate_allocated_bytes
+                .cmp(&left.immediate_allocated_bytes)
+                .then_with(|| right.immediate_bytes.cmp(&left.immediate_bytes))
                 .then_with(|| left.path.cmp(&right.path))
         });
         let file_results_omitted = self
@@ -1338,6 +1413,7 @@ impl StorageScan {
         StorageAnalysisResult {
             root_path: root_path.to_string_lossy().into_owned(),
             apparent_bytes_scanned: self.progress.bytes_scanned,
+            allocated_bytes_scanned: self.progress.allocated_bytes_scanned,
             truncated: coverage_incomplete,
             stop_reason: self.stop_reason,
             errors: self.errors,
@@ -1389,6 +1465,7 @@ fn fit_storage_analysis_response(
                 files_scanned: 0,
                 directories_scanned: 0,
                 bytes_scanned: result.apparent_bytes_scanned,
+                allocated_bytes_scanned: result.allocated_bytes_scanned,
             },
             created_unix_ms: started_unix_ms,
             started_unix_ms: Some(started_unix_ms),
@@ -1683,6 +1760,53 @@ mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
 
+    #[test]
+    fn file_manager_rejects_too_many_roots() {
+        let roots = (0..=MAX_CONFIGURED_ROOTS)
+            .map(|index| PathBuf::from(format!("/srv/helix/root-{index}")))
+            .collect();
+        let error = FileManager::new(roots).expect_err("root cap");
+        assert!(error.contains("too many managed roots"));
+    }
+
+    #[test]
+    fn storage_analysis_rejects_too_many_roots() {
+        let roots = (0..=MAX_CONFIGURED_ROOTS)
+            .map(|index| PathBuf::from(format!("/srv/helix/analysis-{index}")))
+            .collect();
+        let error = StorageAnalysisManager::new(roots).expect_err("root cap");
+        assert!(error.contains("too many analysis roots"));
+    }
+
+    #[test]
+    fn storage_analysis_charges_hard_linked_data_once() {
+        let temporary = tempfile::tempdir().unwrap();
+        let managed = temporary.path().join("managed");
+        let first = managed.join("first");
+        let second = managed.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        let original = first.join("shared.bin");
+        fs::write(&original, vec![0x5a; 16 * 1024]).unwrap();
+        fs::hard_link(&original, second.join("shared.bin")).unwrap();
+        let allocated = fs::metadata(&original)
+            .unwrap()
+            .blocks()
+            .saturating_mul(512);
+        let manager = StorageAnalysisManager::with_limits(vec![managed.clone()], analysis_limits())
+            .expect("analysis manager");
+
+        let started = manager
+            .start(&managed.to_string_lossy())
+            .expect("start analysis");
+        let status = wait_for_analysis(&manager, &started.job_id);
+        let result = status.result.expect("analysis result");
+
+        assert_eq!(result.allocated_bytes_scanned, allocated);
+        assert_eq!(result.skipped.hard_link_aliases, 1);
+        assert_eq!(result.largest_files.len(), 1);
+    }
+
     fn analysis_limits() -> StorageAnalysisLimits {
         StorageAnalysisLimits {
             max_duration: Duration::from_secs(2),
@@ -1835,13 +1959,17 @@ mod tests {
         assert_eq!(status.state, StorageAnalysisJobState::Complete);
         let result = status.result.expect("analysis result");
         assert_eq!(result.apparent_bytes_scanned, 150);
+        assert!(result.allocated_bytes_scanned >= 150);
         assert_eq!(result.errors.total, 0);
         assert_eq!(result.skipped.symbolic_links, 1);
         assert_eq!(result.largest_files[0].name, "largest.bin");
         assert_eq!(result.largest_files[0].bytes, 100);
+        assert!(result.largest_files[0].allocated_bytes >= 100);
         let encoded = serde_json::to_value(&result).expect("serialize exact byte fields");
         assert_eq!(encoded["apparent_bytes_scanned"], "150");
+        assert!(encoded["allocated_bytes_scanned"].is_string());
         assert_eq!(encoded["largest_files"][0]["bytes"], "100");
+        assert!(encoded["largest_files"][0]["allocated_bytes"].is_string());
         assert_eq!(encoded["largest_files"][0]["type"], "file");
         assert!(encoded["largest_files"][0].get("kind").is_none());
         assert!(
@@ -1857,14 +1985,75 @@ mod tests {
             .expect("folder result");
         assert_eq!(folder_total.immediate_bytes, 20);
         assert_eq!(folder_total.recursive_bytes, 50);
+        assert!(folder_total.immediate_allocated_bytes >= 20);
+        assert!(folder_total.recursive_allocated_bytes >= 50);
         assert!(folder_total.immediate_complete);
         assert!(folder_total.recursive_complete);
         assert!(
             result
                 .largest_files
                 .windows(2)
-                .all(|files| files[0].bytes >= files[1].bytes)
+                .all(|files| files[0].allocated_bytes >= files[1].allocated_bytes)
         );
+    }
+
+    #[test]
+    fn analysis_ranks_actual_disk_usage_ahead_of_sparse_logical_length() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let managed = temporary.path().join("managed");
+        fs::create_dir(&managed).expect("managed directory");
+        let sparse_path = managed.join("large-sparse.bin");
+        File::create(&sparse_path)
+            .expect("sparse fixture")
+            .set_len(64 * 1024 * 1024)
+            .expect("sparse fixture length");
+        fs::write(managed.join("smaller-dense.bin"), vec![1_u8; 1024 * 1024])
+            .expect("dense fixture");
+
+        let manager = StorageAnalysisManager::with_limits(vec![managed.clone()], analysis_limits())
+            .expect("analysis manager");
+        let result = wait_for_analysis(
+            &manager,
+            &manager.start(managed.to_str().unwrap()).unwrap().job_id,
+        )
+        .result
+        .expect("analysis result");
+        let sparse = result
+            .largest_files
+            .iter()
+            .find(|file| file.name == "large-sparse.bin")
+            .expect("sparse result");
+        let dense = result
+            .largest_files
+            .iter()
+            .find(|file| file.name == "smaller-dense.bin")
+            .expect("dense result");
+        assert!(sparse.bytes > dense.bytes);
+        assert!(sparse.allocated_bytes < dense.allocated_bytes);
+        assert_eq!(result.largest_files[0].name, "smaller-dense.bin");
+    }
+
+    #[test]
+    fn repeated_analysis_starts_with_a_fresh_directory_cursor() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let managed = temporary.path().join("managed");
+        fs::create_dir(&managed).expect("managed directory");
+        fs::write(managed.join("one.bin"), vec![1_u8; 2048]).expect("first fixture");
+        fs::write(managed.join("two.bin"), vec![2_u8; 4096]).expect("second fixture");
+
+        let manager = StorageAnalysisManager::with_limits(vec![managed.clone()], analysis_limits())
+            .expect("analysis manager");
+        for _ in 0..2 {
+            let start = manager
+                .start(managed.to_str().expect("UTF-8 target"))
+                .expect("start analysis");
+            let status = wait_for_analysis(&manager, &start.job_id);
+            assert_eq!(status.state, StorageAnalysisJobState::Complete);
+            let result = status.result.expect("analysis result");
+            assert_eq!(status.progress.entries_scanned, 2);
+            assert_eq!(result.apparent_bytes_scanned, 6144);
+            assert_eq!(result.largest_files.len(), 2);
+        }
     }
 
     #[test]
@@ -2005,11 +2194,13 @@ mod tests {
                 name: format!("{index}-{}", "x".repeat(220)),
                 kind: StorageAnalysisEntryKind::File,
                 bytes: index,
+                allocated_bytes: index,
             })
             .collect();
         let mut result = StorageAnalysisResult {
             root_path: root.to_string_lossy().into_owned(),
             apparent_bytes_scanned: 8_128,
+            allocated_bytes_scanned: 8_128,
             truncated: false,
             stop_reason: None,
             errors: StorageAnalysisErrors::default(),
@@ -2045,6 +2236,7 @@ mod tests {
                 files_scanned: 128,
                 directories_scanned: 1,
                 bytes_scanned: 8_128,
+                allocated_bytes_scanned: 8_128,
             },
             created_unix_ms: 1,
             started_unix_ms: Some(1),

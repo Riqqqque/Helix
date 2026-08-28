@@ -12,6 +12,8 @@ const ruleId = '6b8f95ce-9c58-4c4c-b232-627a29ca1c03';
 const inventory = {
   schema_version: 1,
   collected_at_unix_ms: 1_800_000_000_000,
+  addresses: { private_ipv4: '192.168.1.20', source: 'router_path', note: 'LAN address.' },
+  router: { automatic_port_forwarding_available: true, discovery: 'upnp_igd', state: 'available', external_ipv4: '8.8.8.8', external_address_kind: 'public', private_ipv4: '192.168.1.20', error: null, note: 'Router available.' },
   listeners: {
     source: 'linux_proc_net',
     items: [{ protocol: 'tcp', family: 'ipv4', address: '0.0.0.0', port: 25565, wildcard: true, uid: 1000, inode: 55, process: { pid: 42, name: 'java' } }],
@@ -40,7 +42,8 @@ const inventory = {
     instance_id: 'native-1', name: 'Survival', manager: 'helix_native', port: 25565, protocol: 'tcp', server_reported_running: true,
     listener_bound: true, docker_published: true, docker_publications: [{ container_id: 'abcdef', container_name: 'minecraft', compose_service: null, protocol: 'tcp', container_port: 25565, host_address: '0.0.0.0', host_port: 25565 }],
     firewall_input_allowance: { applicable: true, allowed: true, state: 'allowed' },
-    external_reachability: { state: 'unverified', reachable: null, note: 'Not tested outside the host.' },
+    private_join_address: '192.168.1.20:25565',
+    external_reachability: { state: 'setup_available', reachable: null, tested_from_external_network: false, router_mapping_verified: false, external_ip: '8.8.8.8', join_address: '8.8.8.8:25565', note: 'Not tested outside the host.' },
   }],
   game_port_inventory_errors: [],
   external_reachability: { state: 'unverified', tested_from_external_network: false },
@@ -56,7 +59,7 @@ describe('network API', () => {
       listenerBound: true,
       dockerPublished: true,
       firewallInputAllowance: { allowed: true },
-      externalReachability: { state: 'unverified', reachable: null },
+      externalReachability: { state: 'setup_available', reachable: null },
     });
     expect(parsed.firewall.helixManagedRuleState[0]?.ruleId).toBe(ruleId);
   });

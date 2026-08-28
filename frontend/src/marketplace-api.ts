@@ -68,7 +68,7 @@ export interface MarketplaceProjectDetail {
     body: string | null;
     projectType: string;
     contentKind: MarketplaceContentKind;
-    serverSide: 'required' | 'optional';
+    serverSide: 'required' | 'optional' | 'unsupported' | 'unknown';
     downloads: number;
     followers: number;
     license: string | null;
@@ -346,7 +346,7 @@ export function parseMarketplaceProjectDetail(value: unknown): MarketplaceProjec
       body: nullableText(project, 'body', 'marketplace project details', 512 * 1_024),
       projectType: expectString(project, 'project_type', 'marketplace project details'),
       contentKind: projectContentKind,
-      serverSide: literal(project, 'server_side', 'marketplace project details', ['required', 'optional'] as const),
+      serverSide: literal(project, 'server_side', 'marketplace project details', ['required', 'optional', 'unsupported', 'unknown'] as const),
       downloads: nonnegative(project, 'downloads', 'marketplace project details'),
       followers: nonnegative(project, 'followers', 'marketplace project details'),
       license: nullableText(project, 'license', 'marketplace project details', 128),

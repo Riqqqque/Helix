@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getHookInventory, manageHookService, parseHookInventory } from './hooks-api';
+import {
+  getHookInstallJob,
+  getHookInstallPlan,
+  getHookInventory,
+  installHook,
+  manageHookService,
+  parseHookInstallPlan,
+  parseHookInventory,
+} from './hooks-api';
 
 const inventory = {
   schema_version: 1,
@@ -7,6 +15,21 @@ const inventory = {
     { id: 'plex', kind: 'systemd', unit: 'plexmediaserver.service', installed: true, active: true, active_state: 'active', enabled: true, enabled_state: 'enabled', controllable: true, actions: ['start', 'stop', 'restart', 'enable', 'disable'], panel_port: null, instance_count: null, unverified_instance_count: null, error: null },
     { id: 'amp', kind: 'api', installed: true, active: true, active_state: 'connected', enabled: true, enabled_state: 'configured', controllable: false, actions: [], panel_port: 8080, instance_count: 4, unverified_instance_count: 0, error: null },
   ],
+  collected_at_unix_ms: 1_800_000_000_000,
+};
+
+const installPlan = {
+  schema_version: 1,
+  hook_id: 'tailscale',
+  mode: 'one_click',
+  install_available: true,
+  status: 'ready',
+  platform: { id: 'ubuntu', name: 'Ubuntu 24.04.3 LTS', codename: 'noble', architecture: 'amd64' },
+  checks: [{ id: 'apt', label: 'APT package manager', status: 'pass', detail: 'Available' }],
+  changes: ['Add the official signed repository', 'Install tailscale'],
+  next_steps: ['Approve this machine in the intended tailnet'],
+  blockers: [],
+  official_docs: 'https://tailscale.com/docs/install/linux',
   collected_at_unix_ms: 1_800_000_000_000,
 };
 
@@ -36,5 +59,44 @@ describe('hooks API', () => {
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(['/api/v1/hooks', '/api/v1/hooks/plex/actions']);
     expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({ action: 'restart' });
+  });
+
+  it('requires one-click readiness, no blockers, and official HTTPS documentation', () => {
+    expect(parseHookInstallPlan(installPlan)).toMatchObject({ hookId: 'tailscale', installAvailable: true, status: 'ready' });
+    expect(() => parseHookInstallPlan({ ...installPlan, blockers: ['APT is unavailable'] })).toThrow(/inconsistent/i);
+    expect(() => parseHookInstallPlan({ ...installPlan, official_docs: 'javascript:alert(1)' })).toThrow(/documentation/i);
+  });
+
+  it('uses exact preflight, install, and opaque job routes', async () => {
+    const jobId = '8953dc16-3891-42bf-802f-711b3ba2965a';
+    const responses = [
+      installPlan,
+      { job_id: jobId, reused: false },
+      { id: jobId, kind: 'hook_install', status: 'running', stage: 'Installing', progress_percent: 52, result: null, error: null },
+    ];
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(responses.shift()), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getHookInstallPlan('tailscale', 'csrf');
+    await installHook('tailscale', 'csrf');
+    await getHookInstallJob(jobId, 'csrf');
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      '/api/v1/hooks/tailscale/install/preflight',
+      '/api/v1/hooks/tailscale/install',
+      `/api/v1/hooks/jobs/${jobId}`,
+    ]);
+    expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+      confirmation: 'tailscale',
+      repository_change_acknowledged: true,
+    });
+  });
+
+  it('rejects non-opaque hook and job identities before fetch', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(getHookInstallPlan('../tailscale', 'csrf')).rejects.toThrow(/valid hook/i);
+    await expect(getHookInstallJob('not-a-job', 'csrf')).rejects.toThrow(/job id/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

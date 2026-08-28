@@ -31,8 +31,9 @@ Current bounded behavior includes:
 - host/server metrics use a configurable bounded refresh cadence;
 - creation, update, backup, and content installation expose bounded job status
   and logs; and
-- software/version/environment checks reject known-incompatible marketplace
-  content instead of mixing plugins and mods; and
+- software, loader, and version checks reject known-incompatible marketplace
+  content instead of mixing plugins and mods, while incomplete server-side
+  metadata remains a visible warning rather than a hard block; and
 - Fabric `.mrpack` creation verifies declared hashes and strict archive bounds,
   excludes optional/client-only files, and atomically rolls back incomplete
   fresh instances.
