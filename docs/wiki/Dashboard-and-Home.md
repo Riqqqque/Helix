@@ -45,7 +45,8 @@ Available widgets are Clock, Host pulse, Live graphs, Servers, Storage, Docker,
 Weather, Notes, and Shortcut. Shortcuts accept only validated HTTP(S) URLs and
 open in a new tab. While editing, **Import from Homarr** pulls classic Homarr
 JSON shortcuts that already have an address. **Full screen** hides the sidebar
-and keeps Homes, layout editing, and theme controls.
+and the top bar (Helix, refresh, theme, account). Exit full screen from the
+Home page button to bring them back.
 
 Overview can show the same live graphs behind a toggle. Those samples live in
 the browser; Helix does not keep a timeseries database.
@@ -69,6 +70,7 @@ Helix validates contrast-sensitive values rather than accepting arbitrary CSS.
 
 ## Dismissed notices
 
-Capacity notices on Overview can be dismissed. Dismissal is a dashboard
-preference; it does not change the disk, remove files, or hide the same evidence
-inside Storage.
+Capacity notices on Overview can be dismissed from the card or from the
+notifications bell in the top bar. Dismissal is this browser’s local list; it
+does not change the disk, remove files, or hide the same evidence inside
+Storage. Settings can show those notices again.

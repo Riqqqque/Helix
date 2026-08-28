@@ -24,6 +24,7 @@ import { HooksRoute, preloadHooksRoute } from './hooks-route';
 import { SecurityRoute, preloadSecurityRoute } from './security-route';
 import { Icon, type IconName } from './icons';
 import { InfoTip } from './info-tip';
+import { dismissNotice, isDismissed } from './dismissals';
 import {
   HostUpdatesRoute,
   NetworkOperationsRoute,
@@ -242,7 +243,6 @@ function useDashboardData(
 function HelixBrand() {
   return (
     <div class="helix-brand" aria-label="Helix">
-      <img class="helix-mark helix-mark--image" src="/favicon-32.png" width={25} height={25} alt="" />
       <span>HELIX</span>
     </div>
   );
@@ -285,6 +285,7 @@ function Sidebar({
       <div class="sidebar-foot">
         <span class="status-dot status-dot--good" />
         <span>Connected</span>
+        <a class="sidebar-help" href="https://github.com/Riqqqque/Helix/wiki" target="_blank" rel="noreferrer">Help</a>
       </div>
     </aside>
   );
@@ -382,15 +383,55 @@ function AccountMenu({ user, onLogout }: { user: AuthenticatedUser; onLogout: ()
   );
 }
 
+function NotificationsMenu({
+  items,
+}: {
+  items: ReadonlyArray<{ id: string; title: string; body: string; href: string }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [tick, setTick] = useState(0);
+  const visible = items.filter((item) => !isDismissed(item.id));
+  void tick;
+  return (
+    <div class="notifications-wrap">
+      <button
+        class="icon-button"
+        type="button"
+        aria-expanded={open}
+        aria-label={visible.length === 0 ? 'Notifications' : `${visible.length} notifications`}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Icon name="bell" />
+      </button>
+      {open && (
+        <div class="notifications-menu" role="dialog" aria-label="Notifications">
+          <h2>Notifications</h2>
+          {visible.length === 0 ? <p>No notices right now.</p> : visible.map((item) => (
+            <div class="notifications-item" key={item.id}>
+              <div>
+                <strong>{item.title}</strong>
+                <span>{item.body}</span>
+                <a href={item.href}>Open</a>
+              </div>
+              <button class="icon-button" type="button" aria-label={`Dismiss ${item.title}`} onClick={() => { dismissNotice(item.id); setTick((value) => value + 1); }}>
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Topbar({
   section,
   hostname,
   refreshedAt,
   user,
-  homeFocus,
+  notices,
   onRefresh,
   onLogout,
-  onHomeFocusToggle,
   theme,
   onThemeChange,
 }: {
@@ -398,10 +439,9 @@ function Topbar({
   hostname: string;
   refreshedAt: number | null;
   user: AuthenticatedUser;
-  homeFocus: boolean;
+  notices: ReadonlyArray<{ id: string; title: string; body: string; href: string }>;
   onRefresh: () => Promise<void>;
   onLogout: () => Promise<void>;
-  onHomeFocusToggle: () => void;
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
 }) {
@@ -419,18 +459,13 @@ function Topbar({
   return (
     <header class="topbar">
       <div class="topbar-title">
-        {homeFocus && <HelixBrand />}
         <span>{hostname}</span>
         <Icon name="chevron" size={13} />
         <strong>{item.label}</strong>
       </div>
       <div class="topbar-actions">
         {refreshedAt !== null && <span class="last-update">Updated {new Date(refreshedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
-        {section === 'home' && (
-          <button class="icon-button" type="button" aria-pressed={homeFocus} aria-label={homeFocus ? 'Exit full screen Home' : 'Full screen Home'} onClick={onHomeFocusToggle}>
-            <Icon name="expand" />
-          </button>
-        )}
+        <NotificationsMenu items={notices} />
         <button class="icon-button" type="button" disabled={manualRefresh} onClick={() => void refreshNow()} aria-label="Refresh dashboard" aria-busy={manualRefresh}>
           <Icon name="refresh" />
         </button>
@@ -472,8 +507,42 @@ export function DiskMap({
 function StoragePage({ data, csrfToken, onSessionExpired }: { data: DashboardData; csrfToken: string; onSessionExpired: () => void }) {
   const [browsePath, setBrowsePath] = useState('/');
   const [analysis, setAnalysis] = useState<{ path: string; mode: StorageAnalysisMode } | null>(null);
+  const [introHidden, setIntroHidden] = useState(() => isDismissed('storage-space-intro'));
   const openDriveAnalysis = (path: string): void => setAnalysis({ path, mode: 'thorough' });
-  return <div class="page page--storage"><PageHead title="Storage" detail="See what is using each drive, then manage files safely." /><InlineError message={data.inventory.error} /><section class="storage-space-intro"><div><span class="eyebrow">SPACE ANALYZER</span><h2>Find what’s using your drive</h2><p>Choose <strong>Analyze space</strong> on any mounted drive. Helix reads filesystem metadata in the background and ranks the files and folder trees consuming the most disk space.</p></div><div class="storage-space-intro__facts"><span><Icon name="activity" size={14} />Low-impact scan</span><span><Icon name="storage" size={14} />Allocated disk usage</span><span><Icon name="check" size={14} />Read-only until you choose trash</span></div></section><DiskMap inventory={data.inventory.data} onBrowse={setBrowsePath} onAnalyze={openDriveAnalysis} /><div class="section-title section-title--spaced"><div><h2>Files <InfoTip text="Helix can browse the host but only changes files inside storage roots allowed by the privileged broker. Delete actions move items into a recoverable .helix-trash folder." /></h2><p>Browse the whole host. Changes are limited to configured storage roots.</p></div><button class="button button--quiet" type="button" onClick={() => setAnalysis({ path: browsePath, mode: 'quick' })}><Icon name="search" size={15} />Analyze current folder</button></div><FileManagerRoute csrfToken={csrfToken} onSessionExpired={onSessionExpired} initialPath={browsePath} analysis={analysis} onAnalysisClose={() => setAnalysis(null)} /></div>;
+  return (
+    <div class="page page--storage">
+      <PageHead title="Storage" detail="See what is using each drive, then manage files safely." />
+      <InlineError message={data.inventory.error} />
+      {!introHidden && (
+        <section class="storage-space-intro">
+          <button class="storage-space-intro__dismiss" type="button" aria-label="Dismiss space analyzer intro" onClick={() => { dismissNotice('storage-space-intro'); setIntroHidden(true); }}>
+            <Icon name="close" size={14} />
+          </button>
+          <div>
+            <span class="eyebrow">SPACE ANALYZER</span>
+            <h2>Find what’s using your drive</h2>
+            <p>Choose <strong>Analyze space</strong> on any mounted drive. Helix reads filesystem metadata in the background and ranks the files and folder trees consuming the most disk space.</p>
+          </div>
+          <div class="storage-space-intro__facts">
+            <span><Icon name="activity" size={14} />Low-impact scan</span>
+            <span><Icon name="storage" size={14} />Allocated disk usage</span>
+            <span><Icon name="check" size={14} />Read-only until you choose trash</span>
+          </div>
+        </section>
+      )}
+      <DiskMap inventory={data.inventory.data} onBrowse={setBrowsePath} onAnalyze={openDriveAnalysis} />
+      <div class="section-title section-title--spaced">
+        <div>
+          <h2>Files <InfoTip text="Helix can browse the host but only changes files inside storage roots allowed by the privileged broker. Delete actions move items into a recoverable .helix-trash folder." /></h2>
+          <p>Browse the whole host. Changes are limited to configured storage roots.</p>
+        </div>
+        <button class="button button--quiet" type="button" onClick={() => setAnalysis({ path: browsePath, mode: 'quick' })}>
+          <Icon name="search" size={15} />Analyze current folder
+        </button>
+      </div>
+      <FileManagerRoute csrfToken={csrfToken} onSessionExpired={onSessionExpired} initialPath={browsePath} analysis={analysis} onAnalysisClose={() => setAnalysis(null)} />
+    </div>
+  );
 }
 
 function NetworkPage({ data, csrfToken, canManageFirewall, onSessionExpired }: { data: DashboardData; csrfToken: string; canManageFirewall: boolean; onSessionExpired: () => void }) {
@@ -588,13 +657,22 @@ export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated,
     });
   };
 
+  const notices = (data.inventory.data?.mounts ?? [])
+    .filter((mount) => mount.usePercent >= 90)
+    .map((mount) => ({
+      id: `capacity:${mount.target}`,
+      title: `${mount.target} is ${formatPercent(mount.usePercent)} full`,
+      body: `${formatBytes(mount.availableBytes)} remains on ${mount.source}.`,
+      href: '#storage',
+    }));
+
   return (
     <>
       <a class="skip-link" href="#main-content">Skip to content</a>
       <div class={`dashboard-shell${homeFocused ? ' is-home-focus' : ''}`}>
         <Sidebar active={active} order={navigationOrder} serversEnabled={serversEnabled} onOrderChange={changeNavigationOrder} />
         <div class="dashboard-workspace">
-          <Topbar section={active} hostname={hostname} refreshedAt={refreshedAt} user={user} homeFocus={homeFocused} onRefresh={data.refresh} onLogout={onLogout} onHomeFocusToggle={toggleHomeFocus} theme={theme} onThemeChange={setTheme} />
+          <Topbar section={active} hostname={hostname} refreshedAt={refreshedAt} user={user} notices={notices} onRefresh={data.refresh} onLogout={onLogout} theme={theme} onThemeChange={setTheme} />
           <MobileNav active={active} order={navigationOrder} serversEnabled={serversEnabled} />
           <main id="main-content" tabIndex={-1}>
             {active === 'overview' && <OverviewRoute data={data} themeLabel={themeLabel} csrfToken={csrfToken} canManageDocker={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}
@@ -606,7 +684,7 @@ export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated,
             {active === 'terminal' && <TerminalRoute csrfToken={csrfToken} canOpen={user.capabilities.includes('terminal.open')} onSessionExpired={onSessionExpired} />}
             {active === 'servers' && (serversEnabled ? <ServersRoute data={data} csrfToken={csrfToken} canManageServers={user.capabilities.includes('games.manage')} canManageBackups={user.capabilities.includes('games.backups.manage')} canManageNetwork={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} /> : <ServersModuleDisabled onEnable={() => dashboardPreferences.setServersEnabled(true)} />)}
             {active === 'hooks' && <HooksRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}
-            {active === 'settings' && <SettingsRoute user={user} csrfToken={csrfToken} theme={theme} refreshIntervalMs={refreshIntervalMs} navigationOrder={navigationOrder} colors={dashboardPreferences.colors} serversEnabled={serversEnabled} preferenceSyncStatus={dashboardPreferences.syncStatus} hostIntegration={data.integration} onThemeChange={setTheme} onRefreshIntervalChange={changeRefreshInterval} onNavigationOrderChange={changeNavigationOrder} onColorsChange={dashboardPreferences.setColors} onServersEnabledChange={dashboardPreferences.setServersEnabled} onAccountUpdated={onAccountUpdated} onHostIntegrationRefresh={data.refresh} />}
+            {active === 'settings' && <SettingsRoute user={user} csrfToken={csrfToken} theme={theme} refreshIntervalMs={refreshIntervalMs} navigationOrder={navigationOrder} colors={dashboardPreferences.colors} serversEnabled={serversEnabled} preferenceSyncStatus={dashboardPreferences.syncStatus} hostIntegration={data.integration} servers={data.servers.data ?? []} onThemeChange={setTheme} onRefreshIntervalChange={changeRefreshInterval} onNavigationOrderChange={changeNavigationOrder} onColorsChange={dashboardPreferences.setColors} onServersEnabledChange={dashboardPreferences.setServersEnabled} onAccountUpdated={onAccountUpdated} onHostIntegrationRefresh={data.refresh} />}
           </main>
         </div>
       </div>

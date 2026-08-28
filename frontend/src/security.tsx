@@ -30,6 +30,14 @@ function stateTone(control: SecurityControl): 'good' | 'warning' | 'idle' {
   return 'idle';
 }
 
+const HELIX_CONTROL_IDS = new Set([
+  'csrf_and_sessions',
+  'lan_bind',
+  'helix_start_on_boot',
+  'minecraft_auto_forward',
+  'typed_broker',
+]);
+
 function confirmationFor(control: SecurityControl, next: boolean): string {
   return (next ? control.confirmationEnable : control.confirmationDisable) ?? '';
 }
@@ -41,7 +49,7 @@ export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, o
   const [pending, setPending] = useState<SecurityControl | null>(null);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
-  const [filter, setFilter] = useState<'recommended' | 'all'>('recommended');
+  const [filter, setFilter] = useState<'host' | 'recommended' | 'helix' | 'all'>('host');
 
   const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
     setLoading(true);
@@ -63,10 +71,12 @@ export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, o
   }, [refresh]);
 
   const controls = inventory?.controls ?? [];
-  const visible = useMemo(
-    () => filter === 'all' ? controls : controls.filter((control) => control.recommended || control.writable),
-    [controls, filter],
-  );
+  const visible = useMemo(() => {
+    if (filter === 'all') return controls;
+    if (filter === 'helix') return controls.filter((control) => HELIX_CONTROL_IDS.has(control.id));
+    if (filter === 'host') return controls.filter((control) => !HELIX_CONTROL_IDS.has(control.id));
+    return controls.filter((control) => control.recommended || control.writable);
+  }, [controls, filter]);
 
   const apply = async (): Promise<void> => {
     if (pending === null || busy) return;
@@ -91,7 +101,7 @@ export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, o
     <div class="page page--security">
       <PageHead
         title="Security"
-        detail="Exact host and Helix controls, with the reason each one exists and what changes if you flip it."
+        detail="Host hardening, firewall and SSH facts, and the few Helix switches that still need a confirmation phrase."
         actions={
           <button class="button button--quiet" type="button" disabled={loading} onClick={() => void refresh()}>
             <Icon name="refresh" size={15} />{loading ? 'Checking…' : 'Recheck'}
@@ -104,14 +114,30 @@ export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, o
         <div><span>Kernel</span><strong>{inventory?.facts.kernel ?? '—'}</strong><small>Observed from this host</small></div>
         <div><span>AppArmor</span><strong>{inventory?.facts.apparmor ?? '—'}</strong><small>Linux confinement</small></div>
         <div><span>UFW</span><strong>{inventory?.facts.ufw ?? '—'}</strong><small>Host firewall status</small></div>
+        <div><span>Fail2ban</span><strong>{inventory?.facts.fail2ban ?? '—'}</strong><small>SSH brute-force jail</small></div>
       </section>
       <div class="security-toolbar">
-        <p>Recommended items are the defaults Helix wants on a private LAN dashboard. Writable switches still require typing an exact confirmation phrase. Helix will not disable UFW, rewrite sshd, or expose a root shell from here.</p>
+        <p>This page is about the Linux host. Recommended defaults are the usual hardening for a private game box. Writable switches still require typing an exact phrase. Helix will not disable UFW, rewrite sshd, or expose a root shell from here.</p>
         <div class="security-filters" role="tablist" aria-label="Security views">
+          <button type="button" class={filter === 'host' ? 'is-active' : ''} onClick={() => setFilter('host')}>Host</button>
           <button type="button" class={filter === 'recommended' ? 'is-active' : ''} onClick={() => setFilter('recommended')}>Recommended</button>
+          <button type="button" class={filter === 'helix' ? 'is-active' : ''} onClick={() => setFilter('helix')}>Helix</button>
           <button type="button" class={filter === 'all' ? 'is-active' : ''} onClick={() => setFilter('all')}>Everything</button>
         </div>
       </div>
+      {(inventory?.tips.length ?? 0) > 0 && (
+        <section class="security-tips">
+          <h2>System recommendations</h2>
+          <div>
+            {inventory?.tips.map((tip) => (
+              <article key={tip.id}>
+                <strong>{tip.title}</strong>
+                <p>{tip.body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
       <div class="security-list">
         {visible.map((control) => (
           <article class="security-card surface" key={control.id}>

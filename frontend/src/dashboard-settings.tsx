@@ -29,6 +29,15 @@ import { Dialog } from './modal';
 import { formatTimestamp } from './format';
 import type { ThemePreference } from './theme';
 import type { AuthenticatedUser } from './types';
+import type { ManagedServer, TrashedNativeServerCatalog } from './control-api';
+import {
+  getTrashedNativeServers,
+  restoreTrashedNativeServer,
+  setNativeStartOnBoot,
+  trashNativeServer,
+} from './control-api';
+import { clearDismissals, dismissedCount } from './dismissals';
+import { GameMark, gameMarkForSoftware } from './game-marks';
 
 const navigationLabels: Record<PrimaryDashboardSectionId, { label: string; icon: IconName }> = {
   overview: { label: 'Overview', icon: 'overview' },
@@ -477,6 +486,147 @@ function HostIntegrationSettings({
   );
 }
 
+function HelixDataSettings({
+  servers,
+  csrfToken,
+  canManage,
+  onRefresh,
+}: {
+  servers: ManagedServer[];
+  csrfToken: string;
+  canManage: boolean;
+  onRefresh: () => Promise<void>;
+}) {
+  const helixServers = servers.filter((server) => server.manager === 'helix');
+  const imported = servers.filter((server) => server.manager !== 'helix');
+  const [removed, setRemoved] = useState<TrashedNativeServerCatalog | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [pendingTrash, setPendingTrash] = useState<ManagedServer | null>(null);
+  const [confirmName, setConfirmName] = useState('');
+  const [noticeCount, setNoticeCount] = useState(dismissedCount);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getTrashedNativeServers(csrfToken, controller.signal)
+      .then((catalog) => {
+        setRemoved(catalog);
+        setError(null);
+      })
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Helix could not list recoverable servers.');
+      });
+    return () => controller.abort();
+  }, [csrfToken, servers]);
+
+  const toggleBoot = async (server: ManagedServer): Promise<void> => {
+    if (!canManage || busyId !== null) return;
+    setBusyId(server.id);
+    setError(null);
+    try {
+      await setNativeStartOnBoot(server.id, !server.startOnBoot, csrfToken);
+      await onRefresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Helix could not change start-on-boot.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const trash = async (): Promise<void> => {
+    if (pendingTrash === null || confirmName !== pendingTrash.name || !canManage) return;
+    setBusyId(pendingTrash.id);
+    setError(null);
+    try {
+      await trashNativeServer(pendingTrash.id, confirmName, csrfToken);
+      setPendingTrash(null);
+      setConfirmName('');
+      await onRefresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Helix could not move that server to recoverable trash.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const restore = async (trashId: string): Promise<void> => {
+    if (!canManage || busyId !== null) return;
+    setBusyId(trashId);
+    setError(null);
+    try {
+      await restoreTrashedNativeServer(trashId, csrfToken);
+      await onRefresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Helix could not restore that server.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <section class="settings-card settings-card--helix-data">
+      <div class="settings-card__head"><div><Icon name="folder" /><span><h2>Helix data</h2><p>Native servers, recoverable trash, and this browser’s dismissed notices.</p></span></div><InfoTip text="Imported AMP or other connections stay owned by those managers. Removing a native server moves its files into recoverable trash; it is not an off-host backup." /></div>
+      <div class="helix-data-summary">
+        <div><strong>{helixServers.length}</strong><span>native servers</span></div>
+        <div><strong>{imported.length}</strong><span>imported connections</span></div>
+        <div><strong>{removed?.servers.length ?? '—'}</strong><span>in recoverable trash</span></div>
+      </div>
+      {helixServers.length === 0 ? <p class="helix-data-empty">No native Helix servers yet. Create one from Servers.</p> : (
+        <ul class="helix-data-list">
+          {helixServers.map((server) => (
+            <li key={server.id}>
+              <GameMark game={gameMarkForSoftware(server.software, server.kind) ?? 'minecraft'} size={22} />
+              <div>
+                <strong>{server.name}</strong>
+                <small>{server.software} · {server.status} · port {server.gamePort || '—'}</small>
+              </div>
+              <button class="switch-button" role="switch" type="button" disabled={!canManage || busyId !== null} aria-checked={server.startOnBoot} onClick={() => void toggleBoot(server)}>
+                <i />
+                <span>{server.startOnBoot ? 'Boot' : 'Manual'}</span>
+              </button>
+              <a class="button button--quiet" href={`#servers`}>Open</a>
+              <button class="button button--quiet" type="button" disabled={!canManage || busyId !== null} onClick={() => { setPendingTrash(server); setConfirmName(''); }}>Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {(removed?.servers.length ?? 0) > 0 && (
+        <div class="helix-data-trash">
+          <strong>Recoverable trash</strong>
+          <ul>
+            {removed?.servers.map((item) => (
+              <li key={item.trashId}>
+                <span>{item.name}<small>{item.software} · {formatTimestamp(item.trashedAtUnixMs)}</small></span>
+                <button class="button button--quiet" type="button" disabled={!canManage || busyId !== null} onClick={() => void restore(item.trashId)}>Restore</button>
+              </li>
+            ))}
+          </ul>
+          <p>{removed?.policy.note}</p>
+        </div>
+      )}
+      <div class="helix-data-notices">
+        <div>
+          <strong>Dismissed notices</strong>
+          <small>{noticeCount === 0 ? 'No capacity or storage notices are hidden in this browser.' : `${noticeCount} hidden in this browser.`}</small>
+        </div>
+        <button class="button button--quiet" type="button" disabled={noticeCount === 0} onClick={() => { clearDismissals(); setNoticeCount(0); }}>Show them again</button>
+      </div>
+      <InlineError message={error} />
+      {!canManage && <div class="host-integration-notice"><Icon name="info" size={14} />This account can view Helix data but cannot remove or restore servers.</div>}
+      {pendingTrash !== null && (
+        <Dialog title={`Remove ${pendingTrash.name}?`} onClose={() => setPendingTrash(null)}>
+          <p class="dialog-intro">This moves the native server into recoverable trash. Type the exact server name to confirm.</p>
+          <label class="field field--wide"><span>Server name</span><input value={confirmName} onInput={(event) => setConfirmName(event.currentTarget.value)} autocomplete="off" /></label>
+          <div class="dialog-actions">
+            <button class="button button--quiet" type="button" onClick={() => setPendingTrash(null)}>Cancel</button>
+            <button class="button button--danger" type="button" disabled={confirmName !== pendingTrash.name || busyId !== null} onClick={() => void trash()}>{busyId !== null ? 'Removing…' : 'Move to trash'}</button>
+          </div>
+        </Dialog>
+      )}
+    </section>
+  );
+}
+
 export function DashboardSettingsPage({
   user,
   csrfToken,
@@ -487,6 +637,7 @@ export function DashboardSettingsPage({
   serversEnabled,
   preferenceSyncStatus,
   hostIntegration,
+  servers,
   onThemeChange,
   onRefreshIntervalChange,
   onNavigationOrderChange,
@@ -504,6 +655,7 @@ export function DashboardSettingsPage({
   serversEnabled: boolean;
   preferenceSyncStatus: 'loading' | 'synced' | 'saving' | 'local';
   hostIntegration: DashboardResource<HostIntegration>;
+  servers: ManagedServer[];
   onThemeChange: (theme: ThemePreference) => void;
   onRefreshIntervalChange: (value: RefreshIntervalMs) => void;
   onNavigationOrderChange: (value: PrimaryDashboardSectionId[]) => void;
@@ -527,7 +679,7 @@ export function DashboardSettingsPage({
             <div>
               <span>Servers dashboard</span>
               <strong>{serversEnabled ? 'Enabled' : 'Hidden'}</strong>
-              <small>Native Minecraft, V Rising, AMP imports, and port pools live here. Existing servers keep running if you hide the page.</small>
+              <small>Native Minecraft, V Rising, Valheim, Terraria, AMP imports, and port pools live here. Existing servers keep running if you hide the page.</small>
             </div>
             <button
               class="switch-button"
@@ -551,6 +703,7 @@ export function DashboardSettingsPage({
           <ol class="navigation-order-list">{navigationOrder.map((section, index) => { const item = navigationLabels[section]; return <li key={section}><span><Icon name={item.icon} size={16} /><strong>{item.label}</strong></span><div><button type="button" disabled={index === 0} onClick={() => onNavigationOrderChange(moveNavigationItem(navigationOrder, section, -1))} aria-label={`Move ${item.label} up`}><Icon name="chevron" size={14} class="icon--up" /></button><button type="button" disabled={index === navigationOrder.length - 1} onClick={() => onNavigationOrderChange(moveNavigationItem(navigationOrder, section, 1))} aria-label={`Move ${item.label} down`}><Icon name="chevron" size={14} class="icon--down" /></button></div></li>; })}</ol>
           <div class="settings-card__foot"><span>{preferenceSyncStatus === 'local' ? 'Browser fallback active' : 'Synced through Helix'}</span><button class="button button--quiet" type="button" onClick={() => onNavigationOrderChange([...primaryDashboardSections])}>Reset order</button></div>
         </section>
+        <HelixDataSettings servers={servers} csrfToken={csrfToken} canManage={user.capabilities.includes('games.manage')} onRefresh={onHostIntegrationRefresh} />
         <HostIntegrationSettings resource={hostIntegration} user={user} csrfToken={csrfToken} onRefresh={onHostIntegrationRefresh} />
         <AccountSettings user={user} csrfToken={csrfToken} onAccountUpdated={onAccountUpdated} />
       </div>

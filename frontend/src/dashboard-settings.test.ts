@@ -48,6 +48,7 @@ describe('whole-host reboot confirmation', () => {
       serversEnabled: true,
       preferenceSyncStatus: 'synced',
       hostIntegration: { data: null, phase: 'loading', error: null },
+      servers: [],
       onThemeChange: vi.fn(),
       onRefreshIntervalChange: vi.fn(),
       onNavigationOrderChange: vi.fn(),
@@ -60,6 +61,7 @@ describe('whole-host reboot confirmation', () => {
     expect(markup).toContain('Host integration');
     expect(markup).toContain('Whole-host reboot');
     expect(markup).toContain('Game servers');
+    expect(markup).toContain('Helix data');
     expect(markup).toContain('Save account changes');
     expect(markup).toContain('Current password');
   });

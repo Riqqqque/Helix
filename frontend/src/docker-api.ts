@@ -22,6 +22,7 @@ export interface PortainerHint {
   container: string | null;
   running: boolean;
   panelPort: number | null;
+  panelScheme: 'http' | 'https' | null;
 }
 
 export interface DockerInventory {
@@ -116,6 +117,9 @@ export function parseDockerInventory(value: unknown): DockerInventory {
       container: optionalText(portainer, 'container', 128),
       running: portainer.running === undefined ? false : bool(portainer, 'running', 'portainer hint'),
       panelPort: optionalNumber(portainer, 'panel_port'),
+      panelScheme: portainer.panel_scheme === 'https' || portainer.panel_scheme === 'http'
+        ? portainer.panel_scheme
+        : null,
     },
     error: optionalText(root, 'error', 500),
     note: optionalText(root, 'note', 500),
@@ -175,4 +179,10 @@ export function runDockerContainerAction(
 
 export function getHomarrCatalog(csrfToken: string, signal?: AbortSignal): Promise<HomarrCatalog> {
   return requestJson('/api/v1/docker/homarr', parseHomarrCatalog, { csrfToken, signal, timeoutMs: 20_000 });
+}
+
+export function portainerHref(hostname: string, panelPort: number | null, panelScheme: 'http' | 'https' | null): string | null {
+  if (panelPort === null) return null;
+  const scheme = panelScheme ?? (panelPort === 9443 ? 'https' : 'http');
+  return `${scheme}://${hostname}:${panelPort}/`;
 }

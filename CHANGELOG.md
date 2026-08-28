@@ -7,6 +7,12 @@ binary or package release yet.
 
 ### Added
 
+- Notifications bell for capacity warnings, dismissible Overview/Storage
+  notices, a quiet Help link to the GitHub wiki, Valheim and Terraria native
+  create, CurseForge catalog browsing/install without an owner API key, Forge /
+  NeoForge / Quilt / Pufferfish as default Minecraft software, a Portainer hook,
+  and Settings management for native Helix servers and recoverable trash.
+
 - Security center, Docker/Portainer inventory, Homarr shortcut import, Home
   fullscreen, live Overview/Home graphs, a Helix-only server filter, and hook
   resource chips. V Rising create is click-to-install with runtime cleanup
@@ -66,6 +72,14 @@ binary or package release yet.
   non-root Linux PTY service.
 
 ### Changed
+
+- Home full screen hides the top bar as well as the sidebar. Create-dialog
+  toggles and Docker inventory copy sit inset from the window edge. Security
+  defaults to host hardening, with Fail2ban, NTP, sysctl, and SSH facts plus
+  written recommendations. Docker listing prefers a compact engine format and
+  opens Portainer on 9443/9000 instead of a dead Open Docker link. Minecraft
+  modpack cards clamp long titles. Imported and dedicated-game marks are
+  geometric instead of noisy artwork.
 
 - Migration rollback snapshots are content-addressed and tied to the exact
   source schema, target schema, and source SHA-256. Identical retries reuse the

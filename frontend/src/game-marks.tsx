@@ -1,6 +1,6 @@
 import type { JSX } from 'preact';
 
-export type GameMarkId = 'minecraft' | 'vrising';
+export type GameMarkId = 'minecraft' | 'vrising' | 'valheim' | 'terraria';
 
 export function GameMark({
   game,
@@ -17,7 +17,7 @@ export function GameMark({
       viewBox="0 0 32 32"
       aria-hidden="true"
     >
-      {game === 'minecraft' ? <MinecraftMark /> : <VRisingMark />}
+      {game === 'minecraft' ? <MinecraftMark /> : game === 'vrising' ? <VRisingMark /> : game === 'valheim' ? <ValheimMark /> : <TerrariaMark />}
     </svg>
   );
 }
@@ -41,22 +41,48 @@ function MinecraftMark(): JSX.Element {
 function VRisingMark(): JSX.Element {
   return (
     <>
-      <circle cx="16" cy="13" r="8.2" fill="#7a1c22" />
-      <circle cx="16" cy="13" r="6.1" fill="#c43b3a" />
-      <circle cx="18.2" cy="11.1" r="2.2" fill="#f2c2b6" opacity="0.35" />
-      <path fill="#140c10" d="M6.4 28.4 16 8.8 25.6 28.4h-3.4L16 14.8 9.8 28.4Z" />
-      <path fill="#2a1418" d="M11.2 28.4h9.6v-3.2l-1.4-1.2h-6.8l-1.4 1.2z" />
-      <path fill="#3d1c22" d="M12.4 22.6h7.2v2.6h-7.2zm1.2-3.8h4.8v2.4h-4.8z" />
-      <path fill="#f0d4a4" d="M15.2 20.2h1.6v2h-1.6z" />
-      <path fill="#8a1f28" d="M14.8 8.2 16 5.4 17.2 8.2 16 10Z" />
+      <rect width="32" height="32" rx="6" fill="#1a1014" />
+      <path fill="#7a1f28" d="M6 26h20v2H6z" />
+      <path fill="#4a141a" d="M8 18h16l-2 8H10z" />
+      <path fill="#c43b3a" d="M16 5 22 18h-4l-2-6-2 6h-4z" />
+      <path fill="#f0d4a4" d="M15.2 11h1.6v3h-1.6z" />
+      <circle cx="16" cy="8.2" r="1.5" fill="#f2c2b6" />
+    </>
+  );
+}
+
+function ValheimMark(): JSX.Element {
+  return (
+    <>
+      <rect width="32" height="32" rx="6" fill="#1b2420" />
+      <path fill="#c4a35a" d="M16 4 26 14v10l-10 4L6 24V14Z" />
+      <path fill="#2c3b34" d="M16 7.2 23.2 14v8.2L16 25.4l-7.2-3.2V14Z" />
+      <path fill="#d7c28a" d="M16 9.4 21.4 14v6.8L16 23.4l-5.4-2.6V14Z" />
+      <path fill="#1b2420" d="M16 12.2 19.4 15v4.4L16 21.2l-3.4-1.8V15Z" />
+    </>
+  );
+}
+
+function TerrariaMark(): JSX.Element {
+  return (
+    <>
+      <rect width="32" height="32" rx="6" fill="#12301c" />
+      <path fill="#3d9a48" d="M6 22h20v4H6z" />
+      <path fill="#2f7a38" d="M8 18h16v4H8z" />
+      <path fill="#c48a3a" d="M14.4 6h3.2v14h-3.2z" />
+      <path fill="#e0c070" d="M10 6h12l-2 4H12z" />
+      <path fill="#8a5a2b" d="M15.2 20h1.6v6h-1.6z" />
     </>
   );
 }
 
 export function gameMarkForSoftware(software: string, kind?: string): GameMarkId | null {
   if (kind === 'vrising' || /v\s*rising/iu.test(software)) return 'vrising';
-  if (kind === 'minecraft' || /minecraft|paper|purpur|folia|leaves|fabric|vanilla|spigot|bukkit|forge/iu.test(software)) {
+  if (kind === 'valheim' || /valheim/iu.test(software)) return 'valheim';
+  if (kind === 'terraria' || /terraria|tmodloader/iu.test(software)) return 'terraria';
+  if (kind === 'minecraft' || /minecraft|paper|purpur|folia|leaves|fabric|vanilla|spigot|bukkit|forge|quilt|pufferfish/iu.test(software)) {
     return 'minecraft';
   }
+  if (/imported|amp/iu.test(software)) return null;
   return null;
 }

@@ -3,13 +3,13 @@
 ## Choosing a game
 
 Choose **New Server** and then a game. Minecraft is the current native Linux
-Java runtime. V Rising installs the official dedicated server into an isolated
-Helix container. The chooser shows original Helix marks, not publisher artwork:
-an isometric grass block for Minecraft and a blood-moon castle for V Rising.
+Java runtime. V Rising, Valheim, and Terraria install dedicated servers into
+isolated Helix containers. The chooser uses original Helix marks, not
+publisher artwork.
 
 The server list can be filtered to **Helix** (native servers only), Minecraft,
-V Rising, or imported Connections. Helix-native and imported servers keep
-visibly different ownership labels.
+V Rising, Valheim, Terraria, or imported Connections. Helix-native and imported
+servers keep visibly different ownership labels.
 
 Owner setup asks whether to include the Servers page. Existing owners keep it.
 Settings can hide or restore it later; hiding the page does not stop running
@@ -33,6 +33,22 @@ When the last **active** V Rising server is removed, Helix deletes the runtime
 image. Trashed data stays recoverable; restore rebuilds the image if needed.
 This path is implemented and unvalidated. It is not publisher-supported.
 
+## Native Valheim
+
+Helix builds `helix-valheim-runtime:1` and installs Steam dedicated app 896660.
+Create is private-LAN UDP: the game port plus the next two. Public UPnP is not
+offered. There is no RCON console. For mods, drop a BepInEx pack zip at
+`/data/bepinex-pack.zip` and plugin files in `/data/plugins`, then restart.
+Uninstalling the last Valheim server removes that runtime image. Implemented and
+unvalidated.
+
+## Native Terraria
+
+Helix builds `helix-terraria-runtime:1`. Vanilla downloads the publisher
+dedicated zip. tModLoader uses Steam app 1281930. Edit `serverconfig.txt` in
+Files. Drop `.tmod` files in `/data/mods` and restart. Public UPnP is not the
+default port-pool behavior. Implemented and unvalidated.
+
 ## Start on boot
 
 Native Helix servers persist a start-on-boot flag in the instance manifest and
@@ -44,15 +60,17 @@ only covers the Helix dashboard and gateway containers.
 
 ## Native Minecraft
 
-The native creation wizard supports Paper, Purpur, Folia, Leaves, Fabric, Vanilla, and
-a guarded custom server JAR. The Minecraft version field loads published
+The native creation wizard supports Paper, Purpur, Folia, Leaves, Fabric, Forge,
+NeoForge, Quilt, Pufferfish, Vanilla, and a guarded custom server JAR. The Minecraft version field loads published
 releases for the selected software, including an explicit Latest stable choice
 except for custom JARs. Paper, Folia, and Leaves omit experimental Minecraft
 versions that create would refuse. The wizard collects the name, software, Minecraft release, memory, player limit,
 automatic-pool or specific port, private/public player-access choice,
-start-after-boot choice, and EULA acknowledgement. Unsupported Forge, NeoForge,
-Quilt, and broad CurseForge paths remain explanations rather than fake install
-buttons.
+start-after-boot choice, and EULA acknowledgement. Paper, Purpur, Folia,
+Leaves, Fabric, Forge, NeoForge, Quilt, Pufferfish, and Vanilla are default
+create choices. Forge uses the official installer for Minecraft 1.17 and newer
+and launches with generated `unix_args`. Pufferfish comes from the publisher
+CI over HTTPS without a checksum pin, same honesty as Purpur.
 
 After creation, a native server has Overview, Console, Settings, Files,
 Performance, Backups, Advanced, and compatible Marketplace tools. Lifecycle
@@ -104,20 +122,23 @@ bounds the response, and derives the media type from image bytes. Search and
 details are filtered by the exact server software, loader, and Minecraft
 release:
 
-- Paper, Purpur, and Leaves receive compatible plugins;
+- Paper, Purpur, Leaves, and Pufferfish receive compatible plugins;
 - Folia requires content declaring Folia compatibility;
-- Fabric receives matching mod JARs;
+- Fabric, Forge, NeoForge, and Quilt receive matching mod JARs;
 - a missing or negative Modrinth server-side flag is shown as a warning, not a
   dead end; and
-- Vanilla or unsupported loaders do not get an install action.
+- Vanilla does not get an install action.
 
 Install re-resolves the selected project/version at the broker before download,
 verifies its SHA-512 hash, and writes it only to the server's `plugins/` or
 `mods/` directory. Optional dependencies are never added silently.
-“Start with a modpack” is narrower: it accepts only one unambiguous stable
-server-capable Fabric `.mrpack`, verifies declared hashes and extraction limits,
-excludes client-only/server-optional files, and reports that the result is a
-server-safe subset rather than full-pack parity.
+
+“Start with a modpack” can search Modrinth or CurseForge without an owner API
+key. Modrinth packs use `.mrpack` hash checks. CurseForge packs use the public
+website catalog and `edge.forgecdn.net` files plus `manifest.json`. Both pin a
+matching loader and start an isolated server. The result is a server-safe
+subset, not a full client copy. Long titles and descriptions are clipped in the
+browser; open the catalog or View releases for the rest.
 
 ## AMP imports
 

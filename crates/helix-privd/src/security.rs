@@ -33,8 +33,74 @@ pub fn inventory(
     });
     let unattended = unattended_upgrades_state(host);
     let docker_live_restore = docker_live_restore(host);
+    let fail2ban = unit_flag(host, "fail2ban.service");
+    let timesync = unit_flag(host, "systemd-timesyncd.service");
+    let ssh_password = ssh_directive("PasswordAuthentication");
+    let ptrace = sysctl_flag(
+        "/proc/sys/kernel/yama/ptrace_scope",
+        &["1", "2", "3"],
+        "ptrace_scope",
+    );
+    let kptr = sysctl_flag(
+        "/proc/sys/kernel/kptr_restrict",
+        &["1", "2"],
+        "kptr_restrict",
+    );
+    let dmesg = sysctl_flag("/proc/sys/kernel/dmesg_restrict", &["1"], "dmesg_restrict");
+    let rp_filter = sysctl_flag(
+        "/proc/sys/net/ipv4/conf/all/rp_filter",
+        &["1", "2"],
+        "rp_filter",
+    );
+    let userns = sysctl_flag(
+        "/proc/sys/kernel/unprivileged_userns_clone",
+        &["1"],
+        "unprivileged_userns_clone",
+    );
     Ok(json!({
         "schema_version": 1,
+        "tips": [
+            {
+                "id": "ssh_keys",
+                "title": "Prefer SSH keys over passwords",
+                "body": "Password SSH is a brute-force target. Key-only login, a non-default port only if you already understand the trade, and Fail2ban if SSH is reachable from more than your LAN."
+            },
+            {
+                "id": "keep_ufw",
+                "title": "Keep a host firewall on",
+                "body": "UFW is the Ubuntu default. Enable it from Network with the SSH-safety flow. Helix will not turn it off from this page. Game ports should be explicit allow rules, not a disabled firewall."
+            },
+            {
+                "id": "ntp",
+                "title": "Keep the clock honest",
+                "body": "TLS, logs, and SteamCMD all assume a sane clock. systemd-timesyncd or chrony should stay enabled on a game host."
+            },
+            {
+                "id": "updates",
+                "title": "Apply security updates",
+                "body": "unattended-upgrades covers distro security patches without a full Host Updates session. It does not reboot for you. Kernel updates still need a planned restart."
+            },
+            {
+                "id": "docker_isolation",
+                "title": "Leave game servers in containers",
+                "body": "Do not install Wine, SteamCMD, Java, or dedicated servers on the host OS. Helix already isolates those runtimes. Host packages and game processes sharing one user is a wider blast radius."
+            },
+            {
+                "id": "lan_only",
+                "title": "Keep the dashboard on the LAN",
+                "body": "Helix is a private console. Publishing it, putting a generic reverse proxy in front, or trusting X-Forwarded-For is a different product. Tailscale is the supported remote path when you need one."
+            },
+            {
+                "id": "backups",
+                "title": "Helix is not the only copy",
+                "body": "Worlds, AMP instances, and Plex libraries need copies Helix does not own. Recoverable trash is not an off-host backup."
+            },
+            {
+                "id": "sysctl_persist",
+                "title": "Live sysctl is not persistence",
+                "body": "Helix reports kernel knobs from /proc. Changing them yourself only survives reboot if you also write sysctl.d. Do not disable unprivileged user namespaces to “harden Docker”; that breaks rootless and some Engine setups."
+            }
+        ],
         "controls": [
             control(
                 "csrf_and_sessions",
@@ -97,6 +163,30 @@ pub fn inventory(
                 Some("enable unattended-upgrades"),
             ),
             control(
+                "fail2ban",
+                "Fail2ban",
+                "Bans repeat offenders on SSH and other jails when the fail2ban unit is already installed.",
+                "Turn it off only while debugging a lockout. Leave it on if SSH or game panels are reachable beyond a single trusted machine.",
+                fail2ban.state,
+                fail2ban.enabled,
+                fail2ban.available,
+                true,
+                "Helix only enables or disables fail2ban.service. It does not install the package, rewrite jail.local, or open extra ports.",
+                Some("enable fail2ban"),
+            ),
+            control(
+                "time_sync",
+                "systemd-timesyncd",
+                "Keeps this host’s clock aligned through the distro NTP client when that unit exists.",
+                "Turn it off only if another NTP client such as chrony already owns time on this host.",
+                timesync.state,
+                timesync.enabled,
+                timesync.available,
+                true,
+                "Helix does not install chrony or change NTP pools. A drifting clock breaks TLS, SteamCMD, and log correlation.",
+                Some("enable systemd-timesyncd"),
+            ),
+            control(
                 "ufw_active",
                 "Host firewall (UFW)",
                 "Reports whether Ubuntu’s Uncomplicated Firewall is installed and active.",
@@ -157,6 +247,78 @@ pub fn inventory(
                 None,
             ),
             control(
+                "kernel_ptrace",
+                "Yama ptrace scope",
+                "Reads /proc/sys/kernel/yama/ptrace_scope. 1 or higher stops casual process tracing.",
+                "Lowering this is a debugging choice. Leave it at 1+ on a machine that holds owner sessions and game data.",
+                ptrace.state,
+                ptrace.recommended,
+                false,
+                ptrace.recommended,
+                "Helix does not write this sysctl. 0 lets any process in the same user ptrace another, which is convenient for gdb and worse for a shared host.",
+                None,
+            ),
+            control(
+                "kernel_kptr",
+                "Kernel pointer restriction",
+                "Reads /proc/sys/kernel/kptr_restrict. 1 or 2 hides kernel addresses from unprivileged readers.",
+                "Set this lower only when a diagnostic tool needs raw kallsyms and you accept the information leak.",
+                kptr.state,
+                kptr.recommended,
+                false,
+                kptr.recommended,
+                "This is an observed kernel fact. Persist a change in sysctl.d if you change it on the host.",
+                None,
+            ),
+            control(
+                "kernel_dmesg",
+                "dmesg restriction",
+                "Reads /proc/sys/kernel/dmesg_restrict. 1 keeps kernel logs away from unprivileged users.",
+                "Opening dmesg to every login is a debugging shortcut, not a game-host default.",
+                dmesg.state,
+                dmesg.recommended,
+                false,
+                dmesg.recommended,
+                "Kernel ring buffer often includes hardware and network details. Helix does not rewrite this knob.",
+                None,
+            ),
+            control(
+                "net_rp_filter",
+                "Reverse-path filtering",
+                "Reads /proc/sys/net/ipv4/conf/all/rp_filter. 1 or 2 drops spoofed source addresses on this host.",
+                "Disable this only if you already understand asymmetric routing on this box. It is not a LAN game-server default to leave off.",
+                rp_filter.state,
+                rp_filter.recommended,
+                false,
+                rp_filter.recommended,
+                "This is one anti-spoofing layer. It does not replace UFW or router filters.",
+                None,
+            ),
+            control(
+                "unprivileged_userns",
+                "Unprivileged user namespaces",
+                "Reads unprivileged_userns_clone when the kernel exposes it. Docker and some sandboxes need this on.",
+                "Do not flip this off to “harden Docker.” That breaks Engine and rootless setups Helix relies on.",
+                userns.state,
+                userns.enabled,
+                false,
+                false,
+                "This is observed only. Helix will not disable user namespaces from the dashboard.",
+                None,
+            ),
+            control(
+                "ssh_password_auth",
+                "SSH password authentication",
+                "Reads PasswordAuthentication from the primary sshd_config. Drop-in files are not parsed.",
+                "Password SSH is a brute-force surface. Prefer keys. Helix does not rewrite sshd.",
+                ssh_password.state,
+                !ssh_password.permissive,
+                false,
+                true,
+                "A yes here means the daemon still accepts passwords if the rest of sshd agrees. Change the file and reload sshd yourself.",
+                None,
+            ),
+            control(
                 "typed_broker",
                 "Typed privileged broker",
                 "Host changes go through helix-privd as exact operations. There is no general root shell API.",
@@ -176,6 +338,13 @@ pub fn inventory(
             "aslr": kernel_aslr().detail,
             "docker_live_restore": docker_live_restore.detail,
             "unattended_upgrades": unattended.detail,
+            "fail2ban": fail2ban.detail,
+            "timesyncd": timesync.detail,
+            "ssh_password_auth": ssh_password.detail,
+            "ptrace_scope": ptrace.detail,
+            "kptr_restrict": kptr.detail,
+            "dmesg_restrict": dmesg.detail,
+            "rp_filter": rp_filter.detail,
             "ufw": firewall.get("status").cloned().unwrap_or(Value::Null)
         },
         "collected_at_unix_ms": now_unix_ms()
@@ -237,6 +406,28 @@ pub fn set_control(
             )?;
             set_unattended_upgrades(host, enabled)
         }
+        "fail2ban" => {
+            require_confirmation(
+                confirmation,
+                if enabled {
+                    "enable fail2ban"
+                } else {
+                    "disable fail2ban"
+                },
+            )?;
+            set_named_unit(host, "fail2ban", "fail2ban.service", enabled)
+        }
+        "time_sync" => {
+            require_confirmation(
+                confirmation,
+                if enabled {
+                    "enable systemd-timesyncd"
+                } else {
+                    "disable systemd-timesyncd"
+                },
+            )?;
+            set_named_unit(host, "time_sync", "systemd-timesyncd.service", enabled)
+        }
         _ => Err("that security control cannot be changed from Helix".to_owned()),
     }
 }
@@ -268,6 +459,8 @@ fn control(
             "helix_start_on_boot" => Value::String("do not start helix after boot".to_owned()),
             "minecraft_auto_forward" => Value::String("keep minecraft private on create".to_owned()),
             "unattended_upgrades" => Value::String("disable unattended-upgrades".to_owned()),
+            "fail2ban" => Value::String("disable fail2ban".to_owned()),
+            "time_sync" => Value::String("disable systemd-timesyncd".to_owned()),
             _ => Value::Null
         }
     })
@@ -318,32 +511,150 @@ fn unattended_upgrades_state(host: &HostControl) -> FlagState {
 }
 
 fn set_unattended_upgrades(host: &HostControl, enabled: bool) -> Result<Value, String> {
-    let current = host.systemctl_state("is-enabled", "unattended-upgrades.service")?;
+    set_named_unit(
+        host,
+        "unattended_upgrades",
+        "unattended-upgrades.service",
+        enabled,
+    )
+}
+
+fn set_named_unit(
+    host: &HostControl,
+    id: &str,
+    unit: &str,
+    enabled: bool,
+) -> Result<Value, String> {
+    let current = host.systemctl_state("is-enabled", unit)?;
     if current == "not-found" {
-        return Err("unattended-upgrades is not installed on this host".to_owned());
+        return Err(format!("{unit} is not installed on this host"));
     }
     let verb = if enabled { "enable" } else { "disable" };
     let output = host.runner.run(
         &host.config.systemctl_binary,
-        &[verb.to_owned(), "unattended-upgrades.service".to_owned()],
+        &[verb.to_owned(), unit.to_owned()],
         Duration::from_secs(20),
     )?;
     crate::host::require_success(output)?;
-    let after = host.systemctl_state("is-enabled", "unattended-upgrades.service")?;
+    let after = host.systemctl_state("is-enabled", unit)?;
     let now_enabled = matches!(
         after.as_str(),
         "enabled" | "enabled-runtime" | "linked" | "linked-runtime" | "alias"
     );
     if now_enabled != enabled {
-        return Err("systemd did not reach the requested unattended-upgrades state".to_owned());
+        return Err(format!("systemd did not reach the requested {unit} state"));
     }
     Ok(json!({
-        "id": "unattended_upgrades",
+        "id": id,
         "enabled": now_enabled,
         "enabled_state": after,
         "verified": true,
         "updated_at_unix_ms": now_unix_ms()
     }))
+}
+
+fn unit_flag(host: &HostControl, unit: &str) -> FlagState {
+    match host.systemctl_state("is-enabled", unit) {
+        Ok(state) if state == "not-found" => FlagState {
+            state: "unavailable",
+            enabled: false,
+            available: false,
+            recommended: true,
+            permissive: false,
+            detail: format!("{unit} is not installed"),
+        },
+        Ok(state) => {
+            let enabled = matches!(
+                state.as_str(),
+                "enabled" | "enabled-runtime" | "linked" | "linked-runtime" | "alias"
+            );
+            FlagState {
+                state: if enabled { "enabled" } else { "disabled" },
+                enabled,
+                available: true,
+                recommended: true,
+                permissive: false,
+                detail: format!("systemd is-enabled={state}"),
+            }
+        }
+        Err(error) => FlagState {
+            state: "unavailable",
+            enabled: false,
+            available: false,
+            recommended: true,
+            permissive: false,
+            detail: error,
+        },
+    }
+}
+
+fn sysctl_flag(path: &str, recommended_values: &[&str], label: &str) -> FlagState {
+    let text = fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().chars().take(16).collect::<String>())
+        .unwrap_or_default();
+    let recommended = recommended_values.iter().any(|value| *value == text);
+    FlagState {
+        state: if text.is_empty() {
+            "unavailable"
+        } else if recommended {
+            "hardened"
+        } else {
+            "relaxed"
+        },
+        enabled: recommended,
+        available: false,
+        recommended,
+        permissive: !text.is_empty() && !recommended,
+        detail: if text.is_empty() {
+            format!("{label} was not readable")
+        } else {
+            text
+        },
+    }
+}
+
+fn ssh_directive(key_name: &str) -> FlagState {
+    let text = fs::read_to_string("/etc/ssh/sshd_config").unwrap_or_default();
+    if text.len() > 256 * 1024 {
+        return FlagState {
+            state: "unavailable",
+            enabled: false,
+            available: false,
+            recommended: false,
+            permissive: false,
+            detail: "sshd_config is too large to parse".to_owned(),
+        };
+    }
+    let mut found = String::from("default");
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, rest)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        if key.eq_ignore_ascii_case(key_name) {
+            found = rest.trim().chars().take(32).collect();
+        }
+    }
+    let lower = found.to_ascii_lowercase();
+    let permissive = matches!(lower.as_str(), "yes" | "default");
+    let state = match lower.as_str() {
+        "yes" => "yes",
+        "no" => "no",
+        "default" => "default",
+        _ => "other",
+    };
+    FlagState {
+        state,
+        enabled: permissive,
+        available: false,
+        recommended: !permissive,
+        permissive,
+        detail: found,
+    }
 }
 
 fn docker_live_restore(host: &HostControl) -> FlagState {

@@ -14,8 +14,15 @@ export interface SecurityControl {
   confirmationDisable: string | null;
 }
 
+export interface SecurityTip {
+  id: string;
+  title: string;
+  body: string;
+}
+
 export interface SecurityInventory {
   controls: SecurityControl[];
+  tips: SecurityTip[];
   facts: Record<string, string | null>;
   collectedAtUnixMs: number;
 }
@@ -64,6 +71,17 @@ function parseControl(value: unknown): SecurityControl {
   };
 }
 
+function parseTip(value: unknown): SecurityTip {
+  const item = expectRecord(value, 'security tip');
+  const id = expectString(item, 'id', 'security tip');
+  if (!CONTROL_ID.test(id)) throw new ApiError('Security inventory returned an invalid tip.');
+  return {
+    id,
+    title: text(item, 'title', 'security tip', 120),
+    body: text(item, 'body', 'security tip', 800),
+  };
+}
+
 export function parseSecurityInventory(value: unknown): SecurityInventory {
   const root = expectRecord(value, 'security inventory');
   if (expectNumber(root, 'schema_version', 'security inventory', { integer: true, minimum: 1, maximum: 1 }) !== 1) {
@@ -85,7 +103,8 @@ export function parseSecurityInventory(value: unknown): SecurityInventory {
     }
   }
   return {
-    controls: expectArray(root, 'controls', 'security inventory', 32).map(parseControl),
+    controls: expectArray(root, 'controls', 'security inventory', 64).map(parseControl),
+    tips: root.tips === undefined ? [] : expectArray(root, 'tips', 'security inventory', 24).map(parseTip),
     facts,
     collectedAtUnixMs: expectNumber(root, 'collected_at_unix_ms', 'security inventory', { integer: true, minimum: 0 }),
   };

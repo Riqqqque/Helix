@@ -7,16 +7,18 @@ use super::{
 };
 use helix_privd::mrpack::{
     MrpackLimits, extract_overrides, inspect_mrpack, prepare_download_path,
-    require_exact_https_host, verify_download, verify_sha512,
+    require_exact_https_host, validate_relative_path, verify_download, verify_sha512,
 };
 use serde_json::{Value, json};
 use std::{
-    fs,
+    fs::{self, File},
+    io::Read as _,
     os::unix::fs::PermissionsExt as _,
     path::Path,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
+use zip::ZipArchive;
 
 const MODRINTH_API_HOST: &str = "api.modrinth.com";
 const MODRINTH_CDN_HOST: &str = "cdn.modrinth.com";
@@ -49,7 +51,14 @@ impl NativeManager {
         query: &str,
         offset: u32,
         limit: u8,
+        provider: helix_privd::ModpackProvider,
     ) -> Result<Value, String> {
+        match provider {
+            helix_privd::ModpackProvider::Curseforge => {
+                return self.curseforge_modpack_search(query, offset, limit);
+            }
+            helix_privd::ModpackProvider::Modrinth => {}
+        }
         validate_search(query, offset, limit)?;
         let facets = serde_json::to_string(&json!([["project_type:modpack"]]))
             .map_err(|_| "could not encode the Modrinth search filter".to_owned())?;
@@ -76,17 +85,149 @@ impl NativeManager {
             "total_hits": response.get("total_hits").and_then(Value::as_u64).unwrap_or_else(|| u64::try_from(results.len()).unwrap_or(u64::MAX)),
             "results": results,
             "installation_scope": {
-                "loader": "fabric",
+                "loaders": ["fabric", "forge", "neoforge", "quilt"],
                 "stable_releases_only": true,
                 "server_capable_only": true,
-                "other_loaders_preview_only": ["forge", "neoforge", "quilt"],
             },
             "source": "Modrinth",
             "collected_at_unix_ms": now_unix_ms(),
         }))
     }
 
+    fn curseforge_modpack_search(
+        &self,
+        query: &str,
+        offset: u32,
+        limit: u8,
+    ) -> Result<Value, String> {
+        validate_search(query, offset, limit)?;
+        let url = format!(
+            "https://www.curseforge.com/api/v1/mods/search?gameId=432&classId=4471&index={offset}&pageSize={limit}&sortField=2&sortOrder=desc&searchFilter={}",
+            percent_encode(query.trim())
+        );
+        let response = self.fetch_json(&url, &["www.curseforge.com"]).map_err(|_| {
+            "CurseForge's public catalog was unreachable; Helix did not use an API key. Try again or use Modrinth."
+                .to_owned()
+        })?;
+        let hits = response
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                "CurseForge returned an unexpected catalog shape; Helix did not use an API key"
+                    .to_owned()
+            })?;
+        let results = hits
+            .iter()
+            .take(usize::from(limit))
+            .map(sanitize_curseforge_search_hit)
+            .collect::<Result<Vec<_>, _>>()?;
+        let total = response
+            .pointer("/pagination/totalCount")
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| u64::try_from(results.len()).unwrap_or(u64::MAX));
+        Ok(json!({
+            "schema_version": 1,
+            "query": clean_text(query.trim(), MAX_SEARCH_QUERY_BYTES),
+            "offset": offset,
+            "limit": limit,
+            "total_hits": total,
+            "results": results,
+            "installation_scope": {
+                "loaders": ["forge", "neoforge", "fabric", "quilt"],
+                "server_pack_preferred": true,
+                "official_api_key": false,
+            },
+            "source": "CurseForge",
+            "provider": "curseforge",
+            "collected_at_unix_ms": now_unix_ms(),
+        }))
+    }
+
+    fn curseforge_modpack_project(&self, project_id: &str) -> Result<Value, String> {
+        let project = self.fetch_json(
+            &format!("https://www.curseforge.com/api/v1/mods/{project_id}"),
+            &["www.curseforge.com"],
+        )?;
+        let project = project.get("data").cloned().unwrap_or(project);
+        let slug = required_text(&project, "slug", 128)
+            .or_else(|_| required_text(&project, "name", 128))?;
+        let files = self.fetch_json(
+            &format!("https://www.curseforge.com/api/v1/mods/{project_id}/files?pageSize=50"),
+            &["www.curseforge.com"],
+        )?;
+        let files = files
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut versions = Vec::new();
+        for file in files.iter().take(MAX_VERSIONS_RETURNED) {
+            let file_id = file
+                .get("id")
+                .and_then(Value::as_u64)
+                .map(|id| id.to_string())
+                .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
+            let game_versions = bounded_string_array(file.get("gameVersions"), 64, 64);
+            let loaders = game_versions
+                .iter()
+                .filter(|value| {
+                    matches!(
+                        value.to_ascii_lowercase().as_str(),
+                        "forge" | "neoforge" | "fabric" | "quilt"
+                    )
+                })
+                .map(|value| value.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            let (status, reason) = loader_preview_status(&loaders, "optional");
+            let release_type = file.get("releaseType").and_then(Value::as_u64).unwrap_or(1);
+            versions.push(json!({
+                "id": file_id,
+                "name": optional_text(file, "displayName", 256).or_else(|| optional_text(file, "fileName", 256)),
+                "version_number": optional_text(file, "fileName", 256),
+                "version_type": if release_type == 1 { "release" } else { "beta" },
+                "game_versions": game_versions,
+                "loaders": loaders,
+                "installable": status.ends_with("_candidate") && release_type == 1,
+                "compatibility_reason": reason,
+                "mrpack_file": json!({
+                    "filename": optional_text(file, "fileName", 256),
+                    "size": file.get("fileLength").and_then(Value::as_u64).unwrap_or(0),
+                    "modrinth_declared_sha512_available": false,
+                }),
+            }));
+        }
+        let compatible_count = versions
+            .iter()
+            .filter(|version| version["installable"].as_bool() == Some(true))
+            .count();
+        Ok(json!({
+            "schema_version": 1,
+            "project": {
+                "id": project_id,
+                "slug": slug,
+                "title": optional_text(&project, "name", 256).unwrap_or_else(|| slug.clone()),
+                "description": optional_text(&project, "summary", 2_048),
+                "body": optional_text_chars(&project, "summary", MAX_PROJECT_BODY_CHARS),
+                "downloads": project.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
+                "followers": 0,
+                "server_side": "optional",
+                "loaders": curseforge_loaders(&project),
+                "web_url": format!("https://www.curseforge.com/minecraft/modpacks/{}", percent_encode(&slug)),
+                "icon_url": project.pointer("/logo/url").and_then(Value::as_str).filter(|url| url.starts_with("https://")),
+            },
+            "versions": versions,
+            "compatible_version_count": compatible_count,
+            "version_results_truncated": files.len() > MAX_VERSIONS_RETURNED,
+            "source": "CurseForge",
+            "provider": "curseforge",
+            "collected_at_unix_ms": now_unix_ms(),
+        }))
+    }
+
     pub fn minecraft_modpack_project(&self, project_id: &str) -> Result<Value, String> {
+        if project_id.bytes().all(|byte| byte.is_ascii_digit()) && !project_id.is_empty() {
+            return self.curseforge_modpack_project(project_id);
+        }
         validate_modrinth_id(project_id, "project")?;
         let project =
             self.fetch_modrinth_json(&format!("https://api.modrinth.com/v2/project/{project_id}"))?;
@@ -161,6 +302,9 @@ impl NativeManager {
     where
         F: FnMut(&str, u8),
     {
+        if matches!(request.provider, helix_privd::ModpackProvider::Curseforge) {
+            return self.create_curseforge_modpack(request, progress);
+        }
         validate_modrinth_id(&request.project_id, "project")?;
         validate_modrinth_id(&request.version_id, "version")?;
         let base_spec = MinecraftCreateSpec {
@@ -266,8 +410,25 @@ impl NativeManager {
                 .saturating_add(MAX_SERVER_JAR_BYTES)
                 .saturating_add(DISK_HEADROOM_BYTES);
             ensure_disk_space(&self.instance_root, required_bytes)?;
-            let artifact =
-                self.resolve_pinned_fabric(&plan.minecraft_version, &plan.fabric_loader_version)?;
+            let artifact = match plan.loader {
+                "fabric" => self
+                    .resolve_pinned_fabric(&plan.minecraft_version, &plan.fabric_loader_version)?,
+                "quilt" => {
+                    self.resolve_pinned_quilt(&plan.minecraft_version, &plan.fabric_loader_version)?
+                }
+                "forge" => {
+                    self.resolve_pinned_forge(&plan.minecraft_version, &plan.fabric_loader_version)?
+                }
+                "neoforge" => self.resolve_pinned_neoforge(
+                    &plan.minecraft_version,
+                    &plan.fabric_loader_version,
+                )?,
+                other => {
+                    return Err(format!(
+                        "the modpack loader {other} is not installable in this Helix release"
+                    ));
+                }
+            };
             if artifact.java_version < 17 || artifact.java_version > 25 {
                 return Err(format!(
                     "Minecraft {} requires Java {}, which this Helix release does not manage yet",
@@ -300,13 +461,9 @@ impl NativeManager {
                 verify_download(&output, file)?;
             }
 
-            progress("Pinning the exact Minecraft and Fabric server runtime", 58);
+            progress("Pinning the exact Minecraft server runtime", 58);
             let jar_path = staging_path.join("server.jar");
-            let artifact_sha256 = self.download_pinned_fabric_artifact(
-                &artifact,
-                &jar_path,
-                remaining_download_seconds(deadline)?,
-            )?;
+            let artifact_sha256 = self.download_artifact(&artifact, &jar_path)?;
             write_new_file(&staging_path.join("eula.txt"), b"eula=true\n", 0o640)?;
             let rcon_password = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
             let server_spec = MinecraftCreateSpec {
@@ -327,13 +484,19 @@ impl NativeManager {
                 .map_err(|_| "could not atomically activate the staged modpack".to_owned())?;
             activated = true;
             let runtime_image = self.resolve_runtime_image(artifact.java_version)?;
+            let unix_args = if artifact.install_server {
+                progress("Running the official loader installer", 72);
+                Some(self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?)
+            } else {
+                None
+            };
             let manifest = InstanceManifest {
                 schema_version: MANIFEST_VERSION,
                 id: id.clone(),
                 name: request.name.trim().to_owned(),
                 instance_name: instance_name.clone(),
                 container_name: container_name.clone(),
-                software: MinecraftSoftware::Fabric,
+                software: artifact.software,
                 minecraft_version: artifact.version,
                 build: artifact.build,
                 java_version: artifact.java_version,
@@ -350,6 +513,7 @@ impl NativeManager {
                 created_at_unix_ms: now_unix_ms(),
                 kind: helix_privd::GameKind::Minecraft,
                 query_port: 0,
+                unix_args,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -389,6 +553,7 @@ impl NativeManager {
                     "version_number": resolved.version_number,
                     "source_filename": resolved.file_name,
                     "minecraft_version": plan.minecraft_version,
+                    "loader": plan.loader,
                     "fabric_loader_version": plan.fabric_loader_version,
                     "installed_server_files": plan.files.len(),
                     "excluded_server_optional_files": plan.skipped_optional_files,
@@ -398,6 +563,262 @@ impl NativeManager {
                 },
                 "modrinth_declared_sha512_verified": true,
                 "declared_file_hashes_verified": ["sha1", "sha512"],
+            }))
+        })();
+
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                progress("Rolling back the incomplete modpack install", 99);
+                let cleanup = if activated {
+                    self.rollback_modpack_creation(&id, &container_name, &data_path, &manifest_path)
+                } else {
+                    remove_staging_directory(&self.instance_root, &staging_path)
+                };
+                Err(match cleanup {
+                    Ok(()) => error,
+                    Err(cleanup) => format!("{error}; cleanup also failed: {cleanup}"),
+                })
+            }
+        }
+    }
+
+    fn create_curseforge_modpack<F>(
+        &self,
+        request: &MinecraftModpackCreateSpec,
+        mut progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        let project_id = request.project_id.trim();
+        let file_id = request.version_id.trim();
+        if !project_id.bytes().all(|byte| byte.is_ascii_digit())
+            || !file_id.bytes().all(|byte| byte.is_ascii_digit())
+            || project_id.is_empty()
+            || file_id.is_empty()
+        {
+            return Err("CurseForge installs need the numeric project and file ids".to_owned());
+        }
+        let base_spec = MinecraftCreateSpec {
+            name: request.name.clone(),
+            software: MinecraftSoftware::Fabric,
+            version: "latest".to_owned(),
+            memory_mb: request.memory_mb,
+            max_players: request.max_players,
+            game_port: request.game_port,
+            network_exposure: request.network_exposure,
+            start_on_boot: request.start_on_boot,
+            eula_accepted: request.eula_accepted,
+            custom_jar: None,
+        };
+        validate_create_spec(&base_spec)?;
+        let _operation = self.begin_creation_operation()?;
+        let deadline = Instant::now() + INSTALL_DEADLINE;
+        progress("Checking ports, names, and storage", 4);
+        let manifests = self.load_manifests()?;
+        if manifests
+            .iter()
+            .any(|manifest| manifest.name.eq_ignore_ascii_case(request.name.trim()))
+        {
+            return Err("a Helix server with that name already exists".to_owned());
+        }
+        let (game_port, allocated_automatically) = self.resolve_game_port(
+            helix_privd::GameKind::Minecraft,
+            request.game_port,
+            &manifests,
+        )?;
+        let mut base_spec = base_spec;
+        base_spec.game_port = Some(game_port);
+        let rcon_port = allocate_rcon_port(&manifests)?;
+        let id = Uuid::new_v4().to_string();
+        let instance_name = instance_name(request.name.trim(), &id);
+        let container_name = modpack_container_name(&id);
+        let run_uid = allocate_run_uid(&id, &manifests)?;
+        let data_path = self.instance_path(&id)?;
+        let manifest_path = self.manifest_path(&id)?;
+        let staging_path = self
+            .instance_root
+            .join(format!(".helix-modpack-staging-{id}"));
+        let archive_path = staging_path.join(".helix-source.zip");
+        let mut activated = false;
+
+        let result = (|| -> Result<Value, String> {
+            ensure_before(deadline)?;
+            progress("Resolving the CurseForge file without an API key", 8);
+            let file = self.fetch_json(
+                &format!("https://www.curseforge.com/api/v1/mods/{project_id}/files/{file_id}"),
+                &["www.curseforge.com"],
+            )?;
+            let file = file.get("data").cloned().unwrap_or(file);
+            let file_name = required_text(&file, "fileName", 256)?;
+            let file_size = file.get("fileLength").and_then(Value::as_u64).unwrap_or(0);
+            if file_size == 0 || file_size > MAX_SERVER_JAR_BYTES {
+                return Err("the CurseForge file size is outside Helix safety limits".to_owned());
+            }
+            fs::create_dir(&staging_path).map_err(|_| {
+                "could not create the isolated modpack staging directory".to_owned()
+            })?;
+            fs::set_permissions(&staging_path, fs::Permissions::from_mode(0o700))
+                .map_err(|_| "could not protect the modpack staging directory".to_owned())?;
+            let url = forgecdn_file_url(
+                file_id
+                    .parse()
+                    .map_err(|_| "the CurseForge file id is invalid".to_owned())?,
+                &file_name,
+            )?;
+            progress("Downloading the CurseForge pack zip", 16);
+            require_forgecdn_host(&url)?;
+            self.curl_no_redirect(
+                &url,
+                &archive_path,
+                file_size.max(64 * 1024),
+                remaining_download_seconds(deadline)?,
+            )?;
+            progress("Reading the CurseForge manifest", 24);
+            let pack = read_curseforge_manifest(&archive_path)?;
+            extract_curseforge_overrides(&archive_path, &staging_path)?;
+            fs::create_dir_all(staging_path.join("mods"))
+                .map_err(|_| "could not create the mods directory".to_owned())?;
+            let file_count = pack.files.len().max(1);
+            for (index, entry) in pack.files.iter().enumerate() {
+                ensure_before(deadline)?;
+                let meta = self.fetch_json(
+                    &format!(
+                        "https://www.curseforge.com/api/v1/mods/{}/files/{}",
+                        entry.project_id, entry.file_id
+                    ),
+                    &["www.curseforge.com"],
+                )?;
+                let meta = meta.get("data").cloned().unwrap_or(meta);
+                let name = required_text(&meta, "fileName", 256)?;
+                let size = meta.get("fileLength").and_then(Value::as_u64).unwrap_or(0);
+                let download = forgecdn_file_url(entry.file_id, &name)?;
+                require_forgecdn_host(&download)?;
+                let destination = staging_path.join("mods").join(&name);
+                if destination.exists() {
+                    continue;
+                }
+                self.curl_no_redirect(
+                    &download,
+                    &destination,
+                    size.max(16 * 1024).min(MAX_SERVER_JAR_BYTES),
+                    remaining_download_seconds(deadline)?,
+                )?;
+                let scaled = index
+                    .saturating_mul(20)
+                    .checked_div(file_count)
+                    .unwrap_or(20);
+                progress(
+                    "Downloading CurseForge mods",
+                    28 + u8::try_from(scaled).unwrap_or(20),
+                );
+            }
+            let artifact = match pack.loader.as_str() {
+                "fabric" => self.resolve_fabric(&pack.minecraft_version)?,
+                "quilt" => self.resolve_quilt(&pack.minecraft_version)?,
+                "forge" => {
+                    self.resolve_pinned_forge(&pack.minecraft_version, &pack.loader_version)?
+                }
+                "neoforge" => {
+                    self.resolve_pinned_neoforge(&pack.minecraft_version, &pack.loader_version)?
+                }
+                other => {
+                    return Err(format!(
+                        "this CurseForge pack uses {other}, which Helix cannot install yet"
+                    ));
+                }
+            };
+            progress("Pinning the Minecraft server runtime", 58);
+            let jar_path = staging_path.join("server.jar");
+            let artifact_sha256 = self.download_artifact(&artifact, &jar_path)?;
+            write_new_file(&staging_path.join("eula.txt"), b"eula=true\n", 0o640)?;
+            let rcon_password = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+            let server_spec = MinecraftCreateSpec {
+                version: pack.minecraft_version.clone(),
+                software: artifact.software,
+                ..base_spec.clone()
+            };
+            write_new_file(
+                &staging_path.join("server.properties"),
+                server_properties(&server_spec, game_port, rcon_port, &rcon_password).as_bytes(),
+                0o640,
+            )?;
+            let _ = fs::remove_file(&archive_path);
+            progress("Committing the complete server atomically", 68);
+            fs::rename(&staging_path, &data_path)
+                .map_err(|_| "could not atomically activate the staged modpack".to_owned())?;
+            activated = true;
+            let runtime_image = self.resolve_runtime_image(artifact.java_version)?;
+            let unix_args = if artifact.install_server {
+                progress("Running the official loader installer", 72);
+                Some(self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?)
+            } else {
+                None
+            };
+            let manifest = InstanceManifest {
+                schema_version: MANIFEST_VERSION,
+                id: id.clone(),
+                name: request.name.trim().to_owned(),
+                instance_name: instance_name.clone(),
+                container_name: container_name.clone(),
+                software: artifact.software,
+                minecraft_version: artifact.version,
+                build: artifact.build,
+                java_version: artifact.java_version,
+                runtime_image,
+                artifact_url: artifact.url,
+                artifact_sha256,
+                memory_mb: request.memory_mb,
+                max_players: request.max_players,
+                game_port,
+                rcon_port,
+                rcon_password,
+                start_on_boot: request.start_on_boot,
+                run_uid,
+                created_at_unix_ms: now_unix_ms(),
+                kind: helix_privd::GameKind::Minecraft,
+                query_port: 0,
+                unix_args,
+            };
+            write_manifest(&manifest_path, &manifest)?;
+            self.chown_instance(&data_path, run_uid)?;
+            self.protect_instance_artifacts(&data_path, run_uid)?;
+            progress("Creating the isolated Helix workload", 75);
+            self.create_container(&manifest, &data_path)?;
+            progress("Starting the modpack server", 82);
+            self.docker(["start", manifest.container_name.as_str()], 90)?;
+            self.wait_for_minecraft(
+                &manifest,
+                remaining_duration(deadline, Duration::from_secs(10 * 60))?,
+                |elapsed| {
+                    let percent = 82_u64.saturating_add((elapsed / 40).min(16));
+                    progress(
+                        "Generating the world and waiting for the modpack",
+                        u8::try_from(percent).unwrap_or(98),
+                    );
+                },
+            )?;
+            self.ensure_console_archiver(&manifest)?;
+            progress("Online", 100);
+            Ok(json!({
+                "schema_version": 1,
+                "instance_id": format!("helix:{id}"),
+                "instance_name": instance_name,
+                "game_port": game_port,
+                "port_allocated_automatically": allocated_automatically,
+                "manager": "helix",
+                "execution_backend": "docker",
+                "modpack": {
+                    "project_id": project_id,
+                    "version_id": file_id,
+                    "source_filename": file_name,
+                    "minecraft_version": pack.minecraft_version,
+                    "loader": pack.loader,
+                    "provider": "curseforge",
+                    "installed_server_files": pack.files.len(),
+                    "full_pack_parity": false,
+                }
             }))
         })();
 
@@ -603,13 +1024,106 @@ fn sanitize_search_hit(hit: &Value) -> Result<Value, String> {
         "server_side": server_side,
         "compatibility_status": status,
         "compatibility_reason": reason,
-        "requires_version_check": status == "fabric_candidate",
+        "requires_version_check": status.ends_with("_candidate"),
         "web_url": format!(
             "https://modrinth.com/modpack/{}",
             percent_encode(&slug)
         ),
         "icon_url": modrinth_icon_proxy_url(hit.get("icon_url").and_then(Value::as_str)),
     }))
+}
+
+fn sanitize_curseforge_search_hit(hit: &Value) -> Result<Value, String> {
+    let project_id = hit
+        .get("id")
+        .and_then(Value::as_u64)
+        .map(|id| id.to_string())
+        .ok_or_else(|| "CurseForge returned a modpack without an id".to_owned())?;
+    let slug = required_text(hit, "slug", 128).or_else(|_| required_text(hit, "name", 128))?;
+    let loaders = curseforge_loaders(hit);
+    let (status, reason) = loader_preview_status(&loaders, "optional");
+    let versions = curseforge_game_versions(hit);
+    let author = hit
+        .get("authors")
+        .and_then(Value::as_array)
+        .and_then(|authors| authors.first())
+        .and_then(|author| author.get("name").or_else(|| author.get("username")))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let icon = hit
+        .pointer("/logo/url")
+        .or_else(|| hit.pointer("/avatarUrl"))
+        .or_else(|| hit.get("thumbnailUrl"))
+        .and_then(Value::as_str);
+    Ok(json!({
+        "project_id": project_id,
+        "slug": slug,
+        "title": optional_text(hit, "name", 256).or_else(|| optional_text(hit, "title", 256)).unwrap_or_else(|| slug.clone()),
+        "description": optional_text(hit, "summary", 2_048).or_else(|| optional_text(hit, "description", 2_048)),
+        "author": author,
+        "downloads": hit.get("downloadCount").or_else(|| hit.get("downloads")).and_then(Value::as_u64).unwrap_or(0),
+        "follows": 0,
+        "latest_version": versions.first().cloned().map(Value::from).unwrap_or(Value::Null),
+        "minecraft_versions": versions,
+        "loaders": loaders,
+        "server_side": "optional",
+        "compatibility_status": status,
+        "compatibility_reason": reason,
+        "requires_version_check": true,
+        "provider": "curseforge",
+        "web_url": format!(
+            "https://www.curseforge.com/minecraft/modpacks/{}",
+            percent_encode(&slug)
+        ),
+        "icon_url": icon.filter(|url| url.starts_with("https://")).map(str::to_owned),
+    }))
+}
+
+fn curseforge_game_versions(hit: &Value) -> Vec<String> {
+    let mut versions = Vec::new();
+    if let Some(entries) = hit.get("latestFilesIndexes").and_then(Value::as_array) {
+        for entry in entries {
+            if let Some(items) = entry.get("gameVersions").and_then(Value::as_array) {
+                for item in items {
+                    let Some(text) = item.as_str() else {
+                        continue;
+                    };
+                    if text
+                        .chars()
+                        .next()
+                        .is_some_and(|character| character.is_ascii_digit())
+                    {
+                        versions.push(text.chars().take(32).collect());
+                    }
+                }
+            }
+        }
+    }
+    versions.sort();
+    versions.dedup();
+    versions.truncate(64);
+    versions
+}
+
+fn curseforge_loaders(hit: &Value) -> Vec<String> {
+    let mut loaders = Vec::new();
+    if let Some(entries) = hit.get("latestFilesIndexes").and_then(Value::as_array) {
+        for entry in entries {
+            if let Some(versions) = entry.get("gameVersions").and_then(Value::as_array) {
+                for version in versions {
+                    if let Some(text) = version.as_str() {
+                        let lower = text.to_ascii_lowercase();
+                        if matches!(lower.as_str(), "forge" | "neoforge" | "fabric" | "quilt") {
+                            loaders.push(lower);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    loaders.sort();
+    loaders.dedup();
+    loaders
 }
 
 fn sanitize_modpack_version(
@@ -659,7 +1173,10 @@ fn ensure_installable_version(version: &Value, server_side: &str) -> Result<(), 
         return Err("Only listed Modrinth releases can be installed".to_owned());
     }
     let loaders = bounded_string_array(version.get("loaders"), 32, 32);
-    if !loaders.iter().any(|loader| loader == "fabric") {
+    if !loaders
+        .iter()
+        .any(|loader| matches!(loader.as_str(), "fabric" | "forge" | "neoforge" | "quilt"))
+    {
         let (_, reason) = loader_preview_status(&loaders, server_side);
         return Err(reason);
     }
@@ -737,28 +1254,28 @@ fn loader_preview_status(loaders: &[String], server_side: &str) -> (&'static str
     }
     if loaders.iter().any(|loader| loader == "neoforge") {
         return (
-            "incompatible",
-            "NeoForge packs are preview-only until Helix has a lifecycle-ready NeoForge server loader"
+            "neoforge_candidate",
+            "NeoForge is lifecycle-ready; choose a stable server-capable release to continue"
                 .to_owned(),
         );
     }
     if loaders.iter().any(|loader| loader == "forge") {
         return (
-            "incompatible",
-            "Forge packs are preview-only until Helix has a lifecycle-ready Forge server loader"
+            "forge_candidate",
+            "Forge is lifecycle-ready; choose a stable server-capable release to continue"
                 .to_owned(),
         );
     }
     if loaders.iter().any(|loader| loader == "quilt") {
         return (
-            "incompatible",
-            "Quilt packs are preview-only until Helix has a lifecycle-ready Quilt server loader"
+            "quilt_candidate",
+            "Quilt is lifecycle-ready; choose a stable server-capable release to continue"
                 .to_owned(),
         );
     }
     (
         "incompatible",
-        "No lifecycle-ready Fabric server release was declared".to_owned(),
+        "No lifecycle-ready server loader was declared".to_owned(),
     )
 }
 
@@ -958,6 +1475,159 @@ fn valid_hex(value: &str, length: usize) -> bool {
     value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+struct CurseforgePack {
+    minecraft_version: String,
+    loader: String,
+    loader_version: String,
+    files: Vec<CurseforgeFileRef>,
+}
+
+struct CurseforgeFileRef {
+    project_id: u64,
+    file_id: u64,
+}
+
+fn require_forgecdn_host(url: &str) -> Result<(), String> {
+    require_exact_https_host(url, "edge.forgecdn.net")
+        .or_else(|_| require_exact_https_host(url, "mediafilez.forgecdn.net"))
+}
+
+fn forgecdn_file_url(file_id: u64, file_name: &str) -> Result<String, String> {
+    if file_id == 0
+        || file_name.is_empty()
+        || file_name.contains(['/', '\\', ':'])
+        || Path::new(file_name)
+            .file_name()
+            .and_then(|value| value.to_str())
+            != Some(file_name)
+    {
+        return Err("the CurseForge file name is invalid".to_owned());
+    }
+    let id = file_id.to_string();
+    let (prefix, suffix) = if id.len() > 3 {
+        (&id[..id.len() - 3], &id[id.len() - 3..])
+    } else {
+        ("0", id.as_str())
+    };
+    Ok(format!(
+        "https://edge.forgecdn.net/files/{prefix}/{suffix}/{file_name}"
+    ))
+}
+
+fn read_curseforge_manifest(archive_path: &Path) -> Result<CurseforgePack, String> {
+    let file = File::open(archive_path)
+        .map_err(|_| "could not open the CurseForge pack archive".to_owned())?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|_| "the CurseForge pack is not a valid ZIP".to_owned())?;
+    let mut manifest = archive.by_name("manifest.json").map_err(|_| {
+        "this CurseForge zip has no manifest.json; Helix needs a standard pack or server pack"
+            .to_owned()
+    })?;
+    let mut bytes = Vec::new();
+    manifest
+        .read_to_end(&mut bytes)
+        .map_err(|_| "could not read the CurseForge manifest".to_owned())?;
+    drop(manifest);
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "the CurseForge manifest is not valid JSON".to_owned())?;
+    let minecraft_version = value
+        .pointer("/minecraft/version")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "the CurseForge manifest does not pin a Minecraft version".to_owned())?
+        .to_owned();
+    let loader_id = value
+        .pointer("/minecraft/modLoaders")
+        .and_then(Value::as_array)
+        .and_then(|loaders| {
+            loaders.iter().find_map(|entry| {
+                let primary = entry.get("primary").and_then(Value::as_bool) != Some(false);
+                primary
+                    .then(|| entry.get("id").and_then(Value::as_str))
+                    .flatten()
+            })
+        })
+        .ok_or_else(|| "the CurseForge manifest does not pin a server loader".to_owned())?;
+    let (loader, loader_version) = split_curseforge_loader(loader_id)?;
+    let files = value
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "the CurseForge manifest has no file list".to_owned())?
+        .iter()
+        .filter(|entry| entry.get("required").and_then(Value::as_bool) != Some(false))
+        .filter_map(|entry| {
+            Some(CurseforgeFileRef {
+                project_id: entry.get("projectID").and_then(Value::as_u64)?,
+                file_id: entry.get("fileID").and_then(Value::as_u64)?,
+            })
+        })
+        .collect::<Vec<_>>();
+    if files.len() > 4_000 {
+        return Err("the CurseForge pack lists too many files for a safe install".to_owned());
+    }
+    Ok(CurseforgePack {
+        minecraft_version,
+        loader,
+        loader_version,
+        files,
+    })
+}
+
+fn split_curseforge_loader(loader_id: &str) -> Result<(String, String), String> {
+    let (loader, version) = loader_id
+        .split_once('-')
+        .ok_or_else(|| "the CurseForge loader pin is invalid".to_owned())?;
+    let loader = match loader {
+        "forge" | "neoforge" | "fabric" | "quilt" => loader.to_owned(),
+        "fabric-loader" => "fabric".to_owned(),
+        "quilt-loader" => "quilt".to_owned(),
+        other => {
+            return Err(format!(
+                "this CurseForge pack uses {other}, which Helix cannot install yet"
+            ));
+        }
+    };
+    Ok((loader, version.to_owned()))
+}
+
+fn extract_curseforge_overrides(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    let limits = MrpackLimits::default();
+    let file = File::open(archive_path)
+        .map_err(|_| "could not open the CurseForge pack archive".to_owned())?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|_| "the CurseForge pack is not a valid ZIP".to_owned())?;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|_| "could not read a CurseForge archive entry".to_owned())?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().replace('\\', "/");
+        let Some(relative) = name
+            .strip_prefix("overrides/")
+            .or_else(|| name.strip_prefix("override/"))
+        else {
+            continue;
+        };
+        if relative.is_empty() {
+            continue;
+        }
+        validate_relative_path(relative, &limits)?;
+        let output = destination.join(relative);
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|_| "could not create CurseForge override folders".to_owned())?;
+        }
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|_| "could not extract a CurseForge override".to_owned())?;
+        fs::write(&output, bytes)
+            .map_err(|_| "could not write a CurseForge override".to_owned())?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -980,18 +1650,20 @@ mod tests {
     }
 
     #[test]
-    fn preview_reasons_never_claim_unsupported_loaders_are_installable() {
-        for (loader, expected) in [
-            ("forge", "Forge"),
-            ("neoforge", "NeoForge"),
-            ("quilt", "Quilt"),
+    fn preview_reasons_mark_lifecycle_ready_loaders() {
+        for (loader, status) in [
+            ("fabric", "fabric_candidate"),
+            ("forge", "forge_candidate"),
+            ("neoforge", "neoforge_candidate"),
+            ("quilt", "quilt_candidate"),
         ] {
-            let (status, reason) = loader_preview_status(&[loader.to_owned()], "required");
-            assert_eq!(status, "incompatible");
-            assert!(reason.contains(expected));
+            let (found, reason) = loader_preview_status(&[loader.to_owned()], "required");
+            assert_eq!(found, status);
+            assert!(!reason.is_empty());
         }
-        let (status, _) = loader_preview_status(&["fabric".to_owned()], "required");
-        assert_eq!(status, "fabric_candidate");
+        let (status, reason) = loader_preview_status(&["rift".to_owned()], "required");
+        assert_eq!(status, "incompatible");
+        assert!(reason.contains("lifecycle-ready"));
     }
 
     #[test]
@@ -1021,7 +1693,7 @@ mod tests {
         assert!(ensure_installable_version(&beta, "required").is_err());
         let mut neoforge = version;
         neoforge["loaders"] = json!(["neoforge"]);
-        assert!(ensure_installable_version(&neoforge, "required").is_err());
+        ensure_installable_version(&neoforge, "required").expect("stable NeoForge release");
 
         let ambiguous = json!({
             "files": [

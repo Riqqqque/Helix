@@ -117,9 +117,9 @@ fail closed with an honest note.
 | `POST` | `/api/v1/security/controls` | `system.settings.write` | Flip one writable control after typing its exact confirmation phrase |
 
 Writable controls are Helix start-after-boot, Minecraft auto-forward on create,
-and unattended-upgrades when that unit exists. UFW disable is not a switch
-here. CSRF, LAN bind, AppArmor, SSH PermitRootLogin, ASLR, and Docker
-live-restore are reported, not casually toggled.
+unattended-upgrades, Fail2ban, and systemd-timesyncd when those units exist.
+UFW disable is not a switch here. CSRF, LAN bind, AppArmor, SSH settings, ASLR,
+sysctl facts, and Docker live-restore are reported, not casually toggled.
 
 ### Storage and file operations
 
@@ -257,12 +257,18 @@ or output. Disconnect ends the PTY.
 | `PUT` | `/api/v1/servers/port-policies/minecraft` | `games.manage` | Persist bounded ranges, individual priority ports, and the public-setup default |
 | `GET` | `/api/v1/servers/port-policies/vrising` | `games.view` | Read the V Rising UDP pool (game + query pairs) |
 | `PUT` | `/api/v1/servers/port-policies/vrising` | `games.manage` | Persist the V Rising UDP pool; public auto-forward stays off |
+| `GET` | `/api/v1/servers/port-policies/valheim` | `games.view` | Read the Valheim UDP pool (game + next two) |
+| `PUT` | `/api/v1/servers/port-policies/valheim` | `games.manage` | Persist the Valheim UDP pool; public auto-forward stays off |
+| `GET` | `/api/v1/servers/port-policies/terraria` | `games.view` | Read the Terraria TCP pool |
+| `PUT` | `/api/v1/servers/port-policies/terraria` | `games.manage` | Persist the Terraria TCP pool |
 | `GET` | `/api/v1/games/readiness` | `games.view` | Compatibility alias for manager readiness |
 | `POST` | `/api/v1/servers/minecraft` | `games.manage` | Start a native Minecraft creation job |
 | `POST` | `/api/v1/servers/vrising` | `games.manage` | Start a native V Rising creation job |
-| `GET` | `/api/v1/servers/minecraft/modpacks/search` | `games.view` | Search bounded Modrinth modpack previews across loaders |
+| `POST` | `/api/v1/servers/valheim` | `games.manage` | Start a native Valheim creation job |
+| `POST` | `/api/v1/servers/terraria` | `games.manage` | Start a native Terraria creation job |
+| `GET` | `/api/v1/servers/minecraft/modpacks/search` | `games.view` | Search Modrinth or CurseForge modpack previews (`provider=modrinth` or `curseforge`) |
 | `GET` | `/api/v1/servers/minecraft/modpacks/projects/{project_id}` | `games.view` | Read bounded project/version compatibility detail |
-| `POST` | `/api/v1/servers/minecraft/modpacks` | `games.manage` | Start a server-safe Fabric `.mrpack` creation job |
+| `POST` | `/api/v1/servers/minecraft/modpacks` | `games.manage` | Start a server-safe modpack creation job |
 | `GET` | `/api/v1/servers/{instance_id}` | `games.view` | Native or AMP detail |
 | `GET` | `/api/v1/servers/removed` | `games.view` | Recoverable removed native servers and retention policy |
 | `POST` | `/api/v1/servers/removed/{trash_id}/restore` | `games.manage` | Restore an exact removed native server before expiry |
@@ -273,10 +279,10 @@ or output. Disconnect ends the PTY.
 | `GET` | `/api/v1/jobs/{job_id}` | `games.view` | Read current bounded job state/log |
 
 The native readiness contract currently advertises install paths for Paper,
-Purpur, Folia, Leaves, Fabric, Vanilla, guarded local custom-JAR import, and V Rising
-when Docker is ready. V Rising uses a Helix-owned isolated runtime image, not a
-third-party Hub tag. Forge, NeoForge, Quilt, Spigot, Velocity, and similar
-choices stay catalog explanations until they have a tested install path.
+Purpur, Folia, Leaves, Fabric, Forge, NeoForge, Quilt, Pufferfish, Vanilla,
+guarded local custom-JAR import, V Rising, Valheim, and Terraria when Docker is
+ready. Dedicated games use Helix-owned isolated runtime images, not unpinned
+Hub tags.
 
 `GET /api/v1/servers/minecraft/versions` returns up to 128 published releases
 for one software id. Paper, Folia, and Leaves hide Minecraft versions newer than
@@ -308,15 +314,14 @@ instances stay under AMP.
 Minecraft creation accepts either one explicit port or no port, which allocates
 the first genuinely free candidate from the stored Minecraft policy while the
 creation lock is held. Priority ports are tried before ordered ranges; the
-policy is bounded to 4,096 unique candidates. Modpack creation accepts only
-opaque Modrinth project/version IDs plus the ordinary server name, RAM, player,
-optional port, network-exposure choice, start-on-boot, and EULA fields. The
-broker re-resolves current metadata and permits only listed stable,
-server-capable Fabric releases with one unambiguous `.mrpack`. Other loaders are
-preview-only. Downloads use exact Modrinth API/CDN hosts without redirects;
-archive and declared file hashes, paths, sizes, counts, expansion, time, and
-disk headroom are checked before same-filesystem activation. The result reports
-excluded optional/client-only files and `full_pack_parity: false`.
+policy is bounded to 4,096 unique candidates. Modpack creation accepts opaque
+project/version IDs, optional `provider` (`modrinth` default, or `curseforge`),
+and the ordinary server name, RAM, player, optional port, network-exposure,
+start-on-boot, and EULA fields. Modrinth `.mrpack` downloads use exact API/CDN
+hosts without redirects and verify declared hashes. CurseForge uses the public
+website catalog and forgecdn files plus `manifest.json`. Fabric, Forge,
+NeoForge, and Quilt loaders can be pinned. The result reports excluded
+optional/client-only files and `full_pack_parity: false`.
 
 ### Server console, settings, marketplace, and backups
 

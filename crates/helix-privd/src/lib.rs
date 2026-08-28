@@ -206,6 +206,8 @@ pub enum BrokerRequest {
         query: String,
         offset: u32,
         limit: u8,
+        #[serde(default)]
+        provider: ModpackProvider,
     },
     MinecraftModpackProject {
         project_id: String,
@@ -247,6 +249,12 @@ pub enum BrokerRequest {
     #[serde(rename = "create_vrising")]
     CreateVRising {
         spec: VRisingCreateSpec,
+    },
+    CreateValheim {
+        spec: ValheimCreateSpec,
+    },
+    CreateTerraria {
+        spec: TerrariaCreateSpec,
     },
     SetNativeStartOnBoot {
         instance_id: String,
@@ -344,6 +352,8 @@ pub enum GameKind {
     Minecraft,
     #[serde(rename = "vrising")]
     VRising,
+    Valheim,
+    Terraria,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -493,6 +503,83 @@ impl VRisingCreateSpec {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct ValheimCreateSpec {
+    pub name: String,
+    pub memory_mb: u32,
+    pub max_players: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_port: Option<u16>,
+    #[serde(default)]
+    pub network_exposure: ServerNetworkExposure,
+    pub start_on_boot: bool,
+}
+
+impl ValheimCreateSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_dedicated_name(&self.name)?;
+        if !(1_024..=16_384).contains(&self.memory_mb) {
+            return Err("Valheim memory must be between 1 and 16 GiB".to_owned());
+        }
+        if !(1..=64).contains(&self.max_players) {
+            return Err("Valheim player limit must be between 1 and 64".to_owned());
+        }
+        if self.game_port.is_some_and(|port| port < 1_024) {
+            return Err("game port must be at least 1024".to_owned());
+        }
+        if self.network_exposure != ServerNetworkExposure::Private {
+            return Err(
+                "Valheim public UPnP is not offered yet; create the server as private and forward UDP 2456–2458 yourself if needed"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerrariaCreateSpec {
+    pub name: String,
+    pub software: TerrariaSoftware,
+    pub memory_mb: u32,
+    pub max_players: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_port: Option<u16>,
+    #[serde(default)]
+    pub network_exposure: ServerNetworkExposure,
+    pub start_on_boot: bool,
+}
+
+impl TerrariaCreateSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_dedicated_name(&self.name)?;
+        if !(512..=8_192).contains(&self.memory_mb) {
+            return Err("Terraria memory must be between 512 MiB and 8 GiB".to_owned());
+        }
+        if !(1..=255).contains(&self.max_players) {
+            return Err("Terraria player limit must be between 1 and 255".to_owned());
+        }
+        if self.game_port.is_some_and(|port| port < 1_024) {
+            return Err("game port must be at least 1024".to_owned());
+        }
+        Ok(())
+    }
+}
+
+fn validate_dedicated_name(name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.len() > 80
+        || name.chars().any(char::is_control)
+        || name.contains(['/', '\\'])
+    {
+        return Err("server name must be 1–80 ordinary characters".to_owned());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MinecraftModpackCreateSpec {
     pub name: String,
     pub memory_mb: u32,
@@ -505,6 +592,12 @@ pub struct MinecraftModpackCreateSpec {
     pub eula_accepted: bool,
     pub project_id: String,
     pub version_id: String,
+    #[serde(default, skip_serializing_if = "is_modrinth_provider")]
+    pub provider: ModpackProvider,
+}
+
+fn is_modrinth_provider(provider: &ModpackProvider) -> bool {
+    matches!(provider, ModpackProvider::Modrinth)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -518,6 +611,25 @@ pub enum MinecraftSoftware {
     Leaves,
     Fabric,
     NeoForge,
+    Forge,
+    Quilt,
+    Pufferfish,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModpackProvider {
+    #[default]
+    Modrinth,
+    Curseforge,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrariaSoftware {
+    #[default]
+    Vanilla,
+    Tmodloader,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1036,6 +1148,7 @@ mod tests {
             query: "adventure".to_owned(),
             offset: 20,
             limit: 20,
+            provider: ModpackProvider::Modrinth,
         })
         .expect("serialize modpack search");
         assert_eq!(search["operation"], "minecraft_modpack_search");
@@ -1053,6 +1166,7 @@ mod tests {
                 eula_accepted: true,
                 project_id: "AABBcc11".to_owned(),
                 version_id: "version22".to_owned(),
+                provider: ModpackProvider::Modrinth,
             },
         })
         .expect("serialize modpack create");

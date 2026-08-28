@@ -149,7 +149,7 @@ describe('Modrinth modpack contracts', () => {
     expect(() => parseModpackSearchPage({
       ...searchResponse,
       results: [{ ...searchResponse.results[0], web_url: 'https://example.com/modpack/fabric-adventure' }],
-    })).toThrow(/Modrinth URL/i);
+    })).toThrow(/invalid pack URL/i);
     expect(() => parseModpackProjectDetail({
       ...projectResponse,
       versions: [{ ...projectResponse.versions[0], mrpack_file: null }],
@@ -193,7 +193,7 @@ describe('Modrinth modpack contracts', () => {
     }, csrf);
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-      '/api/v1/servers/minecraft/modpacks/search?query=+fabric+adventure+&offset=0&limit=12',
+      '/api/v1/servers/minecraft/modpacks/search?query=+fabric+adventure+&offset=0&limit=12&provider=modrinth',
       '/api/v1/servers/minecraft/modpacks/projects/fabricPack1',
       '/api/v1/servers/minecraft/modpacks',
     ]);

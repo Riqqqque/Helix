@@ -1,7 +1,7 @@
 import { ApiError, expectArray, expectNumber, expectRecord, expectString, requestJson } from './api';
 import type { MinecraftSoftware } from './control-api';
 
-export type InstallableMinecraftSoftware = Extract<MinecraftSoftware, 'paper' | 'purpur' | 'folia' | 'leaves' | 'vanilla' | 'fabric' | 'custom'>;
+export type InstallableMinecraftSoftware = Extract<MinecraftSoftware, 'paper' | 'purpur' | 'folia' | 'leaves' | 'vanilla' | 'fabric' | 'neoforge' | 'forge' | 'quilt' | 'pufferfish' | 'custom'>;
 export type MinecraftCatalogStatus = 'ready' | 'validation_pending' | 'manual_build_required' | 'publisher_source_required' | 'topology_planned' | 'retired' | 'not_recommended' | 'platform_planned';
 
 export interface MinecraftSoftwareCatalogEntry {
@@ -31,7 +31,7 @@ export type ServerManagerReadiness =
       collectedAtUnixMs: number;
     };
 
-const installableSoftware = new Set<InstallableMinecraftSoftware>(['paper', 'purpur', 'folia', 'leaves', 'vanilla', 'fabric', 'custom']);
+const installableSoftware = new Set<InstallableMinecraftSoftware>(['paper', 'purpur', 'folia', 'leaves', 'vanilla', 'fabric', 'neoforge', 'forge', 'quilt', 'pufferfish', 'custom']);
 const catalogStatuses = new Set<MinecraftCatalogStatus>(['ready', 'validation_pending', 'manual_build_required', 'publisher_source_required', 'topology_planned', 'retired', 'not_recommended', 'platform_planned']);
 const catalogKinds = new Set<MinecraftSoftwareCatalogEntry['kind']>(['plugin_server', 'vanilla_server', 'mod_server', 'custom_server', 'proxy', 'hybrid_server', 'bedrock_server']);
 
@@ -67,7 +67,7 @@ export function parseServerManagerReadiness(value: unknown): ServerManagerReadin
     };
   }
   if (availability !== 'ready') throw new ApiError('Server manager readiness returned an invalid availability.');
-  const supported = stringList(root, 'supported_minecraft_software', 'server manager readiness', 16).map((entry) => {
+  const supported = stringList(root, 'supported_minecraft_software', 'server manager readiness', 24).map((entry) => {
     if (!installableSoftware.has(entry as InstallableMinecraftSoftware)) throw new ApiError('Server manager readiness returned unsupported Minecraft software.');
     return entry as InstallableMinecraftSoftware;
   });

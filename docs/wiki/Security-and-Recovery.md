@@ -39,19 +39,23 @@ Helix self-update remains unavailable.
 
 ## Security center
 
-The **Security** page is a first-class dashboard section. Each card explains
-what the control does, why Helix recommends it, and what changes if you turn
-it off. Recommended items are the defaults for a private LAN dashboard.
+The **Security** page is host-first. Cards cover firewall, SSH, kernel,
+Fail2ban, NTP, AppArmor, and Docker live-restore, plus short recommendations
+for a private game box. Helix-only items (CSRF, LAN bind, start-after-boot,
+Minecraft auto-forward, typed broker) live under the Helix filter.
 
 Writable switches still require typing an exact confirmation phrase:
 
 - start Helix after host boot;
 - forward Minecraft ports when creating a server;
-- enable or disable `unattended-upgrades` when that unit is already installed.
+- enable or disable `unattended-upgrades` when that unit is already installed;
+- enable or disable Fail2ban when that unit is already installed;
+- enable or disable systemd-timesyncd when that unit is already installed.
 
 Helix will not disable UFW from this page, rewrite sshd, or offer a root shell.
-CSRF pairing, the private LAN bind, AppArmor, SSH PermitRootLogin, ASLR, and
-Docker live-restore are observed and explained, not casual toggles.
+Sysctl values are observed, not rewritten. CSRF pairing, the private LAN bind,
+AppArmor, SSH directives, ASLR, and Docker live-restore are explained, not
+casual toggles.
 
 ## Data and recovery
 
