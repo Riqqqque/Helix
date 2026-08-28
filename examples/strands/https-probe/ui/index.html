@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HTTPS Probe</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<h1>HTTPS Probe</h1>
+<p class="lead">Helix only fetches origins listed in <code>helix:net.https</code>. Store a token here, then point the URL at a vacuum, battery, printer, or any other HTTPS JSON API.</p>
+<label for="url">HTTPS URL</label>
+<input id="url" value="https://api.open-meteo.com/v1/forecast?latitude=39.74&longitude=-104.99&current=temperature_2m">
+<label for="token">Optional Authorization header</label>
+<input id="token" type="password" placeholder="Bearer …" autocomplete="off">
+<button type="button" id="save">Save token in this Strand's storage</button>
+<button type="button" id="run">Fetch through Helix</button>
+<p id="status">Loading saved settings…</p>
+<pre id="out"></pre>
+</main>
+<script src="helix.js"></script>
+<script>
+document.documentElement.classList.toggle("is-widget", location.hash === "#helix-widget");
+var URL_KEY = "probe-url";
+var TOKEN_KEY = "auth-header";
+var LAST_KEY = "last-probe";
+function show(label, body) {
+  document.getElementById("status").textContent = label;
+  document.getElementById("out").textContent = body || "";
+}
+function loadSaved() {
+  return Promise.all([
+    helix.storage.get(URL_KEY),
+    helix.storage.get(TOKEN_KEY),
+    helix.storage.get(LAST_KEY)
+  ]).then(function (entries) {
+    if (entries[0] && entries[0].value) document.getElementById("url").value = entries[0].value;
+    if (entries[1] && entries[1].value) document.getElementById("token").value = entries[1].value;
+    if (entries[2] && entries[2].value) show("Last stored result", entries[2].value);
+    else show("No stored result yet.", "");
+  }).catch(function () {
+    show("Ready.", "");
+  });
+}
+document.getElementById("save").addEventListener("click", function () {
+  var url = document.getElementById("url").value.trim();
+  var token = document.getElementById("token").value.trim();
+  helix.storage.set(URL_KEY, url).then(function () {
+    return token ? helix.storage.set(TOKEN_KEY, token) : helix.storage.remove(TOKEN_KEY);
+  }).then(function () {
+    show("Saved in this Strand's key/value store.", "");
+  }).catch(function (error) {
+    show(error.message, "");
+  });
+});
+document.getElementById("run").addEventListener("click", function () {
+  var url = document.getElementById("url").value.trim();
+  var token = document.getElementById("token").value.trim();
+  var request = { method: "GET", url: url };
+  if (token) request.headers = { authorization: token };
+  show("Fetching…", "");
+  helix.net.fetch(request).then(function (response) {
+    var body = response.body || "";
+    return helix.storage.set(LAST_KEY, body).then(function () { return body; });
+  }).then(function (body) {
+    show("Fetched and stored.", body);
+  }).catch(function (error) {
+    show(error.message, "");
+  });
+});
+loadSaved();
+</script>
+</body>
+</html>

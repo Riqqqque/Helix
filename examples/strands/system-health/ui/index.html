@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>System Health</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<h1>System Health</h1>
+<p class="lead">Bounded host metrics from Helix. This Strand cannot read files, open a shell, or talk to helix-privd.</p>
+<div class="grid">
+  <div class="card"><span>CPU</span><strong id="cpu">—</strong></div>
+  <div class="card"><span>Memory</span><strong id="mem">—</strong></div>
+  <div class="card"><span>Uptime</span><strong id="up">—</strong></div>
+  <div class="card"><span>Helix</span><strong id="ver">—</strong></div>
+</div>
+<button type="button" id="refresh">Refresh</button>
+<pre id="raw" hidden></pre>
+</main>
+<script src="helix.js"></script>
+<script>
+document.documentElement.classList.toggle("is-widget", location.hash === "#helix-widget");
+function fmtBytes(value) {
+  if (typeof value !== "number" || !isFinite(value)) return "—";
+  var units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  var n = value;
+  var i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+  return n.toFixed(n >= 10 || i === 0 ? 0 : 1) + " " + units[i];
+}
+function load() {
+  helix.metrics.snapshot().then(function (snapshot) {
+    document.getElementById("cpu").textContent =
+      snapshot.cpuPercent == null ? "warming up" : snapshot.cpuPercent.toFixed(1) + "%";
+    document.getElementById("mem").textContent =
+      fmtBytes(snapshot.memoryUsedBytes) + " / " + fmtBytes(snapshot.memoryTotalBytes);
+    document.getElementById("up").textContent = Math.floor((snapshot.uptimeSeconds || 0) / 3600) + " h";
+    document.getElementById("ver").textContent = snapshot.helixVersion || "—";
+    document.getElementById("raw").hidden = location.hash !== "#helix-debug";
+    document.getElementById("raw").textContent = JSON.stringify(snapshot, null, 2);
+  }).catch(function (error) {
+    document.getElementById("cpu").textContent = error.message;
+  });
+}
+document.getElementById("refresh").addEventListener("click", load);
+load();
+</script>
+</body>
+</html>

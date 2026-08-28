@@ -21,6 +21,7 @@ import { OverviewRoute, preloadOverviewRoute } from './overview-route';
 import { readHomeFocus, saveHomeFocus } from './home-layout';
 import { getHostIntegration, type HostIntegration } from './host-api';
 import { HooksRoute, preloadHooksRoute } from './hooks-route';
+import { StrandsRoute, preloadStrandsRoute } from './strands-route';
 import { SecurityRoute, preloadSecurityRoute } from './security-route';
 import { Icon, type IconName } from './icons';
 import { InfoTip } from './info-tip';
@@ -61,6 +62,7 @@ const navigation: ReadonlyArray<{
   { id: 'terminal', label: 'Terminal', description: 'Direct Linux shell', icon: 'terminal' },
   { id: 'servers', label: 'Servers', description: 'Game server instances', icon: 'servers' },
   { id: 'hooks', label: 'Hooks', description: 'Connected services', icon: 'hooks' },
+  { id: 'strands', label: 'Strands', description: 'Installable extensions', icon: 'strands' },
   { id: 'settings', label: 'Settings', description: 'Dashboard and account', icon: 'settings' },
 ];
 
@@ -73,6 +75,7 @@ function preloadForSection(section: DashboardSectionId): (() => void) | undefine
   if (section === 'terminal') return preloadTerminalRoute;
   if (section === 'servers') return preloadServersRoute;
   if (section === 'hooks') return preloadHooksRoute;
+  if (section === 'strands') return preloadStrandsRoute;
   if (section === 'security') return preloadSecurityRoute;
   if (section === 'settings') return preloadSettingsRoute;
   return undefined;
@@ -684,6 +687,7 @@ export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated,
             {active === 'terminal' && <TerminalRoute csrfToken={csrfToken} canOpen={user.capabilities.includes('terminal.open')} onSessionExpired={onSessionExpired} />}
             {active === 'servers' && (serversEnabled ? <ServersRoute data={data} csrfToken={csrfToken} canManageServers={user.capabilities.includes('games.manage')} canManageBackups={user.capabilities.includes('games.backups.manage')} canManageNetwork={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} /> : <ServersModuleDisabled onEnable={() => dashboardPreferences.setServersEnabled(true)} />)}
             {active === 'hooks' && <HooksRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}
+            {active === 'strands' && <StrandsRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}
             {active === 'settings' && <SettingsRoute user={user} csrfToken={csrfToken} theme={theme} refreshIntervalMs={refreshIntervalMs} navigationOrder={navigationOrder} colors={dashboardPreferences.colors} serversEnabled={serversEnabled} preferenceSyncStatus={dashboardPreferences.syncStatus} hostIntegration={data.integration} servers={data.servers.data ?? []} onThemeChange={setTheme} onRefreshIntervalChange={changeRefreshInterval} onNavigationOrderChange={changeNavigationOrder} onColorsChange={dashboardPreferences.setColors} onServersEnabledChange={dashboardPreferences.setServersEnabled} onAccountUpdated={onAccountUpdated} onHostIntegrationRefresh={data.refresh} />}
           </main>
         </div>

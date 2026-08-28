@@ -37,7 +37,7 @@ describe('dashboard shell', () => {
     const sidebar = markup.match(/<nav[^>]*class="sidebar-nav"[^>]*>.*?<\/nav>/u)?.[0] ?? '';
     const links = Array.from(sidebar.matchAll(/href="([^"]+)"/gu), (match) => match[1]);
 
-    expect(links).toEqual(['#overview', '#home', '#storage', '#network', '#host', '#security', '#terminal', '#servers', '#hooks', '#settings']);
+    expect(links).toEqual(['#overview', '#home', '#storage', '#network', '#host', '#security', '#terminal', '#servers', '#hooks', '#strands', '#settings']);
     expect(sidebar).toContain('>Arrange<');
     expect(sidebar).toMatch(/nav-item nav-item--settings/u);
     expect(markup).not.toContain('Control plane');
@@ -72,12 +72,13 @@ describe('dashboard shell', () => {
       ['#terminal', 'Terminal'],
       ['#servers', 'Servers'],
       ['#hooks', 'Hooks'],
+      ['#strands', 'Strands'],
       ['#settings', 'Settings'],
     ] as const) {
       vi.stubGlobal('window', { location: { hash } });
       const markup = render(<Dashboard {...dashboardProps} />);
-      if (hash === '#home' || hash === '#hooks' || hash === '#terminal' || hash === '#overview') {
-        expect(markup).toContain(hash === '#home' ? 'Loading Home…' : hash === '#hooks' ? 'Loading Hooks…' : hash === '#overview' ? 'Loading Overview…' : 'Loading terminal…');
+      if (hash === '#home' || hash === '#hooks' || hash === '#terminal' || hash === '#overview' || hash === '#strands') {
+        expect(markup).toContain(hash === '#home' ? 'Loading Home…' : hash === '#hooks' ? 'Loading Hooks…' : hash === '#overview' ? 'Loading Overview…' : hash === '#strands' ? 'Loading Strands…' : 'Loading terminal…');
       } else {
         expect(markup).toContain(`<h1>${title}</h1>`);
       }

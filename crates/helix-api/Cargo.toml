@@ -15,6 +15,7 @@ helix-auth.workspace = true
 helix-core.workspace = true
 helix-privd.workspace = true
 helix-state.workspace = true
+helix-strand-kit.workspace = true
 helix-system.workspace = true
 helix-terminal.workspace = true
 mime.workspace = true

@@ -29,15 +29,15 @@ against a host with irreplaceable data or active users. A capacity claim also
 needs the exact game/version/hardware/configuration/load evidence; a synthetic
 fixture proves only control-plane bounds.
 
-## Preview Strand projects
+## Installable UI Strands
 
 ```text
-helixctl strand new system-health --name "System Health"
-helixctl strand check system-health
+helixctl strand new vacuum-status --name "Vacuum status"
+helixctl strand check vacuum-status
+helixctl strand pack vacuum-status -o vacuum-status.strand.zip
 ```
 
-These commands create and validate metadata without installing or executing an
-extension. See
+Pack a zip, then install it from the dashboard Strands page. See
 [Building Strands](https://github.com/Riqqqque/Helix/wiki/Building-Strands).
 
 More detail:

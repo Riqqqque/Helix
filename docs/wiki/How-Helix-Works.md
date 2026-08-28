@@ -22,9 +22,10 @@ instances and files.
 The Home page is deliberately modular: widgets can be added, moved, resized,
 renamed, recolored, and removed across multiple exportable layouts without
 installing an extension. Hooks connects exact host services without granting a
-third party a runtime inside Helix. Strands are the future third-party extension
-model. Today the Strand Kit validates preview manifests only and cannot install
-or execute code.
+third party a runtime inside Helix. Strands are installable UI-only packages:
+drop a `.strand.zip` or paste an https zip URL, review the host calls, and
+Enable. They cannot call helix-privd or open a shell. Portable Wasm is still
+not a runtime.
 
 The optional terminal is not a root-broker command. A fresh dashboard-password
 proof opens a one-use connection to a separate service running as one normal

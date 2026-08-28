@@ -10,6 +10,7 @@ export const primaryDashboardSections = [
   'terminal',
   'servers',
   'hooks',
+  'strands',
 ] as const satisfies ReadonlyArray<DashboardSectionId>;
 
 export type PrimaryDashboardSectionId = (typeof primaryDashboardSections)[number];

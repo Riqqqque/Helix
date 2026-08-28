@@ -242,20 +242,18 @@ support.
 
 ## Phase 9 — Strands and automation
 
-**Status: NOT STARTED beyond author preview tooling**
+**Status: PARTIAL — installable UI-only Strands**
 
-The current Strand Kit scaffolds and validates a zero-capability manifest. It
-does not install or run code.
+Owners can pack, review, install, enable, share, and open `helix.strand/1`
+UI-only packages. Host calls are metrics, namespaced KV, and allowlisted HTTPS.
+There is no Helix-operated store and no package signatures.
 
-Before a runtime exists, Helix needs:
+Still later:
 
-- a stable versioned package and SDK;
-- capability review, grants, revocation, and audit;
-- an optional isolated host with CPU/memory/I/O/storage/network limits;
-- namespaced state and mediated secret handles;
-- isolated lazy UI contributions;
-- package provenance and update review; and
-- hostile-message, timeout, crash, and exhaustion tests.
+- portable Wasm / `helix-strandd`;
+- native sidecars;
+- signed provenance and auto-update;
+- automation jobs driven by Strand events.
 
 Native sidecars remain trusted code, not a sandbox.
 

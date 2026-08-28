@@ -680,6 +680,7 @@ dependencies = [
  "helix-core",
  "helix-privd",
  "helix-state",
+ "helix-strand-kit",
  "helix-system",
  "helix-terminal",
  "mime",
@@ -790,10 +791,12 @@ dependencies = [
  "rustix",
  "semver",
  "serde",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "toml",
  "uuid",
+ "zip",
 ]
 
 [[package]]

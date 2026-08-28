@@ -1,0 +1,13 @@
+:root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#10140f;color:#e8edd8}
+body{margin:0;padding:20px}
+main{max-width:640px}
+h1{font-size:1.35rem;margin:0 0 8px}
+p,pre,li{color:#b7c0a4}
+pre{white-space:pre-wrap;background:#1a2118;border:1px solid #2a3326;border-radius:10px;padding:12px}
+button{border:0;border-radius:8px;padding:8px 12px;background:#d7f64d;color:#10140f;font-weight:650}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0}
+.card{padding:12px;border:1px solid #2a3326;border-radius:10px;background:#1a2118}
+.card strong{display:block;font-size:1.2rem;color:#e8edd8}
+html.is-widget body{padding:12px}
+html.is-widget .lead{display:none}
+html.is-widget .grid{margin:8px 0}

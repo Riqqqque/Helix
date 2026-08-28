@@ -43,7 +43,7 @@ describe('whole-host reboot confirmation', () => {
       csrfToken: 'csrf',
       theme: 'oled',
       refreshIntervalMs: 1_000,
-      navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks'],
+      navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands'],
       colors: { accent: '', text: '', surface: '' },
       serversEnabled: true,
       preferenceSyncStatus: 'synced',

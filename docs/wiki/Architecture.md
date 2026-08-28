@@ -29,8 +29,9 @@ flowchart LR
   instances, files, and credentials.
 - Long or risky operations use bounded jobs and per-instance concurrency
   guards. Current broker job status is not a crash-persistent queue.
-- Home widgets are built into Helix. The Strand Kit can scaffold and validate
-  preview metadata, but no third-party Strand installation/runtime exists.
+- Home widgets are built into Helix. An enabled Strand that declared
+  `helix:ui.widget` can also be pinned as a Home widget. UI-only Strands install
+  from an owner-authorized zip; portable Wasm is not a runtime.
 
 Network evidence deliberately keeps a local listener, Docker publication, UFW
 allowance, and outside reachability separate. A green value in one layer does

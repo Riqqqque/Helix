@@ -113,8 +113,11 @@ mutates anyway, reports false success, or bypasses its boundary is in scope.
   records lifecycle authorization events, not terminal input or output.
 - Tailscale may provide an already configured private route; Helix does not
   install or manage it.
-- The Strand Kit validates preview metadata only. No third-party extension
-  runtime or sandbox is active.
+- UI-only Strands install as owner-authorized zips. They run in a sandboxed
+  iframe and only receive the host calls granted at Enable (`metrics`, namespaced
+  KV, allowlisted HTTPS). They cannot call `helix-privd`, open a shell, or reach
+  private/link-local/metadata addresses. Portable Wasm and native sidecars are
+  not a runtime. Unsigned zips are not scanned.
 
 Unrestricted root or a compromised kernel/firmware can inspect memory, replace
 binaries and keys, forge local records, alter containers/firewall/timers, and

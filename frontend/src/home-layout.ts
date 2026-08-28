@@ -1,4 +1,4 @@
-export type HomeWidgetKind = 'clock' | 'host' | 'servers' | 'storage' | 'weather' | 'note' | 'shortcut' | 'graphs' | 'docker';
+export type HomeWidgetKind = 'clock' | 'host' | 'servers' | 'storage' | 'weather' | 'note' | 'shortcut' | 'graphs' | 'docker' | 'strand';
 export type HomeWidgetSize = 'compact' | 'wide' | 'full';
 export type HomeWidgetHeight = 'short' | 'medium' | 'tall';
 
@@ -36,7 +36,7 @@ export interface NoteWidgetConfiguration {
 const STORAGE_KEY = 'helix.home.widgets';
 const TEMPLATES_STORAGE_KEY = 'helix.home.templates';
 const ACTIVE_HOME_STORAGE_KEY = 'helix.home.active-template';
-const kinds = new Set<HomeWidgetKind>(['clock', 'host', 'servers', 'storage', 'weather', 'note', 'shortcut', 'graphs', 'docker']);
+const kinds = new Set<HomeWidgetKind>(['clock', 'host', 'servers', 'storage', 'weather', 'note', 'shortcut', 'graphs', 'docker', 'strand']);
 const sizes = new Set<HomeWidgetSize>(['compact', 'wide', 'full']);
 const heights = new Set<HomeWidgetHeight>(['short', 'medium', 'tall']);
 const MAX_HOME_TEMPLATES = 8;
@@ -149,7 +149,11 @@ export function normalizeHomeWidgets(value: unknown): HomeWidget[] {
         : 'medium',
       title: cleanText(record.title, 80).trim() || kind,
       content: cleanText(record.content, 8_000),
-      url: kind === 'shortcut' ? cleanText(record.url, 2_048) : '',
+      url: kind === 'shortcut'
+        ? cleanText(record.url, 2_048)
+        : kind === 'strand' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(cleanText(record.url, 36))
+          ? cleanText(record.url, 36)
+          : '',
       color: normalizeWidgetColor(record.color),
     });
   }

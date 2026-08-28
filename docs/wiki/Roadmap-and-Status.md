@@ -29,6 +29,7 @@ and explicit confirmation. Public exposure is not supported. Modpack create is a
 Modrinth or public CurseForge catalogs, not a full client copy. Unknown loaders
 and every upstream pack remain unclaimed.
 
-The Strand Kit can scaffold and validate a zero-capability preview manifest.
-No Strand can be installed or executed yet. Modular Home widgets are built into
-Helix and do not imply that a third-party extension runtime exists.
+Owners can install UI-only Strands from a zip or https zip URL after reviewing
+the exact host calls. Portable Wasm, native sidecars, signatures, and a
+Helix-operated store are still not a runtime. Modular Home widgets are built
+into Helix; a Strand can also be pinned there when it declares `helix:ui.widget`.

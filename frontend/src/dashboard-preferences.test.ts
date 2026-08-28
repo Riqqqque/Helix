@@ -23,6 +23,7 @@ describe('dashboard preferences', () => {
       'security',
       'terminal',
       'hooks',
+      'strands',
     ]);
   });
 

@@ -10,8 +10,8 @@ server.
 
 ## Navigation and refresh
 
-Overview, Home, Storage, Network, Host, Security, Terminal, Servers, and Hooks
-are full pages. An empty URL fragment opens Home so a pinned tab lands on the
+Overview, Home, Storage, Network, Host, Security, Terminal, Servers, Hooks, and
+Strands are full pages. An empty URL fragment opens Home so a pinned tab lands on the
 dashboard. Settings stays at the bottom of the sidebar. Choose **Arrange**
 beside Pages to move the primary pages up or down; the order follows the owner
 account.
@@ -42,9 +42,10 @@ and accent color. The grid reflows at desktop, tablet, and mobile widths, so a
 layout with one widget and a layout at the configured maximum both stay usable.
 
 Available widgets are Clock, Host pulse, Live graphs, Servers, Storage, Docker,
-Weather, Notes, and Shortcut. Shortcuts accept only validated HTTP(S) URLs and
-open in a new tab. While editing, **Import from Homarr** reads Homarr apps that
-already have an http(s) address. Current Homarr stores those in SQLite; older
+Weather, Notes, Shortcut, and Strand. Shortcuts accept only validated HTTP(S)
+URLs and open in a new tab. Strand widgets embed an enabled package that
+declared `helix:ui.widget`. While editing, **Import from Homarr** reads Homarr
+apps that already have an http(s) address. Current Homarr stores those in SQLite; older
 Homarr JSON configs still work. Relative icons, notes, and Homarr-only apps stay
 in Homarr. Shortcuts already on this Home are left unchecked. **Full screen**
 hides the sidebar and the top bar (Helix, refresh, theme, account). Exit full

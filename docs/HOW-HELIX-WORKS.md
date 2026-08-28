@@ -135,10 +135,12 @@ adapter, exposes only verified supported lifecycle actions, and links to the
 upstream panel for deeper settings. An absent service receives guided official
 setup instead of an unsafe remote install script or a fake connected state.
 
-Strands are the planned third-party extension unit. The current Strand Kit can
-scaffold and validate a zero-capability preview manifest, but Helix cannot
-install or execute a Strand. Built-in Home modularity is not evidence that an
-extension sandbox exists.
+Strands are installable UI-only extensions. An owner can drop someone else's
+`.strand.zip` onto the Strands page, review the exact host calls, and Enable it.
+The package runs in a sandboxed iframe and may call bounded metrics, its own
+key/value store, and allowlisted HTTPS APIs. Portable Wasm and native sidecars
+are not a runtime. Built-in Home modularity is separate from Strands; a Home
+widget can embed an enabled Strand that declared `helix:ui.widget`.
 
 ## Data and recovery
 
