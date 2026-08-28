@@ -52,6 +52,8 @@ COPY --from=rust-build /tmp/helixd /layout/app/bin/helixd
 COPY --from=rust-build /tmp/helixctl /layout/app/bin/helixctl
 COPY --from=rust-build /usr/lib/*/libgcc_s.so.1 /layout/app/lib/libgcc_s.so.1
 COPY --from=frontend-build /build/frontend/dist /layout/app/web
+RUN find /layout/app/web -type d -exec chmod 0755 {} + && \
+    find /layout/app/web -type f -exec chmod 0444 {} +
 COPY --chmod=0444 deploy/helix-container.toml /layout/app/config/helix.toml
 COPY --chmod=0444 LICENSE /layout/app/LICENSE
 

@@ -1,6 +1,6 @@
 # Helix Progress
 
-Last updated: 2026-08-27
+Last updated: 2026-08-28
 
 This is the implementation ledger. [ROADMAP.md](ROADMAP.md) describes intended
 ordering; it is not evidence that a feature works.
@@ -71,6 +71,19 @@ was performed during this pass.
 This is useful target-host evidence, not a clean-install or public-release
 matrix. The broader destructive fault, recovery, hostile-peer, authenticated
 browser-terminal, and supported-host gates below remain open.
+
+## 2026-08-28 in-place upgrade
+
+The same private Ubuntu host was upgraded in place to git `cb37f20` (native
+Kill) plus a dashboard image that forces packaged web assets to mode `0444`.
+The first new image refused to start because `favicon-32.png` arrived with
+group-write bits. After the mode fix, dashboard and gateway were healthy,
+`helixctl doctor --full` passed on schema 7, the LAN gateway returned HTTP 204,
+and only the two Helix web containers changed identity. The native Minecraft
+container, AMP instances, and other Docker workloads kept their previous IDs
+and stayed running. Helix-privd and helix-terminald were replaced from the
+same build. No reboot, firewall mutation, marketplace install, or live game
+stop was performed.
 
 ## Explicit unsupported states
 
