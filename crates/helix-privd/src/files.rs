@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use helix_privd::{
-    FileUploadPurpose, MAX_CONCURRENT_FILE_UPLOADS, MAX_CUSTOM_JAR_UPLOAD_BYTES,
-    MAX_FILE_UPLOAD_CHUNK_BYTES, MAX_STORAGE_UPLOAD_BYTES, StorageAnalysisMode,
+    FileUploadPurpose, MAX_CONCURRENT_FILE_UPLOADS, MAX_FILE_UPLOAD_CHUNK_BYTES,
+    MAX_STORAGE_UPLOAD_BYTES, StorageAnalysisMode,
 };
 use serde::Serialize;
 use serde_json::{Value, json};

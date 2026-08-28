@@ -425,7 +425,7 @@ fn ssh_permit_root() -> FlagState {
             detail: "sshd_config is too large to parse".to_owned(),
         };
     }
-    let mut value = "default";
+    let mut found = String::from("default");
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -435,20 +435,25 @@ fn ssh_permit_root() -> FlagState {
             continue;
         };
         if key.eq_ignore_ascii_case("PermitRootLogin") {
-            value = rest.trim();
+            found = rest.trim().chars().take(32).collect();
         }
     }
-    let permissive = matches!(
-        value.to_ascii_lowercase().as_str(),
-        "yes" | "without-password" | "forced-commands-only"
-    );
+    let (state, permissive, enabled) = match found.to_ascii_lowercase().as_str() {
+        "yes" => ("yes", true, true),
+        "without-password" => ("without-password", true, true),
+        "prohibit-password" => ("prohibit-password", false, true),
+        "forced-commands-only" => ("forced-commands-only", true, true),
+        "no" => ("no", false, false),
+        "default" => ("default", false, true),
+        _ => ("other", true, true),
+    };
     FlagState {
-        state: value,
-        enabled: !matches!(value.to_ascii_lowercase().as_str(), "no"),
+        state,
+        enabled,
         available: false,
         recommended: false,
         permissive,
-        detail: value.to_owned(),
+        detail: found,
     }
 }
 

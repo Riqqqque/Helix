@@ -33,8 +33,7 @@ use files::{FileManager, MAX_CONFIGURED_ROOTS, StorageAnalysisManager};
 use helix_privd::{
     BrokerClient, BrokerRequest, BrokerResponse, DockerContainerActionKind, FileUploadPurpose,
     FileUploadTarget, HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec,
-    MinecraftSoftware, PackageUpdateCandidate, ServerNetworkExposure, VRisingCreateSpec,
-    read_frame, write_frame,
+    PackageUpdateCandidate, ServerNetworkExposure, VRisingCreateSpec, read_frame, write_frame,
 };
 #[cfg(target_os = "linux")]
 use hook_install::{HookInstaller, HookInstallerConfig};
@@ -200,13 +199,17 @@ impl BrokerContext {
             BrokerRequest::ManageHookService { hook_id, action } => {
                 self.manage_hook_service(&hook_id, action)
             }
-            BrokerRequest::DockerInventory {} => self.host_control()?.docker_inventory(),
+            BrokerRequest::DockerInventory {} => {
+                self.host_control().and_then(|host| host.docker_inventory())
+            }
             BrokerRequest::DockerContainerAction {
                 name,
                 action,
                 confirmation,
             } => self.docker_container_action(&name, action, &confirmation),
-            BrokerRequest::HomarrWidgetCatalog {} => self.host_control()?.homarr_widget_catalog(),
+            BrokerRequest::HomarrWidgetCatalog {} => self
+                .host_control()
+                .and_then(|host| host.homarr_widget_catalog()),
             BrokerRequest::SecurityInventory {} => self.security_inventory(),
             BrokerRequest::SetSecurityControl {
                 id,
