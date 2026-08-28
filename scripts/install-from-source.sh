@@ -15,9 +15,14 @@ fail() {
   exit 1
 }
 
+if ((BASH_VERSINFO[0] < 4)); then
+  fail "this installer needs Bash 4 or newer"
+fi
+
 usage() {
   cat <<'USAGE'
 Usage: ./scripts/install-from-source.sh [--no-start] [--install-deps]
+       ./scripts/install-from-source.sh --print-family
 
 Build Helix from this checkout and install helixd as a systemd service.
 
@@ -32,10 +37,22 @@ local package, not a supported production installer.
 USAGE
 }
 
+os_release_file() {
+  # /etc/os-release is a symlink to /usr/lib/os-release on Debian, Ubuntu,
+  # Fedora, Arch, and most other systemd distros. Follow it.
+  if [[ -f /etc/os-release ]]; then
+    printf '%s' /etc/os-release
+  elif [[ -f /usr/lib/os-release ]]; then
+    printf '%s' /usr/lib/os-release
+  else
+    return 1
+  fi
+}
+
 os_release_field() {
   local key=$1
-  local file=/etc/os-release
-  [[ -f "$file" && ! -L "$file" ]] || return 1
+  local file
+  file="$(os_release_file)" || return 1
   awk -F= -v key="$key" '
     $1 == key {
       value = substr($0, index($0, "=") + 1)
@@ -55,19 +72,23 @@ pkg_family() {
   id=${id,,}
   like=${like,,}
   case "$id" in
-    ubuntu|debian|linuxmint|pop|elementary|raspbian|raspberrypi|zorin|kali|devuan|neon)
+    nixos|guix)
+      printf 'nix'
+      return 0
+      ;;
+    ubuntu|debian|linuxmint|pop|elementary|raspbian|raspberrypi|zorin|kali|devuan|neon|deepin|uos|mx|antix|parrot|pureos|trisquel|linuxlite|peppermint|bodhi|sparky|siduction|knoppix|tails)
       printf 'debian'
       return 0
       ;;
-    fedora|rhel|centos|rocky|almalinux|ol|amzn|nobara)
+    fedora|rhel|centos|rocky|almalinux|ol|amzn|nobara|bazzite|ultramarine|openeuler|opencloudos|anolis|mageia|openmandriva|azurelinux|mariner|photon)
       printf 'fedora'
       return 0
       ;;
-    opensuse-leap|opensuse-tumbleweed|opensuse|sles|sled)
+    opensuse-leap|opensuse-tumbleweed|opensuse|opensuse-microos|sles|sled|sle-micro|sl-micro)
       printf 'suse'
       return 0
       ;;
-    arch|manjaro|endeavouros|garuda|cachyos|archcraft)
+    arch|manjaro|endeavouros|garuda|cachyos|archcraft|arcolinux|archarm|steamos|artix)
       printf 'arch'
       return 0
       ;;
@@ -75,14 +96,33 @@ pkg_family() {
       printf 'alpine'
       return 0
       ;;
+    gentoo|funtoo|calculate)
+      printf 'gentoo'
+      return 0
+      ;;
   esac
   case " $like " in
     *" debian "*|*" ubuntu "*) printf 'debian'; return 0 ;;
-    *" fedora "*|*" rhel "*|*" centos "*) printf 'fedora'; return 0 ;;
-    *" suse "*) printf 'suse'; return 0 ;;
+    *" fedora "*|*" rhel "*|*" centos "*|*" mageia "*) printf 'fedora'; return 0 ;;
+    *" suse "*|*" opensuse "*) printf 'suse'; return 0 ;;
     *" arch "*) printf 'arch'; return 0 ;;
+    *" gentoo "*) printf 'gentoo'; return 0 ;;
   esac
   printf 'unknown'
+}
+
+rpm_installer() {
+  if command -v dnf >/dev/null 2>&1; then
+    printf 'dnf'
+  elif command -v yum >/dev/null 2>&1; then
+    printf 'yum'
+  elif command -v microdnf >/dev/null 2>&1; then
+    printf 'microdnf'
+  elif command -v tdnf >/dev/null 2>&1; then
+    printf 'tdnf'
+  else
+    return 1
+  fi
 }
 
 print_rust_and_node() {
@@ -111,7 +151,9 @@ EOF
       ;;
     fedora)
       cat <<'EOF'
-  sudo dnf install -y gcc gcc-c++ make pkgconf-pkg-config git curl ca-certificates
+  sudo dnf install -y gcc gcc-c++ make git curl ca-certificates
+  sudo dnf install -y pkgconf-pkg-config || sudo dnf install -y pkgconfig || sudo dnf install -y pkgconf
+  Amazon Linux 2 and some RHEL 7 hosts use yum instead of dnf.
 EOF
       ;;
     suse)
@@ -126,15 +168,33 @@ EOF
       ;;
     alpine)
       cat <<'EOF'
-  sudo apk add build-base pkgconf git curl ca-certificates
-  Alpine's default OpenRC image is not enough; helixd needs systemd as PID 1.
+  sudo apk add bash coreutils util-linux findutils build-base pkgconf git curl ca-certificates
+  Alpine's default OpenRC image is not enough; helixd needs systemd as PID 1
+  and GNU coreutils (not BusyBox) for the package scripts.
+EOF
+      ;;
+    gentoo)
+      cat <<'EOF'
+  sudo emerge --ask=n --noreplace --quiet-build=y \
+    sys-devel/gcc sys-devel/make virtual/pkgconfig \
+    dev-vcs/git net-misc/curl app-misc/ca-certificates
+  Gentoo may compile gcc if it is not already installed; that can take a long time.
+EOF
+      ;;
+    nix)
+      cat <<'EOF'
+  This installer writes FHS paths (/usr/bin/helixd, systemd units under
+  /usr/lib). NixOS and Guix are not targets. Use Debian, Fedora, openSUSE,
+  Arch, or another systemd GNU/Linux distro, or run helixd from this checkout
+  with cargo.
 EOF
       ;;
     *)
       cat <<'EOF'
-  Install a C compiler, pkg-config, git, curl, and CA certificates with this
-  distribution's package manager. GNU coreutils (sha256sum, install, realpath)
-  and util-linux (flock) are required for the local package scripts.
+  Install a C compiler, pkg-config or pkgconf, git, curl, CA certificates,
+  Bash 4+, GNU coreutils (sha256sum --strict, install, realpath -e, mktemp
+  --tmpdir), and util-linux (flock, mountpoint) with this distribution's
+  package manager.
 EOF
       ;;
   esac
@@ -150,6 +210,24 @@ print_prereqs() {
   printf '\nOr pass --install-deps to install only the compiler packages above.\n' >&2
 }
 
+install_fedora_packages() {
+  local pm
+  pm="$(rpm_installer)" ||
+    fail "need dnf, yum, microdnf, or tdnf on this RPM host"
+  printf 'Using %s to install compiler packages...\n' "$pm"
+  sudo -- "$pm" install -y gcc gcc-c++ make git curl ca-certificates
+  if sudo -- "$pm" install -y pkgconf-pkg-config; then
+    return 0
+  fi
+  if sudo -- "$pm" install -y pkgconfig; then
+    return 0
+  fi
+  if sudo -- "$pm" install -y pkgconf; then
+    return 0
+  fi
+  fail "could not install a pkg-config provider (pkgconf-pkg-config, pkgconfig, or pkgconf)"
+}
+
 install_distro_packages() {
   local family
   family="$(pkg_family)"
@@ -157,22 +235,33 @@ install_distro_packages() {
   case "$family" in
     debian)
       sudo -- apt-get update
-      sudo -- apt-get install -y build-essential pkg-config git curl ca-certificates
+      if ! sudo -- apt-get install -y build-essential pkg-config git curl ca-certificates; then
+        sudo -- apt-get install -y gcc g++ make pkg-config git curl ca-certificates
+      fi
       ;;
     fedora)
-      sudo -- dnf install -y gcc gcc-c++ make pkgconf-pkg-config git curl ca-certificates
+      install_fedora_packages
       ;;
     suse)
-      sudo -- zypper install -y gcc gcc-c++ make pkg-config git curl ca-certificates
+      sudo -- zypper --non-interactive install --auto-agree-with-licenses \
+        gcc gcc-c++ make pkg-config git curl ca-certificates
       ;;
     arch)
       sudo -- pacman -S --needed --noconfirm base-devel pkgconf git curl ca-certificates
       ;;
     alpine)
-      sudo -- apk add build-base pkgconf git curl ca-certificates
+      sudo -- apk add bash coreutils util-linux findutils build-base pkgconf git curl ca-certificates
+      ;;
+    gentoo)
+      sudo -- emerge --ask=n --noreplace --quiet-build=y \
+        sys-devel/gcc sys-devel/make virtual/pkgconfig \
+        dev-vcs/git net-misc/curl app-misc/ca-certificates
+      ;;
+    nix)
+      fail "this installer writes /usr FHS paths; NixOS and Guix are not targets"
       ;;
     *)
-      fail "this host's package manager is not one of apt, dnf, zypper, pacman, or apk; install gcc, pkg-config, git, and curl by hand"
+      fail "this host's package manager is not one of apt, dnf/yum, zypper, pacman, apk, or emerge; install gcc, pkg-config, git, and curl by hand"
       ;;
   esac
 }
@@ -186,6 +275,11 @@ while (($# > 0)); do
     --install-deps)
       install_deps=1
       shift
+      ;;
+    --print-family)
+      pkg_family
+      printf '\n'
+      exit 0
       ;;
     -h|--help)
       usage
@@ -207,6 +301,11 @@ case "$machine" in
   *) fail "the local package is built for 64-bit x86_64 and aarch64 (found $machine)" ;;
 esac
 
+family="$(pkg_family)"
+if [[ "$family" == "nix" ]]; then
+  fail "this installer writes /usr FHS paths; NixOS and Guix are not targets. Use a systemd GNU/Linux distro or run helixd from this checkout"
+fi
+
 if [[ ! -e /sys/fs/cgroup/cgroup.controllers ]]; then
   printf 'warning: cgroup v2 is not visible; host resource views may be incomplete.\n' >&2
 fi
@@ -216,17 +315,45 @@ if ((install_deps == 1)); then
 fi
 
 missing=()
-for required_command in rustc cargo node npm git sudo pkg-config; do
+for required_command in rustc cargo node npm git sudo; do
   command -v "$required_command" >/dev/null 2>&1 || missing+=("$required_command")
 done
+if command -v pkg-config >/dev/null 2>&1; then
+  :
+elif command -v pkgconf >/dev/null 2>&1; then
+  export PKG_CONFIG
+  PKG_CONFIG="$(command -v pkgconf)"
+else
+  missing+=("pkg-config")
+fi
 if ! command -v cc >/dev/null 2>&1 &&
   ! command -v gcc >/dev/null 2>&1 &&
   ! command -v clang >/dev/null 2>&1; then
   missing+=("c-compiler")
 fi
 if ! command -v sha256sum >/dev/null 2>&1 ||
-  ! sha256sum --help >/dev/null 2>&1; then
+  ! sha256sum --help >/dev/null 2>&1 ||
+  ! sha256sum --help 2>&1 | grep -q -- '--strict'; then
   missing+=("gnu-sha256sum")
+fi
+if ! command -v realpath >/dev/null 2>&1 ||
+  ! realpath -e / >/dev/null 2>&1; then
+  missing+=("gnu-realpath")
+fi
+gnu_mktemp=""
+if command -v mktemp >/dev/null 2>&1; then
+  gnu_mktemp="$(mktemp --tmpdir="${TMPDIR:-/tmp}" helix-gnu-check.XXXXXX 2>/dev/null || true)"
+fi
+if [[ -z "$gnu_mktemp" || ! -f "$gnu_mktemp" ]]; then
+  missing+=("gnu-mktemp")
+else
+  rm -f -- "$gnu_mktemp"
+fi
+if ! command -v flock >/dev/null 2>&1; then
+  missing+=("util-linux-flock")
+fi
+if ! command -v mountpoint >/dev/null 2>&1; then
+  missing+=("util-linux-mountpoint")
 fi
 if ((${#missing[@]} > 0)); then
   printf 'error: missing build tools: %s\n' "${missing[*]}" >&2

@@ -40,14 +40,17 @@ sudo -u helix -- helixctl --config /etc/helix/helix.toml setup-token
 ```
 
 Open http://127.0.0.1:8080 and paste the token. If a C toolchain is missing,
-the script prints apt, dnf, zypper, pacman, or apk commands. Pass
+the script prints apt, dnf/yum, zypper, pacman, apk, or emerge commands. Pass
 `--install-deps` to install those packages. Rust 1.88+ and Node.js 22.12+ are
 still required; rustup is the usual way to get a new enough compiler. First
 compile takes a while.
 
-Debian/Ubuntu CI covers the package lifecycle. Fedora, openSUSE, and Arch are
-intended source-install targets with systemd and GNU coreutils. OpenRC/Alpine
-default images are not enough. Selected APT updates, UFW writes, and one-click
+Debian/Ubuntu CI covers the package lifecycle. Fedora, RHEL-family, openSUSE,
+Arch, and other systemd GNU/Linux distros are intended source-install targets.
+The installer follows `/etc/os-release` even when it is a symlink, accepts
+`pkgconf` when `pkg-config` is missing, and requires GNU coreutils plus
+util-linux (BusyBox is not enough). OpenRC-only Alpine, NixOS, and Guix are
+not installer targets. Selected APT updates, UFW writes, and one-click
 Tailscale/Jellyfin installs remain Debian-family features.
 
 ## Build the source

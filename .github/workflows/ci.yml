@@ -62,6 +62,10 @@ jobs:
           scripts/build-release.sh
           scripts/test-linux-package.sh
 
+      - name: Detect Ubuntu as a Debian-family host
+        if: matrix.toolchain == 'stable'
+        run: test "$(./scripts/install-from-source.sh --print-family)" = debian
+
       - name: Run ShellCheck
         if: matrix.toolchain == 'stable'
         run: >-
