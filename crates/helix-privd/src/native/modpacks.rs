@@ -1,9 +1,8 @@
 use super::{
     InstanceManifest, MANIFEST_VERSION, MAX_METADATA_BYTES, MAX_SERVER_JAR_BYTES,
     MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSoftware, NativeManager,
-    allocate_rcon_port, allocate_run_uid, instance_name,
-    marketplace::modrinth_icon_proxy_url, now_unix_ms, server_properties, validate_create_spec,
-    write_manifest, write_new_file,
+    allocate_rcon_port, allocate_run_uid, instance_name, marketplace::modrinth_icon_proxy_url,
+    now_unix_ms, server_properties, validate_create_spec, write_manifest, write_new_file,
 };
 use helix_privd::mrpack::{
     MrpackLimits, extract_overrides, inspect_mrpack, prepare_download_path,
