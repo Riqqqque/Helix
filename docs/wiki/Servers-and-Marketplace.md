@@ -3,13 +3,13 @@
 ## Choosing a game
 
 Choose **New Server** and then a game. Minecraft is the current native Linux
-Java runtime. V Rising uses a Helix-owned Wine container around the official
-Windows dedicated server. The chooser shows original Helix marks, not publisher
-artwork: an isometric grass block for Minecraft and a blood-moon castle for
-V Rising.
+Java runtime. V Rising installs the official dedicated server into an isolated
+Helix container. The chooser shows original Helix marks, not publisher artwork:
+an isometric grass block for Minecraft and a blood-moon castle for V Rising.
 
-The server list can be filtered by game, manager, and state. Helix-native and
-imported servers keep visibly different ownership labels.
+The server list can be filtered to **Helix** (native servers only), Minecraft,
+V Rising, or imported Connections. Helix-native and imported servers keep
+visibly different ownership labels.
 
 Owner setup asks whether to include the Servers page. Existing owners keep it.
 Settings can hide or restore it later; hiding the page does not stop running
@@ -18,16 +18,16 @@ game containers.
 ## Native V Rising
 
 V Rising is not a Linux dedicated server. Helix builds `helix-vrising-runtime:1`
-from an embedded Dockerfile (Debian, Wine64, Xvfb, SteamCMD) the first time you
-create a V Rising server. Game files, saves, Wine prefix, and a SteamCMD copy
-live in that instance’s data directory. The host never receives Wine packages.
+from an embedded Dockerfile the first time you create a V Rising server. Game
+files, saves, and the isolated runtime live in that instance’s data directory.
+The host never receives Wine packages.
 
-First create acknowledges the unofficial Wine path, picks a UDP game/query pair
-from the V Rising pool (default 9876–9910), and can take a long time while
-SteamCMD downloads app 1829350. Public UPnP is not offered. Player counts are
-not queried. There is no RCON command console and no Modrinth marketplace.
-Host settings live in `save/Settings/ServerHostSettings.json` under Files.
-Update restarts the container so SteamCMD runs again.
+Create is one click after you pick a name, memory, and UDP ports. Public UPnP
+is not offered. Player counts are not queried. There is no RCON command console
+and no Modrinth marketplace. Backups, start-on-boot, files, and logs work the
+same way as Minecraft. Host settings live in `save/Settings/ServerHostSettings.json`
+under Files. Update restarts the container so SteamCMD runs again.
+Uninstalling the last V Rising server removes the runtime image.
 
 When the last **active** V Rising server is removed, Helix deletes the runtime
 image. Trashed data stays recoverable; restore rebuilds the image if needed.

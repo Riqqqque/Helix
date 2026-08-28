@@ -8,13 +8,17 @@ complete API. The built-in catalog currently knows about:
 - Plex Media Server;
 - AMP;
 - Tailscale;
-- Pterodactyl Wings; and
-- Jellyfin.
+- Pterodactyl Wings;
+- Jellyfin; and
+- Docker, including every container on the host and Open Portainer when that
+  container is published.
 
 The protected broker configuration decides which exact systemd units are
-controllable. Installed services report running and start-after-boot state.
-Supported buttons issue only start, stop, restart, enable, or disable for that
-exact unit and verify the result. AMP uses its separate loopback API adapter.
+controllable. Installed services report running, start-after-boot state, and
+cgroup memory when systemd exposes it. Supported buttons issue only start, stop,
+restart, enable, or disable for that exact unit and verify the result. AMP uses
+its separate loopback API adapter. Docker start/stop/restart uses the typed
+container-action route and refuses Helix dashboard/gateway names.
 
 When a service is absent, Helix runs a read-only host preflight first. On a
 supported Debian or Ubuntu release and architecture, Tailscale and Jellyfin

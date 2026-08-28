@@ -1,4 +1,4 @@
-export type HomeWidgetKind = 'clock' | 'host' | 'servers' | 'storage' | 'weather' | 'note' | 'shortcut';
+export type HomeWidgetKind = 'clock' | 'host' | 'servers' | 'storage' | 'weather' | 'note' | 'shortcut' | 'graphs' | 'docker';
 export type HomeWidgetSize = 'compact' | 'wide' | 'full';
 export type HomeWidgetHeight = 'short' | 'medium' | 'tall';
 
@@ -36,7 +36,7 @@ export interface NoteWidgetConfiguration {
 const STORAGE_KEY = 'helix.home.widgets';
 const TEMPLATES_STORAGE_KEY = 'helix.home.templates';
 const ACTIVE_HOME_STORAGE_KEY = 'helix.home.active-template';
-const kinds = new Set<HomeWidgetKind>(['clock', 'host', 'servers', 'storage', 'weather', 'note', 'shortcut']);
+const kinds = new Set<HomeWidgetKind>(['clock', 'host', 'servers', 'storage', 'weather', 'note', 'shortcut', 'graphs', 'docker']);
 const sizes = new Set<HomeWidgetSize>(['compact', 'wide', 'full']);
 const heights = new Set<HomeWidgetHeight>(['short', 'medium', 'tall']);
 const MAX_HOME_TEMPLATES = 8;
@@ -259,6 +259,25 @@ export function readHomeWidgets(): HomeWidget[] {
     return normalizeHomeWidgets(stored === null || stored === undefined ? null : JSON.parse(stored));
   } catch {
     return defaultHomeWidgets.map((widget) => ({ ...widget }));
+  }
+}
+
+const HOME_FOCUS_KEY = 'helix.home.focus';
+
+export function readHomeFocus(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(HOME_FOCUS_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveHomeFocus(value: boolean): void {
+  try {
+    if (value) globalThis.localStorage?.setItem(HOME_FOCUS_KEY, '1');
+    else globalThis.localStorage?.removeItem(HOME_FOCUS_KEY);
+  } catch {
+    // Focus mode still works in memory if browser storage is unavailable.
   }
 }
 

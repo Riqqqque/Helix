@@ -31,11 +31,11 @@ The current private-alpha build includes:
 
 - local owner setup, Argon2id password login, revocable sessions, CSRF
   protection, and owner username/password changes;
-- live CPU, memory, swap, disk, network, service, process, and Helix-only
-  resource views;
-- multiple named Home layouts with drag-and-drop/resizable clock, host, server,
-  storage, weather, paged-note, and website-shortcut widgets, per-widget color,
-  and JSON export/import;
+- live CPU, memory, swap, disk, network, service, process, Docker, and Helix-only
+  resource views, plus a Security center for explained host/Helix protections;
+- multiple named Home layouts with drag-and-drop/resizable clock, host, graphs,
+  server, storage, docker, weather, paged-note, and website-shortcut widgets,
+  Homarr shortcut import, full-screen Home, per-widget color, and JSON export/import;
 - mounted-drive browsing, bounded text editing, folder/file creation, rename,
   recoverable deletion, and cancellable largest-file/folder analysis inside
   configured storage roots;
@@ -62,9 +62,9 @@ The current private-alpha build includes:
 - optional AMP discovery/control through a separate loopback integration. AMP
   remains its own manager; Helix does not relabel AMP instances as native;
 - a Hooks page for bounded discovery and verified lifecycle control of AMP,
-  Plex, Tailscale, Pterodactyl Wings, Jellyfin, and root-configured systemd
-  services, with exact one-click Tailscale/Jellyfin APT installs on eligible
-  Debian/Ubuntu hosts and a prerequisite-aware Wings guide;
+  Plex, Tailscale, Pterodactyl Wings, Jellyfin, Docker/Portainer, and
+  root-configured systemd services, with exact one-click Tailscale/Jellyfin APT
+  installs on eligible Debian/Ubuntu hosts and a prerequisite-aware Wings guide;
 - an optional real Linux PTY that runs as one configured unprivileged host
   user, requires the current Helix password for every one-use connection, and
   does not record commands or output;

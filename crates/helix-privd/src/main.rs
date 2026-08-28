@@ -3,6 +3,8 @@ mod amp;
 #[cfg(target_os = "linux")]
 mod bounded_command;
 #[cfg(target_os = "linux")]
+mod docker;
+#[cfg(target_os = "linux")]
 mod files;
 #[cfg(target_os = "linux")]
 mod hook_install;
@@ -17,6 +19,8 @@ mod network;
 #[cfg(target_os = "linux")]
 mod packages;
 #[cfg(target_os = "linux")]
+mod security;
+#[cfg(target_os = "linux")]
 mod upnp;
 
 #[cfg(target_os = "linux")]
@@ -27,9 +31,10 @@ use clap::Parser;
 use files::{FileManager, MAX_CONFIGURED_ROOTS, StorageAnalysisManager};
 #[cfg(target_os = "linux")]
 use helix_privd::{
-    BrokerClient, BrokerRequest, BrokerResponse, FileUploadPurpose, FileUploadTarget,
-    HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSoftware,
-    PackageUpdateCandidate, ServerNetworkExposure, VRisingCreateSpec, read_frame, write_frame,
+    BrokerClient, BrokerRequest, BrokerResponse, DockerContainerActionKind, FileUploadPurpose,
+    FileUploadTarget, HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec,
+    MinecraftSoftware, PackageUpdateCandidate, ServerNetworkExposure, VRisingCreateSpec,
+    read_frame, write_frame,
 };
 #[cfg(target_os = "linux")]
 use hook_install::{HookInstaller, HookInstallerConfig};
@@ -195,6 +200,19 @@ impl BrokerContext {
             BrokerRequest::ManageHookService { hook_id, action } => {
                 self.manage_hook_service(&hook_id, action)
             }
+            BrokerRequest::DockerInventory {} => self.host_control()?.docker_inventory(),
+            BrokerRequest::DockerContainerAction {
+                name,
+                action,
+                confirmation,
+            } => self.docker_container_action(&name, action, &confirmation),
+            BrokerRequest::HomarrWidgetCatalog {} => self.host_control()?.homarr_widget_catalog(),
+            BrokerRequest::SecurityInventory {} => self.security_inventory(),
+            BrokerRequest::SetSecurityControl {
+                id,
+                enabled,
+                confirmation,
+            } => self.set_security_control(&id, enabled, &confirmation),
             BrokerRequest::HostIntegrationStatus {} => self.host_integration_status(),
             BrokerRequest::SetHelixStartOnBoot { enabled } => self
                 .host_control()
@@ -609,7 +627,112 @@ impl BrokerContext {
             }),
         };
         hooks.push(amp);
+        match self.host_control().and_then(|host| host.docker_inventory()) {
+            Ok(docker) => {
+                let containers = docker
+                    .get("containers")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let running = containers
+                    .iter()
+                    .filter(|item| item.get("running").and_then(Value::as_bool) == Some(true))
+                    .count();
+                let memory = containers
+                    .iter()
+                    .filter_map(|item| item.get("memory_used_bytes").and_then(Value::as_u64))
+                    .sum::<u64>();
+                let cpu = containers
+                    .iter()
+                    .filter_map(|item| item.get("cpu_percent").and_then(Value::as_f64))
+                    .sum::<f64>();
+                let portainer = docker.get("portainer").cloned().unwrap_or(Value::Null);
+                let installed =
+                    docker.get("docker_installed").and_then(Value::as_bool) == Some(true);
+                hooks.push(json!({
+                    "id": "docker",
+                    "kind": "docker",
+                    "installed": installed,
+                    "active": running > 0,
+                    "active_state": if installed { if running > 0 { "running" } else { "idle" } } else { "unavailable" },
+                    "enabled": installed,
+                    "enabled_state": if installed { "installed" } else { "not_found" },
+                    "controllable": false,
+                    "actions": [],
+                    "instance_count": containers.len(),
+                    "unverified_instance_count": Value::Null,
+                    "panel_port": portainer.get("panel_port").cloned().unwrap_or(Value::Null),
+                    "memory_used_bytes": if memory > 0 { Value::from(memory) } else { Value::Null },
+                    "cpu_percent": if running > 0 { Value::from(cpu) } else { Value::Null },
+                    "error": docker.get("error").cloned().unwrap_or(Value::Null)
+                }));
+            }
+            Err(error) => hooks.push(json!({
+                "id": "docker",
+                "kind": "docker",
+                "installed": false,
+                "active": false,
+                "active_state": "unavailable",
+                "enabled": false,
+                "enabled_state": "unavailable",
+                "controllable": false,
+                "actions": [],
+                "error": error
+            })),
+        }
         Ok(host_inventory)
+    }
+
+    fn docker_container_action(
+        &self,
+        name: &str,
+        action: DockerContainerActionKind,
+        confirmation: &str,
+    ) -> Result<Value, String> {
+        let _power_gate = self
+            .power_gate
+            .lock()
+            .map_err(|_| "host power coordination failed".to_owned())?;
+        if let Some(host) = self.host.as_deref()
+            && host.reboot_pending()?
+        {
+            return Err(
+                "a host reboot is scheduled; Docker changes are temporarily unavailable".to_owned(),
+            );
+        }
+        self.host_control()?
+            .docker_container_action(name, action, confirmation)
+    }
+
+    fn security_inventory(&self) -> Result<Value, String> {
+        security::inventory(self.host_control()?, &self.network, self.native.as_deref())
+    }
+
+    fn set_security_control(
+        &self,
+        id: &str,
+        enabled: bool,
+        confirmation: &str,
+    ) -> Result<Value, String> {
+        let _power_gate = self
+            .power_gate
+            .lock()
+            .map_err(|_| "host power coordination failed".to_owned())?;
+        if let Some(host) = self.host.as_deref()
+            && host.reboot_pending()?
+        {
+            return Err(
+                "a host reboot is scheduled; security changes are temporarily unavailable"
+                    .to_owned(),
+            );
+        }
+        security::set_control(
+            self.host_control()?,
+            self.native.as_deref(),
+            id,
+            enabled,
+            confirmation,
+        )
     }
 
     fn manage_hook_service(

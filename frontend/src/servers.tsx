@@ -296,6 +296,7 @@ function MinecraftVersionField({
   error,
   allowLatest,
   onChange,
+  onRetry,
 }: {
   version: string;
   catalog: MinecraftVersionCatalog | null;
@@ -303,19 +304,15 @@ function MinecraftVersionField({
   error: string | null;
   allowLatest: boolean;
   onChange: (value: string) => void;
+  onRetry: () => void;
 }) {
-  const [manual, setManual] = useState(false);
   const options = catalog?.versions ?? [];
   const known = new Set(options);
   const current = version.trim();
   const isLatest = current.toLowerCase() === "latest";
-  const listed = (allowLatest && isLatest) || known.has(current);
   const catalogFailed = error !== null && options.length === 0 && !loading;
-  const showInput =
-    manual || catalogFailed || (!listed && current.length > 0 && !isLatest);
-  const selectValue = showInput
-    ? "__manual__"
-    : allowLatest && (isLatest || current.length === 0)
+  const selectValue =
+    allowLatest && (isLatest || current.length === 0)
       ? "latest"
       : known.has(current)
         ? current
@@ -323,7 +320,7 @@ function MinecraftVersionField({
           ? ""
           : allowLatest
             ? "latest"
-            : "__manual__";
+            : (options[0] ?? "");
   const latestLabel =
     catalog?.latestVersion !== null && catalog?.latestVersion !== undefined
       ? ` (${catalog.latestVersion})`
@@ -332,21 +329,12 @@ function MinecraftVersionField({
     <label class="field">
       <span>Minecraft version</span>
       <select
-        required={!showInput}
+        required
         value={selectValue}
-        disabled={loading && options.length === 0 && !showInput}
-        onChange={(event) => {
-          const next = event.currentTarget.value;
-          if (next === "__manual__") {
-            setManual(true);
-            if (isLatest || current.length === 0) onChange("");
-            return;
-          }
-          setManual(false);
-          onChange(next);
-        }}
+        disabled={loading && options.length === 0}
+        onChange={(event) => onChange(event.currentTarget.value)}
       >
-        {loading && options.length === 0 && !showInput && (
+        {loading && options.length === 0 && (
           <option value="" disabled>
             Loading published versions…
           </option>
@@ -359,28 +347,21 @@ function MinecraftVersionField({
             {item}
           </option>
         ))}
-        <option value="__manual__">Enter a version not listed…</option>
       </select>
-      {showInput && (
-        <input
-          required
-          value={isLatest ? "" : version}
-          onInput={(event) => onChange(event.currentTarget.value)}
-          placeholder="1.21.8"
-          autocomplete="off"
-          autocapitalize="none"
-          spellcheck={false}
-        />
-      )}
       <small>
         {loading
           ? "Loading published versions…"
-          : error !== null
-            ? `${error} You can type a release such as 1.21.8.`
+          : catalogFailed
+            ? error
             : allowLatest
-              ? "Pick a published release or keep latest so Helix chooses the current stable build."
+              ? "Pick a published release, or keep Latest so Helix uses the current stable build."
               : "Custom JARs need the exact Minecraft version they were built for."}
       </small>
+      {catalogFailed && (
+        <button class="button button--quiet" type="button" onClick={onRetry}>
+          Try loading versions again
+        </button>
+      )}
     </label>
   );
 }
@@ -890,8 +871,9 @@ function CreateServerDialog({
   const [readinessError, setReadinessError] = useState<string | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [versions, setVersions] = useState<MinecraftVersionCatalog | null>(null);
-  const [versionsError, setVersionsError] = useState<string | null>(null);
   const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionsError, setVersionsError] = useState<string | null>(null);
+  const [versionsRetry, setVersionsRetry] = useState(0);
   const [jarDropActive, setJarDropActive] = useState(false);
   const [jarUploading, setJarUploading] = useState(false);
   const [jarUploadPercent, setJarUploadPercent] = useState(0);
@@ -953,7 +935,7 @@ function CreateServerDialog({
         if (!controller.signal.aborted) setVersionsLoading(false);
       });
     return () => controller.abort();
-  }, [csrfToken, mode, onSessionExpired, software]);
+  }, [csrfToken, mode, onSessionExpired, software, versionsRetry]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1361,6 +1343,7 @@ function CreateServerDialog({
                   error={versionsError}
                   allowLatest
                   onChange={setVersion}
+                  onRetry={() => setVersionsRetry((value) => value + 1)}
                 />
               </>
             ) : mode === "custom" ? (
@@ -1490,6 +1473,7 @@ function CreateServerDialog({
                   error={versionsError}
                   allowLatest={false}
                   onChange={setVersion}
+                  onRetry={() => setVersionsRetry((value) => value + 1)}
                 />
                 <label class="field">
                   <span>Java runtime</span>
@@ -3971,7 +3955,7 @@ function NativeServerPage({
             <h1>{detail.name}</h1>
             <p>
               {isVRising
-                ? `${joinAddress} · Wine runtime · UDP ${detail.gamePort}${detail.queryPort === null ? "" : ` / ${detail.queryPort}`}`
+                ? `${joinAddress} · isolated runtime · UDP ${detail.gamePort}${detail.queryPort === null ? "" : ` / ${detail.queryPort}`}`
                 : `${joinAddress} · ${detail.minecraftVersion} · Java ${detail.javaVersion}`}
             </p>
           </div>
@@ -4194,7 +4178,7 @@ function NativeServerPage({
                 <div class="section-title">
                   <div>
                     <h2>Right now</h2>
-                    <p>{isVRising ? "Live Wine runtime state" : "Live Minecraft and runtime state"}</p>
+                    <p>{isVRising ? "Live dedicated-server runtime" : "Live Minecraft and runtime state"}</p>
                   </div>
                   <span
                     class={`state-label state-label--${online ? "good" : "idle"}`}
@@ -4234,7 +4218,7 @@ function NativeServerPage({
                 <div class="section-title">
                   <div>
                     <h2>Build</h2>
-                    <p>{isVRising ? "Helix-owned Wine runtime" : "Resolved and pinned by Helix"}</p>
+                    <p>{isVRising ? "Isolated Helix runtime" : "Resolved and pinned by Helix"}</p>
                   </div>
                 </div>
                 <dl>
@@ -4250,7 +4234,7 @@ function NativeServerPage({
                       </div>
                       <div>
                         <dt>Runtime</dt>
-                        <dd>Wine + Xvfb container</dd>
+                        <dd>Isolated dedicated-server container</dd>
                       </div>
                       <div>
                         <dt>Query UDP</dt>
@@ -4806,7 +4790,7 @@ function ImportedServerPage({
   );
 }
 
-type ServerFilter = "all" | "minecraft" | "vrising" | "imported";
+type ServerFilter = "all" | "helix" | "minecraft" | "vrising" | "imported";
 
 function isMinecraftServer(server: ManagedServer): boolean {
   if (server.kind === "vrising") return false;
@@ -4852,22 +4836,17 @@ export function NewServerChooser({
           <span>
             <strong>V Rising</strong>
             <small>
-              Official Windows dedicated server in a Helix-owned Wine container.
-              First create builds Wine once; removing the last V Rising server
-              deletes that runtime.
+              One click installs the dedicated server in an isolated container. Uninstalling the last V Rising server removes that runtime too.
             </small>
           </span>
-          <em>Wine runtime</em>
+          <em>Click to install</em>
         </button>
       </div>
       <div class="server-platform-note">
         <Icon name="info" size={16} />
         <span>
-          <strong>Wine is unofficial</strong>
-          Stunlock ships a Windows dedicated server. Helix runs it under Wine +
-          Xvfb inside an isolated container so the host OS never gets Wine
-          packages. First start downloads the game through SteamCMD and can take
-          a while. This path is not publisher-supported.
+          <strong>Nothing is installed on the host OS</strong>
+          Helix downloads the official dedicated server into a private container, including everything that server needs to run. Backups, start-on-boot, files, and logs work the same way as Minecraft. There is no command console because V Rising does not offer one.
         </span>
       </div>
       <div class="dialog-actions">
@@ -4897,7 +4876,6 @@ function CreateVRisingDialog({
   const [gamePort, setGamePort] = useState(9876);
   const [queryPort, setQueryPort] = useState(9877);
   const [startOnBoot, setStartOnBoot] = useState(true);
-  const [acknowledged, setAcknowledged] = useState(false);
   const [job, setJob] = useState<BrokerJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -4942,7 +4920,7 @@ function CreateVRisingDialog({
         memory_mb: memory,
         max_players: players,
         start_on_boot: startOnBoot,
-        wine_runtime_acknowledged: acknowledged,
+        wine_runtime_acknowledged: true,
       };
       if (portMode === "manual") {
         payload.game_port = gamePort;
@@ -4976,14 +4954,14 @@ function CreateVRisingDialog({
           <strong>{job.stage}</strong>
           <ProgressBar value={job.progressPercent} />
           <small>
-            First create can build the Wine image and download the dedicated server through SteamCMD. Leave this open.
+            First create downloads the dedicated server into an isolated container. Leave this open.
           </small>
           {polling.error !== null && <InlineError message={polling.error} />}
         </div>
       ) : (
         <>
           <p class="dialog-intro">
-            Helix builds a local Wine + SteamCMD image if needed, then runs the official Windows dedicated server in an isolated container. The host never gets Wine packages.
+            Helix installs everything the dedicated server needs in an isolated container. Click create. When you uninstall the last V Rising server, that runtime is removed so the host looks like it was never there.
           </p>
           <div class="form-grid">
             <label class="field field--wide">
@@ -5025,17 +5003,10 @@ function CreateVRisingDialog({
               <small>Docker restart policy unless-stopped. Survives host reboot without starting the server now.</small>
             </span>
           </label>
-          <label class="check-row">
-            <input class="toggle-input" type="checkbox" checked={acknowledged} disabled={busy} onChange={(event) => setAcknowledged(event.currentTarget.checked)} />
-            <span>
-              <strong>I understand this uses Wine</strong>
-              <small>Stunlock does not support Linux. Helix isolates Wine in a container and removes that image when the last V Rising server is uninstalled.</small>
-            </span>
-          </label>
           <InlineError message={error ?? (job?.error ?? null)} />
           <div class="dialog-actions">
             <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
-            <button class="button button--primary" type="button" disabled={busy || name.trim().length === 0 || !acknowledged} onClick={() => void submit()}>
+            <button class="button button--primary" type="button" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
               {submitting ? "Starting…" : "Create V Rising server"}
             </button>
           </div>
@@ -5154,11 +5125,13 @@ export function ServersPage({
   const visibleServers = servers.filter(
     (server) =>
       filter === "all" ||
-      (filter === "minecraft"
-        ? isMinecraftServer(server)
-        : filter === "vrising"
-          ? isVRisingServer(server)
-          : server.manager !== "helix"),
+      (filter === "helix"
+        ? server.manager === "helix"
+        : filter === "minecraft"
+          ? isMinecraftServer(server)
+          : filter === "vrising"
+            ? isVRisingServer(server)
+            : server.manager !== "helix"),
   );
   const online = servers.filter((server) => server.status === "online").length;
   const helixManaged = servers.filter(
@@ -5229,6 +5202,13 @@ export function ServersPage({
           onClick={() => setFilter("all")}
         >
           All <span>{servers.length}</span>
+        </button>
+        <button
+          class={filter === "helix" ? "is-active" : ""}
+          type="button"
+          onClick={() => setFilter("helix")}
+        >
+          Helix <span>{helixManaged}</span>
         </button>
         <button
           class={filter === "minecraft" ? "is-active" : ""}

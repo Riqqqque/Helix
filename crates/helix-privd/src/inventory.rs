@@ -23,6 +23,8 @@ pub struct HostInventory {
     pub services: Vec<Service>,
     pub processes: Vec<Process>,
     pub load_average: [f64; 3],
+    pub process_count: u64,
+    pub cpu_model: Option<String>,
     pub collected_at_unix_ms: u64,
 }
 
@@ -158,6 +160,8 @@ pub fn collect() -> Result<HostInventory, String> {
         services: parse_services(&services),
         processes: collect_processes().unwrap_or_default(),
         load_average: read_load_average().unwrap_or([0.0; 3]),
+        process_count: read_process_count().unwrap_or(0),
+        cpu_model: read_cpu_model(),
         collected_at_unix_ms: now_unix_ms(),
     })
 }
@@ -453,6 +457,38 @@ fn read_load_average() -> Result<[f64; 3], String> {
         values.next().and_then(Result::ok).unwrap_or(0.0),
         values.next().and_then(Result::ok).unwrap_or(0.0),
     ])
+}
+
+fn read_process_count() -> Result<u64, String> {
+    let text = fs::read_to_string("/proc/loadavg")
+        .map_err(|_| "process count is unavailable".to_owned())?;
+    let token = text
+        .split_whitespace()
+        .nth(3)
+        .ok_or_else(|| "process count is unavailable".to_owned())?;
+    let count = token
+        .split('/')
+        .nth(1)
+        .ok_or_else(|| "process count is unavailable".to_owned())?;
+    count
+        .parse()
+        .map_err(|_| "process count is unavailable".to_owned())
+}
+
+fn read_cpu_model() -> Option<String> {
+    let text = fs::read_to_string("/proc/cpuinfo").ok()?;
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if key.trim() == "model name" {
+            let model = value.trim();
+            if !model.is_empty() && model.len() <= 180 && !model.chars().any(char::is_control) {
+                return Some(model.to_owned());
+            }
+        }
+    }
+    None
 }
 
 fn text(value: &Value, key: &str) -> Option<String> {

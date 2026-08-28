@@ -20,6 +20,7 @@ describe('dashboard preferences', () => {
       'storage',
       'network',
       'host',
+      'security',
       'terminal',
       'hooks',
     ]);

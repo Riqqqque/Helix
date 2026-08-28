@@ -10,9 +10,11 @@ server.
 
 ## Navigation and refresh
 
-Overview, Home, Storage, Network, Host, Terminal, Servers, and Hooks are full
-pages. Settings stays at the bottom of the sidebar. Choose **Arrange** beside
-Pages to move the primary pages up or down; the order follows the owner account.
+Overview, Home, Storage, Network, Host, Security, Terminal, Servers, and Hooks
+are full pages. An empty URL fragment opens Home so a pinned tab lands on the
+dashboard. Settings stays at the bottom of the sidebar. Choose **Arrange**
+beside Pages to move the primary pages up or down; the order follows the owner
+account.
 
 Host metrics refresh every second by default. Change that interval in
 **Settings → Dashboard behavior**. The top-right refresh button requests a
@@ -39,8 +41,14 @@ with keyboard-accessible controls. Every widget can choose width, height, title,
 and accent color. The grid reflows at desktop, tablet, and mobile widths, so a
 layout with one widget and a layout at the configured maximum both stay usable.
 
-Available widgets are Clock, Host pulse, Servers, Storage, Weather, Notes, and
-Shortcut. Shortcuts accept only validated HTTP(S) URLs and open in a new tab.
+Available widgets are Clock, Host pulse, Live graphs, Servers, Storage, Docker,
+Weather, Notes, and Shortcut. Shortcuts accept only validated HTTP(S) URLs and
+open in a new tab. While editing, **Import from Homarr** pulls classic Homarr
+JSON shortcuts that already have an address. **Full screen** hides the sidebar
+and keeps Homes, layout editing, and theme controls.
+
+Overview can show the same live graphs behind a toggle. Those samples live in
+the browser; Helix does not keep a timeseries database.
 
 ## Notes
 

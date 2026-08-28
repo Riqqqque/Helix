@@ -6,8 +6,9 @@ adapters; root-required work crosses a typed local socket to `helix-privd`.
 There is no caller-supplied root command endpoint.
 
 The native Minecraft manager creates and controls Docker-backed Paper, Purpur,
-Folia, Leaves, Fabric, and Vanilla instances. V Rising uses a Helix-owned Wine container
-around the official Windows dedicated server. Console capture and game
+Folia, Leaves, Fabric, and Vanilla instances. V Rising installs the official
+dedicated server into an isolated Helix container; the host never receives Wine
+packages. Console capture and game
 containers do not depend on the dashboard being open. Console history is bounded
 and rotates; it is persistent, not unlimited. Native Stop waits for a clean
 shutdown; Kill is a confirmed SIGKILL for when that stop hangs. AMP instances

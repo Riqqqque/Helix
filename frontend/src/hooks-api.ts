@@ -1,7 +1,7 @@
 import { ApiError, expectArray, expectNumber, expectRecord, expectString, requestJson } from './api';
 
 export type HookServiceAction = 'start' | 'stop' | 'restart' | 'enable' | 'disable';
-export type HookKind = 'systemd' | 'api';
+export type HookKind = 'systemd' | 'api' | 'docker';
 
 export interface HookConnection {
   id: string;
@@ -17,6 +17,8 @@ export interface HookConnection {
   panelPort: number | null;
   instanceCount: number | null;
   unverifiedInstanceCount: number | null;
+  memoryUsedBytes: number | null;
+  cpuPercent: number | null;
   error: string | null;
 }
 
@@ -106,7 +108,7 @@ function parseHook(value: unknown): HookConnection {
   const id = expectString(item, 'id', context);
   const kind = expectString(item, 'kind', context);
   const unit = nullableText(item, 'unit', context);
-  if (!HOOK_ID.test(id) || (kind !== 'systemd' && kind !== 'api') || (unit !== null && !UNIT.test(unit))) {
+  if (!HOOK_ID.test(id) || (kind !== 'systemd' && kind !== 'api' && kind !== 'docker') || (unit !== null && !UNIT.test(unit))) {
     throw new ApiError('Hook connection returned an invalid identity.');
   }
   const actions = expectArray(item, 'actions', context, 5).map(parseAction);
@@ -127,6 +129,12 @@ function parseHook(value: unknown): HookConnection {
     panelPort,
     instanceCount: nullableCount(item, 'instance_count', 100_000),
     unverifiedInstanceCount: nullableCount(item, 'unverified_instance_count', 100_000),
+    memoryUsedBytes: item.memory_used_bytes === null || item.memory_used_bytes === undefined
+      ? null
+      : expectNumber(item, 'memory_used_bytes', context, { integer: true, minimum: 0 }),
+    cpuPercent: item.cpu_percent === null || item.cpu_percent === undefined
+      ? null
+      : expectNumber(item, 'cpu_percent', context, { minimum: 0 }),
     error: nullableText(item, 'error', context),
   };
 }

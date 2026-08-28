@@ -12,12 +12,16 @@ import {
   type PrimaryDashboardSectionId,
   type RefreshIntervalMs,
 } from './dashboard-preferences';
-import { InlineError, Metric, PageHead, ProgressBar, toneForPercent } from './dashboard-ui';
+import { InlineError, PageHead, ProgressBar, toneForPercent } from './dashboard-ui';
 import { FileManagerRoute, preloadFileManager } from './file-manager-route';
-import { calculatePercent, formatBytes, formatDuration, formatPercent } from './format';
+import { formatBytes, formatDuration, formatPercent } from './format';
 import { HomeRoute, preloadHomeRoute } from './home-route';
+import { DockerInventoryRoute, preloadDockerPanel } from './docker-panel-route';
+import { OverviewRoute, preloadOverviewRoute } from './overview-route';
+import { readHomeFocus, saveHomeFocus } from './home-layout';
 import { getHostIntegration, type HostIntegration } from './host-api';
 import { HooksRoute, preloadHooksRoute } from './hooks-route';
+import { SecurityRoute, preloadSecurityRoute } from './security-route';
 import { Icon, type IconName } from './icons';
 import { InfoTip } from './info-tip';
 import {
@@ -52,6 +56,7 @@ const navigation: ReadonlyArray<{
   { id: 'storage', label: 'Storage', description: 'Disks and files', icon: 'storage' },
   { id: 'network', label: 'Network', description: 'Interfaces and ports', icon: 'network' },
   { id: 'host', label: 'Host', description: 'Services and processes', icon: 'host' },
+  { id: 'security', label: 'Security', description: 'Host and Helix protections', icon: 'security' },
   { id: 'terminal', label: 'Terminal', description: 'Direct Linux shell', icon: 'terminal' },
   { id: 'servers', label: 'Servers', description: 'Game server instances', icon: 'servers' },
   { id: 'hooks', label: 'Hooks', description: 'Connected services', icon: 'hooks' },
@@ -62,10 +67,12 @@ function preloadForSection(section: DashboardSectionId): (() => void) | undefine
   if (section === 'storage') return preloadFileManager;
   if (section === 'home') return preloadHomeRoute;
   if (section === 'network') return preloadNetworkOperationsRoute;
-  if (section === 'host') return preloadHostUpdatesRoute;
+  if (section === 'host') return () => { preloadHostUpdatesRoute(); preloadDockerPanel(); };
+  if (section === 'overview') return () => { preloadOverviewRoute(); preloadDockerPanel(); };
   if (section === 'terminal') return preloadTerminalRoute;
   if (section === 'servers') return preloadServersRoute;
   if (section === 'hooks') return preloadHooksRoute;
+  if (section === 'security') return preloadSecurityRoute;
   if (section === 'settings') return preloadSettingsRoute;
   return undefined;
 }
@@ -235,7 +242,7 @@ function useDashboardData(
 function HelixBrand() {
   return (
     <div class="helix-brand" aria-label="Helix">
-      <span class="helix-mark" aria-hidden="true"><span /><span /></span>
+      <img class="helix-mark helix-mark--image" src="/favicon-32.png" width={25} height={25} alt="" />
       <span>HELIX</span>
     </div>
   );
@@ -380,8 +387,10 @@ function Topbar({
   hostname,
   refreshedAt,
   user,
+  homeFocus,
   onRefresh,
   onLogout,
+  onHomeFocusToggle,
   theme,
   onThemeChange,
 }: {
@@ -389,8 +398,10 @@ function Topbar({
   hostname: string;
   refreshedAt: number | null;
   user: AuthenticatedUser;
+  homeFocus: boolean;
   onRefresh: () => Promise<void>;
   onLogout: () => Promise<void>;
+  onHomeFocusToggle: () => void;
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
 }) {
@@ -408,12 +419,18 @@ function Topbar({
   return (
     <header class="topbar">
       <div class="topbar-title">
+        {homeFocus && <HelixBrand />}
         <span>{hostname}</span>
         <Icon name="chevron" size={13} />
         <strong>{item.label}</strong>
       </div>
       <div class="topbar-actions">
         {refreshedAt !== null && <span class="last-update">Updated {new Date(refreshedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+        {section === 'home' && (
+          <button class="icon-button" type="button" aria-pressed={homeFocus} aria-label={homeFocus ? 'Exit full screen Home' : 'Full screen Home'} onClick={onHomeFocusToggle}>
+            <Icon name="expand" />
+          </button>
+        )}
         <button class="icon-button" type="button" disabled={manualRefresh} onClick={() => void refreshNow()} aria-label="Refresh dashboard" aria-busy={manualRefresh}>
           <Icon name="refresh" />
         </button>
@@ -421,84 +438,6 @@ function Topbar({
         <AccountMenu user={user} onLogout={onLogout} />
       </div>
     </header>
-  );
-}
-
-function OverviewPage({ data }: { data: DashboardData }) {
-  const { overview, inventory, servers, integration } = data;
-  const memoryPercent = overview.data === null
-    ? 0
-    : calculatePercent(overview.data.memory.usedBytes, overview.data.memory.totalBytes) ?? 0;
-  const criticalMounts = inventory.data?.mounts.filter((mount) => mount.usePercent >= 90) ?? [];
-  const online = servers.data?.filter((server) => server.status === 'online').length ?? 0;
-  const helixContainers = integration.data === null
-    ? []
-    : [integration.data.resources.containers.dashboard, integration.data.resources.containers.gateway].filter((value) => value !== null);
-  const helixCpuValues = helixContainers.flatMap((value) => value.cpuPercent === null ? [] : [value.cpuPercent]);
-  const helixMemoryValues = helixContainers.flatMap((value) => value.memoryUsedBytes === null ? [] : [value.memoryUsedBytes]);
-  if (integration.data?.resources.broker.rssBytes !== null && integration.data?.resources.broker.rssBytes !== undefined) {
-    helixMemoryValues.push(integration.data.resources.broker.rssBytes);
-  }
-  const helixCpu = helixCpuValues.length === 0 ? null : helixCpuValues.reduce((sum, value) => sum + value, 0);
-  const helixMemory = helixMemoryValues.length === 0 ? null : helixMemoryValues.reduce((sum, value) => sum + value, 0);
-  const helixErrors = integration.data?.errors ?? [];
-  return (
-    <div class="page page--overview">
-      <PageHead title="Overview" detail={overview.data?.hostname
-        ? `${overview.data.hostname} — host, storage, and game workloads in one place.`
-        : 'The host, storage, and game workloads in one place.'} />
-      <InlineError message={overview.error ?? inventory.error ?? servers.error ?? integration.error} />
-      {criticalMounts.map((mount) => (
-        <a class="capacity-alert" href="#storage" key={mount.target}>
-          <Icon name="warning" />
-          <div>
-            <strong>{mount.target} is {formatPercent(mount.usePercent)} full</strong>
-            <span>{formatBytes(mount.availableBytes)} remains on {mount.source}. Open Storage to make room.</span>
-          </div>
-          <Icon name="chevron" />
-        </a>
-      ))}
-      <section class="metrics-strip" aria-label="Host metrics">
-        <Metric icon="cpu" label="Processor" value={overview.data?.cpu.usagePercent === null || overview.data === null ? '—' : formatPercent(overview.data.cpu.usagePercent)} detail={`${overview.data?.cpu.logicalCores ?? '—'} logical cores`} percent={overview.data?.cpu.usagePercent ?? undefined} help="The share of this host’s CPU currently busy across all logical cores." />
-        <Metric icon="memory" label="Memory" value={overview.data === null ? '—' : `${formatBytes(overview.data.memory.usedBytes)} / ${formatBytes(overview.data.memory.totalBytes)}`} detail={overview.data === null ? 'Loading' : `${formatBytes(overview.data.memory.availableBytes)} available`} percent={overview.data === null ? undefined : memoryPercent} help="RAM currently in use on the host. This includes the operating system, Helix, and every workload." />
-        <Metric icon="servers" label="Game servers" value={servers.data === null ? '—' : `${online} online`} detail={servers.data === null ? 'Loading' : `${servers.data.filter((server) => server.manager === 'helix').length} Helix · ${servers.data.filter((server) => server.manager === 'amp_import').length} imported`} help="Helix-managed servers plus read-only compatibility inventory imported from AMP." />
-        <Metric icon="activity" label="Uptime" value={overview.data === null ? '—' : formatDuration(overview.data.uptimeSeconds)} detail={inventory.data === null ? 'Loading' : `Load ${inventory.data.loadAverage.map((value) => value.toFixed(2)).join(' · ')}`} help="Time since the Linux host last booted. Load shows runnable work over 1, 5, and 15 minutes." />
-      </section>
-      <div class="overview-grid">
-        <section class="surface overview-helix">
-          <div class="section-title"><div><h2>Helix footprint <InfoTip text="These figures cover the Helix dashboard and gateway containers plus the privileged broker’s RAM. Game servers are deliberately excluded." /></h2><p>Dashboard runtime only · game servers excluded</p></div><span class={`state-label state-label--${integration.data?.availability === 'ready' && helixErrors.length === 0 ? 'good' : integration.data === null ? 'idle' : 'warning'}`}>{integration.data === null ? 'Loading' : helixErrors.length === 0 && integration.data.availability === 'ready' ? 'Healthy' : `${helixErrors.length} issue${helixErrors.length === 1 ? '' : 's'}`}</span></div>
-          <div class="helix-footprint-stats">
-            <div><span>Container CPU</span><strong>{helixCpu === null ? '—' : formatPercent(helixCpu)}</strong><small>Dashboard + gateway</small></div>
-            <div><span>Runtime memory</span><strong>{helixMemory === null ? '—' : formatBytes(helixMemory)}</strong><small>Containers + broker RSS</small></div>
-            <div><span>Runtime errors</span><strong>{integration.data === null ? '—' : helixErrors.length}</strong><small>{helixErrors.length === 0 ? 'No integration errors reported' : helixErrors[0]?.message}</small></div>
-          </div>
-        </section>
-        <section class="surface overview-storage">
-          <div class="section-title"><div><h2>Storage</h2><p>Mounted capacity across this host</p></div><a href="#storage">Open files <Icon name="chevron" size={14} /></a></div>
-          <div class="mount-summary-list">
-            {(inventory.data?.mounts ?? []).filter((mount) => mount.sizeBytes >= 10_000_000_000).slice(0, 5).map((mount) => (
-              <div class="mount-summary" key={mount.target}><div class="mount-summary-top"><strong>{mount.target}</strong><span>{formatBytes(mount.usedBytes)} of {formatBytes(mount.sizeBytes)}</span></div><ProgressBar value={mount.usePercent} tone={toneForPercent(mount.usePercent)} /><small>{mount.source} · {formatBytes(mount.availableBytes)} free</small></div>
-            ))}
-          </div>
-        </section>
-        <section class="surface overview-servers">
-          <div class="section-title"><div><h2>Servers</h2><p>Helix and imported workloads</p></div><a href="#servers">Manage <Icon name="chevron" size={14} /></a></div>
-          <div class="compact-server-list">
-            {(servers.data ?? []).slice().sort((a, b) => Number(b.status === 'online') - Number(a.status === 'online')).slice(0, 6).map((server) => (
-              <div key={server.id}><span class={`status-dot status-dot--${server.status === 'online' ? 'good' : 'idle'}`} /><strong>{server.name}</strong><span>{server.status === 'online' ? `${server.playersOnline}/${server.maxPlayers} players` : 'Offline'}</span><small>{server.software} {server.version}</small></div>
-            ))}
-          </div>
-        </section>
-        <section class="surface overview-services">
-          <div class="section-title"><div><h2>Services</h2><p>Systemd units Helix can see</p></div><a href="#host">Inspect <Icon name="chevron" size={14} /></a></div>
-          <div class="service-pills">{(inventory.data?.services ?? []).slice(0, 8).map((service) => <span key={service.unit}><i class={`status-dot status-dot--${service.active === 'active' ? 'good' : 'idle'}`} />{service.unit.replace('.service', '')}</span>)}</div>
-        </section>
-        <section class="surface overview-network">
-          <div class="section-title"><div><h2>Network</h2><p>Physical and virtual interfaces</p></div><a href="#network">Details <Icon name="chevron" size={14} /></a></div>
-          <div class="interface-summary">{(inventory.data?.interfaces ?? []).filter((item) => item.name !== 'lo').slice(0, 4).map((item) => <div key={item.name}><span class={`status-dot status-dot--${item.state.toLowerCase() === 'up' ? 'good' : 'idle'}`} /><strong>{item.name}</strong><span>{item.addresses.find((address) => address.family === 'inet')?.address ?? 'No IPv4 address'}</span></div>)}</div>
-        </section>
-      </div>
-    </div>
   );
 }
 
@@ -563,18 +502,22 @@ function NetworkPage({ data, csrfToken, canManageFirewall, onSessionExpired }: {
   );
 }
 
-function HostPage({ data, csrfToken, onSessionExpired }: { data: DashboardData; csrfToken: string; onSessionExpired: () => void }) {
+function HostPage({ data, csrfToken, canManageDocker, onSessionExpired }: { data: DashboardData; csrfToken: string; canManageDocker: boolean; onSessionExpired: () => void }) {
   const overview = data.overview.data;
   const inventory = data.inventory.data;
   return (
     <div class="page page--host">
       <PageHead title="Host" detail="Operating system, services, and the processes using this machine." /><InlineError message={data.overview.error ?? data.inventory.error} />
-      <section class="host-facts"><div><span>Hostname</span><strong>{overview?.hostname ?? '—'}</strong></div><div><span>Operating system</span><strong>{overview?.operatingSystem ?? '—'}</strong></div><div><span>Kernel</span><strong>{overview?.kernelVersion ?? '—'}</strong></div><div><span>Architecture</span><strong>{overview?.architecture ?? '—'}</strong></div><div><span>Uptime</span><strong>{overview === null ? '—' : formatDuration(overview.uptimeSeconds)}</strong></div><div><span>Load average</span><strong>{inventory?.loadAverage.map((value) => value.toFixed(2)).join(' / ') ?? '—'}</strong></div></section>
+      <section class="host-facts"><div><span>Hostname</span><strong>{overview?.hostname ?? '—'}</strong></div><div><span>Operating system</span><strong>{overview?.operatingSystem ?? '—'}</strong></div><div><span>Kernel</span><strong>{overview?.kernelVersion ?? '—'}</strong></div><div><span>Architecture</span><strong>{overview?.architecture ?? '—'}</strong></div><div><span>Processor</span><strong>{inventory?.cpuModel ?? (overview === null ? '—' : `${overview.cpu.logicalCores} cores`)}</strong></div><div><span>Processes</span><strong>{inventory === null ? '—' : inventory.processCount.toLocaleString()}</strong></div><div><span>Uptime</span><strong>{overview === null ? '—' : formatDuration(overview.uptimeSeconds)}</strong></div><div><span>Load average</span><strong>{inventory?.loadAverage.map((value) => value.toFixed(2)).join(' / ') ?? '—'}</strong></div></section>
       <div class="host-columns">
         <section class="surface host-table-panel"><div class="section-title"><div><h2>Services <InfoTip text="Services are background programs managed by systemd. Active means systemd currently considers the unit running; failed or inactive units may need attention depending on their purpose." /></h2><p>Systemd service state</p></div></div><div class="host-table-scroll"><table class="data-table services-table"><thead><tr><th>Unit</th><th>State</th><th>Description</th></tr></thead><tbody>{(inventory?.services ?? []).map((service) => <tr key={service.unit}><td><strong>{service.unit}</strong></td><td><span class={`state-label state-label--${service.active === 'active' ? 'good' : 'idle'}`}>{service.active}</span></td><td>{service.description}</td></tr>)}</tbody></table></div></section>
         <section class="surface host-table-panel"><div class="section-title"><div><h2>Top processes <InfoTip text="A process is a running program. This list is sampled and sorted by current CPU use so a busy or runaway workload is easier to spot." /></h2><p>Sorted by current CPU use</p></div></div><div class="host-table-scroll"><table class="data-table processes-table"><thead><tr><th>Process</th><th>CPU</th><th>Memory</th><th>Uptime</th></tr></thead><tbody>{(inventory?.processes ?? []).map((process) => <tr key={process.pid}><td><strong>{process.name}</strong><small>PID {process.pid} · {process.user}</small></td><td>{formatPercent(process.cpuPercent)}</td><td>{formatBytes(process.residentBytes)}</td><td>{formatDuration(process.uptimeSeconds)}</td></tr>)}</tbody></table></div></section>
       </div>
       <HostUpdatesRoute csrfToken={csrfToken} onSessionExpired={onSessionExpired} />
+      <section class="surface host-docker">
+        <div class="section-title"><div><h2>Docker containers</h2><p>Every container on this host, including ones Helix did not create.</p></div></div>
+        <DockerInventoryRoute csrfToken={csrfToken} canManage={canManageDocker} compact onSessionExpired={onSessionExpired} />
+      </section>
     </div>
   );
 }
@@ -634,5 +577,39 @@ export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated,
     dashboardPreferences.setMetricsRefreshMs(next);
   };
 
-  return <><a class="skip-link" href="#main-content">Skip to content</a><div class="dashboard-shell"><Sidebar active={active} order={navigationOrder} serversEnabled={serversEnabled} onOrderChange={changeNavigationOrder} /><div class="dashboard-workspace"><Topbar section={active} hostname={hostname} refreshedAt={refreshedAt} user={user} onRefresh={data.refresh} onLogout={onLogout} theme={theme} onThemeChange={setTheme} /><MobileNav active={active} order={navigationOrder} serversEnabled={serversEnabled} /><main id="main-content" tabIndex={-1}>{active === 'overview' && <OverviewPage data={data} />}{active === 'home' && <HomeRoute overview={data.overview.data} inventory={data.inventory.data} servers={data.servers.data ?? []} displayName={user.displayName} templates={dashboardPreferences.homeTemplates} activeHomeId={dashboardPreferences.activeHomeId} syncStatus={dashboardPreferences.syncStatus} onHomeChange={dashboardPreferences.setHomeState} csrfToken={csrfToken} />}{active === 'storage' && <StoragePage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}{active === 'network' && <NetworkPage data={data} csrfToken={csrfToken} canManageFirewall={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} />}{active === 'host' && <HostPage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}{active === 'terminal' && <TerminalRoute csrfToken={csrfToken} canOpen={user.capabilities.includes('terminal.open')} onSessionExpired={onSessionExpired} />}{active === 'servers' && (serversEnabled ? <ServersRoute data={data} csrfToken={csrfToken} canManageServers={user.capabilities.includes('games.manage')} canManageBackups={user.capabilities.includes('games.backups.manage')} canManageNetwork={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} /> : <ServersModuleDisabled onEnable={() => dashboardPreferences.setServersEnabled(true)} />)}{active === 'hooks' && <HooksRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}{active === 'settings' && <SettingsRoute user={user} csrfToken={csrfToken} theme={theme} refreshIntervalMs={refreshIntervalMs} navigationOrder={navigationOrder} colors={dashboardPreferences.colors} serversEnabled={serversEnabled} preferenceSyncStatus={dashboardPreferences.syncStatus} hostIntegration={data.integration} onThemeChange={setTheme} onRefreshIntervalChange={changeRefreshInterval} onNavigationOrderChange={changeNavigationOrder} onColorsChange={dashboardPreferences.setColors} onServersEnabledChange={dashboardPreferences.setServersEnabled} onAccountUpdated={onAccountUpdated} onHostIntegrationRefresh={data.refresh} />}</main></div></div></>;
+  const [homeFocus, setHomeFocus] = useState(readHomeFocus);
+  const homeFocused = active === 'home' && homeFocus;
+  const themeLabel = theme === 'system' ? 'System' : theme === 'midnight' ? 'Midnight' : theme === 'oled' ? 'OLED' : 'Light';
+  const toggleHomeFocus = (): void => {
+    setHomeFocus((current) => {
+      const next = !current;
+      saveHomeFocus(next);
+      return next;
+    });
+  };
+
+  return (
+    <>
+      <a class="skip-link" href="#main-content">Skip to content</a>
+      <div class={`dashboard-shell${homeFocused ? ' is-home-focus' : ''}`}>
+        <Sidebar active={active} order={navigationOrder} serversEnabled={serversEnabled} onOrderChange={changeNavigationOrder} />
+        <div class="dashboard-workspace">
+          <Topbar section={active} hostname={hostname} refreshedAt={refreshedAt} user={user} homeFocus={homeFocused} onRefresh={data.refresh} onLogout={onLogout} onHomeFocusToggle={toggleHomeFocus} theme={theme} onThemeChange={setTheme} />
+          <MobileNav active={active} order={navigationOrder} serversEnabled={serversEnabled} />
+          <main id="main-content" tabIndex={-1}>
+            {active === 'overview' && <OverviewRoute data={data} themeLabel={themeLabel} csrfToken={csrfToken} canManageDocker={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}
+            {active === 'home' && <HomeRoute overview={data.overview.data} inventory={data.inventory.data} servers={data.servers.data ?? []} displayName={user.displayName} templates={dashboardPreferences.homeTemplates} activeHomeId={dashboardPreferences.activeHomeId} syncStatus={dashboardPreferences.syncStatus} onHomeChange={dashboardPreferences.setHomeState} csrfToken={csrfToken} homeFocus={homeFocused} onHomeFocusToggle={toggleHomeFocus} canManageDocker={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}
+            {active === 'storage' && <StoragePage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}
+            {active === 'network' && <NetworkPage data={data} csrfToken={csrfToken} canManageFirewall={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} />}
+            {active === 'host' && <HostPage data={data} csrfToken={csrfToken} canManageDocker={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}
+            {active === 'security' && <SecurityRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} themeLabel={themeLabel} helixVersion={data.overview.data?.helixVersion ?? null} onSessionExpired={onSessionExpired} />}
+            {active === 'terminal' && <TerminalRoute csrfToken={csrfToken} canOpen={user.capabilities.includes('terminal.open')} onSessionExpired={onSessionExpired} />}
+            {active === 'servers' && (serversEnabled ? <ServersRoute data={data} csrfToken={csrfToken} canManageServers={user.capabilities.includes('games.manage')} canManageBackups={user.capabilities.includes('games.backups.manage')} canManageNetwork={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} /> : <ServersModuleDisabled onEnable={() => dashboardPreferences.setServersEnabled(true)} />)}
+            {active === 'hooks' && <HooksRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}
+            {active === 'settings' && <SettingsRoute user={user} csrfToken={csrfToken} theme={theme} refreshIntervalMs={refreshIntervalMs} navigationOrder={navigationOrder} colors={dashboardPreferences.colors} serversEnabled={serversEnabled} preferenceSyncStatus={dashboardPreferences.syncStatus} hostIntegration={data.integration} onThemeChange={setTheme} onRefreshIntervalChange={changeRefreshInterval} onNavigationOrderChange={changeNavigationOrder} onColorsChange={dashboardPreferences.setColors} onServersEnabledChange={dashboardPreferences.setServersEnabled} onAccountUpdated={onAccountUpdated} onHostIntegrationRefresh={data.refresh} />}
+          </main>
+        </div>
+      </div>
+    </>
+  );
 }

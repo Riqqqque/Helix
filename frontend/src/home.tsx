@@ -18,6 +18,9 @@ import {
   type HomeWidgetKind,
   type NoteWidgetConfiguration,
 } from './home-layout';
+import { DockerInventoryPanel } from './docker-panel';
+import { getHomarrCatalog, type HomarrWidgetCandidate } from './docker-api';
+import { Sparkline } from './dashboard-ui';
 import { Icon, type IconName } from './icons';
 import { InfoTip } from './info-tip';
 import type { SystemOverview } from './types';
@@ -35,7 +38,11 @@ export interface HomePageProps extends HomeLiveData {
   templates: HomeTemplate[];
   activeHomeId: string;
   syncStatus: 'loading' | 'synced' | 'saving' | 'local';
+  homeFocus: boolean;
+  canManageDocker: boolean;
   onHomeChange: (templates: HomeTemplate[], activeHomeId: string) => void;
+  onHomeFocusToggle: () => void;
+  onSessionExpired: () => void;
 }
 
 const widgetIcons: Record<HomeWidgetKind, IconName> = {
@@ -46,6 +53,8 @@ const widgetIcons: Record<HomeWidgetKind, IconName> = {
   weather: 'weather',
   note: 'note',
   shortcut: 'external',
+  graphs: 'activity',
+  docker: 'host',
 };
 
 function makeWidget(kind: HomeWidgetKind): HomeWidget {
@@ -58,6 +67,8 @@ function makeWidget(kind: HomeWidgetKind): HomeWidget {
     weather: { size: 'wide', height: 'medium', title: 'Weather', content: '', url: '', color: '' },
     note: { size: 'compact', height: 'medium', title: 'Notes', content: '', url: '', color: '' },
     shortcut: { size: 'compact', height: 'medium', title: 'Shortcut', content: '', url: '', color: '' },
+    graphs: { size: 'wide', height: 'medium', title: 'Live graphs', content: '', url: '', color: '' },
+    docker: { size: 'wide', height: 'tall', title: 'Docker', content: '', url: '', color: '' },
   };
   return { id: `${kind}-${suffix}`, kind, ...defaults[kind] };
 }
@@ -213,10 +224,28 @@ function HostWidget({ overview, inventory }: Pick<HomePageProps, 'overview' | 'i
     : calculatePercent(overview.memory.usedBytes, overview.memory.totalBytes);
   return (
     <div class="home-stat-grid">
-      <div><span>CPU</span><strong>{overview?.cpu.usagePercent === null || overview === null ? '—' : formatPercent(overview.cpu.usagePercent)}</strong><small>{overview?.cpu.logicalCores ?? '—'} logical cores</small></div>
+      <div><span>CPU</span><strong>{overview?.cpu.usagePercent === null || overview === null ? '—' : formatPercent(overview.cpu.usagePercent)}</strong><small>{inventory?.cpuModel ?? `${overview?.cpu.logicalCores ?? '—'} cores`}</small></div>
       <div><span>Memory</span><strong>{memory === null ? '—' : formatPercent(memory)}</strong><small>{overview === null ? 'Waiting for host' : `${formatBytes(overview.memory.availableBytes)} available`}</small></div>
       <div><span>Uptime</span><strong>{overview === null ? '—' : formatDuration(overview.uptimeSeconds)}</strong><small>{overview?.hostname ?? 'Host not reported'}</small></div>
-      <div><span>Load</span><strong>{inventory?.loadAverage[0].toFixed(2) ?? '—'}</strong><small>1 minute average</small></div>
+      <div><span>Load</span><strong>{inventory?.loadAverage[0].toFixed(2) ?? '—'}</strong><small>{inventory === null ? '1 minute average' : `${inventory.processCount.toLocaleString()} processes`}</small></div>
+    </div>
+  );
+}
+
+function GraphsWidget({ overview, inventory }: Pick<HomePageProps, 'overview' | 'inventory'>) {
+  const [samples, setSamples] = useState<Array<{ cpu: number | null; memory: number | null; load: number | null }>>([]);
+  useEffect(() => {
+    const cpu = overview?.cpu.usagePercent ?? null;
+    const memory = overview === null ? null : calculatePercent(overview.memory.usedBytes, overview.memory.totalBytes);
+    const load = inventory?.loadAverage[0] ?? null;
+    if (cpu === null && memory === null && load === null) return;
+    setSamples((current) => [...current, { cpu, memory, load }].slice(-60));
+  }, [overview, inventory]);
+  return (
+    <div class="home-graphs">
+      <div><span>CPU</span><Sparkline values={samples.map((sample) => sample.cpu)} label="CPU" /></div>
+      <div><span>Memory</span><Sparkline values={samples.map((sample) => sample.memory)} label="Memory" /></div>
+      <div><span>Load</span><Sparkline values={samples.map((sample) => sample.load)} label="Load" /></div>
     </div>
   );
 }
@@ -308,17 +337,21 @@ function NoteWidget({ widget, editing, onChange }: {
   );
 }
 
-function WidgetBody({ widget, editing, onChange, data, csrfToken }: {
+function WidgetBody({ widget, editing, onChange, data, csrfToken, canManageDocker, onSessionExpired }: {
   widget: HomeWidget;
   editing: boolean;
   onChange: (patch: Partial<HomeWidget>) => void;
   data: HomeLiveData;
   csrfToken: string;
+  canManageDocker: boolean;
+  onSessionExpired: () => void;
 }) {
   if (widget.kind === 'clock') return <ClockWidget />;
   if (widget.kind === 'host') return <HostWidget overview={data.overview} inventory={data.inventory} />;
+  if (widget.kind === 'graphs') return <GraphsWidget overview={data.overview} inventory={data.inventory} />;
   if (widget.kind === 'servers') return <ServersWidget servers={data.servers} />;
   if (widget.kind === 'storage') return <StorageWidget inventory={data.inventory} />;
+  if (widget.kind === 'docker') return <DockerInventoryPanel csrfToken={csrfToken} canManage={canManageDocker} compact onSessionExpired={onSessionExpired} />;
   if (widget.kind === 'weather') return <WeatherWidget widget={widget} editing={editing} onChange={onChange} csrfToken={csrfToken} />;
   if (widget.kind === 'note') return <NoteWidget widget={widget} editing={editing} onChange={onChange} />;
 
@@ -430,7 +463,7 @@ function HomeTemplatePanel({ templates, activeHomeId, onHomeChange, onClose }: {
   );
 }
 
-export function HomePage({ overview, inventory, servers, displayName, templates, activeHomeId, syncStatus, onHomeChange, csrfToken }: HomePageProps) {
+export function HomePage({ overview, inventory, servers, displayName, templates, activeHomeId, syncStatus, onHomeChange, csrfToken, homeFocus, onHomeFocusToggle, canManageDocker, onSessionExpired }: HomePageProps) {
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -438,6 +471,12 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
   const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [dropPlacement, setDropPlacement] = useState<'before' | 'after'>('before');
+  const [homarrOpen, setHomarrOpen] = useState(false);
+  const [homarrLoading, setHomarrLoading] = useState(false);
+  const [homarrError, setHomarrError] = useState<string | null>(null);
+  const [homarrNote, setHomarrNote] = useState<string | null>(null);
+  const [homarrWidgets, setHomarrWidgets] = useState<HomarrWidgetCandidate[]>([]);
+  const [homarrSelected, setHomarrSelected] = useState<string[]>([]);
   const activeTemplate = templates.find((template) => template.id === activeHomeId) ?? templates[0]!;
   const widgets = activeTemplate.widgets;
 
@@ -460,6 +499,42 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
     setDropTargetId(null);
     setDropPlacement('before');
   };
+  const loadHomarr = async (): Promise<void> => {
+    setHomarrLoading(true);
+    setHomarrError(null);
+    setHomarrOpen(true);
+    try {
+      const catalog = await getHomarrCatalog(csrfToken);
+      setHomarrNote(catalog.note);
+      setHomarrWidgets(catalog.widgets);
+      setHomarrSelected(catalog.widgets.map((widget) => widget.url));
+      if (catalog.availability !== 'ready') setHomarrError(catalog.note);
+    } catch (reason) {
+      setHomarrWidgets([]);
+      setHomarrError(reason instanceof Error ? reason.message : 'Helix could not read Homarr.');
+    } finally {
+      setHomarrLoading(false);
+    }
+  };
+  const importHomarr = (): void => {
+    const chosen = homarrWidgets.filter((widget) => homarrSelected.includes(widget.url));
+    if (chosen.length === 0) return;
+    changeWidgets((current) => [
+      ...current,
+      ...chosen.map((widget, index) => ({
+        id: `shortcut-homarr-${Date.now().toString(36)}-${index.toString(36)}`,
+        kind: 'shortcut' as const,
+        size: 'compact' as const,
+        height: 'medium' as const,
+        title: widget.name.slice(0, 80),
+        content: '',
+        url: widget.url,
+        color: '',
+      })),
+    ]);
+    setHomarrOpen(false);
+    setAdding(false);
+  };
 
   return (
     <div class="page page--home" style={{ '--home-accent': activeTemplate.accent }}>
@@ -467,16 +542,38 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
         <div><span class="eyebrow">{activeTemplate.name}</span><h1>Home</h1><p>{displayName.trim().length > 0 ? `Welcome, ${displayName.trim()}. Arrange this workspace around how you run this host.` : 'Your at-a-glance workspace. Arrange it around how you run this host.'}</p></div>
         <div class="page-head-actions home-page-actions">
           {editing && <button class="button button--quiet" type="button" onClick={() => setAdding((value) => !value)}><Icon name="plus" size={15} />Add widget</button>}
+          {editing && <button class="button button--quiet" type="button" disabled={homarrLoading} onClick={() => void loadHomarr()}>{homarrLoading ? 'Reading Homarr…' : 'Import from Homarr'}</button>}
+          <button class={`button${homeFocus ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={homeFocus} onClick={onHomeFocusToggle}><Icon name="expand" size={15} />{homeFocus ? 'Exit full screen' : 'Full screen'}</button>
           <button class={`button${templatesOpen ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={templatesOpen} onClick={() => setTemplatesOpen((value) => !value)}><Icon name="home" size={15} />Homes</button>
           <button class={`button${editing ? ' button--primary' : ''}`} type="button" aria-pressed={editing} onClick={() => { setEditing((value) => !value); setAdding(false); setSettingsWidgetId(null); finishDrag(); }}><Icon name={editing ? 'check' : 'edit'} size={15} />{editing ? 'Done editing' : 'Edit layout'}</button>
         </div>
       </div>
       <div class={`home-local-note home-local-note--${syncStatus}`}><Icon name={syncStatus === 'synced' ? 'check' : syncStatus === 'local' ? 'warning' : 'refresh'} size={14} /><span>{syncStatus === 'synced' ? 'Layout synced through Helix' : syncStatus === 'saving' ? 'Saving layout…' : syncStatus === 'loading' ? 'Loading your layout…' : 'Using this browser’s saved copy'}</span><InfoTip text={syncStatus === 'local' ? 'Changes remain in this browser and retry automatically.' : 'This layout follows the owner account across browsers, with a local fallback.'} /></div>
       {templatesOpen && <HomeTemplatePanel templates={templates} activeHomeId={activeTemplate.id} onHomeChange={onHomeChange} onClose={() => setTemplatesOpen(false)} />}
+      {editing && homarrOpen && (
+        <section class="home-widget-catalog" aria-label="Import Homarr shortcuts">
+          <div><strong>Homarr shortcuts</strong><span>{homarrNote ?? 'Choose which Homarr links to place on this Home. Notes and Homarr-only apps stay in Homarr.'}</span></div>
+          {homarrError !== null && <p class="home-homarr-error" role="status">{homarrError}</p>}
+          {homarrWidgets.map((widget) => (
+            <label key={widget.url} class="home-homarr-item">
+              <input
+                type="checkbox"
+                checked={homarrSelected.includes(widget.url)}
+                onChange={() => setHomarrSelected((current) => current.includes(widget.url) ? current.filter((item) => item !== widget.url) : [...current, widget.url])}
+              />
+              <span><strong>{widget.name}</strong><small>{widget.url}</small></span>
+            </label>
+          ))}
+          <div class="home-homarr-actions">
+            <button class="button button--quiet" type="button" onClick={() => setHomarrOpen(false)}>Cancel</button>
+            <button class="button button--primary" type="button" disabled={homarrSelected.length === 0} onClick={importHomarr}>Add {homarrSelected.length} shortcut{homarrSelected.length === 1 ? '' : 's'}</button>
+          </div>
+        </section>
+      )}
       {editing && adding && (
         <section class="home-widget-catalog" aria-label="Add a widget">
           <div><strong>Add a widget</strong><span>Every widget can be moved and resized after it is added.</span></div>
-          {(['clock', 'host', 'servers', 'storage', 'weather', 'note', 'shortcut'] as const).map((kind) => <button type="button" key={kind} onClick={() => addWidget(kind)}><Icon name={widgetIcons[kind]} /><span><strong>{kind === 'host' ? 'Host pulse' : kind[0]?.toUpperCase() + kind.slice(1)}</strong><small>{kind === 'shortcut' ? 'Open a website' : kind === 'note' ? 'Keep synced notes' : kind === 'weather' ? 'Five-day forecast' : 'Live dashboard data'}</small></span></button>)}
+          {(['clock', 'host', 'graphs', 'servers', 'storage', 'docker', 'weather', 'note', 'shortcut'] as const).map((kind) => <button type="button" key={kind} onClick={() => addWidget(kind)}><Icon name={widgetIcons[kind]} /><span><strong>{kind === 'host' ? 'Host pulse' : kind === 'graphs' ? 'Live graphs' : kind === 'docker' ? 'Docker' : kind[0]?.toUpperCase() + kind.slice(1)}</strong><small>{kind === 'shortcut' ? 'Open a website' : kind === 'note' ? 'Keep synced notes' : kind === 'weather' ? 'Five-day forecast' : kind === 'graphs' ? 'CPU, memory, and load' : kind === 'docker' ? 'All containers on this host' : 'Live dashboard data'}</small></span></button>)}
         </section>
       )}
       {editing && <div class="home-editing-hint"><Icon name="menu" size={14} /><span>Drag a widget by its handle, or use the arrow controls. Width, height, color, and widget-specific options are under Settings.</span></div>}
@@ -507,7 +604,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
               {editing && <WidgetControls widget={widget} first={index === 0} last={index === widgets.length - 1} onMove={(offset) => changeWidgets((current) => moveHomeWidget(current, widget.id, offset))} onResize={() => updateWidget(widget.id, { size: nextHomeWidgetSize(widget.size) })} onHeight={() => updateWidget(widget.id, { height: nextHomeWidgetHeight(widget.height) })} onSettings={() => setSettingsWidgetId((current) => current === widget.id ? null : widget.id)} onDragStart={(event) => { setDraggedWidgetId(widget.id); event.dataTransfer?.setData('text/plain', widget.id); if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = 'move'; }} onDragEnd={finishDrag} onRemove={() => changeWidgets((current) => current.filter((candidate) => candidate.id !== widget.id))} />}
             </header>
             {editing && settingsWidgetId === widget.id && <WidgetSettings widget={widget} onChange={(patch) => updateWidget(widget.id, patch)} onClose={() => setSettingsWidgetId(null)} />}
-            <WidgetBody widget={widget} editing={editing} onChange={(patch) => updateWidget(widget.id, patch)} data={{ overview, inventory, servers }} csrfToken={csrfToken} />
+            <WidgetBody widget={widget} editing={editing} onChange={(patch) => updateWidget(widget.id, patch)} data={{ overview, inventory, servers }} csrfToken={csrfToken} canManageDocker={canManageDocker} onSessionExpired={onSessionExpired} />
           </article>
         ))}
         {widgets.length === 0 && <div class="home-grid-empty"><Icon name="overview" size={26} /><strong>This Home is empty</strong><span>Use Add widget to build the layout you want.</span></div>}

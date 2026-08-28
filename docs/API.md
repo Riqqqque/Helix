@@ -66,7 +66,7 @@ malformed, stale, or wrong proof returns `403` with code `csrf_rejected`.
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/health` | `system.view` | Protected dependency health |
 | `GET` | `/api/v1/system/overview` | `system.view` | Bounded CPU, memory, storage, and network snapshot |
-| `GET` | `/api/v1/host/inventory` | `system.view` | Disks, mounts, interfaces, routes, services, processes, and listeners |
+| `GET` | `/api/v1/host/inventory` | `system.view` | Disks, mounts, interfaces, routes, services, processes, process count, CPU model, and listeners |
 | `GET` | `/api/v1/weather` | `dashboard.customize` | Bounded weather data for one validated location |
 | `GET` | `/api/v1/settings/preferences` | `dashboard.customize` | Revisioned dashboard preferences |
 | `PUT` | `/api/v1/settings/preferences` | `dashboard.customize` | Save navigation, metric cadence, Home widgets, and whether the Servers page is enabled, with an expected revision |
@@ -95,6 +95,31 @@ acknowledgement. The broker performs active-player/running-job preflight and use
 an opaque operation ID with a systemd transient timer. Recurring schedules store
 one verified daily/weekday local-time plan and return the effective host timezone
 and next activation. Automated tests never execute a reboot.
+
+### Docker, Portainer, and Homarr
+
+| Method | Route | Capability | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/docker/inventory` | `system.view` | All Docker containers on the host, with CPU/memory when Docker reports them, plus a Portainer hint |
+| `POST` | `/api/v1/docker/actions` | `system.settings.write` | Start, stop, or restart one named container after typing that exact name |
+| `GET` | `/api/v1/docker/homarr` | `dashboard.customize` | Import classic Homarr JSON shortcuts that already have an http(s) address |
+
+Helix talks to the Docker engine on the host. It does not proxy Portainer’s API.
+Open Portainer uses a published port when a Portainer container is detected.
+Dashboard and gateway container names stay protected. Homarr 1 sqlite catalogs
+fail closed with an honest note.
+
+### Security center
+
+| Method | Route | Capability | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/security` | `system.view` | Observed and writable host/Helix security controls with explanations |
+| `POST` | `/api/v1/security/controls` | `system.settings.write` | Flip one writable control after typing its exact confirmation phrase |
+
+Writable controls are Helix start-after-boot, Minecraft auto-forward on create,
+and unattended-upgrades when that unit exists. UFW disable is not a switch
+here. CSRF, LAN bind, AppArmor, SSH PermitRootLogin, ASLR, and Docker
+live-restore are reported, not casually toggled.
 
 ### Storage and file operations
 
@@ -190,7 +215,7 @@ unavailable and has no route.
 
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/hooks` | `system.view` | Inventory exact configured systemd services plus the optional AMP API adapter |
+| `GET` | `/api/v1/hooks` | `system.view` | Inventory exact configured systemd services, the optional AMP adapter, and the Docker engine hook |
 | `GET` | `/api/v1/hooks/{hook_id}/install/preflight` | `system.view` | Read exact host prerequisites, planned changes, blockers, and owner steps for a built-in installer |
 | `POST` | `/api/v1/hooks/{hook_id}/install` | `system.settings.write` | Start one exact allowlisted Tailscale or Jellyfin package/service installation |
 | `GET` | `/api/v1/hooks/jobs/{job_id}` | `system.view` | Read bounded hook-install progress and verified result |
@@ -234,7 +259,7 @@ or output. Disconnect ends the PTY.
 | `PUT` | `/api/v1/servers/port-policies/vrising` | `games.manage` | Persist the V Rising UDP pool; public auto-forward stays off |
 | `GET` | `/api/v1/games/readiness` | `games.view` | Compatibility alias for manager readiness |
 | `POST` | `/api/v1/servers/minecraft` | `games.manage` | Start a native Minecraft creation job |
-| `POST` | `/api/v1/servers/vrising` | `games.manage` | Start a native V Rising Wine-runtime creation job |
+| `POST` | `/api/v1/servers/vrising` | `games.manage` | Start a native V Rising creation job |
 | `GET` | `/api/v1/servers/minecraft/modpacks/search` | `games.view` | Search bounded Modrinth modpack previews across loaders |
 | `GET` | `/api/v1/servers/minecraft/modpacks/projects/{project_id}` | `games.view` | Read bounded project/version compatibility detail |
 | `POST` | `/api/v1/servers/minecraft/modpacks` | `games.manage` | Start a server-safe Fabric `.mrpack` creation job |
@@ -249,7 +274,7 @@ or output. Disconnect ends the PTY.
 
 The native readiness contract currently advertises install paths for Paper,
 Purpur, Folia, Leaves, Fabric, Vanilla, guarded local custom-JAR import, and V Rising
-when Docker is ready. V Rising uses a Helix-owned Wine + SteamCMD image, not a
+when Docker is ready. V Rising uses a Helix-owned isolated runtime image, not a
 third-party Hub tag. Forge, NeoForge, Quilt, Spigot, Velocity, and similar
 choices stay catalog explanations until they have a tested install path.
 
@@ -259,12 +284,12 @@ the current default/stable channel so Latest matches what create actually
 installs. Paper-family and Fabric/Vanilla catalogs accept `latest`; custom JAR
 catalogs return Mojang releases and reject `latest` at create time.
 
-V Rising creation requires an explicit Wine acknowledgement, allocates a UDP
-game/query pair from the V Rising pool, and stays private. The first create may
-build `helix-vrising-runtime:1` and download Steam app `1829350`. Removing the
-last active V Rising instance deletes that image. Restore rebuilds it if needed.
-This path is implemented and unvalidated on a live host; it is not
-publisher-supported.
+V Rising creation installs the dedicated server into an isolated container,
+allocates a UDP game/query pair from the V Rising pool, and stays private. The
+first create may build `helix-vrising-runtime:1` and download Steam app
+`1829350`. Removing the last active V Rising instance deletes that image.
+Restore rebuilds it if needed. This path is implemented and unvalidated on a
+live host; it is not publisher-supported.
 
 Native start-on-boot writes Docker `--restart unless-stopped` or `no` on the
 exact instance container and persists the same flag on the instance manifest.

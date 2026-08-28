@@ -166,6 +166,7 @@ pub struct HostOverview {
     pub architecture: String,
     pub kernel_version: Option<String>,
     pub uptime_seconds: u64,
+    pub helix_version: String,
     pub cpu: CpuOverview,
     pub memory: MemoryOverview,
     pub swap: SwapOverview,
@@ -235,6 +236,7 @@ mod tests {
             architecture: "test".to_owned(),
             kernel_version: None,
             uptime_seconds: 0,
+            helix_version: VERSION.to_owned(),
             cpu: CpuOverview {
                 usage_percent: None,
                 logical_cores: 1,

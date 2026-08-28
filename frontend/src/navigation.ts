@@ -4,6 +4,7 @@ export const dashboardSectionIds = [
   'storage',
   'network',
   'host',
+  'security',
   'terminal',
   'servers',
   'hooks',
@@ -14,6 +15,7 @@ export type DashboardSectionId = (typeof dashboardSectionIds)[number];
 
 export function dashboardSectionForHash(hash: string): DashboardSectionId {
   const candidate = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (candidate === '') return 'home';
   if (
     candidate === 'servers' ||
     candidate.startsWith('servers/') ||
@@ -22,5 +24,5 @@ export function dashboardSectionForHash(hash: string): DashboardSectionId {
   ) {
     return 'servers';
   }
-  return dashboardSectionIds.find((id) => id === candidate) ?? 'overview';
+  return dashboardSectionIds.find((id) => id === candidate) ?? 'home';
 }
