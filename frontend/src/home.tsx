@@ -656,7 +656,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
       <div class={`home-local-note home-local-note--${syncStatus}`}><Icon name={syncStatus === 'synced' ? 'check' : syncStatus === 'local' ? 'warning' : 'refresh'} size={14} /><span>{syncStatus === 'synced' ? 'Layout synced through Helix' : syncStatus === 'saving' ? 'Saving layout…' : syncStatus === 'loading' ? 'Loading your layout…' : 'Using this browser’s saved copy'}</span><InfoTip text={syncStatus === 'local' ? 'Changes remain in this browser and retry automatically.' : 'This layout follows the owner account across browsers, with a local fallback.'} /></div>
       {templatesOpen && <HomeTemplatePanel templates={templates} activeHomeId={activeTemplate.id} onHomeChange={onHomeChange} onClose={() => setTemplatesOpen(false)} />}
       {editing && homarrOpen && (
-        <section class="home-widget-catalog" aria-label="Import Homarr shortcuts">
+        <section class="home-widget-catalog home-homarr-catalog" aria-label="Import Homarr shortcuts">
           <div>
             <strong>Homarr shortcuts</strong>
             <span>
@@ -668,23 +668,25 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
             </span>
           </div>
           {homarrError !== null && homarrWidgets.length > 0 && <p class="home-homarr-error" role="status">{homarrError}</p>}
-          {homarrWidgets.map((widget) => {
-            const alreadyOnHome = existingShortcutUrls.has(widget.url);
-            return (
-              <label key={widget.url} class={`home-homarr-item${alreadyOnHome ? ' is-present' : ''}`}>
-                <input
-                  type="checkbox"
-                  checked={homarrSelected.includes(widget.url)}
-                  onChange={() => setHomarrSelected((current) => current.includes(widget.url) ? current.filter((item) => item !== widget.url) : [...current, widget.url])}
-                />
-                <ShortcutMark name={widget.name} url={widget.url} icon={widget.icon} size={28} />
-                <span>
-                  <strong>{widget.name}</strong>
-                  <small>{alreadyOnHome ? 'Already on Homarr Home' : widget.url}</small>
-                </span>
-              </label>
-            );
-          })}
+          <div class="home-homarr-list">
+            {homarrWidgets.map((widget) => {
+              const alreadyOnHome = existingShortcutUrls.has(widget.url);
+              return (
+                <label key={widget.url} class={`home-homarr-item${alreadyOnHome ? ' is-present' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={homarrSelected.includes(widget.url)}
+                    onChange={() => setHomarrSelected((current) => current.includes(widget.url) ? current.filter((item) => item !== widget.url) : [...current, widget.url])}
+                  />
+                  <ShortcutMark name={widget.name} url={widget.url} icon={widget.icon} size={28} />
+                  <span>
+                    <strong>{widget.name}</strong>
+                    <small>{alreadyOnHome ? 'Already on Homarr Home' : widget.url}</small>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
           <div class="home-homarr-actions">
             <button class="button button--quiet" type="button" onClick={() => setHomarrOpen(false)}>Cancel</button>
             <button class="button button--primary" type="button" disabled={homarrSelected.length === 0 || homarrLoading} onClick={importHomarr}>Place {homarrSelected.length} on Homarr Home</button>

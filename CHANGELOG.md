@@ -9,6 +9,8 @@ binary or package release yet.
 
 - Homarr import keeps Homarr's board order and tile width, places shortcuts on
   a dedicated Homarr Home, and no longer alphabetizes the catalog.
+- Homarr import names stay inside the picker and shortcut tiles instead of
+  spilling across neighboring cells.
 - Homarr import keeps http(s) icons, maps Homarr icon names onto the
   dashboard-icons set, and matches leftover shortcuts from the app name or
   link. Uploaded Homarr media files stay in Homarr.
