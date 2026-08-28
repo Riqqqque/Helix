@@ -17,6 +17,7 @@ binary or package release yet.
   inventing an Ubuntu suite from Mint's VERSION_CODENAME.
 - From-source `--install-deps` follows the usual `/etc/os-release` symlink, so
   Debian, Ubuntu, Fedora, and Arch are not treated as an unknown distro.
+- The sidebar HELIX wordmark is centered in the top-left column.
 
 ### Added
 
