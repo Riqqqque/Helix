@@ -5733,9 +5733,10 @@ fn unique_jar_name(
     name: &str,
     reserved: &HashSet<PathBuf>,
 ) -> Result<String, String> {
-    let Some(file_name) = Path::new(name).file_name().and_then(|value| value.to_str()) else {
-        return Err("drop a .jar file with an ordinary file name".to_owned());
-    };
+    let file_name = Path::new(name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "drop a .jar file with an ordinary file name".to_owned())?;
     if file_name != name {
         return Err("drop a .jar file with an ordinary file name".to_owned());
     }
