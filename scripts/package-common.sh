@@ -69,6 +69,24 @@ helix_require_commands() {
   done
 }
 
+helix_run_as_service_user() {
+  local user=$1
+  shift
+  [[ -n "$user" && $# -gt 0 ]] ||
+    helix_package_fail "service-user runner requires an account and a command"
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u "$user" -- env -i PATH=/usr/bin:/bin "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo -u "$user" -- env -i PATH=/usr/bin:/bin "$@"
+  elif command -v su >/dev/null 2>&1; then
+    local quoted
+    printf -v quoted '%q ' "$@"
+    su -s /bin/sh "$user" -c "env -i PATH=/usr/bin:/bin ${quoted}"
+  else
+    helix_package_fail "need runuser, sudo, or su to run commands as ${user}"
+  fi
+}
+
 helix_assert_root_owned() {
   local path=$1
   local ownership

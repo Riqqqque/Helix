@@ -43,11 +43,16 @@ done
 
 for required_command in \
   bash chmod chown cmp cp cut date env find flock id install mktemp mountpoint mv realpath rm \
-  rmdir runuser sha256sum sort stat systemctl systemd-sysusers systemd-tmpfiles uname \
+  rmdir sha256sum sort stat systemctl systemd-sysusers systemd-tmpfiles uname \
   xargs; do
   command -v "$required_command" >/dev/null 2>&1 ||
     fail "required install command is unavailable: $required_command"
 done
+if ! command -v runuser >/dev/null 2>&1 &&
+  ! command -v sudo >/dev/null 2>&1 &&
+  ! command -v su >/dev/null 2>&1; then
+  fail "required install command is unavailable: runuser, sudo, or su"
+fi
 
 [[ "$(uname -s)" == "Linux" ]] || fail "the Helix local installer supports Linux/systemd hosts only"
 [[ "$(id -u)" -eq 0 ]] || fail "run this installer as root, for example with sudo"
@@ -334,8 +339,7 @@ fi
 # captured before tmpfiles or any CLI invocation so a normal upgrade never
 # generates a replacement setup token.
 configured_state_readable_before=0
-if runuser -u helix -- \
-  env -i PATH=/usr/bin:/bin \
+if helix_run_as_service_user helix \
   "${HELIX_STAGED_PATHS[/usr/bin/helixctl]}" \
   --config /etc/helix/helix.toml \
   status >/dev/null 2>&1; then
@@ -374,8 +378,7 @@ systemctl daemon-reload
 if ((bootstrap_required == 1)); then
   printf 'Initializing fresh owner setup state; the following token is shown once.\n' >&2
   bootstrap_attempted=1
-  runuser -u helix -- \
-    env -i PATH=/usr/bin:/bin \
+  helix_run_as_service_user helix \
     /usr/bin/helixctl \
     --config /etc/helix/helix.toml \
     setup-token
@@ -384,8 +387,7 @@ fi
 if ((start_service == 1)); then
   systemctl enable --now helixd.service
   systemctl is-active --quiet helixd.service || fail "helixd did not remain active"
-  runuser -u helix -- \
-    env -i PATH=/usr/bin:/bin \
+  helix_run_as_service_user helix \
     /usr/bin/helixctl \
     --config /etc/helix/helix.toml \
     ready --timeout-seconds 20 || fail "helixd did not pass bounded readiness checks"

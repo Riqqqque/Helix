@@ -193,14 +193,23 @@ impl HookInstaller {
             Ok(platform) => {
                 let apt_supported = matches!(platform.id.as_str(), "ubuntu" | "debian")
                     && valid_codename(&platform.codename);
+                let os_detail = if platform.codename.is_empty() {
+                    platform.name.clone()
+                } else {
+                    format!("{} · {}", platform.name, platform.codename)
+                };
                 checks.push(check(
                     "operating_system",
                     "Supported Linux release",
-                    if apt_supported { "pass" } else { "block" },
-                    &format!("{} · {}", platform.name, platform.codename),
+                    if hook_id == "pterodactyl" || apt_supported {
+                        "pass"
+                    } else {
+                        "block"
+                    },
+                    &os_detail,
                 ));
-                if !apt_supported {
-                    blockers.push("One-click installs currently require a supported Debian or Ubuntu APT release.");
+                if matches!(hook_id, "tailscale" | "jellyfin") && !apt_supported {
+                    blockers.push("One-click Tailscale and Jellyfin installs currently require a Debian-family APT release (Debian, Ubuntu, or a derivative with UBUNTU_CODENAME / VERSION_CODENAME).");
                 }
                 let architecture_supported = match hook_id {
                     "jellyfin" => {
@@ -234,10 +243,8 @@ impl HookInstaller {
             }
         }
 
-        for (id, label, path) in [
+        let mut required_tools = vec![
             ("curl", "HTTPS download tool", &self.config.curl_binary),
-            ("apt", "APT package manager", &self.config.apt_get_binary),
-            ("dpkg", "Debian package database", &self.config.dpkg_binary),
             (
                 "systemd",
                 "systemd service manager",
@@ -248,7 +255,14 @@ impl HookInstaller {
                 "Bounded command runner",
                 &self.config.timeout_binary,
             ),
-        ] {
+        ];
+        if matches!(hook_id, "tailscale" | "jellyfin") {
+            required_tools.extend([
+                ("apt", "APT package manager", &self.config.apt_get_binary),
+                ("dpkg", "Debian package database", &self.config.dpkg_binary),
+            ]);
+        }
+        for (id, label, path) in required_tools {
             let available = executable(path);
             checks.push(check(
                 id,
@@ -260,7 +274,7 @@ impl HookInstaller {
                 blockers.push(match id {
                     "curl" => "curl is required for verified HTTPS downloads.",
                     "apt" => "apt-get is required for package installation.",
-                    "dpkg" => "dpkg is required to identify the host architecture.",
+                    "dpkg" => "dpkg is required for Debian package installs.",
                     "timeout" => "timeout is required to enforce command deadlines.",
                     _ => "systemctl is required to verify the installed service.",
                 });
@@ -500,26 +514,52 @@ impl HookInstaller {
             return Err("the host operating-system metadata is invalid".to_owned());
         }
         let values = parse_os_release(&body)?;
-        let architecture = self.runner.run(
-            &self.config.dpkg_binary,
-            &["--print-architecture".to_owned()],
-            Duration::from_secs(10),
-        )?;
-        let architecture = require_success(architecture, "dpkg architecture check")?
-            .trim()
-            .to_owned();
+        let architecture = self.host_architecture()?;
+        let name = values
+            .get("PRETTY_NAME")
+            .cloned()
+            .unwrap_or_else(|| "Linux".to_owned());
+        if let Some((id, codename)) = apt_repo_identity(&values) {
+            Ok(HostPlatform {
+                id,
+                name,
+                codename,
+                architecture,
+            })
+        } else {
+            Ok(HostPlatform {
+                id: required_platform_value(&values, "ID")?.to_ascii_lowercase(),
+                name,
+                codename: values
+                    .get("VERSION_CODENAME")
+                    .cloned()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase(),
+                architecture,
+            })
+        }
+    }
+
+    fn host_architecture(&self) -> Result<String, String> {
+        if executable(&self.config.dpkg_binary) {
+            if let Ok(output) = self.runner.run(
+                &self.config.dpkg_binary,
+                &["--print-architecture".to_owned()],
+                Duration::from_secs(10),
+            ) {
+                if output.success {
+                    let architecture = output.stdout.trim().to_owned();
+                    if valid_token(&architecture, 24) {
+                        return Ok(architecture);
+                    }
+                }
+            }
+        }
+        let architecture = debian_architecture_name();
         if !valid_token(&architecture, 24) {
             return Err("the host architecture is invalid".to_owned());
         }
-        Ok(HostPlatform {
-            id: required_platform_value(&values, "ID")?.to_ascii_lowercase(),
-            name: values
-                .get("PRETTY_NAME")
-                .cloned()
-                .unwrap_or_else(|| "Linux".to_owned()),
-            codename: required_platform_value(&values, "VERSION_CODENAME")?.to_ascii_lowercase(),
-            architecture,
-        })
+        Ok(architecture)
     }
 
     fn private_staging_directory(&self) -> Result<PathBuf, String> {
@@ -684,6 +724,61 @@ fn validate_hook_id(value: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err("this hook does not have a Helix installer".to_owned())
+    }
+}
+
+fn apt_repo_identity(values: &HashMap<String, String>) -> Option<(String, String)> {
+    let id = values.get("ID")?.to_ascii_lowercase();
+    if !valid_token(&id, 64) {
+        return None;
+    }
+    let like = values
+        .get("ID_LIKE")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    let like_tokens = like.split_whitespace().collect::<Vec<_>>();
+    let ubuntu_codename = values
+        .get("UBUNTU_CODENAME")
+        .or_else(|| values.get("VERSION_CODENAME"))
+        .map(|value| value.to_ascii_lowercase())
+        .filter(|value| valid_codename(value));
+    let debian_codename = values
+        .get("DEBIAN_CODENAME")
+        .or_else(|| values.get("VERSION_CODENAME"))
+        .map(|value| value.to_ascii_lowercase())
+        .filter(|value| valid_codename(value));
+
+    if id == "ubuntu" {
+        return ubuntu_codename
+            .or(debian_codename)
+            .map(|codename| (id, codename));
+    }
+    if id == "debian" {
+        return debian_codename
+            .or(ubuntu_codename)
+            .map(|codename| (id, codename));
+    }
+    if matches!(
+        id.as_str(),
+        "linuxmint" | "pop" | "elementary" | "zorin" | "neon"
+    ) || like_tokens.iter().any(|token| *token == "ubuntu")
+    {
+        return ubuntu_codename.map(|codename| ("ubuntu".to_owned(), codename));
+    }
+    if matches!(id.as_str(), "raspbian" | "raspberrypi" | "kali" | "devuan")
+        || like_tokens.iter().any(|token| *token == "debian")
+    {
+        return debian_codename.map(|codename| ("debian".to_owned(), codename));
+    }
+    None
+}
+
+fn debian_architecture_name() -> String {
+    match std::env::consts::ARCH {
+        "x86_64" => "amd64".to_owned(),
+        "aarch64" => "arm64".to_owned(),
+        "arm" => "armhf".to_owned(),
+        other => other.to_owned(),
     }
 }
 
@@ -962,6 +1057,46 @@ mod tests {
         assert_eq!(values["ID"], "ubuntu");
         assert_eq!(values["VERSION_CODENAME"], "noble");
         assert!(!values.contains_key("bad-key"));
+    }
+
+    #[test]
+    fn mint_and_pop_map_to_ubuntu_apt_identity() {
+        let mint = parse_os_release(
+            "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\nPRETTY_NAME=\"Linux Mint 22\"\nVERSION_CODENAME=wilma\nUBUNTU_CODENAME=noble\n",
+        )
+        .unwrap();
+        assert_eq!(
+            apt_repo_identity(&mint),
+            Some(("ubuntu".to_owned(), "noble".to_owned()))
+        );
+        let pop = parse_os_release(
+            "ID=pop\nID_LIKE=\"ubuntu debian\"\nPRETTY_NAME=\"Pop!_OS 24.04 LTS\"\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble\n",
+        )
+        .unwrap();
+        assert_eq!(
+            apt_repo_identity(&pop),
+            Some(("ubuntu".to_owned(), "noble".to_owned()))
+        );
+    }
+
+    #[test]
+    fn fedora_has_no_apt_repo_identity() {
+        let fedora = parse_os_release(
+            "ID=fedora\nID_LIKE=\"rhel centos fedora\"\nPRETTY_NAME=\"Fedora Linux 42\"\nVERSION_ID=42\n",
+        )
+        .unwrap();
+        assert_eq!(apt_repo_identity(&fedora), None);
+    }
+
+    #[test]
+    fn debian_architecture_name_uses_the_compiled_cpu() {
+        let architecture = debian_architecture_name();
+        assert!(
+            matches!(
+                architecture.as_str(),
+                "amd64" | "arm64" | "armhf" | "x86" | "riscv64"
+            ) || valid_token(&architecture, 24)
+        );
     }
 
     #[test]

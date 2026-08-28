@@ -8,7 +8,7 @@ installer, or binary release yet. Public-internet exposure is unsupported.
 
 Check these first:
 
-- [Getting Started](docs/wiki/Getting-Started.md), including the Ubuntu
+- [Getting Started](docs/wiki/Getting-Started.md), including the Linux
   from-source install;
 - [current verified status](PROGRESS.md);
 - [known next work and release gates](NEXT.md);
