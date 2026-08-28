@@ -8,6 +8,8 @@ Ubuntu 24.04 GitHub Actions passed the declared Rust 1.88/stable builds and one 
 
 This is not clean-VM, cross-version-upgrade, schema-downgrade, complete fault-injection, low-disk/power-loss, reference-performance, platform-support, signed-release, or supported-installer evidence. CI first verified the hosted runner's `/usr/share` ancestor was root-owned with its unusual `0777` mode, then normalized it to the conventional root-owned `0755` baseline so Helix's production path checks ran unchanged.
 
+On 64-bit Ubuntu 24.04 with systemd, `./scripts/install-from-source.sh` is the shortest path: it compiles this checkout, then uses sudo to install that same unsigned `helixd` package on loopback. Missing Rust 1.88+, Node.js 22.12+, or a C toolchain prints the exact apt/rustup commands. The script does not install `helix-privd`.
+
 Do not use development binaries as a production installation, and do not publish a one-line installer until clean-install, upgrade, rollback, uninstall, permission, interruption, and fault-injection tests pass on supported Ubuntu releases. The bundle checksum detects accidental or local bundle modification; it is not a signature or proof of publisher authenticity.
 
 ## Supported environment policy

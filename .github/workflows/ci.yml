@@ -56,6 +56,7 @@ jobs:
           bash -n
           scripts/package-common.sh
           scripts/install-local.sh
+          scripts/install-from-source.sh
           scripts/rollback-local.sh
           scripts/uninstall-local.sh
           scripts/build-release.sh
@@ -67,6 +68,7 @@ jobs:
           shellcheck -x
           scripts/package-common.sh
           scripts/install-local.sh
+          scripts/install-from-source.sh
           scripts/rollback-local.sh
           scripts/uninstall-local.sh
           scripts/build-release.sh

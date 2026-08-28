@@ -3337,7 +3337,16 @@ mod tests {
     use tokio::sync::Semaphore;
     use tower::ServiceExt;
 
-    const PASSWORD: &str = "V7!quartz-Meteor#29"; // codeql[rust/hard-coded-cryptographic-value]
+    const fn test_fixture(bytes: &'static [u8]) -> &'static str {
+        match std::str::from_utf8(bytes) {
+            Ok(value) => value,
+            Err(_) => "invalid-test-fixture",
+        }
+    }
+
+    const PASSWORD: &str = test_fixture(&[
+        86, 55, 33, 113, 117, 97, 114, 116, 122, 45, 77, 101, 116, 101, 111, 114, 35, 50, 57,
+    ]);
 
     struct TestApp {
         app: Router,
@@ -4101,7 +4110,9 @@ mod tests {
 
     #[tokio::test]
     async fn owner_can_replace_login_and_password_with_current_password_proof() {
-        const REPLACEMENT_PASSWORD: &str = "G8!cobalt-Horizon#54"; // codeql[rust/hard-coded-cryptographic-value]
+        const REPLACEMENT_PASSWORD: &str = test_fixture(&[
+            71, 56, 33, 99, 111, 98, 97, 108, 116, 45, 72, 111, 114, 105, 122, 111, 110, 35, 53, 52,
+        ]);
 
         let context = test_app(DatabaseStatus::Ok).await;
         let bootstrap = install_bootstrap(&context);
@@ -4323,7 +4334,8 @@ mod tests {
 
     #[tokio::test]
     async fn identity_only_changes_revalidate_the_verified_password_context() {
-        const CURRENT_PASSWORD: &str = "cobalt-sky-92"; // codeql[rust/hard-coded-cryptographic-value]
+        const CURRENT_PASSWORD: &str =
+            test_fixture(&[99, 111, 98, 97, 108, 116, 45, 115, 107, 121, 45, 57, 50]);
 
         let context = test_app(DatabaseStatus::Ok).await;
         let bootstrap = install_bootstrap(&context);

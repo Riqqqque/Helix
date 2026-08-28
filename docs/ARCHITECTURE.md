@@ -130,7 +130,7 @@ The foundation workspace uses these crates:
 | `helix-config` | Typed process configuration, validation, defaults, and filesystem path policy | Runtime state or arbitrary environment access throughout the codebase |
 | `helix-state` | Critical SQLite schema, migrations, repositories, transaction boundaries, and integrity checks | HTTP concerns, host polling, game files |
 | `helix-secrets` | Redacted master-key credentials, authenticated record envelopes, and closure-only plaintext access over `helix-state` | Credential provisioning, HTTP responses, config/env/CLI key loading, rotation orchestration |
-| `helix-strand-kit` | Non-executing preview project scaffolding, strict manifest parsing, and author-facing validation summaries | Package installation, signature trust, capability grants, host calls, sandboxing, or extension execution |
+| `helix-strand-kit` | Strand project scaffolding, `helix.strand/1` pack/unpack, and author-facing validation | Package installation, signature trust, capability grants, host-call sandboxing, or Wasm execution |
 | `helix-system` | Narrow read-only Linux host discovery and metric snapshots | Privileged mutation, persistent polling loops, policy decisions |
 | `helix-api` | Versioned HTTP contracts, routing, extraction, middleware, and response mapping | Direct SQL strings, root operations, business invariants defined only in handlers |
 | `helix-privd` | Closed broker protocol plus Linux host, storage, network, native-server, package, and integration operations | General shell RPC, arbitrary unit/binary execution, frontend state |

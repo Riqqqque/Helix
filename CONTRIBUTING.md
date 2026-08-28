@@ -36,12 +36,12 @@ A mocked Docker/process adapter is not proof that a real game lifecycle works.
 See [Development](docs/DEVELOPMENT.md) for repository conventions and platform limits.
 
 Strand ideas should begin with the
-[preview author workflow](docs/STRAND-DEVELOPMENT.md). Keep the generated
+[Strand author workflow](docs/STRAND-DEVELOPMENT.md). Keep the generated
 manifest at zero capabilities until the design has a concrete need, explain
 each requested capability in user-facing terms, and run
-`helixctl strand check` in the Strand repository. Preview metadata is welcome;
-an extension runtime, host call, native sidecar, or install path needs prior
-architecture and threat-model review.
+`helixctl strand check` in the Strand repository. UI zip install is
+implemented. Portable Wasm, a native sidecar, or extra host calls still need
+prior architecture and threat-model review.
 
 ## Required checks
 
@@ -73,8 +73,8 @@ it with a weaker claim.
 Shell packaging changes also require:
 
 ```text
-bash -n scripts/package-common.sh scripts/install-local.sh scripts/rollback-local.sh scripts/uninstall-local.sh scripts/build-release.sh scripts/test-linux-package.sh
-shellcheck -x scripts/package-common.sh scripts/install-local.sh scripts/rollback-local.sh scripts/uninstall-local.sh scripts/build-release.sh scripts/test-linux-package.sh
+bash -n scripts/package-common.sh scripts/install-local.sh scripts/install-from-source.sh scripts/rollback-local.sh scripts/uninstall-local.sh scripts/build-release.sh scripts/test-linux-package.sh
+shellcheck -x scripts/package-common.sh scripts/install-local.sh scripts/install-from-source.sh scripts/rollback-local.sh scripts/uninstall-local.sh scripts/build-release.sh scripts/test-linux-package.sh
 ```
 
 ## Pull requests

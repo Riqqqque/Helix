@@ -9,8 +9,14 @@ binary or package release yet.
 
 - Homarr import reads the current Homarr SQLite app catalog (http(s) hrefs from
   the container mounts) instead of telling you to export classic JSON by hand.
+- README CI badge tracks the latest push to `main`, and CodeQL uses the repo
+  query filter so local-path false positives stop reopening.
 
 ### Added
+
+- `scripts/install-from-source.sh` builds the unsigned local `helixd` package
+  on Ubuntu and installs it with sudo. Missing Rust/Node/C tools print the
+  exact apt/rustup commands. Host and game controls still need `helix-privd`.
 
 - Notifications bell for capacity warnings, dismissible Overview/Storage
   notices, a quiet Help link to the GitHub wiki, Valheim and Terraria native
