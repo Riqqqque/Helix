@@ -209,7 +209,7 @@ impl HookInstaller {
                     &os_detail,
                 ));
                 if matches!(hook_id, "tailscale" | "jellyfin") && !apt_supported {
-                    blockers.push("One-click Tailscale and Jellyfin installs currently require a Debian-family APT release (Debian, Ubuntu, or a derivative with UBUNTU_CODENAME / VERSION_CODENAME).");
+                    blockers.push("One-click Tailscale and Jellyfin installs currently require a Debian-family APT release (Debian, Ubuntu, or a derivative with UBUNTU_CODENAME or a Debian codename).");
                 }
                 let architecture_supported = match hook_id {
                     "jellyfin" => {
@@ -542,17 +542,18 @@ impl HookInstaller {
 
     fn host_architecture(&self) -> Result<String, String> {
         if executable(&self.config.dpkg_binary) {
-            if let Ok(output) = self.runner.run(
+            match self.runner.run(
                 &self.config.dpkg_binary,
                 &["--print-architecture".to_owned()],
                 Duration::from_secs(10),
             ) {
-                if output.success {
+                Ok(output) if output.success => {
                     let architecture = output.stdout.trim().to_owned();
                     if valid_token(&architecture, 24) {
                         return Ok(architecture);
                     }
                 }
+                _ => {}
             }
         }
         let architecture = debian_architecture_name();
@@ -727,6 +728,10 @@ fn validate_hook_id(value: &str) -> Result<(), String> {
     }
 }
 
+fn like_has(like: &str, token: &str) -> bool {
+    like.split_whitespace().any(|candidate| candidate == token)
+}
+
 fn apt_repo_identity(values: &HashMap<String, String>) -> Option<(String, String)> {
     let id = values.get("ID")?.to_ascii_lowercase();
     if !valid_token(&id, 64) {
@@ -736,37 +741,50 @@ fn apt_repo_identity(values: &HashMap<String, String>) -> Option<(String, String
         .get("ID_LIKE")
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_default();
-    let like_tokens = like.split_whitespace().collect::<Vec<_>>();
     let ubuntu_codename = values
         .get("UBUNTU_CODENAME")
-        .or_else(|| values.get("VERSION_CODENAME"))
+        .map(|value| value.to_ascii_lowercase())
+        .filter(|value| valid_codename(value));
+    let version_codename = values
+        .get("VERSION_CODENAME")
         .map(|value| value.to_ascii_lowercase())
         .filter(|value| valid_codename(value));
     let debian_codename = values
         .get("DEBIAN_CODENAME")
-        .or_else(|| values.get("VERSION_CODENAME"))
         .map(|value| value.to_ascii_lowercase())
-        .filter(|value| valid_codename(value));
+        .filter(|value| valid_codename(value))
+        .or(version_codename.clone());
 
     if id == "ubuntu" {
         return ubuntu_codename
-            .or(debian_codename)
+            .or(version_codename)
             .map(|codename| (id, codename));
     }
     if id == "debian" {
-        return debian_codename
-            .or(ubuntu_codename)
-            .map(|codename| (id, codename));
+        return debian_codename.map(|codename| (id, codename));
+    }
+    if (matches!(
+        id.as_str(),
+        "pop" | "elementary" | "zorin" | "neon" | "linuxlite" | "peppermint" | "bodhi"
+    ) || like_has(&like, "ubuntu"))
+        && let Some(codename) = ubuntu_codename
+    {
+        return Some(("ubuntu".to_owned(), codename));
     }
     if matches!(
         id.as_str(),
-        "linuxmint" | "pop" | "elementary" | "zorin" | "neon"
-    ) || like_tokens.iter().any(|token| *token == "ubuntu")
-    {
-        return ubuntu_codename.map(|codename| ("ubuntu".to_owned(), codename));
-    }
-    if matches!(id.as_str(), "raspbian" | "raspberrypi" | "kali" | "devuan")
-        || like_tokens.iter().any(|token| *token == "debian")
+        "raspbian"
+            | "raspberrypi"
+            | "kali"
+            | "devuan"
+            | "linuxmint"
+            | "deepin"
+            | "uos"
+            | "mx"
+            | "parrot"
+            | "pureos"
+            | "trisquel"
+    ) || like_has(&like, "debian")
     {
         return debian_codename.map(|codename| ("debian".to_owned(), codename));
     }
@@ -1086,6 +1104,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(apt_repo_identity(&fedora), None);
+        let bazzite = parse_os_release(
+            "ID=bazzite\nID_LIKE=fedora\nPRETTY_NAME=\"Bazzite\"\nVERSION_ID=42\n",
+        )
+        .unwrap();
+        assert_eq!(apt_repo_identity(&bazzite), None);
+    }
+
+    #[test]
+    fn debian_derivatives_map_to_debian_apt_identity() {
+        let lmde = parse_os_release(
+            "ID=linuxmint\nID_LIKE=debian\nPRETTY_NAME=\"LMDE 6\"\nVERSION_CODENAME=faye\nDEBIAN_CODENAME=bookworm\n",
+        )
+        .unwrap();
+        assert_eq!(
+            apt_repo_identity(&lmde),
+            Some(("debian".to_owned(), "bookworm".to_owned()))
+        );
+        let kali = parse_os_release(
+            "ID=kali\nID_LIKE=debian\nPRETTY_NAME=\"Kali GNU/Linux Rolling\"\nVERSION_CODENAME=kali-rolling\n",
+        )
+        .unwrap();
+        assert_eq!(
+            apt_repo_identity(&kali),
+            Some(("debian".to_owned(), "kali-rolling".to_owned()))
+        );
+        let deepin = parse_os_release(
+            "ID=deepin\nID_LIKE=debian\nPRETTY_NAME=\"Deepin 23\"\nVERSION_CODENAME=beige\n",
+        )
+        .unwrap();
+        assert_eq!(
+            apt_repo_identity(&deepin),
+            Some(("debian".to_owned(), "beige".to_owned()))
+        );
     }
 
     #[test]

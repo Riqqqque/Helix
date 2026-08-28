@@ -13,13 +13,19 @@ binary or package release yet.
   query filter so local-path false positives stop reopening.
 - The local package uses the distro nologin path for the `helix` account, and
   hook one-click preflight no longer demands APT/dpkg on Fedora-style hosts.
+- Linux Mint Debian Edition maps Tailscale/Jellyfin repos to Debian instead of
+  inventing an Ubuntu suite from Mint's VERSION_CODENAME.
+- From-source `--install-deps` follows the usual `/etc/os-release` symlink, so
+  Debian, Ubuntu, Fedora, and Arch are not treated as an unknown distro.
 
 ### Added
 
 - `scripts/install-from-source.sh` builds the unsigned local `helixd` package
   on systemd Linux and installs it with sudo. Missing compiler tools print
-  apt, dnf, zypper, pacman, or apk commands; `--install-deps` installs those
-  packages. Host and game controls still need `helix-privd`.
+  apt, dnf/yum, zypper, pacman, apk, or emerge commands; `--install-deps`
+  installs those packages. The installer follows `/etc/os-release` through the
+  usual distro symlink, accepts pkgconf, and requires GNU coreutils. Host and
+  game controls still need `helix-privd`.
 
 - Notifications bell for capacity warnings, dismissible Overview/Storage
   notices, a quiet Help link to the GitHub wiki, Valheim and Terraria native

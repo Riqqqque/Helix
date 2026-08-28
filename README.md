@@ -93,12 +93,13 @@ sudo -u helix -- helixctl --config /etc/helix/helix.toml setup-token
 ```
 
 Open http://127.0.0.1:8080 and paste the token. Missing compiler tools print
-the matching apt, dnf, zypper, pacman, or apk commands, plus rustup and Node
+the matching apt, dnf/yum, zypper, pacman, apk, or emerge commands, plus rustup and Node
 22.12+. Pass `--install-deps` to install only those compiler packages.
 
-Debian, Ubuntu, Mint, Pop!_OS, Fedora, RHEL-family, openSUSE, and Arch are
-the intended source-install targets. PID 1 must be systemd. First compile
-takes a while.
+Debian, Ubuntu, Mint, Pop!_OS, Fedora, RHEL-family, openSUSE, Arch, and
+other systemd GNU/Linux distros are the intended source-install targets.
+PID 1 must be systemd. First compile takes a while. NixOS and Guix are
+not FHS targets.
 
 That package is `helixd` on loopback. It does not install `helix-privd`, so
 host files, firewall, packages, and native game servers stay unavailable until

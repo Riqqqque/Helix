@@ -11,16 +11,18 @@ This is not clean-VM, cross-version-upgrade, schema-downgrade, complete fault-in
 On 64-bit systemd Linux (x86_64 or aarch64), `./scripts/install-from-source.sh`
 is the shortest path: it compiles this checkout, then uses sudo to install that
 same unsigned `helixd` package on loopback. Missing compiler tools print apt,
-dnf, zypper, pacman, or apk commands; `--install-deps` installs those packages.
-Rust 1.88+ and Node.js 22.12+ are still required. The script does not install
-`helix-privd`. Debian/Ubuntu, Fedora/RHEL-family, openSUSE, and Arch are the
-intended targets. PID 1 must be systemd.
+dnf/yum, zypper, pacman, apk, or emerge commands; `--install-deps` installs those
+packages. Rust 1.88+ and Node.js 22.12+ are still required. The script does not
+install `helix-privd`. Debian/Ubuntu, Fedora/RHEL-family (including Amazon Linux
+and Rocky), openSUSE, Arch, Gentoo (systemd), and other GNU-userland systemd
+distros are the intended compile/install targets. PID 1 must be systemd. NixOS
+and Guix are not FHS targets. BusyBox userland (default Alpine) is not enough.
 
 Do not use development binaries as a production installation, and do not publish a one-line installer until clean-install, upgrade, rollback, uninstall, permission, interruption, and fault-injection tests pass on supported Ubuntu releases. The bundle checksum detects accidental or local bundle modification; it is not a signature or proof of publisher authenticity.
 
 ## Supported environment policy
 
-The first supported environment will be a documented set of 64-bit Ubuntu Server releases using systemd and cgroup v2. Exact releases and architectures must be chosen from current upstream support information and tested before publication. “Linux” by itself is not a useful compatibility claim. The from-source installer still targets other systemd GNU-userland distros (Fedora/RHEL-family, openSUSE, Arch, Debian derivatives); those are intended to compile and install `helixd`, not a claim that APT, UFW, or one-click hooks were validated there.
+The first supported environment will be a documented set of 64-bit Ubuntu Server releases using systemd and cgroup v2. Exact releases and architectures must be chosen from current upstream support information and tested before publication. “Linux” by itself is not a useful compatibility claim. The from-source installer still targets other systemd GNU-userland distros (Fedora/RHEL-family, openSUSE, Arch, Debian derivatives, Gentoo with systemd); those are intended to compile and install `helixd`, not a claim that APT, UFW, or one-click hooks were validated there. NixOS and Guix are not installer targets.
 
 The package must not require these technologies for Helix itself:
 

@@ -22,9 +22,10 @@ its separate loopback API adapter. Docker start/stop/restart uses the typed
 container-action route and refuses Helix dashboard/gateway names.
 
 When a service is absent, Helix runs a read-only host preflight first. On a
-Debian-family APT host (Debian, Ubuntu, Mint, Pop!_OS, and similar), Tailscale
-and Jellyfin have one-click installers. Fedora, openSUSE, and Arch get an
-honest blocked/guided result instead of a fake APT path. Each installer accepts
+Debian-family APT host (Debian, Ubuntu, Mint Ubuntu edition, Pop!_OS, LMDE,
+and similar), Tailscale and Jellyfin have one-click installers. Fedora,
+openSUSE, and Arch get an honest blocked/guided result instead of a fake APT
+path. Each installer accepts
 only one built-in hook ID, downloads repository material from the publisher's
 exact HTTPS host, validates the repository definition, adds the exact signed
 APT source, installs the exact allowlisted package, enables the exact systemd
