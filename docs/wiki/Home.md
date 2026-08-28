@@ -20,7 +20,7 @@ not imply production support or a completed security review.
 Helix brings the common jobs for one server into one place:
 
 - multiple exportable Home layouts with drag-and-drop/resizable status, clock,
-  weather, graphs, Docker, paged-note, and shortcut widgets plus color controls;
+  weather, graphs, Docker, paged-note, shortcut, and Strand widgets plus color controls;
   pin the site to open Home, or use full-screen Home;
 - live host, storage, network, service, process, Docker, and Helix resource views;
 - a Security center for explained, confirmed host and Helix protections;
@@ -36,7 +36,10 @@ Helix brings the common jobs for one server into one place:
   Helix-native;
 - Hooks for Plex, AMP, Tailscale, Pterodactyl Wings, Jellyfin, Docker, and
   Portainer, including eligible one-click Tailscale/Jellyfin installs;
-- an optional current-password-gated non-root Linux PTY; and
+- an optional current-password-gated non-root Linux PTY;
+- Strands: drop in someone else's `.strand.zip` (or pack your own) for isolated
+  pages/widgets that can call metrics, namespaced storage, or an allowlisted
+  HTTPS API; and
 - selected APT updates, immediate/recurring host reboot, UFW safety activation,
   and exact Helix start-on-boot controls with explicit preflight/confirmation.
 
@@ -67,7 +70,7 @@ addresses and storage roots. Nothing ships with a demo city or demo server.
 ## Important limits
 
 Broad/unattended package upgrades, signed Helix self-update, public-network
-exposure, and a third-party Strand runtime are not implemented. Exact selected
+exposure, portable Wasm Strands, and native Strand sidecars are not implemented. Exact selected
 APT candidates do have a guarded path but no rollback claim. Helix can inspect
 UFW, manage exact owned allow rules, and separately enable inactive UFW only
 after preserving a verified SSH listener; it cannot configure a router or prove

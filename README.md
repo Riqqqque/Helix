@@ -203,16 +203,18 @@ host yet.
 
 ## Make a Strand
 
-A Strand is Helix's planned extension unit. The current Strand Kit can scaffold
-and validate a manifest-only preview project:
+A Strand is a zip you can drop onto Helix: isolated dashboard HTML plus declared
+host calls. Pack one and share the zip; there is no Helix-operated store.
 
 ```text
-helixctl strand new system-health --name "System Health" --publisher "Your name"
-helixctl strand check system-health
+helixctl strand new vacuum-status --name "Vacuum status" --publisher "Your name"
+helixctl strand check vacuum-status
+helixctl strand pack vacuum-status -o vacuum-status.strand.zip
 ```
 
-The preview starts with no permissions and cannot be installed or executed by
-Helix. See [Building a Strand](docs/STRAND-DEVELOPMENT.md).
+Install the zip from the dashboard **Strands** page. See
+[Building a Strand](docs/STRAND-DEVELOPMENT.md). Portable Wasm is still preview
+metadata only.
 
 ## Build the source
 

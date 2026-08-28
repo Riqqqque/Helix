@@ -50,9 +50,11 @@ binary or package release yet.
   filtering, instance detail and capability-driven tabs, plus a protected
   readiness API that keeps production controls locked until restore, broker,
   and native-execution gates are real.
-- A non-executing Strand Kit preview with atomic no-overwrite project
-  scaffolding, strict bounded manifest validation, CLI summaries, a checked
-  reference project, and an author guide.
+- Installable UI Strands: pack a zip, drop it on the Strands page or paste an
+  https zip URL, review the exact host calls, then Enable. Isolated pages and
+  Home widgets can read bounded metrics, keep their own key/value store, and
+  call allowlisted HTTPS APIs. There is no Helix store and no Wasm/native
+  sidecar runtime.
 - A full private-LAN dashboard with Overview, multi-layout Home, Storage,
   Network, Host, Terminal, Servers, Hooks, and Settings pages; reorderable
   navigation; and bounded color/theme controls.

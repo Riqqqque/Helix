@@ -38,7 +38,8 @@ fn scaffold_and_check_do_not_require_a_helix_installation() {
         output_text(&created.stderr)
     );
     assert!(destination.join("strand.toml").is_file());
-    assert!(output_text(&created.stdout).contains("cannot install or run Strands yet"));
+    assert!(destination.join("ui").join("index.html").is_file());
+    assert!(output_text(&created.stdout).contains("Pack with helixctl strand pack"));
 
     let checked = helixctl()
         .env("HELIX_CONFIG", missing_config)
@@ -53,9 +54,33 @@ fn scaffold_and_check_do_not_require_a_helix_installation() {
         output_text(&checked.stderr)
     );
     let stdout = output_text(&checked.stdout);
-    assert!(stdout.contains("Strand manifest is valid"));
+    assert!(stdout.contains("Strand manifest is valid and can be packed"));
     assert!(stdout.contains("Capabilities: none (deny by default)"));
-    assert!(stdout.contains("Execution status: not installable or runnable"));
+    assert!(stdout.contains("Installable: yes"));
+
+    let zip = temp.path().join("status-card.strand.zip");
+    let packed = helixctl()
+        .args(["strand", "pack"])
+        .arg(&destination)
+        .args(["-o"])
+        .arg(&zip)
+        .output()
+        .expect("pack Strand");
+    assert!(
+        packed.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        output_text(&packed.stdout),
+        output_text(&packed.stderr)
+    );
+    assert!(zip.is_file());
+
+    let inspected = helixctl()
+        .args(["strand", "inspect"])
+        .arg(&zip)
+        .output()
+        .expect("inspect Strand");
+    assert!(inspected.status.success());
+    assert!(output_text(&inspected.stdout).contains("ui/index.html"));
 
     let rejected_options = helixctl()
         .arg("--data-dir")

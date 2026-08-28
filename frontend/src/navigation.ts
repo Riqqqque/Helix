@@ -8,6 +8,7 @@ export const dashboardSectionIds = [
   'terminal',
   'servers',
   'hooks',
+  'strands',
   'settings',
 ] as const;
 
@@ -23,6 +24,9 @@ export function dashboardSectionForHash(hash: string): DashboardSectionId {
     candidate.startsWith('games/')
   ) {
     return 'servers';
+  }
+  if (candidate === 'strands' || candidate.startsWith('strands/')) {
+    return 'strands';
   }
   return dashboardSectionIds.find((id) => id === candidate) ?? 'home';
 }

@@ -4,6 +4,8 @@ mod auth;
 mod marketplace_media;
 mod server_media;
 mod static_root;
+mod strand_net;
+mod strands;
 mod terminal;
 mod weather;
 
@@ -423,6 +425,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             get(user_preferences).put(update_user_preferences),
         )
         .layer(DefaultBodyLimit::max(80 * 1024));
+    let strand_api = strands::routes();
     let api = Router::new()
         .route("/health", get(detailed_health))
         .route("/system/overview", get(system_overview))
@@ -432,6 +435,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .merge(auth_api)
         .merge(terminal_api)
         .merge(settings_api)
+        .merge(strand_api)
         .fallback(api_not_found)
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
@@ -758,6 +762,7 @@ enum PrimaryDashboardSection {
     Terminal,
     Servers,
     Hooks,
+    Strands,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -772,6 +777,7 @@ enum HomeWidgetKind {
     Shortcut,
     Graphs,
     Docker,
+    Strand,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -897,6 +903,7 @@ impl Default for DashboardPreferences {
                 PrimaryDashboardSection::Terminal,
                 PrimaryDashboardSection::Servers,
                 PrimaryDashboardSection::Hooks,
+                PrimaryDashboardSection::Strands,
             ],
             metrics_refresh_ms: 1_000,
             home_widgets: home_widgets.clone(),
@@ -1090,6 +1097,14 @@ fn reconcile_legacy_home_preferences(preferences: &mut DashboardPreferences) {
             .navigation_order
             .push(PrimaryDashboardSection::Hooks);
     }
+    if !preferences
+        .navigation_order
+        .contains(&PrimaryDashboardSection::Strands)
+    {
+        preferences
+            .navigation_order
+            .push(PrimaryDashboardSection::Strands);
+    }
     if preferences.home_templates.is_empty() {
         preferences.home_templates.push(HomeTemplatePreference {
             id: "home-main".to_owned(),
@@ -1123,7 +1138,7 @@ fn validate_dashboard_preferences(preferences: &DashboardPreferences) -> Result<
     if !matches!(
         preferences.metrics_refresh_ms,
         1_000 | 2_000 | 5_000 | 10_000 | 30_000
-    ) || preferences.navigation_order.len() != 9
+    ) || preferences.navigation_order.len() != 10
         || preferences.home_widgets.len() > 32
         || preferences.home_templates.is_empty()
         || preferences.home_templates.len() > 8
@@ -1142,13 +1157,14 @@ fn validate_dashboard_preferences(preferences: &DashboardPreferences) -> Result<
             PrimaryDashboardSection::Terminal => 1 << 6,
             PrimaryDashboardSection::Servers => 1 << 7,
             PrimaryDashboardSection::Hooks => 1 << 8,
+            PrimaryDashboardSection::Strands => 1 << 9,
         };
         if section_mask & bit != 0 {
             return Err(());
         }
         section_mask |= bit;
     }
-    if section_mask != 0b1_1111_1111 {
+    if section_mask != 0b11_1111_1111 {
         return Err(());
     }
 
@@ -1219,6 +1235,16 @@ fn validate_home_widgets(widgets: &[HomeWidgetPreference]) -> Result<(), ()> {
             HomeWidgetKind::Shortcut => {
                 let uri = widget.url.parse::<axum::http::Uri>().map_err(|_| ())?;
                 if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.authority().is_none()
+                {
+                    return Err(());
+                }
+            }
+            HomeWidgetKind::Strand => {
+                if widget.url.len() != 36
+                    || widget
+                        .url
+                        .bytes()
+                        .any(|byte| !byte.is_ascii_hexdigit() && byte != b'-')
                 {
                     return Err(());
                 }
@@ -2888,6 +2914,9 @@ pub(crate) enum ApiError {
     PreferenceWriteRateLimited,
     ServerAppearanceConflict,
     StorageAnalysisRateLimited,
+    StrandBusy,
+    StrandConflict,
+    StrandRejected(String),
     TerminalCapacityExhausted,
     TerminalTicketRejected,
     TerminalUnavailable,
@@ -2917,6 +2946,17 @@ impl IntoResponse for ApiError {
                     [(header::CACHE_CONTROL, "no-store")],
                     Json(serde_json::json!({
                         "code": "broker_operation_rejected",
+                        "message": message,
+                    })),
+                )
+                    .into_response();
+            }
+            Self::StrandRejected(message) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    [(header::CACHE_CONTROL, "no-store")],
+                    Json(serde_json::json!({
+                        "code": "strand_rejected",
                         "message": message,
                     })),
                 )
@@ -2983,6 +3023,7 @@ impl IntoResponse for ApiError {
                 Some(HeaderValue::from_static("2")),
             ),
             Self::BrokerRejected(_) => unreachable!("handled before the static problem match"),
+            Self::StrandRejected(_) => unreachable!("handled before the static problem match"),
             Self::CrossSiteRequest => (
                 StatusCode::FORBIDDEN,
                 ApiProblem {
@@ -3110,6 +3151,22 @@ impl IntoResponse for ApiError {
                     message: "Storage analysis requests are being sent too quickly.",
                 },
                 Some(HeaderValue::from_static("60")),
+            ),
+            Self::StrandBusy => (
+                StatusCode::TOO_MANY_REQUESTS,
+                ApiProblem {
+                    code: "strand_busy",
+                    message: "This Strand is over its call limit.",
+                },
+                Some(HeaderValue::from_static("60")),
+            ),
+            Self::StrandConflict => (
+                StatusCode::CONFLICT,
+                ApiProblem {
+                    code: "strand_conflict",
+                    message: "A different Strand is already installed with that slug.",
+                },
+                None,
             ),
             Self::TerminalCapacityExhausted => (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -3542,6 +3599,7 @@ mod tests {
                 PrimaryDashboardSection::Terminal,
                 PrimaryDashboardSection::Servers,
                 PrimaryDashboardSection::Hooks,
+                PrimaryDashboardSection::Strands,
             ],
             metrics_refresh_ms: 1_000,
             home_widgets: home_widgets.clone(),
@@ -6327,5 +6385,280 @@ mod tests {
             .await
             .expect("liveness response");
         assert_eq!(liveness.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn ui_strands_can_be_installed_enabled_and_asked_for_metrics() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let bootstrap = install_bootstrap(&context);
+        let client = claim_owner(&context, &bootstrap).await;
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("examples")
+            .join("strands")
+            .join("system-health");
+        let bytes = helix_strand_kit::pack_strand_project(&root).expect("pack example");
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+
+        let listed = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(get("/api/v1/strands"), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .expect("list empty");
+        assert_eq!(listed.status(), StatusCode::OK);
+        assert_eq!(response_json(listed).await["strands"], json!([]));
+
+        let installed = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    post_json(
+                        "/api/v1/strands",
+                        &json!({
+                            "source": "upload",
+                            "filename": "system-health.strand.zip",
+                            "bytesBase64": encoded
+                        }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("install");
+        assert_eq!(installed.status(), StatusCode::CREATED);
+        let installed = response_json(installed).await;
+        assert_eq!(installed["slug"], "system-health");
+        assert_eq!(installed["enabled"], false);
+        let strand_id = installed["id"].as_str().expect("id").to_owned();
+
+        let enabled = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    put_json(
+                        &format!("/api/v1/strands/{strand_id}"),
+                        &json!({ "enabled": true }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("enable");
+        assert_eq!(enabled.status(), StatusCode::OK);
+        assert_eq!(response_json(enabled).await["enabled"], true);
+
+        let called = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    post_json(
+                        &format!("/api/v1/strands/{strand_id}/host"),
+                        &json!({ "method": "metrics.snapshot", "params": {} }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("host call");
+        assert_eq!(called.status(), StatusCode::OK);
+        let snapshot = response_json(called).await;
+        assert!(snapshot["helixVersion"].as_str().is_some());
+        assert!(snapshot["memoryTotalBytes"].as_u64().is_some());
+
+        let ui = context
+            .app
+            .clone()
+            .oneshot(with_cookie(
+                get(&format!("/api/v1/strands/{strand_id}/files/ui/index.html")),
+                &client.cookie,
+            ))
+            .await
+            .expect("ui file");
+        assert_eq!(ui.status(), StatusCode::OK);
+        let csp = ui
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .expect("csp")
+            .to_str()
+            .expect("csp ascii");
+        assert!(csp.contains("unsafe-inline"));
+        assert!(csp.contains("frame-ancestors 'self'"));
+
+        let disabled = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    put_json(
+                        &format!("/api/v1/strands/{strand_id}"),
+                        &json!({ "enabled": false }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("disable");
+        assert_eq!(disabled.status(), StatusCode::OK);
+
+        let denied = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    post_json(
+                        &format!("/api/v1/strands/{strand_id}/host"),
+                        &json!({ "method": "metrics.snapshot", "params": {} }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("disabled host call");
+        assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_json(denied).await["code"], "strand_rejected");
+
+        let hidden = context
+            .app
+            .clone()
+            .oneshot(with_cookie(
+                get(&format!("/api/v1/strands/{strand_id}/files/ui/index.html")),
+                &client.cookie,
+            ))
+            .await
+            .expect("disabled ui file");
+        assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn https_strands_reject_private_targets_and_remember_updates() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let bootstrap = install_bootstrap(&context);
+        let client = claim_owner(&context, &bootstrap).await;
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("examples")
+            .join("strands")
+            .join("https-probe");
+        let bytes = helix_strand_kit::pack_strand_project(&root).expect("pack https-probe");
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+        let source = json!({
+            "source": "upload",
+            "filename": "https-probe.strand.zip",
+            "bytesBase64": encoded
+        });
+
+        let inspected = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    post_json("/api/v1/strands/inspect", &source, 1),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("inspect");
+        assert_eq!(inspected.status(), StatusCode::OK);
+        let inspected = response_json(inspected).await;
+        assert_eq!(inspected["alreadyInstalled"], false);
+        assert_eq!(inspected["slug"], "https-probe");
+
+        let installed = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(post_json("/api/v1/strands", &source, 1), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .expect("install https-probe");
+        assert_eq!(installed.status(), StatusCode::CREATED);
+        let installed = response_json(installed).await;
+        let strand_id = installed["id"].as_str().expect("id").to_owned();
+
+        let again = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    post_json("/api/v1/strands/inspect", &source, 1),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("inspect existing");
+        assert_eq!(response_json(again).await["alreadyInstalled"], true);
+
+        let enabled = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    put_json(
+                        &format!("/api/v1/strands/{strand_id}"),
+                        &json!({ "enabled": true }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("enable https-probe");
+        assert_eq!(enabled.status(), StatusCode::OK);
+
+        let private_target = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    post_json(
+                        &format!("/api/v1/strands/{strand_id}/host"),
+                        &json!({
+                            "method": "net.fetch",
+                            "params": { "method": "GET", "url": "https://127.0.0.1/" }
+                        }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("ssrf host call");
+        assert_eq!(private_target.status(), StatusCode::BAD_REQUEST);
+
+        let updated = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(post_json("/api/v1/strands", &source, 1), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .expect("reinstall");
+        assert_eq!(updated.status(), StatusCode::CREATED);
+        assert_eq!(response_json(updated).await["enabled"], false);
     }
 }

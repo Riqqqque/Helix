@@ -232,6 +232,26 @@ the node configuration and credentials. There is no caller-supplied package,
 repository, unit, executable, remote install script, upstream account login, or
 claim of full upstream API parity.
 
+### Strands
+
+| Method | Route | Capability | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/strands` | `system.view` | List installed UI-only packages |
+| `POST` | `/api/v1/strands/inspect` | `system.settings.write` | Review a zip upload or https zip URL without installing |
+| `POST` | `/api/v1/strands` | `system.settings.write` | Install or replace a package (starts disabled) |
+| `PUT` | `/api/v1/strands/{id}` | `system.settings.write` | Enable or disable host calls and UI files |
+| `DELETE` | `/api/v1/strands/{id}` | `system.settings.write` | Remove the package and its namespaced storage |
+| `GET` | `/api/v1/strands/{id}/package` | `system.view` | Export the stored zip |
+| `GET` | `/api/v1/strands/{id}/files/{*asset}` | `system.view` | Serve a sandboxed UI asset (session cookie, no CSRF) |
+| `POST` | `/api/v1/strands/{id}/host` | `system.view` | Run a declared host call for an enabled Strand |
+
+Installable packages are `helix.strand/1` UI-only zips. Host methods are
+`metrics.snapshot`, `storage.get|set|delete|list`, and `net.fetch`. HTTPS is
+origin-allowlisted and blocked from private/link-local/metadata addresses.
+Replacing the same UUID keeps KV and sets `enabled` to false. Portable Wasm is
+not a runtime. There is no Helix-operated store and no signature check;
+unsigned zips are owner-authorized.
+
 ### Optional host terminal
 
 | Method | Route | Capability | Purpose |
@@ -428,7 +448,9 @@ an optimistic frontend transition succeeded.
 - URLs and redirects are HTTPS/host constrained per integration.
 - Downloaded marketplace/runtime artifacts are bounded and checked against the
   evidence available from their upstream contract.
-- User-visible text is escaped by the frontend; no third-party HTML is injected.
+- User-visible Helix chrome is escaped by the frontend. Strand UI is third-party
+  HTML served into a sandboxed iframe with `connect-src 'none'` and no
+  `allow-same-origin`.
 
 ## Compatibility and release limits
 

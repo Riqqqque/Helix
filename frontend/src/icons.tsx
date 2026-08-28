@@ -8,6 +8,7 @@ export type IconName =
   | 'host'
   | 'servers'
   | 'hooks'
+  | 'strands'
   | 'terminal'
   | 'refresh'
   | 'user'
@@ -57,6 +58,7 @@ const paths: Record<IconName, JSX.Element> = {
   host: <><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h7M11 17.5h7"/></>,
   servers: <><path d="M4 8h16l1 10H3L4 8Z"/><path d="M8 8V5h8v3M8 18v2M16 18v2M8 13h.01M12 13h4"/></>,
   hooks: <><path d="M8.5 5.5 6 3 3 6l2.5 2.5"/><path d="m15.5 18.5 2.5 2.5 3-3-2.5-2.5"/><path d="m6 8 10 10"/><path d="M14 6.5A4.5 4.5 0 0 1 20.5 3L17 6.5l.5 2.5 2.5.5 1-1A4.5 4.5 0 0 1 14 13"/><path d="M10 11 3 18l3 3 7-7"/></>,
+  strands: <><path d="M7 4c4 0 6 4 10 4s4-4 4-4"/><path d="M7 12c4 0 6 4 10 4s4-4 4-4"/><path d="M7 20c4 0 6-4 10-4"/><path d="M5 4v16"/></>,
   terminal: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/><path d="M3 8h18"/></>,
   refresh: <><path d="M20 11a8 8 0 0 0-14.8-4L3 10"/><path d="M3 4v6h6M4 13a8 8 0 0 0 14.8 4L21 14"/><path d="M21 20v-6h-6"/></>,
   user: <><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></>,

@@ -1,8 +1,9 @@
-//! Development-only scaffolding and validation for preview Strand packages.
+//! Scaffolding, validation, and zip packaging for Strand extensions.
 //!
-//! This crate deliberately contains no extension runtime, host API, installer,
-//! or WebAssembly engine. It lets authors shape and check package metadata
-//! without adding resident cost or pretending the execution boundary is ready.
+//! `helix.strand/1` UI-only packages can be packed and installed. Portable Wasm
+//! and native sidecars stay preview-only until their isolated host exists.
+
+mod package;
 
 use semver::{Op, Version, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -16,13 +17,28 @@ use std::{
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use package::{
+    MAX_FILE_BYTES, MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES, MAX_UNCOMPRESSED_BYTES, StrandAsset,
+    UnpackedStrand, content_type_for_asset, hex_sha256, pack_strand_project, unpack_strand_package,
+};
+
 pub const PREVIEW_SCHEMA: &str = "helix.strand/preview-1";
+pub const INSTALL_SCHEMA: &str = "helix.strand/1";
 pub const PREVIEW_HOST_API: &str = "preview-1";
+pub const INSTALL_HOST_API: &str = "1";
 pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 pub const MAX_CAPABILITIES: usize = 32;
+pub const MAX_CAPABILITY_ORIGINS: usize = 8;
 
 const DEFAULT_HELIX_COMPATIBILITY: &str = ">=0.1.0-alpha.1, <0.2.0";
 const DEFAULT_LICENSE: &str = "AGPL-3.0-or-later";
+const INSTALLABLE_CAPABILITIES: &[&str] = &[
+    "helix:metrics.read",
+    "helix:storage.kv",
+    "helix:net.https",
+    "helix:ui.page",
+    "helix:ui.widget",
+];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -47,6 +63,14 @@ pub struct CapabilityRequest {
     pub reason: String,
     #[serde(default)]
     pub optional: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub origins: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiSpec {
+    pub entry: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -98,11 +122,14 @@ struct ManifestDocument {
     capabilities: Vec<CapabilityRequest>,
     compatibility: Compatibility,
     limits: ResourceLimits,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ui: Option<UiSpec>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedManifest {
     pub path: PathBuf,
+    pub schema: String,
     pub id: Uuid,
     pub slug: String,
     pub name: String,
@@ -113,7 +140,30 @@ pub struct ValidatedManifest {
     pub kind: StrandKind,
     pub capabilities: Vec<CapabilityRequest>,
     pub helix_compatibility: VersionReq,
+    pub host_api: String,
     pub limits: ResourceLimits,
+    pub ui_entry: Option<String>,
+    pub installable: bool,
+}
+
+impl ValidatedManifest {
+    pub fn ensure_helix_compatible(&self, helix_version: &str) -> Result<(), StrandKitError> {
+        let version =
+            Version::parse(helix_version).map_err(|error| StrandKitError::PackageInvalid {
+                message: format!("Helix version is not valid SemVer: {error}"),
+            })?;
+        if self.helix_compatibility.matches(&version) {
+            Ok(())
+        } else {
+            Err(StrandKitError::NotInstallable {
+                path: self.path.clone(),
+                message: format!(
+                    "this Strand requires Helix {}; this host is {helix_version}",
+                    self.helix_compatibility
+                ),
+            })
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -177,6 +227,12 @@ pub enum StrandKitError {
     DestinationExists { path: PathBuf },
     #[error("invalid Strand destination {path}: {message}")]
     InvalidDestination { path: PathBuf, message: String },
+    #[error("Strand package is not installable: {message}")]
+    NotInstallable { path: PathBuf, message: String },
+    #[error("Strand package is invalid: {message}")]
+    PackageInvalid { message: String },
+    #[error("Strand package exceeds the {maximum}-byte zip limit (observed {observed} bytes)")]
+    PackageTooLarge { observed: u64, maximum: u64 },
     #[error(transparent)]
     Validation(#[from] ManifestValidationError),
 }
@@ -312,8 +368,13 @@ pub fn scaffold_strand(options: &ScaffoldOptions) -> Result<ScaffoldResult, Stra
         .name
         .clone()
         .unwrap_or_else(|| display_name_from_slug(&options.slug));
+    let installable = options.kind == StrandKind::UiOnly;
     let document = ManifestDocument {
-        schema: PREVIEW_SCHEMA.to_owned(),
+        schema: if installable {
+            INSTALL_SCHEMA.to_owned()
+        } else {
+            PREVIEW_SCHEMA.to_owned()
+        },
         id: Uuid::new_v4().hyphenated().to_string(),
         slug: options.slug.clone(),
         name: name.clone(),
@@ -325,9 +386,16 @@ pub fn scaffold_strand(options: &ScaffoldOptions) -> Result<ScaffoldResult, Stra
         capabilities: Vec::new(),
         compatibility: Compatibility {
             helix: DEFAULT_HELIX_COMPATIBILITY.to_owned(),
-            host_api: PREVIEW_HOST_API.to_owned(),
+            host_api: if installable {
+                INSTALL_HOST_API.to_owned()
+            } else {
+                PREVIEW_HOST_API.to_owned()
+            },
         },
         limits: ResourceLimits::default(),
+        ui: installable.then(|| UiSpec {
+            entry: "ui/index.html".to_owned(),
+        }),
     };
     validate_document(destination.join("strand.toml"), document.clone())?;
 
@@ -340,30 +408,56 @@ pub fn scaffold_strand(options: &ScaffoldOptions) -> Result<ScaffoldResult, Stra
             source,
         })?;
     let staged_root = temporary.path();
-    fs::create_dir(staged_root.join("src")).map_err(|source| StrandKitError::Io {
-        operation: "create",
-        path: staged_root.join("src"),
-        source,
-    })?;
+    if installable {
+        fs::create_dir(staged_root.join("ui")).map_err(|source| StrandKitError::Io {
+            operation: "create",
+            path: staged_root.join("ui"),
+            source,
+        })?;
+    } else {
+        fs::create_dir(staged_root.join("src")).map_err(|source| StrandKitError::Io {
+            operation: "create",
+            path: staged_root.join("src"),
+            source,
+        })?;
+    }
 
-    let mut manifest_text = String::from(
-        "# Strand Kit preview manifest. Helix can validate this file but cannot install or run it yet.\n",
-    );
+    let header = if installable {
+        "# Installable UI Strand. Pack it with helixctl strand pack, then install the zip from the Strands page.\n"
+    } else {
+        "# Portable preview manifest. Helix can validate this file, but the Wasm host is not available yet.\n"
+    };
+    let mut manifest_text = String::from(header);
     let serialized = toml::to_string_pretty(&document)?;
     manifest_text.push_str(&serialized.replace(
         "capabilities = []\n",
-        "# Deny by default. Replace this line with [[capabilities]] entries only when needed.\ncapabilities = []\n",
+        "# Deny by default. Add [[capabilities]] entries only for host calls this Strand actually makes.\ncapabilities = []\n",
     ));
     write_scaffold_file(staged_root.join("strand.toml"), manifest_text.as_bytes())?;
     write_scaffold_file(
         staged_root.join("README.md"),
         scaffold_readme(&name, &options.slug, options.kind).as_bytes(),
     )?;
-    write_scaffold_file(
-        staged_root.join("src").join("README.md"),
-        source_readme(options.kind).as_bytes(),
-    )?;
-    write_scaffold_file(staged_root.join(".gitignore"), b"/dist/\n")?;
+    if installable {
+        write_scaffold_file(
+            staged_root.join("ui").join("helix.js"),
+            scaffold_host_sdk().as_bytes(),
+        )?;
+        write_scaffold_file(
+            staged_root.join("ui").join("style.css"),
+            scaffold_ui_css().as_bytes(),
+        )?;
+        write_scaffold_file(
+            staged_root.join("ui").join("index.html"),
+            scaffold_ui_html(&name).as_bytes(),
+        )?;
+    } else {
+        write_scaffold_file(
+            staged_root.join("src").join("README.md"),
+            source_readme(options.kind).as_bytes(),
+        )?;
+    }
+    write_scaffold_file(staged_root.join(".gitignore"), b"/dist/\n*.strand.zip\n")?;
 
     validate_strand_project(staged_root)?;
     match publish_directory_no_replace(staged_root, destination) {
@@ -415,10 +509,20 @@ fn validate_document(
     document: ManifestDocument,
 ) -> Result<ValidatedManifest, ManifestValidationError> {
     let mut issues = Vec::new();
-    if document.schema != PREVIEW_SCHEMA {
+    let installable_schema = document.schema == INSTALL_SCHEMA;
+    if document.schema != PREVIEW_SCHEMA && document.schema != INSTALL_SCHEMA {
         issues.push(format!(
-            "schema must be {PREVIEW_SCHEMA:?}; this validator does not guess across schema versions"
+            "schema must be {PREVIEW_SCHEMA:?} or {INSTALL_SCHEMA:?}"
         ));
+    }
+    if installable_schema && document.kind != StrandKind::UiOnly {
+        issues.push(
+            "helix.strand/1 currently installs ui-only packages; portable Wasm remains preview-only"
+                .to_owned(),
+        );
+    }
+    if document.schema == PREVIEW_SCHEMA && document.ui.is_some() {
+        issues.push("helix.strand/preview-1 cannot declare [ui]; use helix.strand/1".to_owned());
     }
 
     let id = match Uuid::parse_str(&document.id) {
@@ -475,14 +579,48 @@ fn validate_document(
             None
         }
     };
-    if document.compatibility.host_api != PREVIEW_HOST_API {
+    let expected_host_api = if installable_schema {
+        INSTALL_HOST_API
+    } else {
+        PREVIEW_HOST_API
+    };
+    if document.compatibility.host_api != expected_host_api {
         issues.push(format!(
-            "compatibility.host_api must be {PREVIEW_HOST_API:?} for this preview schema"
+            "compatibility.host_api must be {expected_host_api:?} for schema {}",
+            document.schema
         ));
     }
 
-    validate_capabilities(&document.capabilities, &mut issues);
+    validate_capabilities(&document.capabilities, installable_schema, &mut issues);
     validate_limits(&document.limits, &mut issues);
+    if installable_schema
+        && document
+            .capabilities
+            .iter()
+            .any(|capability| capability.name == "helix:net.https")
+        && document.limits.outbound_requests_per_minute == 0
+    {
+        issues.push(
+            "helix:net.https requires limits.outbound_requests_per_minute of at least 1".to_owned(),
+        );
+    }
+
+    let ui_entry = match &document.ui {
+        Some(ui) if installable_schema => {
+            if !package::is_allowed_ui_path(&ui.entry) || !ui.entry.ends_with(".html") {
+                issues.push(
+                    "ui.entry must be an HTML file under ui/ with an allowed extension".to_owned(),
+                );
+            }
+            Some(ui.entry.clone())
+        }
+        None if installable_schema => {
+            issues.push("helix.strand/1 ui-only packages must declare [ui].entry".to_owned());
+            None
+        }
+        Some(_) => None,
+        None => None,
+    };
 
     if !issues.is_empty() {
         return Err(ManifestValidationError { path, issues });
@@ -490,6 +628,7 @@ fn validate_document(
 
     Ok(ValidatedManifest {
         path,
+        schema: document.schema,
         id: id.expect("validated ID is present"),
         slug: document.slug,
         name: document.name,
@@ -500,7 +639,10 @@ fn validate_document(
         kind: document.kind,
         capabilities: document.capabilities,
         helix_compatibility: helix_compatibility.expect("validated requirement is present"),
+        host_api: document.compatibility.host_api,
         limits: document.limits,
+        ui_entry,
+        installable: installable_schema && document.kind == StrandKind::UiOnly,
     })
 }
 
@@ -625,10 +767,14 @@ fn is_forbidden_display_character(character: char) -> bool {
         )
 }
 
-fn validate_capabilities(capabilities: &[CapabilityRequest], issues: &mut Vec<String>) {
+fn validate_capabilities(
+    capabilities: &[CapabilityRequest],
+    installable_schema: bool,
+    issues: &mut Vec<String>,
+) {
     if capabilities.len() > MAX_CAPABILITIES {
         issues.push(format!(
-            "capabilities contains {} entries; the preview limit is {MAX_CAPABILITIES}",
+            "capabilities contains {} entries; the limit is {MAX_CAPABILITIES}",
             capabilities.len()
         ));
     }
@@ -639,6 +785,12 @@ fn validate_capabilities(capabilities: &[CapabilityRequest], issues: &mut Vec<St
         if !is_capability_name(&capability.name) {
             issues.push(format!(
                 "{field}.name must use a narrow canonical name such as helix:metrics.read"
+            ));
+        }
+        if installable_schema && !INSTALLABLE_CAPABILITIES.contains(&capability.name.as_str()) {
+            issues.push(format!(
+                "{field}.name {:?} is not a host call this Helix version mediates",
+                capability.name
             ));
         }
         if !names.insert(capability.name.as_str()) {
@@ -654,7 +806,79 @@ fn validate_capabilities(capabilities: &[CapabilityRequest], issues: &mut Vec<St
             200,
             issues,
         );
+        if capability.name == "helix:net.https" {
+            if capability.origins.is_empty() {
+                issues.push(format!(
+                    "{field}.origins must list the exact https origins this Strand may call"
+                ));
+            }
+            if capability.origins.len() > MAX_CAPABILITY_ORIGINS {
+                issues.push(format!(
+                    "{field}.origins contains {} entries; the limit is {MAX_CAPABILITY_ORIGINS}",
+                    capability.origins.len()
+                ));
+            }
+            let mut origins = HashSet::new();
+            for origin in &capability.origins {
+                if !is_https_origin(origin) {
+                    issues.push(format!(
+                        "{field}.origins value {origin:?} must be an exact https://host or https://host:port origin with no path"
+                    ));
+                }
+                if !origins.insert(origin.as_str()) {
+                    issues.push(format!("{field}.origins duplicates {origin:?}"));
+                }
+            }
+        } else if !capability.origins.is_empty() {
+            issues.push(format!("{field}.origins is only valid for helix:net.https"));
+        }
     }
+}
+
+fn is_https_origin(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("https://") else {
+        return false;
+    };
+    if rest.is_empty()
+        || rest.contains('/')
+        || rest.contains('?')
+        || rest.contains('#')
+        || rest.contains('@')
+        || rest.contains('\\')
+        || rest.contains(' ')
+    {
+        return false;
+    }
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((host, port)) if port.bytes().all(|byte| byte.is_ascii_digit()) => (host, Some(port)),
+        _ => (rest, None),
+    };
+    if host.is_empty() || host.len() > 253 {
+        return false;
+    }
+    if let Some(port) = port {
+        match port.parse::<u16>() {
+            Ok(443 | 0) | Err(_) => return false,
+            Ok(_) => {}
+        }
+    }
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with('.') {
+        return false;
+    }
+    host.split('.').all(|label| {
+        (1..=63).contains(&label.len())
+            && label
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_alphanumeric())
+            && label
+                .bytes()
+                .last()
+                .is_some_and(|byte| byte.is_ascii_alphanumeric())
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    })
 }
 
 fn is_capability_name(name: &str) -> bool {
@@ -741,14 +965,76 @@ fn write_scaffold_file(path: PathBuf, contents: &[u8]) -> Result<(), StrandKitEr
 }
 
 fn scaffold_readme(name: &str, slug: &str, kind: StrandKind) -> String {
-    format!(
-        "# {name}\n\n`{slug}` is a {kind} Helix Strand project created by the Strand Kit preview.\n\n> Helix can validate this project, but it cannot install or run Strands yet. The runtime, SDK, and host API remain intentionally unavailable until their security boundaries are implemented and tested.\n\n## Check the project\n\n```text\nhelixctl strand check .\n```\n\nStart by editing `strand.toml`. Leave `capabilities = []` unchanged until the Strand has a concrete need; then replace it with explained `[[capabilities]]` entries. Keep every resource ceiling as small as the design allows. Put implementation experiments in `src/`; expect the eventual SDK and host ABI to require changes.\n\nRead the current author guide at <https://github.com/Riqqqque/Helix/blob/main/docs/STRAND-DEVELOPMENT.md>.\n"
-    )
+    if kind == StrandKind::UiOnly {
+        format!(
+            "# {name}\n\n`{slug}` is a UI-only Helix Strand. It runs as isolated dashboard HTML and talks to Helix through declared host calls only.\n\n## Build and install\n\n```text\nhelixctl strand check .\nhelixctl strand pack . -o {slug}.strand.zip\n```\n\nOpen **Strands** in the Helix dashboard, upload the zip or paste an https zip URL, review the capabilities, and enable it. Share the zip with another owner the same way; Helix does not operate a store.\n\nKeep `capabilities = []` until a host call is required. `helix:net.https` needs an exact origin allowlist. Strands never get a root shell, the privileged broker, or ambient sockets.\n"
+        )
+    } else {
+        format!(
+            "# {name}\n\n`{slug}` is a portable Strand preview. Helix can validate this project, but the Wasm host is not installable yet.\n\n```text\nhelixctl strand check .\n```\n\nUse `--kind ui-only` when you want a package that can be packed and installed today.\n"
+        )
+    }
 }
 
 fn source_readme(kind: StrandKind) -> String {
     format!(
-        "# Source placeholder\n\nThis directory is reserved for the {kind} Strand implementation. Helix does not publish a runnable Strand SDK or ABI yet, so the scaffold deliberately avoids generating fake host calls or code that cannot be executed.\n"
+        "# Source placeholder\n\nThis directory is reserved for a future {kind} Wasm implementation. This Helix version installs UI-only packages, not portable components.\n"
+    )
+}
+
+fn scaffold_host_sdk() -> String {
+    HELIX_HOST_SDK.to_owned()
+}
+
+const HELIX_HOST_SDK: &str = r#"(function (root) {
+  "use strict";
+  var pending = Object.create(null);
+  var nextId = 1;
+  function call(method, params) {
+    return new Promise(function (resolve, reject) {
+      var id = String(nextId++);
+      var timer = root.setTimeout(function () {
+        if (!pending[id]) return;
+        delete pending[id];
+        reject(new Error("Strand host call timed out"));
+      }, 30000);
+      pending[id] = {
+        resolve: function (value) { root.clearTimeout(timer); resolve(value); },
+        reject: function (error) { root.clearTimeout(timer); reject(error); }
+      };
+      root.parent.postMessage({ type: "helix-strand", id: id, method: method, params: params || {} }, "*");
+    });
+  }
+  root.addEventListener("message", function (event) {
+    if (event.source !== root.parent) return;
+    var msg = event.data;
+    if (!msg || msg.type !== "helix-strand-result" || !pending[msg.id]) return;
+    var job = pending[msg.id];
+    delete pending[msg.id];
+    if (msg.ok) job.resolve(msg.result);
+    else job.reject(new Error(msg.error || "Strand host call failed"));
+  });
+  root.helix = {
+    call: call,
+    metrics: { snapshot: function () { return call("metrics.snapshot"); } },
+    storage: {
+      get: function (key) { return call("storage.get", { key: key }); },
+      set: function (key, value) { return call("storage.set", { key: key, value: value }); },
+      remove: function (key) { return call("storage.delete", { key: key }); },
+      list: function () { return call("storage.list"); }
+    },
+    net: { fetch: function (request) { return call("net.fetch", request); } }
+  };
+})(window);
+"#;
+
+fn scaffold_ui_css() -> String {
+    ":root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#10140f;color:#e8edd8}body{margin:0;padding:20px}main{max-width:640px}h1{font-size:1.35rem;margin:0 0 8px}p,pre{color:#b7c0a4}pre{white-space:pre-wrap;background:#1a2118;border:1px solid #2a3326;border-radius:10px;padding:12px}button{border:0;border-radius:8px;padding:8px 12px;background:#d7f64d;color:#10140f;font-weight:650}html.is-widget body{padding:12px}html.is-widget .lead,html.is-widget p:first-of-type{display:none}\n".to_owned()
+}
+
+fn scaffold_ui_html(name: &str) -> String {
+    format!(
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{name}</title>\n<link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n<main>\n<h1>{name}</h1>\n<p>This Strand talks to Helix only through declared host calls. Add capabilities in strand.toml when you need metrics, namespaced storage, or an allowlisted HTTPS origin.</p>\n<p id=\"status\">Ready.</p>\n<button type=\"button\" id=\"probe\">Read host metrics if granted</button>\n<pre id=\"out\" hidden></pre>\n</main>\n<script src=\"helix.js\"></script>\n<script>\ndocument.documentElement.classList.toggle(\"is-widget\", location.hash === \"#helix-widget\");\ndocument.getElementById(\"probe\").addEventListener(\"click\", function () {{\n  var out = document.getElementById(\"out\");\n  var status = document.getElementById(\"status\");\n  helix.metrics.snapshot().then(function (snapshot) {{\n    status.textContent = \"Host metrics received.\";\n    out.hidden = false;\n    out.textContent = JSON.stringify(snapshot, null, 2);\n  }}).catch(function (error) {{\n    status.textContent = error.message;\n  }});\n}});\n</script>\n</body>\n</html>\n"
     )
 }
 
@@ -771,12 +1057,14 @@ mod tests {
                 name: "helix:metrics.read".to_owned(),
                 reason: "Read the selected node's bounded health summary.".to_owned(),
                 optional: false,
+                origins: Vec::new(),
             }],
             compatibility: Compatibility {
                 helix: DEFAULT_HELIX_COMPATIBILITY.to_owned(),
                 host_api: PREVIEW_HOST_API.to_owned(),
             },
             limits: ResourceLimits::default(),
+            ui: None,
         }
     }
 
@@ -894,13 +1182,20 @@ mod tests {
         let created = scaffold_strand(&options).expect("create scaffold");
         assert_eq!(created.manifest.name, "Weather Card");
         assert_eq!(created.manifest.kind, StrandKind::UiOnly);
+        assert!(created.manifest.installable);
         assert!(destination.join("README.md").is_file());
-        assert!(destination.join("src").join("README.md").is_file());
+        assert!(destination.join("ui").join("index.html").is_file());
+        assert!(destination.join("ui").join("helix.js").is_file());
         assert!(
             fs::read_to_string(destination.join("strand.toml"))
                 .expect("read generated manifest")
                 .contains("Deny by default")
         );
+
+        let packed = pack_strand_project(&destination).expect("pack scaffold");
+        let unpacked = unpack_strand_package(&packed).expect("unpack scaffold");
+        assert_eq!(unpacked.manifest.slug, "weather-card");
+        assert!(unpacked.asset("ui/index.html").is_some());
 
         assert!(matches!(
             scaffold_strand(&options),
@@ -968,5 +1263,66 @@ mod tests {
             .join("system-health");
         let manifest = validate_strand_project(&reference).expect("reference Strand is valid");
         assert_eq!(manifest.slug, "system-health");
+        assert!(manifest.installable);
+        let packed = pack_strand_project(&reference).expect("pack reference Strand");
+        let unpacked = unpack_strand_package(&packed).expect("unpack reference Strand");
+        assert!(unpacked.asset("ui/index.html").is_some());
+        assert!(unpacked.asset("ui/helix.js").is_some());
+    }
+
+    #[test]
+    fn preview_packages_cannot_be_packed() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        write_document(&temp.path().join("strand.toml"), &valid_document());
+        assert!(matches!(
+            pack_strand_project(temp.path()),
+            Err(StrandKitError::NotInstallable { .. })
+        ));
+    }
+
+    #[test]
+    fn https_origins_must_be_exact_hosts() {
+        assert!(is_https_origin("https://api.open-meteo.com"));
+        assert!(is_https_origin("https://example.com:8443"));
+        assert!(!is_https_origin("http://example.com"));
+        assert!(!is_https_origin("https://example.com/path"));
+        assert!(!is_https_origin("https://user:pass@example.com"));
+        assert!(!is_https_origin("https://localhost"));
+    }
+
+    #[test]
+    fn installable_helix_range_matches_current_helix() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let destination = temp.path().join("compat-card");
+        let created = scaffold_strand(&ScaffoldOptions::new(
+            destination,
+            "compat-card".to_owned(),
+            StrandKind::UiOnly,
+        ))
+        .expect("scaffold");
+        created
+            .manifest
+            .ensure_helix_compatible(env!("CARGO_PKG_VERSION"))
+            .expect("current Helix is inside the default range");
+        assert!(created.manifest.ensure_helix_compatible("9.9.9").is_err());
+    }
+
+    #[test]
+    fn checked_in_https_probe_packs() {
+        let reference = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("examples")
+            .join("strands")
+            .join("https-probe");
+        let manifest = validate_strand_project(&reference).expect("https-probe is valid");
+        assert!(manifest.installable);
+        assert!(
+            manifest
+                .capabilities
+                .iter()
+                .any(|capability| capability.name == "helix:net.https")
+        );
+        pack_strand_project(&reference).expect("pack https-probe");
     }
 }

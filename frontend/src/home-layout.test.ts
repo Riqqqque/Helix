@@ -53,7 +53,7 @@ describe('home layout', () => {
     expect(parseWeatherWidgetConfiguration('{"location":"Denver, Colorado","unit":"celsius"}')).toEqual({ location: 'Denver, Colorado', unit: 'celsius' });
     expect(parseWeatherWidgetConfiguration('{')).toEqual({ location: '', unit: 'fahrenheit' });
     expect(normalizeHomeWidgets([{ id: 'forecast', kind: 'weather', size: 'wide', title: 'Forecast', content: '{"location":"Denver","unit":"fahrenheit"}' }])[0]?.kind).toBe('weather');
-    expect(normalizeHomeWidgets([{ id: 'live', kind: 'graphs', size: 'wide', title: 'Live graphs' }, { id: 'boxes', kind: 'docker', size: 'wide', title: 'Docker' }]).map((widget) => widget.kind)).toEqual(['graphs', 'docker']);
+    expect(normalizeHomeWidgets([{ id: 'live', kind: 'graphs', size: 'wide', title: 'Live graphs' }, { id: 'boxes', kind: 'docker', size: 'wide', title: 'Docker' }, { id: 'ext', kind: 'strand', size: 'wide', title: 'System Health', url: 'b893d568-327d-4b6e-b0b6-0b7a58e0c852' }]).map((widget) => widget.kind)).toEqual(['graphs', 'docker', 'strand']);
   });
 
   it('reorders and resizes widgets predictably', () => {

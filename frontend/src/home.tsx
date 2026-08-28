@@ -28,6 +28,8 @@ import { Icon, type IconName } from './icons';
 import { InfoTip } from './info-tip';
 import type { SystemOverview } from './types';
 import { getWeatherForecast, type WeatherForecast } from './weather-api';
+import { StrandFrame } from './strand-frame';
+import { listStrands, type StrandSummary } from './strands-api';
 
 interface HomeLiveData {
   overview: SystemOverview | null;
@@ -58,6 +60,7 @@ const widgetIcons: Record<HomeWidgetKind, IconName> = {
   shortcut: 'external',
   graphs: 'activity',
   docker: 'host',
+  strand: 'strands',
 };
 
 function makeWidget(kind: HomeWidgetKind): HomeWidget {
@@ -72,6 +75,7 @@ function makeWidget(kind: HomeWidgetKind): HomeWidget {
     shortcut: { size: 'compact', height: 'medium', title: 'Shortcut', content: '', url: '', color: '' },
     graphs: { size: 'wide', height: 'medium', title: 'Live graphs', content: '', url: '', color: '' },
     docker: { size: 'wide', height: 'tall', title: 'Docker', content: '', url: '', color: '' },
+    strand: { size: 'wide', height: 'tall', title: 'Strand', content: '', url: '', color: '' },
   };
   return { id: `${kind}-${suffix}`, kind, ...defaults[kind] };
 }
@@ -340,6 +344,53 @@ function NoteWidget({ widget, editing, onChange }: {
   );
 }
 
+function StrandHomeWidget({ widget, editing, onChange, csrfToken, onSessionExpired }: {
+  widget: HomeWidget;
+  editing: boolean;
+  onChange: (patch: Partial<HomeWidget>) => void;
+  csrfToken: string;
+  onSessionExpired: () => void;
+}) {
+  const [options, setOptions] = useState<StrandSummary[]>([]);
+  useEffect(() => {
+    let mounted = true;
+    void listStrands(csrfToken).then((strands) => {
+      if (mounted) setOptions(strands.filter((strand) => strand.enabled && strand.hasWidget));
+    }).catch(() => {
+      if (mounted) setOptions([]);
+    });
+    return () => { mounted = false; };
+  }, [csrfToken]);
+  const selected = options.find((strand) => strand.id === widget.url);
+  if (editing) {
+    return (
+      <label class="home-shortcut-editor">
+        <span>Installed Strand</span>
+        <select value={widget.url} onChange={(event) => {
+          const next = options.find((strand) => strand.id === event.currentTarget.value);
+          onChange({ url: event.currentTarget.value, title: next?.name ?? widget.title });
+        }}>
+          <option value="">Choose a Strand with helix:ui.widget</option>
+          {options.map((strand) => <option key={strand.id} value={strand.id}>{strand.name}</option>)}
+        </select>
+      </label>
+    );
+  }
+  if (selected === undefined) {
+    return <div class="home-widget__empty">Enable a Strand with the widget capability, then pick it in edit mode.</div>;
+  }
+  return (
+    <StrandFrame
+      strandId={selected.id}
+      uiEntry={selected.uiEntry}
+      csrfToken={csrfToken}
+      surface="widget"
+      title={selected.name}
+      onSessionExpired={onSessionExpired}
+    />
+  );
+}
+
 function WidgetBody({ widget, editing, onChange, data, csrfToken, canManageDocker, onSessionExpired }: {
   widget: HomeWidget;
   editing: boolean;
@@ -357,6 +408,9 @@ function WidgetBody({ widget, editing, onChange, data, csrfToken, canManageDocke
   if (widget.kind === 'docker') return <DockerInventoryPanel csrfToken={csrfToken} canManage={canManageDocker} compact onSessionExpired={onSessionExpired} />;
   if (widget.kind === 'weather') return <WeatherWidget widget={widget} editing={editing} onChange={onChange} csrfToken={csrfToken} />;
   if (widget.kind === 'note') return <NoteWidget widget={widget} editing={editing} onChange={onChange} />;
+  if (widget.kind === 'strand') {
+    return <StrandHomeWidget widget={widget} editing={editing} onChange={onChange} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />;
+  }
 
   const href = normalizeShortcutUrl(widget.url);
   if (editing) {
@@ -617,7 +671,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
       {editing && adding && (
         <section class="home-widget-catalog" aria-label="Add a widget">
           <div><strong>Add a widget</strong><span>Every widget can be moved and resized after it is added.</span></div>
-          {(['clock', 'host', 'graphs', 'servers', 'storage', 'docker', 'weather', 'note', 'shortcut'] as const).map((kind) => <button type="button" key={kind} onClick={() => addWidget(kind)}><Icon name={widgetIcons[kind]} /><span><strong>{kind === 'host' ? 'Host pulse' : kind === 'graphs' ? 'Live graphs' : kind === 'docker' ? 'Docker' : kind[0]?.toUpperCase() + kind.slice(1)}</strong><small>{kind === 'shortcut' ? 'Open a website' : kind === 'note' ? 'Keep synced notes' : kind === 'weather' ? 'Five-day forecast' : kind === 'graphs' ? 'CPU, memory, and load' : kind === 'docker' ? 'All containers on this host' : 'Live dashboard data'}</small></span></button>)}
+          {(['clock', 'host', 'graphs', 'servers', 'storage', 'docker', 'weather', 'note', 'shortcut', 'strand'] as const).map((kind) => <button type="button" key={kind} onClick={() => addWidget(kind)}><Icon name={widgetIcons[kind]} /><span><strong>{kind === 'host' ? 'Host pulse' : kind === 'graphs' ? 'Live graphs' : kind === 'docker' ? 'Docker' : kind === 'strand' ? 'Strand' : kind[0]?.toUpperCase() + kind.slice(1)}</strong><small>{kind === 'shortcut' ? 'Open a website' : kind === 'note' ? 'Keep synced notes' : kind === 'weather' ? 'Five-day forecast' : kind === 'graphs' ? 'CPU, memory, and load' : kind === 'docker' ? 'All containers on this host' : kind === 'strand' ? 'An installed Strand page' : 'Live dashboard data'}</small></span></button>)}
         </section>
       )}
       {editing && <div class="home-editing-hint"><Icon name="menu" size={14} /><span>Drag a widget by its handle, or use the arrow controls. Width, height, color, and widget-specific options are under Settings.</span></div>}

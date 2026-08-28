@@ -47,7 +47,7 @@ tools on another contributor's machine without permission.
 | `crates/helix-config` | Typed process configuration and path policy |
 | `crates/helix-state` | Critical SQLite state, repositories, migrations, and integrity operations |
 | `crates/helix-secrets` | Portable authenticated-encryption and master-key boundary for recoverable secrets |
-| `crates/helix-strand-kit` | Development-only Strand project scaffolding and preview manifest validation |
+| `crates/helix-strand-kit` | Strand project scaffolding, `helix.strand/1` pack/unpack, and preview-1 validation |
 | `crates/helix-system` | Narrow read-only host discovery and metrics adapters |
 | `crates/helix-api` | Versioned HTTP contracts, routing, and middleware |
 | `crates/helixd` | Daemon composition and lifecycle |
@@ -165,21 +165,19 @@ game-lifecycle or player-capacity evidence.
 
 ## Strand project tooling
 
-Preview Strand authoring is intentionally independent of daemon configuration
-and state:
+Strand authoring is independent of daemon configuration and state:
 
 ```powershell
-cargo run --locked -p helixctl -- strand new system-health --name "System Health"
-cargo run --locked -p helixctl -- strand check system-health
+cargo run --locked -p helixctl -- strand new vacuum-status --name "Vacuum status"
+cargo run --locked -p helixctl -- strand check vacuum-status
+cargo run --locked -p helixctl -- strand pack vacuum-status -o vacuum-status.strand.zip
 ```
 
-The generated project is metadata-first and cannot be installed or run. The
-validator is still a real trust-boundary parser: it is strict, size-bounded,
-non-executing, and returns a failure status for malformed metadata. Read
-[Building a Strand](STRAND-DEVELOPMENT.md) before changing the preview schema.
-Do not add a Wasm runtime, native plugin loader, host call, or install path as a
-developer convenience; those changes belong to the sequenced Strand security
-phase.
+UI-only projects (`helix.strand/1`) can be installed from the dashboard. Portable
+`--kind portable` still writes preview metadata only. The validator is a real
+trust-boundary parser: strict, size-bounded, and non-executing. Read
+[Building a Strand](STRAND-DEVELOPMENT.md) before changing the schema. Do not
+load a Wasm runtime or native plugin into `helixd` as a convenience.
 
 ## Rust conventions
 

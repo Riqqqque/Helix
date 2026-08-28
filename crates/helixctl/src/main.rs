@@ -7,10 +7,12 @@ use helix_state::{
     PragmaReport, StateDatabaseReader,
 };
 use helix_strand_kit::{
-    ScaffoldOptions, StrandKind, ValidatedManifest, scaffold_strand, validate_strand_project,
+    ScaffoldOptions, StrandKind, UnpackedStrand, ValidatedManifest, pack_strand_project,
+    scaffold_strand, unpack_strand_package, validate_strand_project,
 };
 use std::{
     error::Error,
+    fs,
     io::{self, Read, Write},
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
@@ -89,19 +91,34 @@ enum StrandCommand {
         /// SPDX license expression for the Strand package.
         #[arg(long, default_value = "AGPL-3.0-or-later", value_name = "LICENSE")]
         license: String,
-        /// Preview package class.
-        #[arg(long, value_enum, default_value_t = StrandTemplate::Portable)]
+        /// Package class. UI-only packages can be packed and installed.
+        #[arg(long, value_enum, default_value_t = StrandTemplate::UiOnly)]
         kind: StrandTemplate,
         /// New package directory. Defaults to the slug in the current directory.
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
     },
-    /// Strictly validate a preview strand.toml without executing any code.
+    /// Strictly validate a strand.toml without executing any Strand code.
     #[command(visible_alias = "validate")]
     Check {
         /// Strand directory or direct path to strand.toml.
         #[arg(default_value = ".", value_name = "PATH")]
         path: PathBuf,
+    },
+    /// Write an installable .strand.zip from a UI-only project.
+    Pack {
+        /// Strand directory or direct path to strand.toml.
+        #[arg(default_value = ".", value_name = "PATH")]
+        path: PathBuf,
+        /// Destination zip path.
+        #[arg(short, long, value_name = "FILE")]
+        output: PathBuf,
+    },
+    /// Show the manifest and files inside a .strand.zip without installing it.
+    Inspect {
+        /// Path to a Strand zip.
+        #[arg(value_name = "FILE")]
+        package: PathBuf,
     },
 }
 
@@ -220,13 +237,52 @@ fn run_strand_command(command: StrandCommand) -> Result<(), DynError> {
                 "Next: edit strand.toml, then run helixctl strand check {}",
                 created.root.display()
             );
-            println!("Preview only: Helix cannot install or run Strands yet.");
+            if created.manifest.installable {
+                println!(
+                    "Pack with helixctl strand pack {} -o {}.strand.zip and install the zip from the Strands page.",
+                    created.root.display(),
+                    created.manifest.slug
+                );
+            } else {
+                println!(
+                    "Portable Wasm Strands cannot be installed yet. Use --kind ui-only for an installable package."
+                );
+            }
         }
         StrandCommand::Check { path } => {
             let manifest = validate_strand_project(&path)?;
-            println!("Strand manifest is valid (development preview)");
+            if manifest.installable {
+                println!("Strand manifest is valid and can be packed for install");
+            } else {
+                println!("Strand manifest is valid (not installable in this Helix version)");
+            }
             print_strand_summary(&manifest);
-            println!("Execution status: not installable or runnable in this Helix version");
+        }
+        StrandCommand::Pack { path, output } => {
+            if output.exists() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "refusing to overwrite {}; choose a new zip path",
+                        output.display()
+                    ),
+                )
+                .into());
+            }
+            let bytes = pack_strand_project(&path)?;
+            fs::write(&output, &bytes)?;
+            let unpacked = unpack_strand_package(&bytes)?;
+            println!("Wrote {} ({} bytes)", output.display(), bytes.len());
+            print_unpacked_summary(&unpacked);
+            println!(
+                "Install this zip from the Helix Strands page, or share it with another owner."
+            );
+        }
+        StrandCommand::Inspect { package } => {
+            let bytes = fs::read(&package)?;
+            let unpacked = unpack_strand_package(&bytes)?;
+            println!("Strand package {}", package.display());
+            print_unpacked_summary(&unpacked);
         }
     }
     Ok(())
@@ -235,11 +291,20 @@ fn run_strand_command(command: StrandCommand) -> Result<(), DynError> {
 fn print_strand_summary(manifest: &ValidatedManifest) {
     println!("  Name: {} ({})", manifest.name, manifest.slug);
     println!("  ID: {}", manifest.id);
+    println!("  Schema: {}", manifest.schema);
     println!("  Version: {}", manifest.version);
     println!("  Kind: {}", manifest.kind);
     println!("  Publisher: {}", manifest.publisher);
     println!("  License: {}", manifest.license);
     println!("  Helix range: {}", manifest.helix_compatibility);
+    println!("  Host API: {}", manifest.host_api);
+    if let Some(entry) = &manifest.ui_entry {
+        println!("  UI entry: {entry}");
+    }
+    println!(
+        "  Installable: {}",
+        if manifest.installable { "yes" } else { "no" }
+    );
     if manifest.capabilities.is_empty() {
         println!("  Capabilities: none (deny by default)");
     } else {
@@ -250,10 +315,19 @@ fn print_strand_summary(manifest: &ValidatedManifest) {
             } else {
                 "required"
             };
-            println!(
-                "    - {} ({requirement}): {}",
-                capability.name, capability.reason
-            );
+            if capability.origins.is_empty() {
+                println!(
+                    "    - {} ({requirement}): {}",
+                    capability.name, capability.reason
+                );
+            } else {
+                println!(
+                    "    - {} ({requirement}): {} [{}]",
+                    capability.name,
+                    capability.reason,
+                    capability.origins.join(", ")
+                );
+            }
         }
     }
     println!(
@@ -269,6 +343,15 @@ fn print_strand_summary(manifest: &ValidatedManifest) {
         manifest.limits.outbound_requests_per_minute,
         manifest.limits.log_kib_per_minute
     );
+}
+
+fn print_unpacked_summary(unpacked: &UnpackedStrand) {
+    print_strand_summary(&unpacked.manifest);
+    println!("  Digest: {}", unpacked.digest_sha256);
+    println!("  Files:");
+    for asset in &unpacked.assets {
+        println!("    - {} ({} bytes)", asset.path, asset.bytes.len());
+    }
 }
 
 #[derive(Clone, Copy)]

@@ -49,6 +49,7 @@ const navigationLabels: Record<PrimaryDashboardSectionId, { label: string; icon:
   terminal: { label: 'Terminal', icon: 'terminal' },
   servers: { label: 'Servers', icon: 'servers' },
   hooks: { label: 'Hooks', icon: 'hooks' },
+  strands: { label: 'Strands', icon: 'strands' },
 };
 
 const themeLabels: Record<ThemePreference, string> = {

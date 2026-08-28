@@ -10,10 +10,12 @@ publish.workspace = true
 [dependencies]
 semver.workspace = true
 serde.workspace = true
+sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 uuid.workspace = true
+zip.workspace = true
 
 [target.'cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos", target_os = "watchos", target_os = "redox"))'.dependencies]
 rustix = { workspace = true, features = ["fs"] }

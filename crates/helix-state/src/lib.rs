@@ -3,6 +3,7 @@
 mod appearance;
 mod secrets;
 mod security;
+mod strands;
 
 #[cfg(test)]
 pub(crate) fn private_test_directory(description: &str) -> tempfile::TempDir {
@@ -48,8 +49,12 @@ pub use security::{
     SessionCreateInput, SessionCreateOutcome, SessionTokenHash, SetupStatus, TerminalAuditEvent,
     UserPreferencesRecord, UserPreferencesUpdateInput, UserPreferencesUpdateOutcome, UserStatus,
 };
+pub use strands::{
+    MAX_STRAND_KV_KEYS, MAX_STRAND_KV_TOTAL_BYTES, MAX_STRAND_PACKAGE_BYTES, MAX_STRAND_PACKAGES,
+    StrandInstallInput, StrandKvEntry, StrandOrigin, StrandPackageRecord, StrandPackageSummary,
+};
 
-pub const STATE_SCHEMA_VERSION: i64 = 7;
+pub const STATE_SCHEMA_VERSION: i64 = 8;
 pub const METRICS_SCHEMA_VERSION: i64 = 1;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DAEMON_LEASE_FILE: &str = ".helixd.lock";
@@ -193,6 +198,14 @@ pub enum StateError {
     InvalidSecretInput(&'static str),
     #[error("invalid server appearance input: {0}")]
     InvalidServerAppearanceInput(&'static str),
+    #[error("invalid Strand input: {0}")]
+    InvalidStrandInput(&'static str),
+    #[error("Strand package was not found")]
+    StrandNotFound,
+    #[error("a Strand with that slug is already installed")]
+    StrandConflict,
+    #[error("Strand storage or package quota was exceeded")]
+    StrandQuotaExceeded,
     #[error("secret record was not found")]
     SecretNotFound,
     #[error("secret revision conflict: expected {expected}, found {actual}")]
@@ -707,6 +720,9 @@ fn migrate_state(
     }
     if current < 7 {
         security::migrate_terminal_capability(connection)?;
+    }
+    if current < 8 {
+        strands::migrate_strands(connection)?;
     }
     Ok(())
 }
@@ -1409,6 +1425,9 @@ fn validate_state_semantics(
     if expected_schema_version >= 6 {
         required_tables.push("server_appearances");
     }
+    if expected_schema_version >= 8 {
+        required_tables.extend(["strand_packages", "strand_kv"]);
+    }
     for table in required_tables {
         let strict = connection
             .query_row(
@@ -1476,6 +1495,16 @@ fn validate_state_semantics(
             (5, "dashboard-preferences-and-owner-capabilities".to_owned()),
             (6, "server-appearance-customization".to_owned()),
             (7, "terminal-capability".to_owned()),
+        ],
+        8 => vec![
+            (1, "foundational-state".to_owned()),
+            (2, "owner-authentication".to_owned()),
+            (3, "recoverable-secret-storage".to_owned()),
+            (4, "bounded-authentication-audit-retention".to_owned()),
+            (5, "dashboard-preferences-and-owner-capabilities".to_owned()),
+            (6, "server-appearance-customization".to_owned()),
+            (7, "terminal-capability".to_owned()),
+            (8, "installable-ui-strands".to_owned()),
         ],
         _ => {
             return Err(StateError::UnsupportedSchema {
