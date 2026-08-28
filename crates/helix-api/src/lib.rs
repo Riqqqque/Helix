@@ -21,10 +21,11 @@ use axum::{
 };
 use helix_core::{DatabaseStatus, HealthReport, HealthStatus, VERSION, unix_timestamp_ms};
 use helix_privd::{
-    BrokerClient, BrokerClientError, BrokerRequest, FirewallRuleSpec, GameKind, GamePortPolicySpec,
-    HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch,
-    PackageUpdateCandidate, RecurringRebootSpec, ServerAction, ServerNetworkExposure,
-    StorageAnalysisMode,
+    BrokerClient, BrokerClientError, BrokerRequest, FileUploadPurpose, FileUploadTarget,
+    FirewallRuleSpec, GameKind, GamePortPolicySpec, HookServiceAction, MinecraftCreateSpec,
+    MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, PackageUpdateCandidate,
+    RecurringRebootSpec, ServerAction, ServerNetworkExposure, StorageAnalysisMode,
+    VRisingCreateSpec,
 };
 use helix_state::{
     DatabaseSet, ServerAppearanceUpdateOutcome, UserPreferencesRecord, UserPreferencesUpdateInput,
@@ -295,6 +296,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/files/write", post(write_text_file))
         .route("/files/rename", post(rename_file))
         .route("/files/trash", post(trash_file))
+        .route("/files/upload/begin", post(begin_file_upload))
+        .route("/files/upload/chunk", post(write_file_upload_chunk))
+        .route("/files/upload/finish", post(finish_file_upload))
+        .route("/files/upload/abort", post(abort_file_upload))
         .route(
             "/storage/analysis",
             post(start_storage_analysis)
@@ -316,7 +321,12 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             "/servers/port-policies/minecraft",
             get(minecraft_port_policy).put(set_minecraft_port_policy),
         )
+        .route(
+            "/servers/port-policies/vrising",
+            get(vrising_port_policy).put(set_vrising_port_policy),
+        )
         .route("/servers/minecraft", post(create_minecraft))
+        .route("/servers/minecraft/versions", get(list_minecraft_versions))
         .route(
             "/servers/minecraft/modpacks/search",
             get(minecraft_modpack_search),
@@ -329,6 +339,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             "/servers/minecraft/modpacks",
             post(create_minecraft_modpack).layer(DefaultBodyLimit::max(API_BODY_LIMIT_BYTES)),
         )
+        .route("/servers/vrising", post(create_vrising))
         .route("/servers/{instance_id}", get(server_detail))
         .route(
             "/servers/{instance_id}/appearance",
@@ -380,6 +391,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route(
             "/servers/{instance_id}/network",
             put(set_server_network_exposure),
+        )
+        .route(
+            "/servers/{instance_id}/start-on-boot",
+            put(set_native_start_on_boot),
         )
         .route("/servers/{instance_id}/remove", post(trash_native_server))
         .route("/jobs/{job_id}", get(job_status))
@@ -804,6 +819,12 @@ struct DashboardPreferences {
     active_home_id: String,
     #[serde(default)]
     colors: DashboardColorPreferences,
+    #[serde(default = "default_true")]
+    servers_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for DashboardPreferences {
@@ -867,6 +888,7 @@ impl Default for DashboardPreferences {
             }],
             active_home_id: "home-main".to_owned(),
             colors: DashboardColorPreferences::default(),
+            servers_enabled: true,
         }
     }
 }
@@ -1223,6 +1245,36 @@ struct WriteTextBody {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct BeginFileUploadBody {
+    target: FileUploadTarget,
+    name: String,
+    expected_size: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileUploadChunkBody {
+    upload_id: String,
+    purpose: FileUploadPurpose,
+    offset: u64,
+    data_base64: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileUploadFinishBody {
+    upload_id: String,
+    purpose: FileUploadPurpose,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MinecraftVersionsQuery {
+    software: MinecraftSoftware,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RenameBody {
     path: String,
     new_name: String,
@@ -1481,6 +1533,36 @@ async fn set_minecraft_port_policy(
     if policy.game != GameKind::Minecraft {
         return Err(ApiError::BrokerRejected(
             "the policy game must match Minecraft".to_owned(),
+        ));
+    }
+    broker_json(&state, BrokerRequest::SetGamePortPolicy { policy }).await
+}
+
+async fn vrising_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    broker_json(
+        &state,
+        BrokerRequest::GamePortPolicy {
+            game: GameKind::VRising,
+        },
+    )
+    .await
+}
+
+async fn set_vrising_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<GamePortPolicySpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(policy) = body.map_err(auth::map_json_rejection)?;
+    if policy.game != GameKind::VRising {
+        return Err(ApiError::BrokerRejected(
+            "the policy game must match V Rising".to_owned(),
         ));
     }
     broker_json(&state, BrokerRequest::SetGamePortPolicy { policy }).await
@@ -1751,6 +1833,120 @@ async fn trash_file(
     auth::validate_post_headers(&headers)?;
     auth::require_capability(&state, &headers, "storage.files.manage").await?;
     broker_json(&state, BrokerRequest::Trash { path: body.path }).await
+}
+
+async fn begin_file_upload(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<BeginFileUploadBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    match &body.target {
+        FileUploadTarget::Directory { .. } => {
+            auth::require_capability(&state, &headers, "storage.files.manage").await?;
+        }
+        FileUploadTarget::CustomJar => {
+            auth::require_capability(&state, &headers, "games.manage").await?;
+        }
+    }
+    broker_json(
+        &state,
+        BrokerRequest::BeginFileUpload {
+            target: body.target,
+            name: body.name,
+            expected_size: body.expected_size,
+        },
+    )
+    .await
+}
+
+async fn write_file_upload_chunk(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<FileUploadChunkBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    require_upload_capability(&state, &headers, body.purpose).await?;
+    broker_json(
+        &state,
+        BrokerRequest::WriteFileUploadChunk {
+            upload_id: body.upload_id,
+            purpose: body.purpose,
+            offset: body.offset,
+            data_base64: body.data_base64,
+        },
+    )
+    .await
+}
+
+async fn finish_file_upload(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<FileUploadFinishBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    require_upload_capability(&state, &headers, body.purpose).await?;
+    broker_json(
+        &state,
+        BrokerRequest::FinishFileUpload {
+            upload_id: body.upload_id,
+            purpose: body.purpose,
+        },
+    )
+    .await
+}
+
+async fn abort_file_upload(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<FileUploadFinishBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    require_upload_capability(&state, &headers, body.purpose).await?;
+    broker_json(
+        &state,
+        BrokerRequest::AbortFileUpload {
+            upload_id: body.upload_id,
+            purpose: body.purpose,
+        },
+    )
+    .await
+}
+
+async fn require_upload_capability(
+    state: &ApiState,
+    headers: &HeaderMap,
+    purpose: FileUploadPurpose,
+) -> Result<(), ApiError> {
+    match purpose {
+        FileUploadPurpose::Storage => {
+            auth::require_capability(state, headers, "storage.files.manage").await?;
+        }
+        FileUploadPurpose::CustomJar => {
+            auth::require_capability(state, headers, "games.manage").await?;
+        }
+    }
+    Ok(())
+}
+
+async fn list_minecraft_versions(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    query: Result<Query<MinecraftVersionsQuery>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    let Query(query) = query.map_err(|_| ApiError::InvalidJson)?;
+    broker_json(
+        &state,
+        BrokerRequest::ListMinecraftVersions {
+            software: query.software,
+        },
+    )
+    .await
 }
 
 async fn start_storage_analysis(
@@ -2320,6 +2516,37 @@ async fn create_minecraft(
         auth::require_capability(&state, &headers, "network.firewall.write").await?;
     }
     broker_json(&state, BrokerRequest::CreateMinecraft { spec }).await
+}
+
+async fn create_vrising(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<VRisingCreateSpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(spec) = body.map_err(auth::map_json_rejection)?;
+    spec.validate().map_err(ApiError::BrokerRejected)?;
+    broker_json(&state, BrokerRequest::CreateVRising { spec }).await
+}
+
+async fn set_native_start_on_boot(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<StartOnBootBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetNativeStartOnBoot {
+            instance_id,
+            enabled: body.enabled,
+        },
+    )
+    .await
 }
 
 async fn minecraft_modpack_search(
@@ -3122,6 +3349,7 @@ mod tests {
             }],
             active_home_id: "home-main".to_owned(),
             colors: DashboardColorPreferences::default(),
+            servers_enabled: true,
         };
         let initial = serde_json::to_string(&preferences).expect("serialize preferences");
         let excess = initial
@@ -5184,6 +5412,7 @@ mod tests {
         for uri in [
             "/api/v1/files?path=/",
             "/api/v1/servers",
+            "/api/v1/servers/minecraft/versions?software=paper",
             "/api/v1/servers/inventory-health",
             "/api/v1/servers/example/marketplace/search?query=world",
             "/api/v1/servers/example/marketplace/projects/1bokaNcj",
@@ -5199,6 +5428,74 @@ mod tests {
                 ))
                 .await
                 .expect("read authorization response");
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{uri}");
+            assert_eq!(
+                response_json(response).await["code"],
+                "authorization_denied"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn file_uploads_require_storage_or_game_capabilities() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let connection =
+            rusqlite::Connection::open(context.data.path().join("state").join("helix-state.db"))
+                .expect("open state database");
+        connection
+            .execute(
+                "DELETE FROM role_capabilities
+                 WHERE capability IN ('storage.files.manage', 'games.manage')",
+                [],
+            )
+            .expect("remove upload capabilities");
+        drop(connection);
+        let bootstrap = install_bootstrap(&context);
+        let client = claim_owner(&context, &bootstrap).await;
+
+        for (uri, body) in [
+            (
+                "/api/v1/files/upload/begin",
+                json!({
+                    "target": { "kind": "directory", "parent": "/" },
+                    "name": "note.txt",
+                    "expected_size": 12
+                }),
+            ),
+            (
+                "/api/v1/files/upload/begin",
+                json!({
+                    "target": { "kind": "custom_jar" },
+                    "name": "server.jar",
+                    "expected_size": 32768
+                }),
+            ),
+            (
+                "/api/v1/files/upload/chunk",
+                json!({
+                    "upload_id": "00000000-0000-4000-8000-000000000001",
+                    "purpose": "storage",
+                    "offset": 0,
+                    "data_base64": "QQ=="
+                }),
+            ),
+            (
+                "/api/v1/files/upload/finish",
+                json!({
+                    "upload_id": "00000000-0000-4000-8000-000000000001",
+                    "purpose": "custom_jar"
+                }),
+            ),
+        ] {
+            let response = context
+                .app
+                .clone()
+                .oneshot(with_csrf(
+                    with_cookie(post_json(uri, &body, 81), &client.cookie),
+                    &client.csrf,
+                ))
+                .await
+                .expect("upload authorization response");
             assert_eq!(response.status(), StatusCode::FORBIDDEN, "{uri}");
             assert_eq!(
                 response_json(response).await["code"],

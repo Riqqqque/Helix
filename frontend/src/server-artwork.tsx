@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { ApiError } from './api';
 import type { ManagedServer } from './control-api';
+import { GameMark, gameMarkForSoftware } from './game-marks';
 import { Icon, type IconName } from './icons';
 import { Dialog } from './modal';
 import {
@@ -56,7 +57,11 @@ export function ServerArtwork({
     >
       {appearance.kind === 'custom' && !imageFailed
         ? <img src={appearance.imageUrl} alt="" loading="lazy" decoding="async" onError={() => setImageFailed(true)} />
-        : <Icon name={presetOptions.find((option) => option.id === preset)?.icon ?? (online ? 'activity' : 'servers')} size={size === 'detail' ? 24 : 19} />}
+        : (() => {
+            const game = appearance.kind === 'default' ? gameMarkForSoftware(server.software, server.kind) : null;
+            if (game !== null) return <GameMark game={game} size={size === 'detail' ? 28 : 22} />;
+            return <Icon name={presetOptions.find((option) => option.id === preset)?.icon ?? (online ? 'activity' : 'servers')} size={size === 'detail' ? 24 : 19} />;
+          })()}
       <i />
     </span>
   );

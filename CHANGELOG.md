@@ -40,12 +40,16 @@ binary or package release yet.
   Network, Host, Terminal, Servers, Hooks, and Settings pages; reorderable
   navigation; and bounded color/theme controls.
 - Native Docker-backed Minecraft creation and lifecycle for Paper, Purpur,
-  Folia, Fabric, and Vanilla, including persistent console archives, settings,
-  files, performance, recoverable backups/removal, and custom server artwork.
+  Folia, Leaves, Fabric, and Vanilla, including a published-release version
+  picker, persistent console archives, settings, files, performance,
+  recoverable backups/removal, and custom server artwork.
+- Drag-and-drop / chunked uploads in Storage and native server Files, plus
+  dropping a custom server JAR during create.
 - Compatibility-filtered Modrinth project artwork/search/details/install and a
   narrowly verified server-safe Fabric `.mrpack` creation path.
-- Configured-root file browsing with pagination, explicit edit/rename actions,
-  recoverable trash, and quick/thorough cancellable largest-item analysis.
+- Configured-root file browsing with pagination, drag-and-drop uploads,
+  explicit edit/rename actions, recoverable trash, and quick/thorough
+  cancellable largest-item analysis.
 - Network evidence, exact Helix-owned UFW rules with Undo, and a separate
   confirmed SSH-safety flow for enabling an installed inactive UFW.
 - Exact selected APT update jobs with list refresh, immediate candidate
@@ -85,6 +89,16 @@ binary or package release yet.
 - Home layouts now support templates, JSON export/import, drag handles,
   width/height, paged notes, quick note editing, widget colors, revisioned
   server persistence, and a retrying local fallback.
+
+### Fixed
+
+- Chunked uploads treat the 10-minute limit as time since the last chunk, so a
+  large JAR on a slow LAN is not killed while data is still arriving.
+- Paper, Folia, and Leaves version lists no longer advertise experimental
+  Minecraft versions as Latest when create would install the current
+  default/stable release.
+- Dropping a file onto Storage or the custom-JAR field while an upload is busy
+  no longer lets the browser navigate away from the dashboard.
 
 ### Security
 

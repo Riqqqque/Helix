@@ -120,6 +120,8 @@ Implemented:
 - Docker-backed isolated instance identities and configured roots;
 - one-click creation with explicit EULA acceptance, validated ports, memory,
   player limit, and start-on-boot choice;
+- a post-create start-on-boot toggle that changes Docker restart policy without
+  starting or stopping the server now;
 - start, stop, restart, update, health, performance, settings, files, logs,
   console, backups, restore, and background jobs;
 - per-instance operation locks and typed non-shell Docker calls;
@@ -221,16 +223,17 @@ never delete the only verified copy.
 
 ## Phase 8 — Additional game integrations
 
-**Status: NOT STARTED**
+**Status: V Rising IMPLEMENTED — UNVALIDATED; other games NOT STARTED**
 
 Add one deep integration at a time, based on current feasibility and demand.
-Candidates include Bedrock, Velocity, V Rising, Valheim, Palworld, Project
-Zomboid, Rust, Terraria/tModLoader, Factorio, Satisfactory, 7 Days to Die, and
-CS2.
+Candidates include Bedrock, Velocity, Valheim, Palworld, Project Zomboid, Rust,
+Terraria/tModLoader, Factorio, Satisfactory, 7 Days to Die, and CS2.
 
-V Rising is visible as a reserved catalog choice, not an install path. Its
-current official dedicated-server distribution is Windows-only, so Linux
-support requires a separately reviewed Wine install/update/backup/restore matrix.
+V Rising is a Helix-owned Wine + SteamCMD container path, not a Hub image and
+not a host OS Wine install. Create/update/start/stop/backup/restore/remove and
+last-instance image teardown are implemented. A live SteamCMD download, Wine
+stability, and publisher-support claim remain open. Public UPnP is not offered
+for V Rising in this release.
 
 Every integration documents runtime dependencies, ports, config coverage,
 console/query behavior, saves, updates, backups, restore, limitations, and a

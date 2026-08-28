@@ -69,7 +69,7 @@ malformed, stale, or wrong proof returns `403` with code `csrf_rejected`.
 | `GET` | `/api/v1/host/inventory` | `system.view` | Disks, mounts, interfaces, routes, services, processes, and listeners |
 | `GET` | `/api/v1/weather` | `dashboard.customize` | Bounded weather data for one validated location |
 | `GET` | `/api/v1/settings/preferences` | `dashboard.customize` | Revisioned dashboard preferences |
-| `PUT` | `/api/v1/settings/preferences` | `dashboard.customize` | Save navigation, metric cadence, and Home widgets with an expected revision |
+| `PUT` | `/api/v1/settings/preferences` | `dashboard.customize` | Save navigation, metric cadence, Home widgets, and whether the Servers page is enabled, with an expected revision |
 
 Preferences are bounded, strictly validated, and conflict rather than silently
 overwriting another session's newer revision.
@@ -107,13 +107,26 @@ and next activation. Automated tests never execute a reboot.
 | `POST` | `/api/v1/files/write` | `storage.files.manage` | Revision-guarded text write |
 | `POST` | `/api/v1/files/rename` | `storage.files.manage` | Rename one entry inside its trusted root |
 | `POST` | `/api/v1/files/trash` | `storage.files.manage` | Move one entry into configured recoverable trash |
+| `POST` | `/api/v1/files/upload/begin` | `storage.files.manage` or `games.manage` | Start a bounded chunked upload into a writable folder or the custom-JAR import root |
+| `POST` | `/api/v1/files/upload/chunk` | matching upload purpose | Append one sequential base64 chunk, maximum 2 MiB decoded |
+| `POST` | `/api/v1/files/upload/finish` | matching upload purpose | Commit the exact expected size into a create-new destination |
+| `POST` | `/api/v1/files/upload/abort` | matching upload purpose | Discard an in-flight temp file |
 | `POST` | `/api/v1/storage/analysis` | `storage.analyze` | Start a bounded `quick` or explicit `thorough` background size analysis |
 | `GET` | `/api/v1/storage/analysis/{job_id}` | `storage.analyze` | Read analysis progress/result |
 | `DELETE` | `/api/v1/storage/analysis/{job_id}` | `storage.analyze` | Request cancellation |
 
 The browser sends paths, but the broker accepts them only under configured
 trusted roots and performs Linux path-safety checks. This is not an arbitrary
-root filesystem API. Quick scans cap at 30 seconds/250,000 entries; thorough
+root filesystem API. Folder drops are rejected. Storage uploads are 1 byte–256
+MiB and need `storage.files.manage`. Custom JAR uploads are 16 KiB–768 MiB ZIP
+archives, land in Helix's private import root, and need `games.manage`. Chunks
+travel as JSON base64 so they stay inside the existing CSRF and 5 MiB body
+limit. Overwrites, out-of-order offsets, mixed purposes, and more than two
+concurrent uploads fail closed. Hidden `.helix-upload-*` temps are omitted from
+listings until finish or abort. An upload that sits idle for 10 minutes without
+a chunk is discarded; chunks themselves reset that timer.
+
+Quick scans cap at 30 seconds/250,000 entries; thorough
 scans cap at 10 minutes/5,000,000 entries and one concurrent job. A completed
 scan considers every eligible entry even though only the bounded largest
 rankings are retained. Coverage, skipped entries, omitted ranking rows, and stop
@@ -214,10 +227,14 @@ or output. Disconnect ends the PTY.
 | `GET` | `/api/v1/servers` | `games.view` | List native and separate AMP-managed instances |
 | `GET` | `/api/v1/servers/inventory-health` | `games.view` | Typed AMP compatibility-inventory health, bounded unverified-instance details, and unavailable/degraded state |
 | `GET` | `/api/v1/servers/manager/readiness` | `games.view` | Native manager backend, supported software, capabilities, and retention policy |
+| `GET` | `/api/v1/servers/minecraft/versions?software=` | `games.view` | Bounded published Minecraft releases for one installable software choice |
 | `GET` | `/api/v1/servers/port-policies/minecraft` | `games.view` | Read the normalized Minecraft ranges, priority ports, capacity, assignments, and next free port |
 | `PUT` | `/api/v1/servers/port-policies/minecraft` | `games.manage` | Persist bounded ranges, individual priority ports, and the public-setup default |
+| `GET` | `/api/v1/servers/port-policies/vrising` | `games.view` | Read the V Rising UDP pool (game + query pairs) |
+| `PUT` | `/api/v1/servers/port-policies/vrising` | `games.manage` | Persist the V Rising UDP pool; public auto-forward stays off |
 | `GET` | `/api/v1/games/readiness` | `games.view` | Compatibility alias for manager readiness |
 | `POST` | `/api/v1/servers/minecraft` | `games.manage` | Start a native Minecraft creation job |
+| `POST` | `/api/v1/servers/vrising` | `games.manage` | Start a native V Rising Wine-runtime creation job |
 | `GET` | `/api/v1/servers/minecraft/modpacks/search` | `games.view` | Search bounded Modrinth modpack previews across loaders |
 | `GET` | `/api/v1/servers/minecraft/modpacks/projects/{project_id}` | `games.view` | Read bounded project/version compatibility detail |
 | `POST` | `/api/v1/servers/minecraft/modpacks` | `games.manage` | Start a server-safe Fabric `.mrpack` creation job |
@@ -225,14 +242,34 @@ or output. Disconnect ends the PTY.
 | `GET` | `/api/v1/servers/removed` | `games.view` | Recoverable removed native servers and retention policy |
 | `POST` | `/api/v1/servers/removed/{trash_id}/restore` | `games.manage` | Restore an exact removed native server before expiry |
 | `POST` | `/api/v1/servers/{instance_id}/actions` | `games.manage` | Typed start/stop/restart/kill/update/backup action |
+| `PUT` | `/api/v1/servers/{instance_id}/start-on-boot` | `games.manage` | Set Docker restart policy on one native game container without starting or stopping it now |
 | `PUT` | `/api/v1/servers/{instance_id}/network` | `games.manage` + `network.firewall.write` | Create or remove the exact verified Helix-owned TCP router/UFW exposure for a native server |
 | `POST` | `/api/v1/servers/{instance_id}/remove` | `games.manage` | Stop/remove exact native workload and move data to recoverable trash |
 | `GET` | `/api/v1/jobs/{job_id}` | `games.view` | Read current bounded job state/log |
 
 The native readiness contract currently advertises install paths for Paper,
-Purpur, Folia, Fabric, Vanilla, and guarded local custom-JAR import when Docker
-and configured roots are ready.
-Forge and NeoForge are catalog explanations, not installable readiness values.
+Purpur, Folia, Leaves, Fabric, Vanilla, guarded local custom-JAR import, and V Rising
+when Docker is ready. V Rising uses a Helix-owned Wine + SteamCMD image, not a
+third-party Hub tag. Forge, NeoForge, Quilt, Spigot, Velocity, and similar
+choices stay catalog explanations until they have a tested install path.
+
+`GET /api/v1/servers/minecraft/versions` returns up to 128 published releases
+for one software id. Paper, Folia, and Leaves hide Minecraft versions newer than
+the current default/stable channel so Latest matches what create actually
+installs. Paper-family and Fabric/Vanilla catalogs accept `latest`; custom JAR
+catalogs return Mojang releases and reject `latest` at create time.
+
+V Rising creation requires an explicit Wine acknowledgement, allocates a UDP
+game/query pair from the V Rising pool, and stays private. The first create may
+build `helix-vrising-runtime:1` and download Steam app `1829350`. Removing the
+last active V Rising instance deletes that image. Restore rebuilds it if needed.
+This path is implemented and unvalidated on a live host; it is not
+publisher-supported.
+
+Native start-on-boot writes Docker `--restart unless-stopped` or `no` on the
+exact instance container and persists the same flag on the instance manifest.
+It does not start or stop the server at toggle time. After a host reboot,
+Docker brings back servers that opted in.
 
 Accepted work is not completed work. Creation, install, update, and backup jobs
 return bounded broker-lifetime status that the frontend polls. Job state is not

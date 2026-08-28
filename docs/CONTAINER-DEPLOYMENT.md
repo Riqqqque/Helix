@@ -41,8 +41,9 @@ configured, and installed on the host separately.
 - The broker configuration names exact managed roots, native state/instance/
   backup roots, custom executable-import roots, Docker binary, optional AMP
   credential file, and durable network-rule state. Broad read-only browsing of
-  `/` is never inherited as a custom JAR import root; set
-  `native.custom_artifact_roots` to explicit mount or storage paths instead.
+  `/` is never inherited as a custom JAR import root. Dropped JARs use Helix's
+  private `{state_root}/imports` directory. Extra Storage paths still need
+  explicit `native.custom_artifact_roots` entries.
 - The broker service sandbox grants configured content roots explicitly. Hosts
   that enable selected APT updates, UFW mutations, or recurring reboot schedules
   must also retain the reviewed `/boot`, `/etc`, `/usr`, and `/var` exceptions

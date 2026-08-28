@@ -3,18 +3,52 @@
 ## Choosing a game
 
 Choose **New Server** and then a game. Minecraft is the current native Linux
-runtime. V Rising is shown as a reserved, unavailable option because the current
-official dedicated-server distribution is Windows-only; Helix does not disguise
-an unvalidated Wine setup as one click.
+Java runtime. V Rising uses a Helix-owned Wine container around the official
+Windows dedicated server. The chooser shows original Helix marks, not publisher
+artwork: an isometric grass block for Minecraft and a blood-moon castle for
+V Rising.
 
 The server list can be filtered by game, manager, and state. Helix-native and
 imported servers keep visibly different ownership labels.
 
+Owner setup asks whether to include the Servers page. Existing owners keep it.
+Settings can hide or restore it later; hiding the page does not stop running
+game containers.
+
+## Native V Rising
+
+V Rising is not a Linux dedicated server. Helix builds `helix-vrising-runtime:1`
+from an embedded Dockerfile (Debian, Wine64, Xvfb, SteamCMD) the first time you
+create a V Rising server. Game files, saves, Wine prefix, and a SteamCMD copy
+live in that instance’s data directory. The host never receives Wine packages.
+
+First create acknowledges the unofficial Wine path, picks a UDP game/query pair
+from the V Rising pool (default 9876–9910), and can take a long time while
+SteamCMD downloads app 1829350. Public UPnP is not offered. Player counts are
+not queried. There is no RCON command console and no Modrinth marketplace.
+Host settings live in `save/Settings/ServerHostSettings.json` under Files.
+Update restarts the container so SteamCMD runs again.
+
+When the last **active** V Rising server is removed, Helix deletes the runtime
+image. Trashed data stays recoverable; restore rebuilds the image if needed.
+This path is implemented and unvalidated. It is not publisher-supported.
+
+## Start on boot
+
+Native Helix servers persist a start-on-boot flag in the instance manifest and
+set Docker `--restart unless-stopped` or `no`. Creation still starts the first
+time so the runtime can install. The later Overview toggle changes policy only;
+it does not start or stop the server now. After a host reboot, Docker brings
+back servers that opted in. This is separate from the Settings control that
+only covers the Helix dashboard and gateway containers.
+
 ## Native Minecraft
 
-The native creation wizard supports Paper, Purpur, Folia, Fabric, Vanilla, and
-a guarded custom server JAR.
-It collects the name, software, Minecraft release, memory, player limit,
+The native creation wizard supports Paper, Purpur, Folia, Leaves, Fabric, Vanilla, and
+a guarded custom server JAR. The Minecraft version field loads published
+releases for the selected software, including an explicit Latest stable choice
+except for custom JARs. Paper, Folia, and Leaves omit experimental Minecraft
+versions that create would refuse. The wizard collects the name, software, Minecraft release, memory, player limit,
 automatic-pool or specific port, private/public player-access choice,
 start-after-boot choice, and EULA acknowledgement. Unsupported Forge, NeoForge,
 Quilt, and broad CurseForge paths remain explanations rather than fake install
@@ -27,24 +61,23 @@ compatible build for the configured Minecraft release, and back up through
 bounded background jobs. Stop waits up to 45 seconds for a clean Minecraft
 shutdown. Kill is a confirmed native-only SIGKILL for when that stop is stuck;
 unsaved chunks can be lost. Imported AMP instances do not get Kill.
-Arbitrary historical build selection is not implemented yet.
+Arbitrary historical Paper/Purpur build IDs are not selectable; Helix still
+updates to the newest compatible build for the chosen Minecraft release.
 
-**Use your own JAR** accepts an absolute `.jar` path that already lives inside
-one of Helix's configured executable-import Storage roots, an exact Minecraft
-release, and Java 17, 21, or 25. The wizard includes a Storage browser as well
-as direct path entry. The broker canonicalizes the path, rejects symlinks and paths
-outside managed roots, bounds the file to 16 KiB–768 MiB, copies it through a
-private create-new staging file, syncs and hashes it, and runs the copy as the
-same isolated numeric user used by native servers. The source is untouched.
+**Use your own JAR** accepts a dropped `.jar` from this computer, an Upload
+picker, or an absolute path that already lives inside Storage. Dropped folders
+are rejected. Uploads go through bounded JSON chunks into Helix's private
+import root (16 KiB–768 MiB, ZIP magic on the first chunk). Storage-browser
+paths still have to sit inside a configured executable-import root. The wizard
+also asks for the exact Minecraft release and Java 17, 21, or 25.
 Helix cannot prove what an arbitrary JAR contains, infer its Java requirement,
 offer a compatibility-filtered marketplace, or choose a publisher update, so
 those actions stay manual and are labeled that way.
 
-The root-owned broker config controls this boundary through
-`native.custom_artifact_roots`. When an older config omits the field, Helix may
-inherit existing narrow managed roots, but it deliberately skips `/`. If no
-safe root exists, Custom JAR stays visibly unavailable instead of preventing
-the broker from starting or silently trusting the whole host.
+Helix always keeps a private `{state_root}/imports` directory for dropped JARs.
+Extra Storage paths can be added with `native.custom_artifact_roots`; `/` is
+never inherited as an import root. If the native manager is down, Custom JAR
+stays visibly unavailable instead of silently trusting the whole host.
 
 The console opens at the newest output and follows it until the operator scrolls
 away. History is captured by the host even when no browser is open and spans
@@ -71,7 +104,7 @@ bounds the response, and derives the media type from image bytes. Search and
 details are filtered by the exact server software, loader, and Minecraft
 release:
 
-- Paper and Purpur receive compatible plugins;
+- Paper, Purpur, and Leaves receive compatible plugins;
 - Folia requires content declaring Folia compatibility;
 - Fabric receives matching mod JARs;
 - a missing or negative Modrinth server-side flag is shown as a warning, not a
@@ -103,12 +136,13 @@ dashboard.
 ## Join addresses
 
 Each native detail view shows a LAN address, a separately detected Tailscale
-address when present, and the public-internet state. **Set up public access**
-uses UPnP only on the same private IPv4 gateway, refuses to overwrite an
-existing router rule, requests one TCP mapping for Minecraft, verifies the
-exact internal IP/port/description returned by the router, and journals
-ownership before presenting a public join address. If UFW is already active,
-Helix also adds one exact owned TCP rule; it never turns UFW on as a side effect.
+address when present, and the public-internet state. Minecraft **Set up public
+access** uses UPnP only on the same private IPv4 gateway, refuses to overwrite
+an existing router rule, requests one TCP mapping, verifies the exact internal
+IP/port/description returned by the router, and journals ownership before
+presenting a public join address. If UFW is already active, Helix also adds one
+exact owned TCP rule; it never turns UFW on as a side effect. V Rising stays
+private; Helix does not offer UPnP for its UDP game and query ports.
 
 A router-confirmed mapping is not the same as an outside test. Helix labels it
 that way and recommends testing from cellular or another network. A CGNAT or
@@ -118,15 +152,15 @@ explanation instead of a fabricated public address.
 
 ## Port pools
 
-Open **Port pools** on the Servers page to set Minecraft ranges and optional
-individual priority ports. Automatic allocation tries the individual list
-first, then each range in order, skipping duplicates, ports assigned to another
-Helix server, and ports currently bound on the host. Up to 32 ranges, 256
-individual entries, and 4,096 unique ports are accepted. The summary shows total
-capacity, assigned ports, and the next available candidate. A ten-port range can
-therefore supply ten sequential server creations without editing each wizard.
+Open **Port pools** on the Servers page to set Minecraft or V Rising ranges and
+optional individual priority ports. Automatic allocation tries the individual
+list first, then each range in order, skipping duplicates, ports assigned to
+another Helix server, and ports currently bound on the host. Up to 32 ranges,
+256 individual entries, and 4,096 unique ports are accepted. The summary shows
+total capacity, assigned ports, and the next available candidate.
 
-The public-setup default only preselects the visible creation choice. A public
-request still requires `network.firewall.write`; failure to configure the router
-does not roll back an otherwise healthy new Minecraft server, and the creation
-result points back to the Join section for a safe retry.
+The Minecraft public-setup default only preselects the visible creation choice.
+A public request still requires `network.firewall.write`; failure to configure
+the router does not roll back an otherwise healthy new Minecraft server, and the
+creation result points back to the Join section for a safe retry. V Rising
+cannot enable that default.

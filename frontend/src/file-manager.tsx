@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { ApiError } from './api';
 import { createDirectory, createFile, getDirectory, readTextFile, renameFile, trashFile, writeTextFile, type DirectoryListing, type FileEntry, type TextFile } from './control-api';
-import { InlineError } from './dashboard-ui';
+import { InlineError, ProgressBar } from './dashboard-ui';
+import { droppedTransferFiles, MAX_STORAGE_UPLOAD_BYTES, uploadHostFile } from './file-upload';
 import { formatBytes, formatTimestamp } from './format';
 import { Icon } from './icons';
 import { Dialog } from './modal';
@@ -46,7 +47,7 @@ export function fileTypeLabel(entry: FileEntry): string {
     avi: 'AVI video', gif: 'GIF image', jpeg: 'JPEG image', jpg: 'JPEG image',
     mkv: 'MKV video', mov: 'QuickTime video', mp3: 'MP3 audio', mp4: 'MP4 video',
     pdf: 'PDF document', png: 'PNG image', wav: 'WAV audio', webm: 'WebM video',
-    webp: 'WebP image', zip: 'ZIP archive',
+    webp: 'WebP image', jar: 'Java archive', zip: 'ZIP archive',
   };
   return known[suffix] ?? `${suffix.toUpperCase()} file`;
 }
@@ -77,6 +78,10 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
   const [editorContent, setEditorContent] = useState('');
   const [busy, setBusy] = useState(false);
   const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
+  const [uploadLabel, setUploadLabel] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
   const activeLoad = useRef<AbortController | null>(null);
   const pageSizeRef = useRef(50);
 
@@ -163,6 +168,35 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
     }
   };
 
+  const uploadFiles = async (files: File[]): Promise<void> => {
+    if (!listing?.writable || files.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      for (const [index, file] of files.entries()) {
+        setUploadLabel(files.length === 1 ? file.name : `${file.name} (${index + 1} of ${files.length})`);
+        setUploadPercent(0);
+        await uploadHostFile({
+          file,
+          purpose: 'storage',
+          parent: path,
+          csrfToken,
+          onProgress: setUploadPercent,
+        });
+      }
+      await load(path, cursorHistory[pageIndex] ?? null, pageIndex);
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setBusy(false);
+      setUploadPercent(null);
+      setUploadLabel(null);
+      setDragging(false);
+      if (fileInput.current !== null) fileInput.current.value = '';
+    }
+  };
+
   const nextPage = (): void => {
     if (listing?.nextCursor === null || listing?.nextCursor === undefined || !listing.hasMore) return;
     const nextCursor = listing.nextCursor;
@@ -188,9 +222,50 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
     onAnalysisClose?.();
   };
   const analysisTarget = analysis ?? (analysisOpen ? { path, mode: 'quick' as const } : null);
+  const canDrop =
+    listing?.writable === true &&
+    !busy &&
+    createKind === null &&
+    renameTarget === null &&
+    trashTarget === null &&
+    editor === null &&
+    analysisTarget === null;
 
   return (
-    <section class="file-manager surface" aria-busy={loading}>
+    <section
+      class={`file-manager surface${dragging ? ' is-drop-target' : ''}`}
+      aria-busy={loading}
+      onDragEnter={(event) => {
+        event.preventDefault();
+        if (canDrop) setDragging(true);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        if (event.dataTransfer !== null) event.dataTransfer.dropEffect = canDrop ? 'copy' : 'none';
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDragging(false);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragging(false);
+        if (!canDrop) return;
+        try {
+          const files = droppedTransferFiles(event.dataTransfer);
+          if (files.length > 0) void uploadFiles(files);
+        } catch (dropError) {
+          setError(describeError(dropError));
+        }
+      }}
+    >
+      {dragging && listing?.writable === true && (
+        <div class="file-drop-overlay">
+          <Icon name="plus" size={22} />
+          <strong>Drop files to upload</strong>
+          <span>Up to {formatBytes(MAX_STORAGE_UPLOAD_BYTES)} each. Folders are rejected.</span>
+        </div>
+      )}
       <div class="file-toolbar">
         <div class="breadcrumbs" aria-label="Current path">
           {crumbs.map((crumb, index) => {
@@ -204,9 +279,17 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
           <button class="button button--quiet" type="button" disabled={listing === null || loading} onClick={() => setAnalysisOpen(true)} title="Find the largest files and calculate folder totals"><Icon name="performance" size={16} />Analyze folder</button>
           <button class="button" type="button" disabled={!listing?.writable || busy} onClick={() => { setCreateName(''); setCreateKind('directory'); }}><Icon name="folder" size={16} />New folder</button>
           <button class="button" type="button" disabled={!listing?.writable || busy} onClick={() => { setCreateName(''); setCreateKind('file'); }}><Icon name="file" size={16} />New file</button>
+          <button class="button" type="button" disabled={!listing?.writable || busy} onClick={() => fileInput.current?.click()}><Icon name="plus" size={16} />Upload</button>
+          <input ref={fileInput} class="sr-only" type="file" multiple disabled={!listing?.writable || busy} onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; if (files.length > 0) void uploadFiles(files); }} />
         </div>
       </div>
       <InlineError message={error} />
+      {uploadPercent !== null && (
+        <div class="file-upload-progress" role="status">
+          <span>Uploading {uploadLabel}</span>
+          <ProgressBar value={uploadPercent} />
+        </div>
+      )}
       <div class="file-table-wrap">
         <table class="data-table file-table">
           <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th>Mode</th><th><span class="sr-only">Actions</span></th></tr></thead>

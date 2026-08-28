@@ -45,6 +45,7 @@ describe('File manager entry actions', () => {
   it('labels file types independently from the size column', () => {
     expect(fileTypeLabel(entry('clip.mp4', 512))).toBe('MP4 video');
     expect(fileTypeLabel(entry('archive.zip', 512))).toBe('ZIP archive');
+    expect(fileTypeLabel(entry('server.jar', 512))).toBe('Java archive');
     expect(fileTypeLabel(entry('world', 0, 'directory'))).toBe('Folder');
   });
 });

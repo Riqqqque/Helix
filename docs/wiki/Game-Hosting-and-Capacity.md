@@ -1,7 +1,7 @@
 # Game Hosting and Capacity
 
 Helix has a native Docker-backed Minecraft manager for Paper, Purpur, Folia,
-Fabric, and Vanilla. It can create and operate instances, retain bounded console
+Leaves, Fabric, and Vanilla. It can create and operate instances, retain bounded console
 history, manage settings and backups, and install compatible Modrinth content
 for the supported plugin/mod profiles. “Start with a modpack” additionally
 creates a server-safe subset from a listed stable server-capable Fabric

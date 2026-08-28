@@ -19,6 +19,9 @@ needed.
 
 The action menu separates:
 
+- **Upload** or drag-and-drop for regular files up to 256 MiB in a writable
+  folder. Folders are rejected. The same drop target is used on a native
+  server's Files tab;
 - **Open/Edit text** for validated UTF-8 regular files up to 4 MiB;
 - **Rename** for files or folders;
 - **Move to trash** for recoverable deletion; and

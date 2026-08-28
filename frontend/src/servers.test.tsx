@@ -6,6 +6,7 @@ import {
   canRunBackupMutation,
   importedServerPanelUrl,
   minecraftCreateSoftwareOptions,
+  NewServerChooser,
   serverActionDescription,
   serverWorkloadIsRunning,
   ServersPage,
@@ -35,6 +36,7 @@ const nativeServer: ManagedServer = {
   manager: 'helix',
   executionBackend: 'docker',
   appearance: { kind: 'default', revision: 0 },
+  kind: 'minecraft',
 };
 
 const data: DashboardData = {
@@ -56,14 +58,58 @@ describe('Servers route', () => {
     expect(markup).toContain('external managers remain separate');
   });
 
+  it('shows Minecraft and V Rising marks in the new-server chooser', () => {
+    const markup = render(
+      <NewServerChooser
+        onMinecraft={() => undefined}
+        onVRising={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('Minecraft: Java Edition');
+    expect(markup).toContain('V Rising');
+    expect(markup).toContain('Wine runtime');
+    expect(markup).toContain('game-mark--minecraft');
+    expect(markup).toContain('game-mark--vrising');
+    expect(markup).not.toContain('Not available on Linux');
+  });
+
+  it('lists native V Rising servers beside Minecraft', () => {
+    const vrising: ManagedServer = {
+      ...nativeServer,
+      id: 'server-vr',
+      name: 'Castle',
+      instanceName: 'helix-game-server-vr',
+      software: 'V Rising',
+      version: 'dedicated',
+      kind: 'vrising',
+      gamePort: 9_876,
+    };
+    const markup = render(
+      <ServersPage
+        data={{ ...data, servers: { data: [nativeServer, vrising], phase: 'ready', error: null } }}
+        csrfToken="csrf"
+        canManageServers
+        canManageBackups
+        canManageNetwork
+        onSessionExpired={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('Survival');
+    expect(markup).toContain('Castle');
+    expect(markup).toContain('V Rising');
+  });
+
   it('offers every currently installable native Minecraft software', () => {
     expect(minecraftCreateSoftwareOptions.map((option) => option.id)).toEqual([
-      'paper', 'purpur', 'folia', 'fabric', 'vanilla',
+      'paper', 'purpur', 'folia', 'leaves', 'fabric', 'vanilla',
     ]);
   });
 
   it('only exposes the marketplace for supported Helix-native software', () => {
-    expect(['Paper', 'Purpur', 'Folia', 'Fabric'].every(supportsMarketplaceSoftware)).toBe(true);
+    expect(['Paper', 'Purpur', 'Folia', 'Leaves', 'Fabric'].every(supportsMarketplaceSoftware)).toBe(true);
     expect(['Vanilla', 'NeoForge', 'AMP'].some(supportsMarketplaceSoftware)).toBe(false);
   });
 

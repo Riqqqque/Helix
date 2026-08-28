@@ -27,9 +27,9 @@ use clap::Parser;
 use files::{FileManager, MAX_CONFIGURED_ROOTS, StorageAnalysisManager};
 #[cfg(target_os = "linux")]
 use helix_privd::{
-    BrokerClient, BrokerRequest, BrokerResponse, HookServiceAction, MinecraftCreateSpec,
-    MinecraftModpackCreateSpec, PackageUpdateCandidate, ServerNetworkExposure, read_frame,
-    write_frame,
+    BrokerClient, BrokerRequest, BrokerResponse, FileUploadPurpose, FileUploadTarget,
+    HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSoftware,
+    PackageUpdateCandidate, ServerNetworkExposure, VRisingCreateSpec, read_frame, write_frame,
 };
 #[cfg(target_os = "linux")]
 use hook_install::{HookInstaller, HookInstallerConfig};
@@ -251,6 +251,23 @@ impl BrokerContext {
                 self.files.rename(&path, &new_name).and_then(to_value)
             }
             BrokerRequest::Trash { path } => self.files.trash(&path).and_then(to_value),
+            BrokerRequest::BeginFileUpload {
+                target,
+                name,
+                expected_size,
+            } => self.begin_file_upload(target, name, expected_size),
+            BrokerRequest::WriteFileUploadChunk {
+                upload_id,
+                purpose,
+                offset,
+                data_base64,
+            } => self.write_file_upload_chunk(&upload_id, purpose, offset, &data_base64),
+            BrokerRequest::FinishFileUpload { upload_id, purpose } => {
+                self.finish_file_upload(&upload_id, purpose)
+            }
+            BrokerRequest::AbortFileUpload { upload_id, purpose } => {
+                self.abort_file_upload(&upload_id, purpose)
+            }
             BrokerRequest::StartStorageAnalysis { path, mode } => {
                 self.storage.start_with_mode(&path, mode).and_then(to_value)
             }
@@ -367,6 +384,18 @@ impl BrokerContext {
             BrokerRequest::CreateMinecraftModpack { spec } => {
                 self.start_minecraft_modpack_job(spec)
             }
+            BrokerRequest::CreateVRising { spec } => self.start_vrising_job(spec),
+            BrokerRequest::SetNativeStartOnBoot {
+                instance_id,
+                enabled,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.set_start_on_boot(&instance_id, enabled)),
+            BrokerRequest::ListMinecraftVersions { software } => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(|native| native.list_minecraft_versions(software)),
             BrokerRequest::JobStatus { job_id } => self.job_status(&job_id),
         };
 
@@ -794,6 +823,83 @@ impl BrokerContext {
             .ok_or_else(|| "host control is not configured".to_owned())
     }
 
+    fn begin_file_upload(
+        &self,
+        target: FileUploadTarget,
+        name: String,
+        expected_size: u64,
+    ) -> Result<Value, String> {
+        match target {
+            FileUploadTarget::Directory { parent } => self
+                .files
+                .begin_upload(&parent, &name, expected_size)
+                .and_then(to_value),
+            FileUploadTarget::CustomJar => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(|native| native.begin_custom_jar_upload(&name, expected_size))
+                .and_then(to_value),
+        }
+    }
+
+    fn write_file_upload_chunk(
+        &self,
+        upload_id: &str,
+        purpose: FileUploadPurpose,
+        offset: u64,
+        data_base64: &str,
+    ) -> Result<Value, String> {
+        match purpose {
+            FileUploadPurpose::Storage => self
+                .files
+                .write_upload_chunk(upload_id, purpose, offset, data_base64)
+                .and_then(to_value),
+            FileUploadPurpose::CustomJar => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(|native| {
+                    native.write_custom_jar_chunk(upload_id, purpose, offset, data_base64)
+                })
+                .and_then(to_value),
+        }
+    }
+
+    fn finish_file_upload(
+        &self,
+        upload_id: &str,
+        purpose: FileUploadPurpose,
+    ) -> Result<Value, String> {
+        match purpose {
+            FileUploadPurpose::Storage => self
+                .files
+                .finish_upload(upload_id, purpose)
+                .and_then(to_value),
+            FileUploadPurpose::CustomJar => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(|native| native.finish_custom_jar_upload(upload_id, purpose))
+                .and_then(to_value),
+        }
+    }
+
+    fn abort_file_upload(
+        &self,
+        upload_id: &str,
+        purpose: FileUploadPurpose,
+    ) -> Result<Value, String> {
+        match purpose {
+            FileUploadPurpose::Storage => self.files.abort_upload(upload_id, purpose),
+            FileUploadPurpose::CustomJar => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(|native| native.abort_custom_jar_upload(upload_id, purpose)),
+        }
+    }
+
     fn server_manager_readiness(&self) -> Result<Value, String> {
         match &self.native {
             Some(native) => native.readiness(),
@@ -1162,6 +1268,57 @@ impl BrokerContext {
                 "",
             );
             return Err("could not start the Minecraft installation job".to_owned());
+        }
+
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
+    fn start_vrising_job(self: &Arc<Self>, spec: VRisingCreateSpec) -> Result<Value, String> {
+        let native = Arc::clone(
+            self.native
+                .as_ref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())?,
+        );
+        let (job_id, _) = self.queue_job("vrising_create", Some("vrising:create"), None)?;
+
+        let context = Arc::clone(self);
+        let worker_job_id = job_id.clone();
+        if thread::Builder::new()
+            .name(format!("vrising-job-{}", &job_id[..8]))
+            .spawn(move || {
+                context.update_job(&worker_job_id, |job| {
+                    job.status = JobState::Running;
+                    job.stage = "Preparing".to_owned();
+                    job.progress_percent = 2;
+                });
+                let result = native.create_vrising(&spec, |stage, progress| {
+                    context.update_job(&worker_job_id, |job| {
+                        job.stage = stage.to_owned();
+                        job.progress_percent = progress;
+                    });
+                });
+                context.update_job(&worker_job_id, |job| match result {
+                    Ok(value) => {
+                        job.status = JobState::Complete;
+                        job.stage = "Online".to_owned();
+                        job.progress_percent = 100;
+                        job.result = Some(value);
+                    }
+                    Err(message) => {
+                        job.status = JobState::Failed;
+                        job.stage = "Failed".to_owned();
+                        job.error = Some(message);
+                    }
+                });
+            })
+            .is_err()
+        {
+            self.finish_job(
+                &job_id,
+                Err("could not start the V Rising installation job".to_owned()),
+                "",
+            );
+            return Err("could not start the V Rising installation job".to_owned());
         }
 
         Ok(json!({"job_id": job_id, "reused": false}))
@@ -2054,6 +2211,7 @@ mod tests {
             id: "helix:test".to_owned(),
             name: "Test".to_owned(),
             instance_name: "test".to_owned(),
+            kind: "minecraft",
             software: "Paper".to_owned(),
             version: "1.21.8".to_owned(),
             status: "offline".to_owned(),

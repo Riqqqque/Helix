@@ -1,5 +1,10 @@
-use helix_privd::StorageAnalysisMode;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use helix_privd::{
+    FileUploadPurpose, MAX_CONCURRENT_FILE_UPLOADS, MAX_CUSTOM_JAR_UPLOAD_BYTES,
+    MAX_FILE_UPLOAD_CHUNK_BYTES, MAX_STORAGE_UPLOAD_BYTES, StorageAnalysisMode,
+};
 use serde::Serialize;
+use serde_json::{Value, json};
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BinaryHeap, HashMap, HashSet},
@@ -30,10 +35,14 @@ const BLOCKED_FILES: &[&str] = &[
     "/etc/security/opasswd",
     "/root/.ssh",
 ];
+const MIN_CUSTOM_JAR_BYTES: u64 = 16 * 1024;
+const FILE_UPLOAD_IDLE: Duration = Duration::from_secs(10 * 60);
+const JAR_MAGIC: &[u8] = b"PK\x03\x04";
 
 #[derive(Clone)]
 pub struct FileManager {
     managed_roots: Vec<PathBuf>,
+    uploads: Arc<Mutex<HashMap<String, StreamingUpload>>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,7 +108,10 @@ impl FileManager {
         managed_roots.sort();
         managed_roots.dedup();
         managed_roots.sort_by_key(|right| std::cmp::Reverse(right.components().count()));
-        Ok(Self { managed_roots })
+        Ok(Self {
+            managed_roots,
+            uploads: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     pub fn list(
@@ -144,6 +156,9 @@ impl FileManager {
             };
             if name.len() > 1024 || name.chars().any(char::is_control) {
                 omitted_entries = omitted_entries.saturating_add(1);
+                continue;
+            }
+            if name.starts_with(".helix-upload-") {
                 continue;
             }
             total_entries = total_entries.saturating_add(1);
@@ -364,6 +379,117 @@ impl FileManager {
         })
     }
 
+    pub fn begin_upload(
+        &self,
+        parent: &str,
+        name: &str,
+        expected_size: u64,
+    ) -> Result<FileUploadStart, String> {
+        if expected_size == 0 || expected_size > MAX_STORAGE_UPLOAD_BYTES {
+            return Err("uploaded files must be between 1 byte and 256 MiB".to_owned());
+        }
+        let (parent, destination) = self.new_target(parent, name)?;
+        let upload = StreamingUpload::start(
+            parent,
+            destination,
+            expected_size,
+            FileUploadPurpose::Storage,
+        )?;
+        self.insert_upload(upload)
+    }
+
+    pub fn write_upload_chunk(
+        &self,
+        upload_id: &str,
+        purpose: FileUploadPurpose,
+        offset: u64,
+        data_base64: &str,
+    ) -> Result<FileUploadProgress, String> {
+        if purpose != FileUploadPurpose::Storage {
+            return Err("that upload does not belong to Storage".to_owned());
+        }
+        let data = decode_upload_chunk(data_base64)?;
+        let mut uploads = self.uploads.lock().map_err(|_| upload_lock_error())?;
+        prune_uploads(&mut uploads);
+        let upload = uploads
+            .get_mut(upload_id)
+            .ok_or_else(|| "that upload is no longer active".to_owned())?;
+        if upload.purpose != purpose {
+            return Err("that upload does not belong to Storage".to_owned());
+        }
+        let written = upload.write_chunk(offset, &data)?;
+        Ok(FileUploadProgress {
+            upload_id: upload_id.to_owned(),
+            bytes_written: written,
+            expected_size: upload.expected_size,
+        })
+    }
+
+    pub fn finish_upload(
+        &self,
+        upload_id: &str,
+        purpose: FileUploadPurpose,
+    ) -> Result<PathResult, String> {
+        if purpose != FileUploadPurpose::Storage {
+            return Err("that upload does not belong to Storage".to_owned());
+        }
+        let mut uploads = self.uploads.lock().map_err(|_| upload_lock_error())?;
+        prune_uploads(&mut uploads);
+        let upload = uploads
+            .remove(upload_id)
+            .ok_or_else(|| "that upload is no longer active".to_owned())?;
+        if upload.purpose != purpose {
+            uploads.insert(upload_id.to_owned(), upload);
+            return Err("that upload does not belong to Storage".to_owned());
+        }
+        Ok(PathResult::new(commit_upload(upload)?))
+    }
+
+    pub fn abort_upload(
+        &self,
+        upload_id: &str,
+        purpose: FileUploadPurpose,
+    ) -> Result<Value, String> {
+        if purpose != FileUploadPurpose::Storage {
+            return Err("that upload does not belong to Storage".to_owned());
+        }
+        let mut uploads = self.uploads.lock().map_err(|_| upload_lock_error())?;
+        prune_uploads(&mut uploads);
+        if let Some(upload) = uploads.remove(upload_id) {
+            if upload.purpose != purpose {
+                uploads.insert(upload_id.to_owned(), upload);
+                return Err("that upload does not belong to Storage".to_owned());
+            }
+            upload.abort();
+        }
+        Ok(json!({ "aborted": true }))
+    }
+
+    fn insert_upload(&self, upload: StreamingUpload) -> Result<FileUploadStart, String> {
+        let mut uploads = self.uploads.lock().map_err(|_| upload_lock_error())?;
+        prune_uploads(&mut uploads);
+        if uploads.len() >= MAX_CONCURRENT_FILE_UPLOADS {
+            upload.abort();
+            return Err("Helix is already receiving the maximum number of uploads".to_owned());
+        }
+        if uploads
+            .values()
+            .any(|existing| existing.destination == upload.destination)
+        {
+            upload.abort();
+            return Err("an item with that name already exists".to_owned());
+        }
+        let upload_id = Uuid::new_v4().to_string();
+        let start = FileUploadStart {
+            upload_id: upload_id.clone(),
+            expected_size: upload.expected_size,
+            max_chunk_bytes: MAX_FILE_UPLOAD_CHUNK_BYTES as u64,
+            purpose: upload.purpose,
+        };
+        uploads.insert(upload_id, upload);
+        Ok(start)
+    }
+
     fn new_target(&self, parent: &str, name: &str) -> Result<(PathBuf, PathBuf), String> {
         validate_name(name)?;
         let parent = canonical_existing(parent)?;
@@ -406,6 +532,118 @@ impl PathResult {
     fn new(path: PathBuf) -> Self {
         Self {
             path: path.to_string_lossy().into_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileUploadStart {
+    pub upload_id: String,
+    pub expected_size: u64,
+    pub max_chunk_bytes: u64,
+    pub purpose: FileUploadPurpose,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileUploadProgress {
+    pub upload_id: String,
+    pub bytes_written: u64,
+    pub expected_size: u64,
+}
+
+pub(crate) struct StreamingUpload {
+    pub(crate) destination: PathBuf,
+    temporary: PathBuf,
+    parent: PathBuf,
+    pub(crate) expected_size: u64,
+    written: u64,
+    file: File,
+    touched: Instant,
+    pub(crate) purpose: FileUploadPurpose,
+    finished: bool,
+}
+
+impl StreamingUpload {
+    pub(crate) fn start(
+        parent: PathBuf,
+        destination: PathBuf,
+        expected_size: u64,
+        purpose: FileUploadPurpose,
+    ) -> Result<Self, String> {
+        let temporary = parent.join(format!(".helix-upload-{}", Uuid::new_v4().simple()));
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o640)
+            .open(&temporary)
+            .map_err(file_error)?;
+        Ok(Self {
+            destination,
+            temporary,
+            parent,
+            expected_size,
+            written: 0,
+            file,
+            touched: Instant::now(),
+            purpose,
+            finished: false,
+        })
+    }
+
+    pub(crate) fn is_stale(&self) -> bool {
+        self.touched.elapsed() > FILE_UPLOAD_IDLE
+    }
+
+    pub(crate) fn write_chunk(&mut self, offset: u64, data: &[u8]) -> Result<u64, String> {
+        if data.is_empty() {
+            return Err("upload chunks cannot be empty".to_owned());
+        }
+        if offset != self.written {
+            return Err("upload chunks must arrive in order".to_owned());
+        }
+        let next = self
+            .written
+            .checked_add(data.len() as u64)
+            .ok_or_else(|| "the upload is too large".to_owned())?;
+        if next > self.expected_size {
+            return Err("the upload exceeded its declared size".to_owned());
+        }
+        if self.purpose == FileUploadPurpose::CustomJar
+            && self.written == 0
+            && (data.len() < JAR_MAGIC.len() || !data.starts_with(JAR_MAGIC))
+        {
+            return Err("the dropped file is not a JAR archive".to_owned());
+        }
+        self.file.write_all(data).map_err(file_error)?;
+        self.written = next;
+        self.touched = Instant::now();
+        Ok(self.written)
+    }
+
+    fn finish(mut self) -> Result<PathBuf, String> {
+        if self.written != self.expected_size {
+            return Err("the upload ended before the declared size was received".to_owned());
+        }
+        if self.purpose == FileUploadPurpose::CustomJar && self.written < MIN_CUSTOM_JAR_BYTES {
+            return Err("the custom server JAR is smaller than the 16 KiB minimum".to_owned());
+        }
+        self.file.sync_all().map_err(file_error)?;
+        fs::hard_link(&self.temporary, &self.destination).map_err(file_error)?;
+        self.finished = true;
+        let _ = fs::remove_file(&self.temporary);
+        Ok(self.destination.clone())
+    }
+
+    pub(crate) fn abort(mut self) {
+        self.finished = true;
+        let _ = fs::remove_file(&self.temporary);
+    }
+}
+
+impl Drop for StreamingUpload {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = fs::remove_file(&self.temporary);
         }
     }
 }
@@ -1677,7 +1915,7 @@ fn is_blocked(path: &Path) -> bool {
             .any(|root| path.starts_with(root))
 }
 
-fn validate_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty()
         || name == "."
         || name == ".."
@@ -1753,6 +1991,35 @@ fn file_error(error: io::Error) -> String {
         io::ErrorKind::StorageFull => "the destination filesystem is full".to_owned(),
         _ => "the filesystem operation failed".to_owned(),
     }
+}
+
+pub(crate) fn decode_upload_chunk(data_base64: &str) -> Result<Vec<u8>, String> {
+    if data_base64.is_empty() || data_base64.len() > MAX_FILE_UPLOAD_CHUNK_BYTES * 2 {
+        return Err("the upload chunk is invalid".to_owned());
+    }
+    let data = STANDARD
+        .decode(data_base64)
+        .map_err(|_| "the upload chunk encoding is invalid".to_owned())?;
+    if data.is_empty() || data.len() > MAX_FILE_UPLOAD_CHUNK_BYTES {
+        return Err("the upload chunk is outside the size limit".to_owned());
+    }
+    Ok(data)
+}
+
+pub(crate) fn prune_uploads(uploads: &mut HashMap<String, StreamingUpload>) {
+    uploads.retain(|_, upload| !upload.is_stale());
+}
+
+pub(crate) fn upload_lock_error() -> String {
+    "upload state is temporarily unavailable".to_owned()
+}
+
+pub(crate) fn commit_upload(upload: StreamingUpload) -> Result<PathBuf, String> {
+    let parent = upload.parent.clone();
+    let destination = upload.finish()?;
+    inherit_owner(&parent, &destination)?;
+    sync_directory(&parent)?;
+    Ok(destination)
 }
 
 #[cfg(test)]
@@ -1845,6 +2112,111 @@ mod tests {
         ] {
             assert!(is_blocked(Path::new(path)), "{path}");
         }
+    }
+
+    #[test]
+    fn file_upload_writes_bounded_regular_files_and_rejects_collisions() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let managed = temporary.path().join("managed");
+        fs::create_dir(&managed).expect("managed root");
+        let manager = FileManager::new(vec![managed.clone()]).expect("file manager");
+        let parent = managed.to_str().unwrap();
+        let payload = b"plugin-bytes";
+        let start = manager
+            .begin_upload(parent, "WorldGuard.jar", payload.len() as u64)
+            .expect("begin");
+        assert_eq!(start.max_chunk_bytes, MAX_FILE_UPLOAD_CHUNK_BYTES as u64);
+        manager
+            .write_upload_chunk(
+                &start.upload_id,
+                FileUploadPurpose::Storage,
+                0,
+                &STANDARD.encode(payload),
+            )
+            .expect("chunk");
+        let finished = manager
+            .finish_upload(&start.upload_id, FileUploadPurpose::Storage)
+            .expect("finish");
+        let written = managed.join("WorldGuard.jar");
+        assert_eq!(finished.path, written.to_string_lossy());
+        assert_eq!(fs::read(&written).unwrap(), payload);
+
+        assert!(manager.begin_upload(parent, "WorldGuard.jar", 4).is_err());
+        assert!(manager.begin_upload(parent, "../escape.jar", 4).is_err());
+        assert!(manager.begin_upload(parent, "empty.bin", 0).is_err());
+        let too_large = manager.begin_upload(parent, "huge.bin", MAX_STORAGE_UPLOAD_BYTES + 1);
+        assert!(too_large.is_err());
+    }
+
+    #[test]
+    fn file_upload_rejects_out_of_order_chunks_and_wrong_purpose() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let managed = temporary.path().join("managed");
+        fs::create_dir(&managed).expect("managed root");
+        let manager = FileManager::new(vec![managed.clone()]).expect("file manager");
+        let start = manager
+            .begin_upload(managed.to_str().unwrap(), "data.bin", 4)
+            .expect("begin");
+        assert!(
+            manager
+                .write_upload_chunk(
+                    &start.upload_id,
+                    FileUploadPurpose::CustomJar,
+                    0,
+                    &STANDARD.encode(b"data"),
+                )
+                .is_err()
+        );
+        assert!(
+            manager
+                .write_upload_chunk(
+                    &start.upload_id,
+                    FileUploadPurpose::Storage,
+                    2,
+                    &STANDARD.encode(b"da"),
+                )
+                .is_err()
+        );
+        manager
+            .abort_upload(&start.upload_id, FileUploadPurpose::Storage)
+            .expect("abort");
+        assert!(!managed.join("data.bin").exists());
+
+        let long = manager
+            .begin_upload(managed.to_str().unwrap(), "long.bin", 4)
+            .expect("begin long");
+        {
+            let mut uploads = manager.uploads.lock().expect("upload lock");
+            let upload = uploads.get_mut(&long.upload_id).expect("active upload");
+            upload.touched = Instant::now() - FILE_UPLOAD_IDLE - Duration::from_secs(1);
+            assert!(upload.is_stale());
+        }
+        manager
+            .write_upload_chunk(
+                &long.upload_id,
+                FileUploadPurpose::Storage,
+                0,
+                &STANDARD.encode(b"data"),
+            )
+            .expect("chunk after idle mark");
+        {
+            let mut uploads = manager.uploads.lock().expect("upload lock");
+            prune_uploads(&mut uploads);
+            let upload = uploads.get(&long.upload_id).expect("upload still active");
+            assert!(!upload.is_stale());
+        }
+        manager
+            .abort_upload(&long.upload_id, FileUploadPurpose::Storage)
+            .expect("abort long");
+        assert!(
+            fs::read_dir(&managed)
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".helix-upload-"))
+        );
     }
 
     #[test]

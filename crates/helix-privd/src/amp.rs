@@ -52,6 +52,7 @@ pub struct AmpServer {
     pub id: String,
     pub name: String,
     pub instance_name: String,
+    pub kind: &'static str,
     pub software: String,
     pub version: String,
     pub status: String,
@@ -348,6 +349,7 @@ impl AmpClient {
             id: format!("amp:{id}"),
             name,
             instance_name,
+            kind: "imported",
             software,
             version,
             status: if online {

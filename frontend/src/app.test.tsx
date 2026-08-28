@@ -44,6 +44,23 @@ describe('dashboard shell', () => {
     expect(markup).not.toContain('Your server clearly in view');
   });
 
+  it('hides Servers until the owner enables the module', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => (key === 'helix.dashboard.servers-enabled' ? 'false' : null),
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    });
+    const sidebarMarkup = render(<Dashboard {...dashboardProps} />);
+    const sidebar = sidebarMarkup.match(/<nav[^>]*class="sidebar-nav"[^>]*>.*?<\/nav>/u)?.[0] ?? '';
+    expect(sidebar).not.toContain('#servers');
+
+    vi.stubGlobal('window', { location: { hash: '#servers' } });
+    const page = render(<Dashboard {...dashboardProps} />);
+    expect(page).toContain('Game servers are turned off');
+    expect(page).toContain('Enable Servers');
+    expect(page).not.toContain('Loading server controls…');
+  });
+
   it('renders every navigation destination with a page heading or route loading boundary', () => {
     for (const [hash, title] of [
       ['#overview', 'Overview'],

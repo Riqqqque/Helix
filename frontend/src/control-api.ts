@@ -137,10 +137,13 @@ export interface TextFile {
 
 export type ServerStatus = 'online' | 'offline' | 'manager_stopped';
 
+export type ServerKind = 'minecraft' | 'vrising' | 'imported';
+
 export interface ManagedServer {
   id: string;
   name: string;
   instanceName: string;
+  kind: ServerKind;
   software: string;
   version: string;
   status: ServerStatus;
@@ -163,7 +166,7 @@ export interface ManagedServer {
 }
 
 export type ServerAction = 'start' | 'stop' | 'restart' | 'kill' | 'update' | 'backup';
-export type MinecraftSoftware = 'custom' | 'vanilla' | 'paper' | 'purpur' | 'folia' | 'fabric' | 'neoforge';
+export type MinecraftSoftware = 'custom' | 'vanilla' | 'paper' | 'purpur' | 'folia' | 'leaves' | 'fabric' | 'neoforge';
 
 export interface MinecraftCreateInput {
   name: string;
@@ -261,6 +264,7 @@ export interface NativeServerDetail {
   id: string;
   name: string;
   instanceName: string;
+  kind: 'minecraft' | 'vrising';
   software: string;
   minecraftVersion: string;
   build: string;
@@ -269,6 +273,7 @@ export interface NativeServerDetail {
   artifactSha256: string;
   memoryLimitMb: number;
   gamePort: number;
+  queryPort: number | null;
   startOnBoot: boolean;
   createdAtUnixMs: number;
   dataPath: string;
@@ -279,7 +284,7 @@ export interface NativeServerDetail {
   cpuPercent: number;
   memoryUsedMb: number;
   containerState: Record<string, unknown>;
-  settings: MinecraftSettings;
+  settings: MinecraftSettings | null;
   consoleHistory: {
     persistent: boolean;
     retentionBytes: number;
@@ -585,11 +590,22 @@ export function parseServers(value: unknown): ManagedServer[] {
     if (executionBackend !== 'docker' && executionBackend !== 'external') {
       throw new Error('Invalid execution backend');
     }
+    const software = expectString(item, 'software', 'server');
+    const rawKind = typeof item.kind === 'string' ? item.kind : '';
+    const kind: ServerKind =
+      rawKind === 'vrising' || rawKind === 'minecraft' || rawKind === 'imported'
+        ? rawKind
+        : /v\s*rising/iu.test(software)
+          ? 'vrising'
+          : manager === 'helix'
+            ? 'minecraft'
+            : 'imported';
     return {
       id: expectString(item, 'id', 'server'),
       name: expectString(item, 'name', 'server'),
       instanceName: expectString(item, 'instance_name', 'server'),
-      software: expectString(item, 'software', 'server'),
+      kind,
+      software,
       version: expectString(item, 'version', 'server'),
       status,
       panelRunning: boolean(item, 'panel_running'),
@@ -709,15 +725,20 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
   const root = expectRecord(value, 'server detail');
   const status = expectString(root, 'status', 'server detail') as NativeServerStatus;
   if (!['online', 'starting', 'stopped'].includes(status)) throw new Error('Invalid native server status');
+  const software = expectString(root, 'software', 'server detail');
+  const rawKind = typeof root.kind === 'string' ? root.kind : '';
+  const kind = rawKind === 'vrising' || software.toLowerCase() === 'v rising' ? 'vrising' as const : 'minecraft' as const;
   const containerState = expectRecord(root.container_state, 'container state');
   const consoleHistory = expectRecord(root.console_history, 'console history configuration');
   const consoleHistoryScope = expectString(consoleHistory, 'scope', 'console history configuration');
   if (consoleHistoryScope !== 'per_server') throw new Error('Invalid console history scope');
+  const queryPort = root.query_port == null ? null : number(root, 'query_port');
   return {
     id: expectString(root, 'id', 'server detail'),
     name: expectString(root, 'name', 'server detail'),
     instanceName: expectString(root, 'instance_name', 'server detail'),
-    software: expectString(root, 'software', 'server detail'),
+    kind,
+    software,
     minecraftVersion: expectString(root, 'minecraft_version', 'server detail'),
     build: expectString(root, 'build', 'server detail'),
     javaVersion: number(root, 'java_version'),
@@ -725,6 +746,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     artifactSha256: expectString(root, 'artifact_sha256', 'server detail'),
     memoryLimitMb: number(root, 'memory_limit_mb'),
     gamePort: number(root, 'game_port'),
+    queryPort,
     startOnBoot: boolean(root, 'start_on_boot'),
     createdAtUnixMs: number(root, 'created_at_unix_ms'),
     dataPath: expectString(root, 'data_path', 'server detail'),
@@ -735,7 +757,9 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     cpuPercent: number(root, 'cpu_percent'),
     memoryUsedMb: number(root, 'memory_used_mb'),
     containerState,
-    settings: parseMinecraftSettings(root.settings),
+    settings: kind === 'vrising' && (root.settings === null || root.settings === undefined)
+      ? null
+      : parseMinecraftSettings(root.settings),
     consoleHistory: {
       persistent: boolean(consoleHistory, 'persistent'),
       retentionBytes: number(consoleHistory, 'retention_bytes'),
@@ -866,6 +890,44 @@ export function createFile(parent: string, name: string, csrfToken: string): Pro
   return requestJson('/api/v1/files/file', identity, { method: 'POST', body: { parent, name }, csrfToken });
 }
 
+export interface MinecraftVersionCatalog {
+  software: MinecraftSoftware;
+  allowsLatest: boolean;
+  latestVersion: string | null;
+  versions: string[];
+}
+
+function parseMinecraftVersionCatalog(value: unknown): MinecraftVersionCatalog {
+  const root = expectRecord(value, 'Minecraft versions');
+  if (expectNumber(root, 'schema_version', 'Minecraft versions', { integer: true }) !== 1) {
+    throw new ApiError('Minecraft versions returned an unsupported schema.');
+  }
+  const latest = root.latest_version;
+  return {
+    software: expectString(root, 'software', 'Minecraft versions') as MinecraftSoftware,
+    allowsLatest: boolean(root, 'allows_latest'),
+    latestVersion: latest === null || latest === undefined ? null : expectString(root, 'latest_version', 'Minecraft versions'),
+    versions: expectArray(root, 'versions', 'Minecraft versions', 128).map((entry) => {
+      if (typeof entry !== 'string' || entry.trim().length === 0) {
+        throw new ApiError('Minecraft versions returned an invalid version.');
+      }
+      return entry;
+    }),
+  };
+}
+
+export function getMinecraftVersions(
+  software: MinecraftSoftware,
+  csrfToken: string,
+  signal?: AbortSignal,
+): Promise<MinecraftVersionCatalog> {
+  return requestJson(
+    `/api/v1/servers/minecraft/versions?software=${encodeURIComponent(software)}`,
+    parseMinecraftVersionCatalog,
+    { csrfToken, signal, timeoutMs: 25_000 },
+  );
+}
+
 export function readTextFile(path: string, csrfToken: string): Promise<TextFile> {
   return requestJson('/api/v1/files/read', parseTextFile, { method: 'POST', body: { path }, csrfToken });
 }
@@ -954,43 +1016,45 @@ export function createMinecraftServer(input: MinecraftCreateInput, csrfToken: st
   }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
 }
 
-function parseGamePortPolicy(value: unknown): GamePortPolicy {
-  const root = expectRecord(value, 'game port policy');
-  if (number(root, 'schema_version') !== 1) throw new ApiError('Unsupported game port policy schema.');
-  const policy = expectRecord(root.policy, 'game port policy details');
-  if (expectString(policy, 'game', 'game port policy details') !== 'minecraft') {
-    throw new ApiError('Game port policy returned the wrong game.');
-  }
-  const ranges = expectArray(policy, 'ranges', 'game port policy details', 32).map((value) => {
-    const range = expectRecord(value, 'game port range');
-    return { start: number(range, 'start'), end: number(range, 'end') };
-  });
-  return {
-    ranges,
-    ports: expectArray(policy, 'ports', 'game port policy details', 256).map((value) => {
-      if (typeof value !== 'number' || !Number.isInteger(value)) throw new ApiError('Game port policy returned an invalid port.');
-      return value;
-    }),
-    autoForwardOnCreate: boolean(policy, 'auto_forward_on_create'),
-    capacity: number(root, 'capacity'),
-    assignedPorts: expectArray(root, 'assigned_ports', 'game port policy', 4096).map((value) => {
-      if (typeof value !== 'number' || !Number.isInteger(value)) throw new ApiError('Game port policy returned an invalid assigned port.');
-      return value;
-    }),
-    availableCount: number(root, 'available_count'),
-    nextAvailablePort: nullableNumber(root, 'next_available_port'),
+function parseGamePortPolicy(expectedGame: 'minecraft' | 'vrising') {
+  return (value: unknown): GamePortPolicy => {
+    const root = expectRecord(value, 'game port policy');
+    if (number(root, 'schema_version') !== 1) throw new ApiError('Unsupported game port policy schema.');
+    const policy = expectRecord(root.policy, 'game port policy details');
+    if (expectString(policy, 'game', 'game port policy details') !== expectedGame) {
+      throw new ApiError('Game port policy returned the wrong game.');
+    }
+    const ranges = expectArray(policy, 'ranges', 'game port policy details', 32).map((value) => {
+      const range = expectRecord(value, 'game port range');
+      return { start: number(range, 'start'), end: number(range, 'end') };
+    });
+    return {
+      ranges,
+      ports: expectArray(policy, 'ports', 'game port policy details', 256).map((value) => {
+        if (typeof value !== 'number' || !Number.isInteger(value)) throw new ApiError('Game port policy returned an invalid port.');
+        return value;
+      }),
+      autoForwardOnCreate: boolean(policy, 'auto_forward_on_create'),
+      capacity: number(root, 'capacity'),
+      assignedPorts: expectArray(root, 'assigned_ports', 'game port policy', 4096).map((value) => {
+        if (typeof value !== 'number' || !Number.isInteger(value)) throw new ApiError('Game port policy returned an invalid assigned port.');
+        return value;
+      }),
+      availableCount: number(root, 'available_count'),
+      nextAvailablePort: nullableNumber(root, 'next_available_port'),
+    };
   };
 }
 
 export function getMinecraftPortPolicy(csrfToken: string, signal?: AbortSignal): Promise<GamePortPolicy> {
-  return requestJson('/api/v1/servers/port-policies/minecraft', parseGamePortPolicy, { csrfToken, signal });
+  return requestJson('/api/v1/servers/port-policies/minecraft', parseGamePortPolicy('minecraft'), { csrfToken, signal });
 }
 
 export function saveMinecraftPortPolicy(
   input: Pick<GamePortPolicy, 'ranges' | 'ports' | 'autoForwardOnCreate'>,
   csrfToken: string,
 ): Promise<GamePortPolicy> {
-  return requestJson('/api/v1/servers/port-policies/minecraft', parseGamePortPolicy, {
+  return requestJson('/api/v1/servers/port-policies/minecraft', parseGamePortPolicy('minecraft'), {
     method: 'PUT',
     body: {
       game: 'minecraft',
@@ -1000,6 +1064,48 @@ export function saveMinecraftPortPolicy(
     },
     csrfToken,
   });
+}
+
+export function getVRisingPortPolicy(csrfToken: string, signal?: AbortSignal): Promise<GamePortPolicy> {
+  return requestJson('/api/v1/servers/port-policies/vrising', parseGamePortPolicy('vrising'), { csrfToken, signal });
+}
+
+export function saveVRisingPortPolicy(
+  input: Pick<GamePortPolicy, 'ranges' | 'ports' | 'autoForwardOnCreate'>,
+  csrfToken: string,
+): Promise<GamePortPolicy> {
+  return requestJson('/api/v1/servers/port-policies/vrising', parseGamePortPolicy('vrising'), {
+    method: 'PUT',
+    body: {
+      game: 'vrising',
+      ranges: input.ranges,
+      ports: input.ports,
+      auto_forward_on_create: false,
+    },
+    csrfToken,
+  });
+}
+
+export function createVRisingServer(input: {
+  name: string;
+  memory_mb: number;
+  max_players: number;
+  game_port?: number;
+  query_port?: number;
+  start_on_boot: boolean;
+  wine_runtime_acknowledged: boolean;
+}, csrfToken: string): Promise<{ jobId: string }> {
+  return requestJson('/api/v1/servers/vrising', (value) => {
+    const root = expectRecord(value, 'V Rising job');
+    return { jobId: expectString(root, 'job_id', 'V Rising job') };
+  }, { method: 'POST', body: { ...input, network_exposure: 'private' }, csrfToken, timeoutMs: 20_000 });
+}
+
+export function setNativeStartOnBoot(id: string, enabled: boolean, csrfToken: string): Promise<{ enabled: boolean }> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/start-on-boot`, (value) => {
+    const root = expectRecord(value, 'native start-on-boot');
+    return { enabled: boolean(root, 'enabled') };
+  }, { method: 'PUT', body: { enabled }, csrfToken });
 }
 
 export function setServerNetworkExposure(

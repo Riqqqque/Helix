@@ -45,18 +45,21 @@ describe('whole-host reboot confirmation', () => {
       refreshIntervalMs: 1_000,
       navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'terminal', 'servers', 'hooks'],
       colors: { accent: '', text: '', surface: '' },
+      serversEnabled: true,
       preferenceSyncStatus: 'synced',
       hostIntegration: { data: null, phase: 'loading', error: null },
       onThemeChange: vi.fn(),
       onRefreshIntervalChange: vi.fn(),
       onNavigationOrderChange: vi.fn(),
       onColorsChange: vi.fn(),
+      onServersEnabledChange: vi.fn(),
       onAccountUpdated: vi.fn(),
       onHostIntegrationRefresh: vi.fn(async () => undefined),
     }));
     expect(markup).toContain('>OLED<');
     expect(markup).toContain('Host integration');
     expect(markup).toContain('Whole-host reboot');
+    expect(markup).toContain('Game servers');
     expect(markup).toContain('Save account changes');
     expect(markup).toContain('Current password');
   });

@@ -348,6 +348,8 @@ impl NativeManager {
                 start_on_boot: request.start_on_boot,
                 run_uid,
                 created_at_unix_ms: now_unix_ms(),
+                kind: helix_privd::GameKind::Minecraft,
+                query_port: 0,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;

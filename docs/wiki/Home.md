@@ -24,7 +24,7 @@ Helix brings the common jobs for one server into one place:
 - live host, storage, network, service, process, and Helix resource views;
 - mounted-drive browsing, bounded text editing, recoverable deletion, and
   cancellable largest-file/folder analysis;
-- a native Docker-backed Minecraft manager for Paper, Purpur, Folia, Fabric,
+- a native Docker-backed Minecraft manager for Paper, Purpur, Folia, Leaves, Fabric,
   Vanilla, and guarded local custom-JAR imports;
 - persistent bounded console history, settings with restart guidance, backups,
   a compatibility-aware Modrinth marketplace, and narrow server-safe Fabric

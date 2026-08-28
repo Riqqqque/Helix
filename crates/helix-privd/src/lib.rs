@@ -9,6 +9,11 @@ use thiserror::Error;
 
 pub const MAX_REQUEST_BYTES: usize = 5 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_FILE_UPLOAD_CHUNK_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_STORAGE_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_CUSTOM_JAR_UPLOAD_BYTES: u64 = 768 * 1024 * 1024;
+pub const MAX_CONCURRENT_FILE_UPLOADS: usize = 2;
+pub const MAX_MINECRAFT_VERSION_CATALOG: usize = 128;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,6 +120,25 @@ pub enum BrokerRequest {
     Trash {
         path: String,
     },
+    BeginFileUpload {
+        target: FileUploadTarget,
+        name: String,
+        expected_size: u64,
+    },
+    WriteFileUploadChunk {
+        upload_id: String,
+        purpose: FileUploadPurpose,
+        offset: u64,
+        data_base64: String,
+    },
+    FinishFileUpload {
+        upload_id: String,
+        purpose: FileUploadPurpose,
+    },
+    AbortFileUpload {
+        upload_id: String,
+        purpose: FileUploadPurpose,
+    },
     StartStorageAnalysis {
         path: String,
         mode: StorageAnalysisMode,
@@ -207,6 +231,17 @@ pub enum BrokerRequest {
     CreateMinecraftModpack {
         spec: MinecraftModpackCreateSpec,
     },
+    #[serde(rename = "create_vrising")]
+    CreateVRising {
+        spec: VRisingCreateSpec,
+    },
+    SetNativeStartOnBoot {
+        instance_id: String,
+        enabled: bool,
+    },
+    ListMinecraftVersions {
+        software: MinecraftSoftware,
+    },
     JobStatus {
         job_id: String,
     },
@@ -281,10 +316,13 @@ pub enum ServerAction {
     Backup,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GameKind {
+    #[default]
     Minecraft,
+    #[serde(rename = "vrising")]
+    VRising,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -375,6 +413,68 @@ pub struct CustomMinecraftJarSpec {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct VRisingCreateSpec {
+    pub name: String,
+    pub memory_mb: u32,
+    pub max_players: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_port: Option<u16>,
+    #[serde(default)]
+    pub network_exposure: ServerNetworkExposure,
+    pub start_on_boot: bool,
+    pub wine_runtime_acknowledged: bool,
+}
+
+impl VRisingCreateSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        let name = self.name.trim();
+        if name.is_empty()
+            || name.len() > 80
+            || name.chars().any(char::is_control)
+            || name.contains(['/', '\\'])
+        {
+            return Err("server name must be 1–80 ordinary characters".to_owned());
+        }
+        if !(2_048..=24_576).contains(&self.memory_mb) {
+            return Err("V Rising memory must be between 2 and 24 GiB".to_owned());
+        }
+        if !(1..=128).contains(&self.max_players) {
+            return Err("V Rising player limit must be between 1 and 128".to_owned());
+        }
+        if self.game_port.is_some_and(|port| port < 1_024) {
+            return Err("game port must be at least 1024".to_owned());
+        }
+        if self.query_port.is_some_and(|port| port < 1_024) {
+            return Err("query port must be at least 1024".to_owned());
+        }
+        if let (Some(game_port), Some(query_port)) = (self.game_port, self.query_port)
+            && game_port == query_port
+        {
+            return Err("V Rising game and query ports must be different".to_owned());
+        }
+        if self.query_port.is_some() && self.game_port.is_none() {
+            return Err("a query port also needs a game port".to_owned());
+        }
+        if self.network_exposure != ServerNetworkExposure::Private {
+            return Err(
+                "V Rising public UPnP is not offered yet; create the server as private and forward both UDP ports yourself if needed"
+                    .to_owned(),
+            );
+        }
+        if !self.wine_runtime_acknowledged {
+            return Err(
+                "acknowledge that Helix runs the official Windows dedicated server under Wine"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MinecraftModpackCreateSpec {
     pub name: String,
     pub memory_mb: u32,
@@ -397,8 +497,23 @@ pub enum MinecraftSoftware {
     Paper,
     Purpur,
     Folia,
+    Leaves,
     Fabric,
     NeoForge,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileUploadPurpose {
+    Storage,
+    CustomJar,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FileUploadTarget {
+    Directory { parent: String },
+    CustomJar,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -600,6 +715,31 @@ mod tests {
         assert_eq!(encoded["spec"]["software"], "paper");
         assert!(encoded["spec"].get("custom_jar").is_none());
 
+        let vrising = serde_json::to_value(BrokerRequest::CreateVRising {
+            spec: VRisingCreateSpec {
+                name: "Castle".to_owned(),
+                memory_mb: 4_096,
+                max_players: 40,
+                game_port: None,
+                query_port: None,
+                network_exposure: ServerNetworkExposure::Private,
+                start_on_boot: true,
+                wine_runtime_acknowledged: true,
+            },
+        })
+        .expect("serialize V Rising request");
+        assert_eq!(vrising["operation"], "create_vrising");
+        assert_eq!(vrising["spec"]["wine_runtime_acknowledged"], true);
+        assert!(vrising["spec"].get("game_port").is_none());
+
+        let boot = serde_json::to_value(BrokerRequest::SetNativeStartOnBoot {
+            instance_id: "helix:test".to_owned(),
+            enabled: false,
+        })
+        .expect("serialize start-on-boot request");
+        assert_eq!(boot["operation"], "set_native_start_on_boot");
+        assert_eq!(boot["enabled"], false);
+
         let custom = serde_json::to_value(BrokerRequest::CreateMinecraft {
             spec: MinecraftCreateSpec {
                 name: "Private build".to_owned(),
@@ -619,6 +759,28 @@ mod tests {
         })
         .expect("serialize custom server request");
         assert_eq!(custom["spec"]["software"], "custom");
+        assert_eq!(
+            custom["spec"]["custom_jar"]["source_path"],
+            "/srv/storage/uploads/server.jar"
+        );
+
+        let versions = serde_json::to_value(BrokerRequest::ListMinecraftVersions {
+            software: MinecraftSoftware::Paper,
+        })
+        .expect("serialize version list");
+        assert_eq!(versions["operation"], "list_minecraft_versions");
+        assert_eq!(versions["software"], "paper");
+
+        let upload = serde_json::to_value(BrokerRequest::BeginFileUpload {
+            target: FileUploadTarget::CustomJar,
+            name: "server.jar".to_owned(),
+            expected_size: 32_768,
+        })
+        .expect("serialize custom jar upload");
+        assert_eq!(upload["operation"], "begin_file_upload");
+        assert_eq!(upload["target"]["kind"], "custom_jar");
+        assert_eq!(upload["name"], "server.jar");
+        assert!(upload.get("content").is_none());
         assert_eq!(custom["spec"]["custom_jar"]["java_version"], 21);
 
         let automatic: BrokerRequest = serde_json::from_value(serde_json::json!({
@@ -999,5 +1161,29 @@ mod tests {
         assert!(install.get("package").is_none());
         assert!(install.get("repository").is_none());
         assert!(install.get("command").is_none());
+    }
+
+    #[test]
+    fn vrising_create_spec_rejects_public_exposure_and_missing_wine_ack() {
+        let mut spec = VRisingCreateSpec {
+            name: "Castle".to_owned(),
+            memory_mb: 4_096,
+            max_players: 40,
+            game_port: None,
+            query_port: None,
+            network_exposure: ServerNetworkExposure::Private,
+            start_on_boot: true,
+            wine_runtime_acknowledged: true,
+        };
+        spec.validate().expect("valid V Rising spec");
+        spec.wine_runtime_acknowledged = false;
+        assert!(spec.validate().unwrap_err().contains("Wine"));
+        spec.wine_runtime_acknowledged = true;
+        spec.network_exposure = ServerNetworkExposure::Public;
+        assert!(spec.validate().unwrap_err().contains("private"));
+        spec.network_exposure = ServerNetworkExposure::Private;
+        spec.game_port = Some(9_876);
+        spec.query_port = Some(9_876);
+        assert!(spec.validate().unwrap_err().contains("different"));
     }
 }

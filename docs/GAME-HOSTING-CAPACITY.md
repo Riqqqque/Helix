@@ -3,7 +3,7 @@
 ## Current status
 
 Helix currently manages Docker-backed native Minecraft instances for Paper,
-Purpur, Folia, Fabric, and Vanilla. It provides creation, lifecycle actions,
+Purpur, Folia, Leaves, Fabric, and Vanilla. It provides creation, lifecycle actions,
 settings, persistent bounded console history, backups, and software-compatible
 marketplace paths. It can also create a server-safe subset from a listed stable
 server-capable Fabric `.mrpack`; Forge, NeoForge, Quilt, CurseForge, and

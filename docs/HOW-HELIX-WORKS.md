@@ -59,11 +59,13 @@ boundary.
 ## Native servers and AMP
 
 Helix-native Minecraft instances run in Docker containers managed by the
-broker. Current native install paths cover Paper, Purpur, Folia, Fabric, and
-Vanilla. The manager provides creation, lifecycle actions, settings, files,
-performance, console, logs, updates, backups, restore, and compatible Modrinth
-content where the selected software supports it. Each server can use a compact
-preset or a validated same-origin uploaded PNG/JPEG icon.
+broker. Current native install paths cover Paper, Purpur, Folia, Leaves, Fabric, and
+Vanilla. V Rising uses a separate Helix-owned Wine + SteamCMD image rather than
+installing Wine on the host. The manager provides creation, lifecycle actions,
+settings where they exist, files, performance, console or logs, updates,
+backups, restore, a start-on-boot Docker restart policy, and compatible
+Modrinth content where the selected software supports it. Each server can use a
+compact preset, a game mark, or a validated same-origin uploaded PNG/JPEG icon.
 
 “Start with a modpack” is a separate narrow creation path. Search can explain
 all loaders, but creation accepts only listed stable server-capable Fabric
