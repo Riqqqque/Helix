@@ -3854,7 +3854,7 @@ impl NativeManager {
         let xmx = format!("-Xmx{}M", manifest.memory_mb);
         let instance_label = format!("io.helix.instance={}", manifest.id);
         let version_label = format!("io.helix.minecraft.version={}", manifest.minecraft_version);
-        let args = vec![
+        let mut args = vec![
             "create".to_owned(),
             "--name".to_owned(),
             manifest.container_name.clone(),
