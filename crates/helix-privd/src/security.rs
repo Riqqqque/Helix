@@ -432,6 +432,7 @@ pub fn set_control(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn control(
     id: &str,
     title: &str,

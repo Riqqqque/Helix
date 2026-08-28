@@ -1128,7 +1128,7 @@ impl NativeManager {
         name: &str,
         expected_size: u64,
     ) -> Result<FileUploadStart, String> {
-        if expected_size < 16 * 1024 || expected_size > MAX_CUSTOM_JAR_UPLOAD_BYTES {
+        if !(16 * 1024..=MAX_CUSTOM_JAR_UPLOAD_BYTES).contains(&expected_size) {
             return Err("custom server JARs must be between 16 KiB and 768 MiB".to_owned());
         }
         let mut uploads = self.uploads.lock().map_err(|_| upload_lock_error())?;
@@ -2111,7 +2111,7 @@ impl NativeManager {
         let detail = match action {
             ServerAction::Start => {
                 if !was_running {
-                    self.clear_ready_marker(&manifest)?;
+                    self.clear_ready_marker(manifest)?;
                     self.docker(["start", manifest.container_name.as_str()], 90)?;
                 }
                 self.wait_until_ready(manifest, self.ready_timeout(manifest), |_| {})?;
@@ -5733,23 +5733,25 @@ fn unique_jar_name(
     name: &str,
     reserved: &HashSet<PathBuf>,
 ) -> Result<String, String> {
-    let name = Path::new(name)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    validate_name(name)?;
-    if !name.to_ascii_lowercase().ends_with(".jar") || name.starts_with('.') {
+    let Some(file_name) = Path::new(name).file_name().and_then(|value| value.to_str()) else {
+        return Err("drop a .jar file with an ordinary file name".to_owned());
+    };
+    if file_name != name {
+        return Err("drop a .jar file with an ordinary file name".to_owned());
+    }
+    validate_name(file_name)?;
+    if !file_name.to_ascii_lowercase().ends_with(".jar") || file_name.starts_with('.') {
         return Err("drop a .jar file with an ordinary file name".to_owned());
     }
     let taken = |candidate: &str| {
         let path = parent.join(candidate);
         path.exists() || reserved.contains(&path)
     };
-    if !taken(name) {
-        return Ok(name.to_owned());
+    if !taken(file_name) {
+        return Ok(file_name.to_owned());
     }
-    let stem = name
-        .get(..name.len().saturating_sub(4))
+    let stem = file_name
+        .get(..file_name.len().saturating_sub(4))
         .filter(|stem| !stem.is_empty())
         .ok_or_else(|| "drop a .jar file with an ordinary file name".to_owned())?;
     for _ in 0..8 {

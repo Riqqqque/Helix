@@ -1,7 +1,7 @@
 use super::{
-    Artifact, InstanceManifest, MANIFEST_VERSION, MAX_METADATA_BYTES, MAX_SERVER_JAR_BYTES,
+    InstanceManifest, MANIFEST_VERSION, MAX_METADATA_BYTES, MAX_SERVER_JAR_BYTES,
     MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSoftware, NativeManager,
-    allocate_rcon_port, allocate_run_uid, file_sha256, instance_name,
+    allocate_rcon_port, allocate_run_uid, instance_name,
     marketplace::modrinth_icon_proxy_url, now_unix_ms, server_properties, validate_create_spec,
     write_manifest, write_new_file,
 };
@@ -702,7 +702,7 @@ impl NativeManager {
                 self.curl_no_redirect(
                     &download,
                     &destination,
-                    size.max(16 * 1024).min(MAX_SERVER_JAR_BYTES),
+                    size.clamp(16 * 1024, MAX_SERVER_JAR_BYTES),
                     remaining_download_seconds(deadline)?,
                 )?;
                 let scaled = index

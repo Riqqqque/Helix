@@ -884,6 +884,7 @@ impl HostControl {
         Ok(self.systemctl_state("is-active", unit)? == "active")
     }
 
+    #[allow(clippy::collapsible_if)]
     fn unit_memory_bytes(&self, unit: &str) -> Option<u64> {
         let output = self
             .runner
@@ -916,7 +917,7 @@ impl HostControl {
         let second = self.cgroup_cpu_usage_usec(unit)?;
         let delta = second.saturating_sub(first);
         let percent = (delta as f64) / 1_200.0;
-        if percent.is_finite() && percent >= 0.0 && percent <= 10_000.0 {
+        if percent.is_finite() && (0.0..=10_000.0).contains(&percent) {
             Some(percent)
         } else {
             None
