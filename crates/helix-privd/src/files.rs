@@ -1765,7 +1765,7 @@ mod tests {
         let roots = (0..=MAX_CONFIGURED_ROOTS)
             .map(|index| PathBuf::from(format!("/srv/helix/root-{index}")))
             .collect();
-        let error = FileManager::new(roots).expect_err("root cap");
+        let error = FileManager::new(roots).err().expect("root cap");
         assert!(error.contains("too many managed roots"));
     }
 
@@ -1774,7 +1774,7 @@ mod tests {
         let roots = (0..=MAX_CONFIGURED_ROOTS)
             .map(|index| PathBuf::from(format!("/srv/helix/analysis-{index}")))
             .collect();
-        let error = StorageAnalysisManager::new(roots).expect_err("root cap");
+        let error = StorageAnalysisManager::new(roots).err().expect("root cap");
         assert!(error.contains("too many analysis roots"));
     }
 
