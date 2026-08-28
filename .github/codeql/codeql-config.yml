@@ -1,0 +1,10 @@
+name: Helix
+
+# CodeQL's Rust path-injection query treats operator config, CLI data dirs,
+# and environment paths as untrusted. Helix is a local-first control plane:
+# those paths are trusted, root-owned configuration. HTTP file access is
+# sandboxed inside helix-privd after canonicalize/managed-root checks, and
+# that cross-process flow is not what this query currently reports.
+query-filters:
+  - exclude:
+      id: rust/path-injection

@@ -1,13 +1,13 @@
 import { ApiError, expectArray, expectNumber, expectRecord, expectString, requestJson } from './api';
 import type { MinecraftSoftware } from './control-api';
 
-export type InstallableMinecraftSoftware = Extract<MinecraftSoftware, 'paper' | 'purpur' | 'folia' | 'vanilla' | 'fabric'>;
+export type InstallableMinecraftSoftware = Extract<MinecraftSoftware, 'paper' | 'purpur' | 'folia' | 'vanilla' | 'fabric' | 'custom'>;
 export type MinecraftCatalogStatus = 'ready' | 'validation_pending' | 'manual_build_required' | 'publisher_source_required' | 'topology_planned' | 'retired' | 'not_recommended' | 'platform_planned';
 
 export interface MinecraftSoftwareCatalogEntry {
   id: string;
   name: string;
-  kind: 'plugin_server' | 'vanilla_server' | 'mod_server' | 'proxy' | 'hybrid_server' | 'bedrock_server';
+  kind: 'plugin_server' | 'vanilla_server' | 'mod_server' | 'custom_server' | 'proxy' | 'hybrid_server' | 'bedrock_server';
   status: MinecraftCatalogStatus;
   installable: boolean;
   recommended: boolean;
@@ -31,9 +31,9 @@ export type ServerManagerReadiness =
       collectedAtUnixMs: number;
     };
 
-const installableSoftware = new Set<InstallableMinecraftSoftware>(['paper', 'purpur', 'folia', 'vanilla', 'fabric']);
+const installableSoftware = new Set<InstallableMinecraftSoftware>(['paper', 'purpur', 'folia', 'vanilla', 'fabric', 'custom']);
 const catalogStatuses = new Set<MinecraftCatalogStatus>(['ready', 'validation_pending', 'manual_build_required', 'publisher_source_required', 'topology_planned', 'retired', 'not_recommended', 'platform_planned']);
-const catalogKinds = new Set<MinecraftSoftwareCatalogEntry['kind']>(['plugin_server', 'vanilla_server', 'mod_server', 'proxy', 'hybrid_server', 'bedrock_server']);
+const catalogKinds = new Set<MinecraftSoftwareCatalogEntry['kind']>(['plugin_server', 'vanilla_server', 'mod_server', 'custom_server', 'proxy', 'hybrid_server', 'bedrock_server']);
 
 function boolean(record: Record<string, unknown>, key: string, context: string): boolean {
   if (typeof record[key] !== 'boolean') throw new ApiError(`${context} returned an invalid ${key} value.`);

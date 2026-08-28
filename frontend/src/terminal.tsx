@@ -37,6 +37,15 @@ interface TerminalRuntime {
   dataDisposable: { dispose: () => void } | null;
   resizeDisposable: { dispose: () => void } | null;
   keepalive: number | null;
+  pendingOutputBytes: number;
+}
+
+const MAX_PENDING_TERMINAL_OUTPUT_BYTES = 4 * 1024 * 1024;
+
+export function nextTerminalOutputBacklog(pendingBytes: number, incomingBytes: number): number | null {
+  if (!Number.isSafeInteger(pendingBytes) || !Number.isSafeInteger(incomingBytes) || pendingBytes < 0 || incomingBytes < 0) return null;
+  const next = pendingBytes + incomingBytes;
+  return next <= MAX_PENDING_TERMINAL_OUTPUT_BYTES ? next : null;
 }
 
 type HostTerminalEvent =
@@ -138,6 +147,7 @@ function stopSocket(runtime: TerminalRuntime): void {
   runtime.resizeDisposable = null;
   if (runtime.keepalive !== null) globalThis.clearInterval(runtime.keepalive);
   runtime.keepalive = null;
+  runtime.pendingOutputBytes = 0;
   const socket = runtime.socket;
   runtime.socket = null;
   if (socket !== null && socket.readyState === WebSocket.OPEN) {
@@ -187,12 +197,12 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
     const terminal = new Terminal({
       allowProposedApi: false,
       convertEol: false,
-      cursorBlink: false,
+      cursorBlink: true,
       cursorStyle: 'block',
       drawBoldTextInBrightColors: true,
       fontFamily: '"Cascadia Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace',
       fontSize: 14,
-      lineHeight: 1.2,
+      lineHeight: 1.25,
       minimumContrastRatio: 4.5,
       scrollback: 10_000,
       tabStopWidth: 4,
@@ -209,6 +219,7 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
       dataDisposable: null,
       resizeDisposable: null,
       keepalive: null,
+      pendingOutputBytes: 0,
     };
     runtimeRef.current = runtime;
     const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
@@ -286,7 +297,18 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
       socket.addEventListener('message', (event) => {
         if (generationRef.current !== generation) return;
         if (event.data instanceof ArrayBuffer) {
-          runtime.terminal.write(new Uint8Array(event.data));
+          const output = new Uint8Array(event.data);
+          const nextBacklog = nextTerminalOutputBacklog(runtime.pendingOutputBytes, output.byteLength);
+          if (nextBacklog === null) {
+            setError('Terminal output exceeded the browser render budget. The shell was closed to keep Helix responsive.');
+            setPhase('ended');
+            socket.close(1009, 'terminal output backlog');
+            return;
+          }
+          runtime.pendingOutputBytes = nextBacklog;
+          runtime.terminal.write(output, () => {
+            runtime.pendingOutputBytes = Math.max(0, runtime.pendingOutputBytes - output.byteLength);
+          });
           return;
         }
         if (typeof event.data !== 'string') {
@@ -338,6 +360,12 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
   const busy = phase === 'authorizing' || phase === 'connecting';
   const connected = phase === 'connected';
   const locked = phase === 'locked' || phase === 'ended' || busy;
+  const runShortcut = (command: string): void => {
+    const runtime = runtimeRef.current;
+    if (!connected || runtime?.socket?.readyState !== WebSocket.OPEN) return;
+    runtime.socket.send(new TextEncoder().encode(`${command}\r`));
+    runtime.terminal.focus();
+  };
   return (
     <div class="page page--terminal">
       <PageHead
@@ -359,6 +387,15 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
             <button class="button button--danger" type="button" disabled={!connected && phase !== 'connecting'} onClick={disconnect}><Icon name="close" size={14} />Disconnect</button>
           </div>
         </header>
+        {connected && (
+          <div class="terminal-shortcuts" aria-label="Read-only command shortcuts">
+            <span>Quick checks</span>
+            <button type="button" onClick={() => runShortcut('ls -lah --color=auto')}>Files</button>
+            <button type="button" onClick={() => runShortcut('df -h --output=source,size,used,avail,pcent,target')}>Drives</button>
+            <button type="button" onClick={() => runShortcut('systemctl --failed --no-pager')}>Failed services</button>
+            <small>Output stays terminal-native so columns, colors, prompts, and interactive tools render correctly.</small>
+          </div>
+        )}
         <div class="terminal-stage">
           <div ref={hostRef} class="terminal-host" aria-label="Linux host terminal" />
           {phase === 'loading' && <div class="terminal-lock"><Icon name="terminal" size={28} /><strong>Checking the host terminal…</strong></div>}

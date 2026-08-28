@@ -44,6 +44,10 @@ mods or plugins.
 
 ## Start here
 
+Clone the source, create an owner with your own display name, and put Helix on a
+private LAN by filling `.env` and the broker config with **that host's**
+addresses and storage roots. Nothing ships with a demo city or demo server.
+
 - [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started)
 - [How Helix Works](https://github.com/Riqqqque/Helix/wiki/How-Helix-Works)
 - [Dashboard and Home](https://github.com/Riqqqque/Helix/wiki/Dashboard-and-Home)

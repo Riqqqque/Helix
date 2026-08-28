@@ -63,9 +63,9 @@ const englishMessages = {
   'games.view.cards': 'Card view',
   'games.view.list': 'Compact view',
   'games.view.label': 'Server view',
-  'games.empty.title': 'No game servers registered',
+  'games.empty.title': 'No game servers yet',
   'games.empty.detail':
-    'Create or adopt a server after this host passes the game-management readiness gate.',
+    'Open Servers and choose New server. Helix Native stays separate from any AMP import.',
   'games.empty.filteredTitle': 'No servers match these filters',
   'games.empty.filteredDetail': 'Try a different search or status filter.',
   'games.instance.players': 'Players',

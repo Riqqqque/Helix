@@ -16,9 +16,11 @@ can place `helixd` behind an explicitly configured private gateway with exact
 Host, Origin, and client-CIDR policy. A second constrained private entry point
 can be used with an already configured Tailscale route.
 
-Helix does not install or configure Tailscale. Direct public-internet exposure,
-arbitrary forwarded-header trust, and a supported public TLS boundary have not
-passed the release gate.
+The built-in Hook can install and start the exact Tailscale package on eligible
+Debian/Ubuntu hosts, but it does not authenticate a tailnet or configure this
+gateway entry point. Direct public-internet exposure, arbitrary forwarded-
+header trust, and a supported public TLS boundary have not passed the release
+gate.
 
 All JSON responses containing protected state use `Cache-Control: no-store`.
 Frontend assets are separately cacheable by their hashed names.
@@ -116,13 +118,14 @@ scans cap at 10 minutes/5,000,000 entries and one concurrent job. A completed
 scan considers every eligible entry even though only the bounded largest
 rankings are retained. Coverage, skipped entries, omitted ranking rows, and stop
 reason are separate response fields. Cancellation is best effort at safe
-checkpoints.
+checkpoints. File and folder rankings use allocated filesystem blocks while the
+response retains logical byte lengths for comparison.
 
 ### Network and firewall
 
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/network/inventory` | `network.firewall.read` | Local listeners, best-effort process owner, Docker publications, game ports, and UFW state |
+| `GET` | `/api/v1/network/inventory` | `network.firewall.read` | Private IPv4, bounded UPnP router state, local listeners, Docker publications, game ports, owned mappings, and UFW state |
 | `POST` | `/api/v1/network/firewall/rules` | `network.firewall.write` | Create a named TCP/UDP single-port or bounded-range UFW allow rule |
 | `DELETE` | `/api/v1/network/firewall/rules/{rule_id}` | `network.firewall.write` | Delete the exact Helix-owned rule into bounded Undo state |
 | `POST` | `/api/v1/network/firewall/rules/{rule_id}/restore` | `network.firewall.write` | Restore the exact deleted rule before expiry |
@@ -135,9 +138,12 @@ Inventory keeps these facts separate:
 - an active UFW matching allowance; and
 - externally tested reachability.
 
-External reachability currently returns `unverified`; Helix does not run an
-outside probe. Docker DNAT may not follow the normal UFW INPUT path, so a Docker
-publication and a UFW rule cannot be collapsed into one “open” value.
+Helix can distinguish an absent mapping, a router-confirmed Helix-owned TCP
+mapping, CGNAT/non-public WAN space, and unavailable UPnP. A confirmed router
+mapping still returns `reachable: null` and
+`tested_from_external_network: false`: Helix does not turn a same-LAN check into
+fake outside proof. Docker DNAT may not follow the normal UFW INPUT path, so a
+Docker publication, UFW rule, router mapping, and outside test remain separate.
 
 Rule writes are available only when UFW is installed, active, and its state is
 verified. Helix creates exact UUID-commented allow rules with durable ownership
@@ -145,7 +151,10 @@ metadata. The separate inactive-UFW activation endpoint requires the literal
 confirmation `ENABLE UFW`, proves the supplied TCP SSH port is listening, stages
 an exact durable allow rule, verifies both the active state and rule, and
 attempts to return to inactive state if verification fails. Helix never resets
-UFW, changes its defaults, or configures a router/ISP boundary.
+UFW or changes its defaults. The server-specific public-access route can create
+one exact TCP UPnP mapping on a same-origin private IPv4 gateway, refuses to
+overwrite any existing mapping, and creates a matching owned UFW rule only when
+UFW is already active. It cannot bypass CGNAT or an ISP block.
 
 ### System packages
 
@@ -169,13 +178,18 @@ unavailable and has no route.
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/hooks` | `system.view` | Inventory exact configured systemd services plus the optional AMP API adapter |
+| `GET` | `/api/v1/hooks/{hook_id}/install/preflight` | `system.view` | Read exact host prerequisites, planned changes, blockers, and owner steps for a built-in installer |
+| `POST` | `/api/v1/hooks/{hook_id}/install` | `system.settings.write` | Start one exact allowlisted Tailscale or Jellyfin package/service installation |
+| `GET` | `/api/v1/hooks/jobs/{job_id}` | `system.view` | Read bounded hook-install progress and verified result |
 | `POST` | `/api/v1/hooks/{hook_id}/actions` | `system.settings.write` | Start, stop, restart, enable, or disable one exact allowlisted service and verify resulting state |
 
 The default catalog describes Plex, Tailscale, Pterodactyl Wings, and Jellyfin;
-the root-owned broker configuration remains authoritative. Absent services are
-guided setup entries, not successful fake connections. There is no caller-
-supplied unit name, remote install script, upstream account login, or claim of
-full upstream API parity.
+the root-owned broker configuration remains authoritative. Eligible Debian or
+Ubuntu hosts can install the exact Tailscale or Jellyfin package from its exact
+official signed repository. Pterodactyl remains guided because its panel owns
+the node configuration and credentials. There is no caller-supplied package,
+repository, unit, executable, remote install script, upstream account login, or
+claim of full upstream API parity.
 
 ### Optional host terminal
 
@@ -200,6 +214,8 @@ or output. Disconnect ends the PTY.
 | `GET` | `/api/v1/servers` | `games.view` | List native and separate AMP-managed instances |
 | `GET` | `/api/v1/servers/inventory-health` | `games.view` | Typed AMP compatibility-inventory health, bounded unverified-instance details, and unavailable/degraded state |
 | `GET` | `/api/v1/servers/manager/readiness` | `games.view` | Native manager backend, supported software, capabilities, and retention policy |
+| `GET` | `/api/v1/servers/port-policies/minecraft` | `games.view` | Read the normalized Minecraft ranges, priority ports, capacity, assignments, and next free port |
+| `PUT` | `/api/v1/servers/port-policies/minecraft` | `games.manage` | Persist bounded ranges, individual priority ports, and the public-setup default |
 | `GET` | `/api/v1/games/readiness` | `games.view` | Compatibility alias for manager readiness |
 | `POST` | `/api/v1/servers/minecraft` | `games.manage` | Start a native Minecraft creation job |
 | `GET` | `/api/v1/servers/minecraft/modpacks/search` | `games.view` | Search bounded Modrinth modpack previews across loaders |
@@ -209,11 +225,13 @@ or output. Disconnect ends the PTY.
 | `GET` | `/api/v1/servers/removed` | `games.view` | Recoverable removed native servers and retention policy |
 | `POST` | `/api/v1/servers/removed/{trash_id}/restore` | `games.manage` | Restore an exact removed native server before expiry |
 | `POST` | `/api/v1/servers/{instance_id}/actions` | `games.manage` | Typed start/stop/restart/update/backup action |
+| `PUT` | `/api/v1/servers/{instance_id}/network` | `games.manage` + `network.firewall.write` | Create or remove the exact verified Helix-owned TCP router/UFW exposure for a native server |
 | `POST` | `/api/v1/servers/{instance_id}/remove` | `games.manage` | Stop/remove exact native workload and move data to recoverable trash |
 | `GET` | `/api/v1/jobs/{job_id}` | `games.view` | Read current bounded job state/log |
 
 The native readiness contract currently advertises install paths for Paper,
-Purpur, Folia, Fabric, and Vanilla when Docker and configured roots are ready.
+Purpur, Folia, Fabric, Vanilla, and guarded local custom-JAR import when Docker
+and configured roots are ready.
 Forge and NeoForge are catalog explanations, not installable readiness values.
 
 Accepted work is not completed work. Creation, install, update, and backup jobs
@@ -221,8 +239,12 @@ return bounded broker-lifetime status that the frontend polls. Job state is not
 yet a crash-persistent queue. Incompatible per-instance operations are
 serialized or rejected rather than run concurrently.
 
-Modpack creation accepts only opaque Modrinth project/version IDs plus the
-ordinary server name, RAM, player, port, start-on-boot, and EULA fields. The
+Minecraft creation accepts either one explicit port or no port, which allocates
+the first genuinely free candidate from the stored Minecraft policy while the
+creation lock is held. Priority ports are tried before ordered ranges; the
+policy is bounded to 4,096 unique candidates. Modpack creation accepts only
+opaque Modrinth project/version IDs plus the ordinary server name, RAM, player,
+optional port, network-exposure choice, start-on-boot, and EULA fields. The
 broker re-resolves current metadata and permits only listed stable,
 server-capable Fabric releases with one unambiguous `.mrpack`. Other loaders are
 preview-only. Downloads use exact Modrinth API/CDN hosts without redirects;
@@ -246,6 +268,7 @@ excluded optional/client-only files and `full_pack_parity: false`.
 | `GET` | `/api/v1/servers/{instance_id}/marketplace/search` | `games.view` | Compatibility-filtered Modrinth search |
 | `GET` | `/api/v1/servers/{instance_id}/marketplace/projects/{project_id}` | `games.view` | Bounded project/version detail |
 | `POST` | `/api/v1/servers/{instance_id}/marketplace/install` | `games.manage` | Start an exact compatible content install job |
+| `GET` | `/api/v1/marketplace/modrinth/image?path=...` | `games.view` | Same-origin, session-authenticated, exact-CDN-path image proxy for marketplace and modpack artwork |
 | `GET` | `/api/v1/servers/{instance_id}/backups` | `games.view` | Active backups, recoverable trash, and retention policy |
 | `POST` | `/api/v1/servers/{instance_id}/backups/{backup_id}/restore` | `games.backups.manage` | Restore an exact backup |
 | `DELETE` | `/api/v1/servers/{instance_id}/backups/{backup_id}` | `games.backups.manage` | Move an exact backup into protected trash |
@@ -258,10 +281,12 @@ bounded by configured bytes and segment count, so “persistent” does not mean
 unlimited or permanent.
 
 Settings identify restart-required fields and report pending restart state.
-Marketplace profiles prevent plugin/mod loader mixing and reject unsupported or
-client-only content. Fabric `.mrpack` creation is the separate narrow server-safe
-path above; Forge, NeoForge, Quilt, CurseForge, Vanilla content installation,
-and broad/full-parity modpack support are not present.
+Marketplace profiles prevent plugin/mod loader mixing and require a matching
+game version and supported loader. A missing or negative Modrinth server-side
+flag is advisory: the API returns it for the UI warning, but does not block an
+otherwise matching JAR. Fabric `.mrpack` creation is the separate narrow
+server-safe path above; Forge, NeoForge, Quilt, CurseForge, Vanilla content
+installation, and broad/full-parity modpack support are not present.
 
 ## Broker protocol boundary
 
@@ -337,7 +362,7 @@ Within `/api/v1`, additive response fields may appear. Removing a field or
 changing its meaning requires an explicit version/deprecation decision. The
 private-alpha API has not completed a public compatibility period.
 
-Still unvalidated for public support: arbitrary public exposure, a general TLS
+Still unvalidated for public support: public exposure of the Helix dashboard, arbitrary router protocols, a general TLS
 and proxy deployment, independent authentication/broker/terminal review, broad
 supported-Ubuntu matrices, browser reconnect events, live UFW mutation and
 package-interruption matrices, signed self-update, and broad game or modpack

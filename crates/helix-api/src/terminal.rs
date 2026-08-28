@@ -42,6 +42,7 @@ const TERMINAL_TICKET_COOKIE: &str = "helix_terminal_ticket";
 const TERMINAL_SUBPROTOCOL: &str = "helix-terminal-v1";
 const TERMINAL_TICKET_TTL: Duration = Duration::from_secs(30);
 const MAX_ACTIVE_TICKETS: usize = 16;
+const MAX_BROWSER_TERMINAL_MESSAGE_BYTES: usize = helix_terminal::MAX_TERMINAL_INPUT_BYTES;
 #[cfg(unix)]
 const TERMINAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 #[cfg(unix)]
@@ -338,6 +339,8 @@ async fn connect_terminal(
     let databases = Arc::clone(&state.databases);
     let blocking_tasks = state.blocking_tasks.clone();
     let mut response = websocket
+        .max_message_size(MAX_BROWSER_TERMINAL_MESSAGE_BYTES)
+        .max_frame_size(MAX_BROWSER_TERMINAL_MESSAGE_BYTES)
         .protocols([TERMINAL_SUBPROTOCOL])
         .on_upgrade(move |socket| {
             bridge_terminal(

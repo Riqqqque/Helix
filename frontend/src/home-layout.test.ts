@@ -12,6 +12,7 @@ import {
   parseNoteWidgetConfiguration,
   parseWeatherWidgetConfiguration,
   readHomeWidgets,
+  reorderHomeWidgets,
   saveHomeWidgets,
 } from './home-layout';
 
@@ -24,6 +25,15 @@ describe('home layout', () => {
       { id: 'one', kind: 'clock', size: 'wide', title: 'Duplicate' },
       { id: '../bad', kind: 'clock', size: 'wide', title: 'Bad' },
     ])).toEqual([{ id: 'one', kind: 'note', size: 'compact', height: 'medium', title: 'A', content: 'B', url: '', color: '' }]);
+  });
+
+  it('ships a first-run note that can be edited without layout mode', () => {
+    const notes = defaultHomeWidgets.find((widget) => widget.id === 'notes');
+    expect(notes).toBeDefined();
+    const parsed = parseNoteWidgetConfiguration(notes!.content);
+    expect(parsed.editableOutsideLayout).toBe(true);
+    expect(parsed.pages[0]?.title).toBe('Scratchpad');
+    expect(parsed.pages[0]?.content).toMatch(/owner account/u);
   });
 
   it('preserves an intentionally empty Home', () => {
@@ -49,6 +59,10 @@ describe('home layout', () => {
     expect(nextHomeWidgetSize('wide')).toBe('full');
     expect(nextHomeWidgetSize('full')).toBe('compact');
     expect(nextHomeWidgetHeight('medium')).toBe('tall');
+    expect(reorderHomeWidgets(defaultHomeWidgets, 'clock', 'servers', 'after').slice(0, 4).map((widget) => widget.id))
+      .toEqual(['weather', 'host', 'servers', 'clock']);
+    expect(reorderHomeWidgets(defaultHomeWidgets, 'servers', 'clock', 'before').slice(0, 4).map((widget) => widget.id))
+      .toEqual(['servers', 'clock', 'weather', 'host']);
   });
 
   it('round trips a local layout', () => {

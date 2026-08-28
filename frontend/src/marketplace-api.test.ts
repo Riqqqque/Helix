@@ -150,6 +150,15 @@ describe('marketplace contracts', () => {
     expect(() => parseMarketplaceProjectDetail(incompatible)).toThrow(/outside the selected server compatibility/i);
   });
 
+  it('keeps projects browseable when server-side metadata is unsupported or unknown', () => {
+    const unsupported = structuredClone(projectDetail);
+    unsupported.project.server_side = 'unsupported';
+    expect(parseMarketplaceProjectDetail(unsupported).project.serverSide).toBe('unsupported');
+    const unknown = structuredClone(projectDetail);
+    unknown.project.server_side = 'unknown';
+    expect(parseMarketplaceProjectDetail(unknown).project.serverSide).toBe('unknown');
+  });
+
   it('rejects unsafe project links and unsafe installed filenames', () => {
     expect(() => parseMarketplaceSearchPage({
       ...searchPage,

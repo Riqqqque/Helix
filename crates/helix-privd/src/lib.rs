@@ -22,6 +22,16 @@ pub enum StorageAnalysisMode {
 pub enum BrokerRequest {
     HostInventory {},
     NetworkInventory {},
+    GamePortPolicy {
+        game: GameKind,
+    },
+    SetGamePortPolicy {
+        policy: GamePortPolicySpec,
+    },
+    SetServerNetworkExposure {
+        instance_id: String,
+        enabled: bool,
+    },
     CreateFirewallRule {
         rule: FirewallRuleSpec,
     },
@@ -43,6 +53,14 @@ pub enum BrokerRequest {
         disruption_acknowledged: bool,
     },
     HookInventory {},
+    HookInstallPreflight {
+        hook_id: String,
+    },
+    InstallHook {
+        hook_id: String,
+        confirmation: String,
+        repository_change_acknowledged: bool,
+    },
     ManageHookService {
         hook_id: String,
         action: HookServiceAction,
@@ -262,6 +280,36 @@ pub enum ServerAction {
     Backup,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GameKind {
+    Minecraft,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerNetworkExposure {
+    #[default]
+    Private,
+    Public,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GamePortRangeSpec {
+    pub start: u16,
+    pub end: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GamePortPolicySpec {
+    pub game: GameKind,
+    pub ranges: Vec<GamePortRangeSpec>,
+    pub ports: Vec<u16>,
+    pub auto_forward_on_create: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MinecraftSettingsPatch {
@@ -307,9 +355,21 @@ pub struct MinecraftCreateSpec {
     pub version: String,
     pub memory_mb: u32,
     pub max_players: u16,
-    pub game_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_port: Option<u16>,
+    #[serde(default)]
+    pub network_exposure: ServerNetworkExposure,
     pub start_on_boot: bool,
     pub eula_accepted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_jar: Option<CustomMinecraftJarSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomMinecraftJarSpec {
+    pub source_path: String,
+    pub java_version: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -318,7 +378,10 @@ pub struct MinecraftModpackCreateSpec {
     pub name: String,
     pub memory_mb: u32,
     pub max_players: u16,
-    pub game_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_port: Option<u16>,
+    #[serde(default)]
+    pub network_exposure: ServerNetworkExposure,
     pub start_on_boot: bool,
     pub eula_accepted: bool,
     pub project_id: String,
@@ -328,6 +391,7 @@ pub struct MinecraftModpackCreateSpec {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MinecraftSoftware {
+    Custom,
     Vanilla,
     Paper,
     Purpur,
@@ -523,14 +587,58 @@ mod tests {
                 version: "1.21.8".to_owned(),
                 memory_mb: 4096,
                 max_players: 20,
-                game_port: 25565,
+                game_port: Some(25565),
+                network_exposure: ServerNetworkExposure::Private,
                 start_on_boot: true,
                 eula_accepted: true,
+                custom_jar: None,
             },
         };
         let encoded = serde_json::to_value(request).expect("serialize request");
         assert_eq!(encoded["operation"], "create_minecraft");
         assert_eq!(encoded["spec"]["software"], "paper");
+        assert!(encoded["spec"].get("custom_jar").is_none());
+
+        let custom = serde_json::to_value(BrokerRequest::CreateMinecraft {
+            spec: MinecraftCreateSpec {
+                name: "Private build".to_owned(),
+                software: MinecraftSoftware::Custom,
+                version: "1.21.8".to_owned(),
+                memory_mb: 4096,
+                max_players: 20,
+                game_port: Some(25566),
+                network_exposure: ServerNetworkExposure::Private,
+                start_on_boot: false,
+                eula_accepted: true,
+                custom_jar: Some(CustomMinecraftJarSpec {
+                    source_path: "/srv/storage/uploads/server.jar".to_owned(),
+                    java_version: 21,
+                }),
+            },
+        })
+        .expect("serialize custom server request");
+        assert_eq!(custom["spec"]["software"], "custom");
+        assert_eq!(custom["spec"]["custom_jar"]["java_version"], 21);
+
+        let automatic: BrokerRequest = serde_json::from_value(serde_json::json!({
+            "operation": "create_minecraft",
+            "spec": {
+                "name": "Automatic",
+                "software": "paper",
+                "version": "latest",
+                "memory_mb": 4096,
+                "max_players": 20,
+                "network_exposure": "public",
+                "start_on_boot": true,
+                "eula_accepted": true
+            }
+        }))
+        .expect("automatic ports remain optional on the wire");
+        let BrokerRequest::CreateMinecraft { spec } = automatic else {
+            panic!("wrong request variant");
+        };
+        assert_eq!(spec.game_port, None);
+        assert_eq!(spec.network_exposure, ServerNetworkExposure::Public);
     }
 
     #[test]
@@ -739,7 +847,8 @@ mod tests {
                 name: "Fabric Adventure".to_owned(),
                 memory_mb: 6144,
                 max_players: 20,
-                game_port: 25_565,
+                game_port: Some(25_565),
+                network_exposure: ServerNetworkExposure::Private,
                 start_on_boot: true,
                 eula_accepted: true,
                 project_id: "AABBcc11".to_owned(),
@@ -763,6 +872,22 @@ mod tests {
 
     #[test]
     fn network_and_package_requests_have_narrow_typed_wire_shapes() {
+        let policy = serde_json::to_value(BrokerRequest::SetGamePortPolicy {
+            policy: GamePortPolicySpec {
+                game: GameKind::Minecraft,
+                ranges: vec![GamePortRangeSpec {
+                    start: 25_565,
+                    end: 25_574,
+                }],
+                ports: vec![25_600],
+                auto_forward_on_create: true,
+            },
+        })
+        .expect("serialize port policy");
+        assert_eq!(policy["operation"], "set_game_port_policy");
+        assert_eq!(policy["policy"]["game"], "minecraft");
+        assert!(policy.get("command").is_none());
+
         let create = serde_json::to_value(BrokerRequest::CreateFirewallRule {
             rule: FirewallRuleSpec {
                 name: "Minecraft".to_owned(),
@@ -835,5 +960,24 @@ mod tests {
         assert_eq!(action["action"], "restart");
         assert!(action.get("unit").is_none());
         assert!(action.get("command").is_none());
+
+        let preflight = serde_json::to_value(BrokerRequest::HookInstallPreflight {
+            hook_id: "tailscale".to_owned(),
+        })
+        .expect("serialize hook preflight");
+        assert_eq!(preflight["operation"], "hook_install_preflight");
+        assert_eq!(preflight.as_object().expect("preflight object").len(), 2);
+
+        let install = serde_json::to_value(BrokerRequest::InstallHook {
+            hook_id: "jellyfin".to_owned(),
+            confirmation: "jellyfin".to_owned(),
+            repository_change_acknowledged: true,
+        })
+        .expect("serialize hook install");
+        assert_eq!(install["operation"], "install_hook");
+        assert_eq!(install["hook_id"], "jellyfin");
+        assert!(install.get("package").is_none());
+        assert!(install.get("repository").is_none());
+        assert!(install.get("command").is_none());
     }
 }

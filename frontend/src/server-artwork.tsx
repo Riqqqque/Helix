@@ -107,9 +107,12 @@ export async function prepareServerIcon(file: File): Promise<PreparedServerIcon>
     if (bitmap.width > 16_384 || bitmap.height > 16_384) {
       throw new Error('This image has unusually large dimensions. Resize it below 16,384 pixels first.');
     }
-    const scale = Math.min(1, MAX_OUTPUT_EDGE / Math.max(bitmap.width, bitmap.height));
-    const width = Math.max(32, Math.round(bitmap.width * scale));
-    const height = Math.max(32, Math.round(bitmap.height * scale));
+    const sourceEdge = Math.min(bitmap.width, bitmap.height);
+    const sourceX = (bitmap.width - sourceEdge) / 2;
+    const sourceY = (bitmap.height - sourceEdge) / 2;
+    const outputEdge = Math.min(MAX_OUTPUT_EDGE, sourceEdge);
+    const width = outputEdge;
+    const height = outputEdge;
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -119,7 +122,7 @@ export async function prepareServerIcon(file: File): Promise<PreparedServerIcon>
       context.fillStyle = '#111510';
       context.fillRect(0, 0, width, height);
     }
-    context.drawImage(bitmap, 0, 0, width, height);
+    context.drawImage(bitmap, sourceX, sourceY, sourceEdge, sourceEdge, 0, 0, width, height);
 
     let contentType: 'image/png' | 'image/jpeg' = file.type;
     let blob = await canvasBlob(canvas, contentType, contentType === 'image/jpeg' ? 0.9 : undefined);
@@ -213,7 +216,7 @@ export function ServerIconDialog({
           <button class="button button--primary" type="button" disabled={busy || preparing || (server.appearance.kind === 'preset' && server.appearance.preset === selectedPreset)} onClick={() => void save(() => setServerIconPreset(server.id, selectedPreset, server.appearance.revision, csrfToken))}>Use {presetOptions.find((option) => option.id === selectedPreset)?.label}</button>
         </section>
         <section class="server-icon-upload">
-          <div class="server-icon-editor__head"><div><strong>Your photo</strong><span>PNG or JPEG. Helix resizes it locally before upload.</span></div></div>
+          <div class="server-icon-editor__head"><div><strong>Your photo</strong><span>PNG or JPEG. Helix center-crops a square and resizes it locally before upload.</span></div></div>
           <label class={`server-icon-drop${preparing ? ' is-busy' : ''}`}>
             {prepared === null ? <><Icon name="plus" size={25} /><strong>{preparing ? 'Optimizing photo…' : 'Choose a photo'}</strong><span>Up to 16 MiB source · stored icon at most 512 KiB</span></> : <><img src={prepared.previewUrl} alt="Prepared server icon preview" /><strong>{prepared.width} × {prepared.height}</strong><span>{Math.ceil(prepared.bytes / 1_024)} KiB · {prepared.contentType.replace('image/', '').toUpperCase()}</span></>}
             <input type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" disabled={busy || preparing} onChange={(event) => void chooseFile(event.currentTarget.files?.[0])} />

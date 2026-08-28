@@ -5,6 +5,8 @@ mod bounded_command;
 #[cfg(target_os = "linux")]
 mod files;
 #[cfg(target_os = "linux")]
+mod hook_install;
+#[cfg(target_os = "linux")]
 mod host;
 #[cfg(target_os = "linux")]
 mod inventory;
@@ -14,18 +16,23 @@ mod native;
 mod network;
 #[cfg(target_os = "linux")]
 mod packages;
+#[cfg(target_os = "linux")]
+mod upnp;
 
 #[cfg(target_os = "linux")]
 use amp::{AmpClient, AmpInventory, AmpInventoryIssue, AmpServer};
 #[cfg(target_os = "linux")]
 use clap::Parser;
 #[cfg(target_os = "linux")]
-use files::{FileManager, StorageAnalysisManager};
+use files::{FileManager, MAX_CONFIGURED_ROOTS, StorageAnalysisManager};
 #[cfg(target_os = "linux")]
 use helix_privd::{
     BrokerClient, BrokerRequest, BrokerResponse, HookServiceAction, MinecraftCreateSpec,
-    MinecraftModpackCreateSpec, PackageUpdateCandidate, read_frame, write_frame,
+    MinecraftModpackCreateSpec, PackageUpdateCandidate, ServerNetworkExposure, read_frame,
+    write_frame,
 };
+#[cfg(target_os = "linux")]
+use hook_install::{HookInstaller, HookInstallerConfig};
 #[cfg(target_os = "linux")]
 use host::{HostControl, HostControlConfig};
 #[cfg(target_os = "linux")]
@@ -81,6 +88,8 @@ struct BrokerConfig {
     socket: PathBuf,
     amp_credentials: Option<PathBuf>,
     managed_roots: Vec<PathBuf>,
+    #[serde(default)]
+    analysis_roots: Vec<PathBuf>,
     native: Option<NativeConfig>,
     #[serde(default)]
     host_control: HostControlConfig,
@@ -88,6 +97,8 @@ struct BrokerConfig {
     network: NetworkConfig,
     #[serde(default)]
     packages: PackageConfig,
+    #[serde(default)]
+    hook_installer: HookInstallerConfig,
 }
 
 #[cfg(target_os = "linux")]
@@ -99,6 +110,7 @@ struct BrokerContext {
     host: Option<Arc<HostControl>>,
     network: NetworkManager,
     packages: PackageManager,
+    hook_installer: Arc<HookInstaller>,
     power_gate: Mutex<()>,
     jobs: Mutex<HashMap<String, JobRecord>>,
 }
@@ -137,6 +149,20 @@ impl BrokerContext {
         let result = match request {
             BrokerRequest::HostInventory {} => inventory::collect().and_then(to_value),
             BrokerRequest::NetworkInventory {} => self.network_inventory(),
+            BrokerRequest::GamePortPolicy { game } => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(|native| native.game_port_policy(game)),
+            BrokerRequest::SetGamePortPolicy { policy } => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(|native| native.set_game_port_policy(policy)),
+            BrokerRequest::SetServerNetworkExposure {
+                instance_id,
+                enabled,
+            } => self.set_server_network_exposure(&instance_id, enabled),
             BrokerRequest::CreateFirewallRule { rule } => {
                 self.firewall_mutation(|network| network.create_rule(rule))
             }
@@ -158,6 +184,14 @@ impl BrokerContext {
                 disruption_acknowledged,
             } => self.start_package_apply_job(packages, confirmation, disruption_acknowledged),
             BrokerRequest::HookInventory {} => self.hook_inventory(),
+            BrokerRequest::HookInstallPreflight { hook_id } => {
+                self.hook_installer.preflight(&hook_id)
+            }
+            BrokerRequest::InstallHook {
+                hook_id,
+                confirmation,
+                repository_change_acknowledged,
+            } => self.start_hook_install_job(hook_id, confirmation, repository_change_acknowledged),
             BrokerRequest::ManageHookService { hook_id, action } => {
                 self.manage_hook_service(&hook_id, action)
             }
@@ -410,6 +444,89 @@ impl BrokerContext {
                 Value::Array(errors),
             );
         Ok(inventory)
+    }
+
+    fn set_server_network_exposure(
+        &self,
+        instance_id: &str,
+        enabled: bool,
+    ) -> Result<Value, String> {
+        let native = self
+            .native
+            .as_deref()
+            .ok_or_else(|| "the Helix server manager is not configured".to_owned())?;
+        let server = native
+            .list_servers()?
+            .into_iter()
+            .find(|server| server.id == instance_id)
+            .ok_or_else(|| "the Helix-owned server does not exist".to_owned())?;
+        let port = server
+            .game_port
+            .ok_or_else(|| "the server does not report a game port".to_owned())?;
+        self.network.set_server_exposure(
+            &GamePortMapping {
+                instance_id: server.id,
+                name: server.name,
+                manager: server.manager.to_owned(),
+                port,
+                running: server.panel_running,
+            },
+            enabled,
+        )
+    }
+
+    fn apply_creation_exposure(
+        &self,
+        mut value: Value,
+        server_name: &str,
+        requested: ServerNetworkExposure,
+    ) -> Value {
+        let Some(instance_id) = value
+            .get("instance_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            return value;
+        };
+        let Some(port) = value
+            .get("game_port")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok())
+        else {
+            return value;
+        };
+        let network = if requested == ServerNetworkExposure::Public {
+            self.network
+                .set_server_exposure(
+                    &GamePortMapping {
+                        instance_id,
+                        name: server_name.to_owned(),
+                        manager: "helix".to_owned(),
+                        port,
+                        running: true,
+                    },
+                    true,
+                )
+                .unwrap_or_else(|error| {
+                    json!({
+                        "enabled": false,
+                        "state": "needs_attention",
+                        "server_created": true,
+                        "error": error,
+                        "note": "The server is online, but automatic public access could not be confirmed. Retry from the server's Join section."
+                    })
+                })
+        } else {
+            json!({
+                "enabled": false,
+                "state": "private",
+                "note": "The server was created for LAN or private-network access."
+            })
+        };
+        if let Some(object) = value.as_object_mut() {
+            object.insert("network_exposure".to_owned(), network);
+        }
+        value
     }
 
     fn hook_inventory(&self) -> Result<Value, String> {
@@ -729,6 +846,62 @@ impl BrokerContext {
         Err("the server manager identifier is invalid".to_owned())
     }
 
+    fn start_hook_install_job(
+        self: &Arc<Self>,
+        hook_id: String,
+        confirmation: String,
+        repository_change_acknowledged: bool,
+    ) -> Result<Value, String> {
+        let plan = self.hook_installer.preflight(&hook_id)?;
+        if plan["install_available"] != true {
+            return Err("this hook is not ready for a one-click install on this host".to_owned());
+        }
+        let reuse_key = format!("hook:install:{hook_id}");
+        let (job_id, reused) =
+            self.queue_job("hook_install", Some("system:packages"), Some(&reuse_key))?;
+        if reused {
+            return Ok(json!({"job_id": job_id, "reused": true}));
+        }
+        let context = Arc::clone(self);
+        let worker_job_id = job_id.clone();
+        let spawn = thread::Builder::new()
+            .name(format!("hook-install-{}", &job_id[..8]))
+            .spawn(move || {
+                context.update_job(&worker_job_id, |job| {
+                    job.status = JobState::Running;
+                    job.stage = "Installing from the verified official repository".to_owned();
+                    job.progress_percent = 12;
+                });
+                let result = context.hook_installer.install(
+                    &hook_id,
+                    &confirmation,
+                    repository_change_acknowledged,
+                    &|stage, percent| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = percent;
+                        });
+                    },
+                );
+                context.finish_job(
+                    &worker_job_id,
+                    result,
+                    "Hook installed and service verified",
+                );
+            });
+        if let Err(error) = spawn {
+            self.update_job(&job_id, |job| {
+                job.status = JobState::Failed;
+                job.stage = "Failed".to_owned();
+                job.error = Some(format!(
+                    "could not start the hook installer worker: {error}"
+                ));
+            });
+            return Err("could not start the hook installer worker".to_owned());
+        }
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
     fn start_package_refresh_job(self: &Arc<Self>) -> Result<Value, String> {
         let (job_id, reused) = self.queue_job(
             "system_package_lists_refresh",
@@ -924,12 +1097,16 @@ impl BrokerContext {
                     job.stage = "Preparing".to_owned();
                     job.progress_percent = 2;
                 });
-                let result = native.create_minecraft(&spec, |stage, progress| {
-                    context.update_job(&worker_job_id, |job| {
-                        job.stage = stage.to_owned();
-                        job.progress_percent = progress;
+                let result = native
+                    .create_minecraft(&spec, |stage, progress| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = progress;
+                        });
+                    })
+                    .map(|value| {
+                        context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                     });
-                });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
                         job.status = JobState::Complete;
@@ -978,12 +1155,16 @@ impl BrokerContext {
                     job.stage = "Resolving the selected Modrinth release".to_owned();
                     job.progress_percent = 2;
                 });
-                let result = native.create_minecraft_modpack(&spec, |stage, progress| {
-                    context.update_job(&worker_job_id, |job| {
-                        job.stage = stage.to_owned();
-                        job.progress_percent = progress;
+                let result = native
+                    .create_minecraft_modpack(&spec, |stage, progress| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = progress;
+                        });
+                    })
+                    .map(|value| {
+                        context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                     });
-                });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
                         job.status = JobState::Complete;
@@ -1406,9 +1587,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             Err(_) => fs::remove_file(&config.socket)?,
         }
     }
-    let storage =
-        StorageAnalysisManager::new(config.managed_roots.clone()).map_err(io::Error::other)?;
-    let files = FileManager::new(config.managed_roots).map_err(io::Error::other)?;
+    let managed_roots = config.managed_roots.clone();
+    let analysis_roots = configured_analysis_roots(&config);
+    let storage = StorageAnalysisManager::new(analysis_roots).map_err(io::Error::other)?;
+    let files = FileManager::new(managed_roots.clone()).map_err(io::Error::other)?;
     let amp = config
         .amp_credentials
         .as_deref()
@@ -1418,6 +1600,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(Arc::new);
     let native = config
         .native
+        .map(|mut native| {
+            apply_custom_artifact_root_defaults(&mut native, &managed_roots);
+            native
+        })
         .map(NativeManager::new)
         .transpose()
         .map_err(io::Error::other)?
@@ -1427,6 +1613,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     ));
     let network = NetworkManager::new(config.network).map_err(io::Error::other)?;
     let packages = PackageManager::new(config.packages).map_err(io::Error::other)?;
+    let hook_installer =
+        Arc::new(HookInstaller::new(config.hook_installer).map_err(io::Error::other)?);
     let context = Arc::new(BrokerContext {
         files,
         storage,
@@ -1435,6 +1623,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         host,
         network,
         packages,
+        hook_installer,
         power_gate: Mutex::new(()),
         jobs: Mutex::new(HashMap::new()),
     });
@@ -1479,6 +1668,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 #[cfg(target_os = "linux")]
+fn apply_custom_artifact_root_defaults(native: &mut NativeConfig, managed_roots: &[PathBuf]) {
+    if !native.custom_artifact_roots.is_empty() {
+        return;
+    }
+    native.custom_artifact_roots.extend(
+        managed_roots
+            .iter()
+            .filter(|root| native::custom_artifact_root_is_safe(root))
+            .cloned(),
+    );
+}
+
+#[cfg(target_os = "linux")]
 struct ConnectionGuard(Arc<AtomicUsize>);
 
 #[cfg(target_os = "linux")]
@@ -1510,7 +1712,10 @@ fn load_config(path: &Path) -> Result<BrokerConfig, Box<dyn Error>> {
     let config: BrokerConfig = serde_json::from_slice(&fs::read(path)?)?;
     if !config.socket.is_absolute()
         || config.managed_roots.is_empty()
+        || config.managed_roots.len() > MAX_CONFIGURED_ROOTS
+        || config.analysis_roots.len() > MAX_CONFIGURED_ROOTS
         || config.managed_roots.iter().any(|root| !root.is_absolute())
+        || config.analysis_roots.iter().any(|root| !root.is_absolute())
         || config
             .amp_credentials
             .as_ref()
@@ -1527,6 +1732,15 @@ fn load_config(path: &Path) -> Result<BrokerConfig, Box<dyn Error>> {
         );
     }
     Ok(config)
+}
+
+#[cfg(target_os = "linux")]
+fn configured_analysis_roots(config: &BrokerConfig) -> Vec<PathBuf> {
+    if config.analysis_roots.is_empty() {
+        config.managed_roots.clone()
+    } else {
+        config.analysis_roots.clone()
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1583,6 +1797,7 @@ mod tests {
             host: None,
             network,
             packages: PackageManager::new(PackageConfig::default()).unwrap(),
+            hook_installer: Arc::new(HookInstaller::new(HookInstallerConfig::default()).unwrap()),
             power_gate: Mutex::new(()),
             jobs: Mutex::new(HashMap::new()),
         }
@@ -1708,6 +1923,44 @@ mod tests {
             config.packages.apt_get_binary,
             PathBuf::from("/usr/bin/apt-get")
         );
+        assert!(config.analysis_roots.is_empty());
+        assert_eq!(
+            configured_analysis_roots(&config),
+            vec![PathBuf::from("/srv")]
+        );
+    }
+
+    #[test]
+    fn analysis_roots_are_separate_from_writable_file_roots() {
+        let config: BrokerConfig = serde_json::from_value(json!({
+            "socket": "/run/helix/privd.sock",
+            "amp_credentials": null,
+            "managed_roots": ["/srv/storage"],
+            "analysis_roots": ["/"],
+            "native": null
+        }))
+        .unwrap();
+
+        assert_eq!(config.managed_roots, vec![PathBuf::from("/srv/storage")]);
+        assert_eq!(config.analysis_roots, vec![PathBuf::from("/")]);
+        assert_eq!(configured_analysis_roots(&config), vec![PathBuf::from("/")]);
+    }
+
+    #[test]
+    fn broad_browse_roots_never_become_custom_executable_roots() {
+        let temporary = tempfile::tempdir().unwrap();
+        let storage = temporary.path().join("storage");
+        fs::create_dir(&storage).unwrap();
+        let mut native: NativeConfig = serde_json::from_value(json!({
+            "state_root": temporary.path().join("state"),
+            "instance_root": temporary.path().join("instances"),
+            "backup_root": temporary.path().join("backups"),
+            "docker_binary": "/usr/bin/docker"
+        }))
+        .unwrap();
+
+        apply_custom_artifact_root_defaults(&mut native, &[PathBuf::from("/"), storage.clone()]);
+        assert_eq!(native.custom_artifact_roots, vec![storage]);
     }
 
     #[test]

@@ -1,12 +1,14 @@
+use crate::bounded_command::{BoundedCommandOutput, run_bounded_command};
 use serde::Serialize;
 use serde_json::Value;
 use std::{
-    fs, io,
-    process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
+    fs,
+    path::Path,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const MAX_COMMAND_OUTPUT: usize = 8 * 1024 * 1024;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_SERVICES: usize = 256;
 const MAX_LISTENERS: usize = 512;
 const MAX_PROCESSES: usize = 32;
@@ -161,17 +163,28 @@ pub fn collect() -> Result<HostInventory, String> {
 }
 
 fn run_json(program: &str, arguments: &[&str]) -> Result<Value, String> {
-    let output = bounded_output(Command::new(program).args(arguments).output(), program)?;
+    let output = run_command(program, arguments)?;
     serde_json::from_slice(&output.stdout).map_err(|_| format!("{program} returned malformed JSON"))
 }
 
-fn bounded_output(result: io::Result<Output>, program: &str) -> Result<Output, String> {
-    let output = result.map_err(|_| format!("{program} is unavailable"))?;
+fn run_command(program: &str, arguments: &[&str]) -> Result<BoundedCommandOutput, String> {
+    let arguments = arguments
+        .iter()
+        .map(|argument| (*argument).to_owned())
+        .collect::<Vec<_>>();
+    let output = run_bounded_command(
+        Path::new("timeout"),
+        Path::new(program),
+        &arguments,
+        COMMAND_TIMEOUT,
+        &[("LC_ALL", "C")],
+        MAX_COMMAND_OUTPUT,
+    )?;
     if !output.status.success() {
+        if output.status.code() == Some(124) {
+            return Err(format!("{program} timed out"));
+        }
         return Err(format!("{program} failed"));
-    }
-    if output.stdout.len() > MAX_COMMAND_OUTPUT || output.stderr.len() > MAX_COMMAND_OUTPUT {
-        return Err(format!("{program} returned too much output"));
     }
     Ok(output)
 }
@@ -369,7 +382,7 @@ fn service_rank(active: &str) -> u8 {
 }
 
 fn collect_listeners() -> Result<Vec<Listener>, String> {
-    let output = bounded_output(Command::new("ss").args(["-H", "-lntup"]).output(), "ss")?;
+    let output = run_command("ss", &["-H", "-lntup"])?;
     let text =
         String::from_utf8(output.stdout).map_err(|_| "ss returned invalid text".to_owned())?;
     let mut listeners = Vec::new();
@@ -408,11 +421,9 @@ fn collect_listeners() -> Result<Vec<Listener>, String> {
 }
 
 fn collect_processes() -> Result<Vec<Process>, String> {
-    let output = bounded_output(
-        Command::new("ps")
-            .args(["-eo", "pid=,user=,comm=,pcpu=,rss=,etimes=", "--sort=-pcpu"])
-            .output(),
+    let output = run_command(
         "ps",
+        &["-eo", "pid=,user=,comm=,pcpu=,rss=,etimes=", "--sort=-pcpu"],
     )?;
     let text =
         String::from_utf8(output.stdout).map_err(|_| "ps returned invalid text".to_owned())?;

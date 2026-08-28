@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import render from 'preact-render-to-string';
-import { Dashboard } from './app';
+import { Dashboard, DiskMap } from './app';
+import type { HostInventory } from './control-api';
 
 const dashboardProps = {
   user: {
@@ -18,6 +19,19 @@ const dashboardProps = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('dashboard shell', () => {
+  it('puts an explicit space analyzer action on every mounted physical drive', () => {
+    const inventory: HostInventory = {
+      disks: [{ name: 'sda', path: '/dev/sda', parent: null, deviceType: 'disk', sizeBytes: 1_000_000_000_000, fileSystem: null, label: null, mountPoints: ['/'], model: 'WD Boot', serial: null, transport: 'sata', rotational: false, readOnly: false, hotplug: false }],
+      mounts: [{ target: '/', source: '/dev/sda2', fileSystem: 'ext4', sizeBytes: 900_000_000_000, usedBytes: 810_000_000_000, availableBytes: 90_000_000_000, usePercent: 90, readOnly: false }],
+      interfaces: [], routes: [], listeners: [], services: [], processes: [], loadAverage: [0, 0, 0], collectedAtUnixMs: 1,
+    };
+    const markup = render(<DiskMap inventory={inventory} onBrowse={() => undefined} onAnalyze={() => undefined} />);
+
+    expect(markup).toContain('WD Boot');
+    expect(markup).toContain('Browse files');
+    expect(markup).toContain('Analyze space');
+  });
+
   it('keeps Servers with the primary pages and pins Settings below them', () => {
     const markup = render(<Dashboard {...dashboardProps} />);
     const sidebar = markup.match(/<nav[^>]*class="sidebar-nav"[^>]*>.*?<\/nav>/u)?.[0] ?? '';

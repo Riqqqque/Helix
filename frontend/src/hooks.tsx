@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
 import { ApiError } from './api';
-import { InlineError, PageHead } from './dashboard-ui';
+import { InlineError, PageHead, ProgressBar } from './dashboard-ui';
 import {
+  getHookInstallJob,
+  getHookInstallPlan,
   getHookInventory,
+  installHook,
   manageHookService,
   type HookConnection,
+  type HookInstallJob,
+  type HookInstallPlan,
   type HookInventory,
   type HookServiceAction,
 } from './hooks-api';
@@ -49,7 +54,7 @@ const descriptors: Record<string, HookDescriptor> = {
     name: 'Tailscale',
     category: 'Private networking',
     summary: 'Private remote access without publishing Helix',
-    detail: 'Helix detects tailscaled and can control its exact service. Initial installation and tailnet sign-in stay guided because repository setup and identity approval differ by distribution and account.',
+    detail: 'On supported Debian and Ubuntu hosts, Helix can add Tailscale’s official signed repository, install the package, and verify tailscaled in one job. Tailnet approval stays with you because Helix never invents or stores account credentials.',
     icon: 'network',
     color: '#b9b9b9',
     docs: 'https://tailscale.com/docs/install/linux',
@@ -59,7 +64,7 @@ const descriptors: Record<string, HookDescriptor> = {
     name: 'Pterodactyl Wings',
     category: 'Game hosting',
     summary: 'Node-agent health and lifecycle control',
-    detail: 'This hook watches the Wings systemd service. A future authenticated panel adapter can add server inventory without weakening Pterodactyl’s ownership boundary.',
+    detail: 'Helix checks the Linux, Docker, architecture, and systemd prerequisites, then walks through the panel-owned node configuration. Wings cannot be honestly reduced to one click because its config and credentials must come from your Pterodactyl Panel.',
     icon: 'servers',
     color: '#7c9cff',
     docs: 'https://pterodactyl.io/wings/1.0/installing.html',
@@ -69,7 +74,7 @@ const descriptors: Record<string, HookDescriptor> = {
     name: 'Jellyfin',
     category: 'Media',
     summary: 'Media server service control and quick access',
-    detail: 'Helix monitors and controls the exact Jellyfin systemd service. Media libraries and account administration remain in Jellyfin’s own web interface.',
+    detail: 'On supported Debian and Ubuntu hosts, Helix can add Jellyfin’s official signed repository, install its packages, and verify the service in one job. Library and owner setup then continue in Jellyfin Web.',
     icon: 'play',
     color: '#a56dff',
     docs: 'https://jellyfin.org/docs/general/installation/linux/',
@@ -131,11 +136,16 @@ function HookCard({ hook, selected, onSelect }: { hook: HookConnection; selected
   );
 }
 
-function HookDetails({ hook, canManage, busyAction, onAction }: {
+function HookDetails({ hook, canManage, busyAction, plan, planLoading, planError, onAction, onInstall, onRetryPlan }: {
   hook: HookConnection;
   canManage: boolean;
   busyAction: HookServiceAction | null;
+  plan: HookInstallPlan | null;
+  planLoading: boolean;
+  planError: string | null;
   onAction: (action: HookServiceAction) => void;
+  onInstall: () => void;
+  onRetryPlan: () => void;
 }) {
   const descriptor = descriptorFor(hook);
   const href = panelHref(hook);
@@ -160,15 +170,31 @@ function HookDetails({ hook, canManage, busyAction, onAction }: {
             {operationalActions.map((action) => <button key={action} class={`button ${action === 'stop' ? 'button--danger-quiet' : action === 'restart' ? 'button--quiet' : 'button--primary'}`} type="button" disabled={!canManage || !hook.controllable || busyAction !== null || (action === 'start' && hook.active) || (action === 'stop' && !hook.active)} onClick={() => onAction(action)} aria-busy={busyAction === action}><Icon name={action === 'start' ? 'play' : action === 'stop' ? 'stop' : 'restart'} size={14} />{busyAction === action ? `${actionLabels[action]}ing…` : actionLabels[action]}</button>)}
             {href !== null && <a class="button button--quiet" href={href} target="_blank" rel="noopener noreferrer"><Icon name="external" size={14} />Open {descriptor.name}</a>}
           </div>
-          {hook.kind === 'systemd' && <div class="hook-boot-control"><span><strong>Start after host boot</strong><small>Changes only <code>{hook.unit}</code>. It does not stop or start the service now.</small></span><button class="switch-button" role="switch" type="button" disabled={!canManage || !hook.controllable || busyAction !== null} aria-checked={hook.enabled} aria-busy={busyAction === 'enable' || busyAction === 'disable'} onClick={() => onAction(hook.enabled ? 'disable' : 'enable')}><i /><span>{busyAction === 'enable' || busyAction === 'disable' ? 'Saving…' : hook.enabled ? 'On' : 'Off'}</span></button></div>}
+          {hook.kind === 'systemd' && <div class="hook-boot-control"><span><strong>Start after host boot</strong><small>Changes only <code>{hook.unit}</code>. It does not stop or start the service now.</small></span><button class="switch-button" role="switch" type="button" disabled={!canManage || !hook.controllable || busyAction !== null} aria-checked={busyAction === 'enable' ? true : busyAction === 'disable' ? false : hook.enabled} aria-busy={busyAction === 'enable' || busyAction === 'disable'} onClick={() => onAction(hook.enabled ? 'disable' : 'enable')}><i /><span>{busyAction === 'enable' || busyAction === 'disable' ? 'Saving…' : hook.enabled ? 'On' : 'Off'}</span></button></div>}
           {!hook.controllable && <small class="hook-boundary"><Icon name="info" size={13} />This adapter is read-only here. Use its own panel for settings Helix cannot verify safely.</small>}
         </>
       ) : (
         <div class="hook-setup">
-          <div><span class="eyebrow">Guided setup</span><h3>Connect {descriptor.name}</h3><p>Helix has not found this service. These steps avoid guessing at a distribution, repository, or account.</p></div>
-          <ol>{descriptor.setupSteps.map((step, index) => <li key={step}><span>{index + 1}</span><p>{step}</p></li>)}</ol>
-          {descriptor.docs.length > 0 && <a class="button button--primary" href={descriptor.docs} target="_blank" rel="noopener noreferrer"><Icon name="external" size={14} />Open official setup</a>}
-          <small><Icon name="info" size={13} />Helix does not run remote install scripts or invent credentials. Once the supported service exists, this card becomes operational automatically.</small>
+          <div><span class="eyebrow">{plan?.mode === 'one_click' ? 'ONE-CLICK INSTALL' : 'GUIDED CONNECTION'}</span><h3>Connect {descriptor.name}</h3><p>{plan?.mode === 'one_click' ? 'Helix can install this from the publisher’s signed APT repository, then verify the exact systemd service.' : 'Helix checks this host first and shows only the steps that still need an owner decision.'}</p></div>
+          {planLoading && <div class="hook-plan-loading" role="status"><Icon name="refresh" class="is-spinning" /><span>Checking this host…</span></div>}
+          <InlineError message={planError} />
+          {planError !== null && <button class="button button--quiet" type="button" onClick={onRetryPlan}><Icon name="refresh" size={14} />Check again</button>}
+          {plan !== null && <>
+            {plan.platform !== null && <div class="hook-platform"><Icon name="host" size={15} /><span><strong>{plan.platform.name}</strong><small>{plan.platform.codename} · {plan.platform.architecture}</small></span></div>}
+            <div class="hook-checks">{plan.checks.map((check) => <div class={`hook-check hook-check--${check.status}`} key={check.id}><Icon name={check.status === 'pass' ? 'check' : 'warning'} size={14} /><span><strong>{check.label}</strong><small>{check.detail}</small></span></div>)}</div>
+            {plan.blockers.length > 0 && <div class="hook-plan-blockers">{plan.blockers.map((blocker) => <p key={blocker}><Icon name="warning" size={13} />{blocker}</p>)}</div>}
+            <section class="hook-plan-columns">
+              <div><span class="eyebrow">HELIX WILL</span><ul>{plan.changes.map((change) => <li key={change}><Icon name="check" size={13} />{change}</li>)}</ul></div>
+              <div><span class="eyebrow">YOU FINISH</span><ul>{plan.nextSteps.map((step) => <li key={step}><Icon name="chevron" size={13} />{step}</li>)}</ul></div>
+            </section>
+            <div class="hook-plan-actions">
+              {plan.installAvailable && <button class="button button--primary" type="button" disabled={!canManage} onClick={onInstall}><Icon name="plus" size={14} />Install {descriptor.name}</button>}
+              {plan.mode === 'guided' && <a class="button button--primary" href="#terminal"><Icon name="terminal" size={14} />Continue in Terminal</a>}
+              <a class="button button--quiet" href={plan.officialDocs} target="_blank" rel="noopener noreferrer"><Icon name="external" size={14} />Official instructions</a>
+            </div>
+          </>}
+          {plan === null && !planLoading && planError === null && <ol>{descriptor.setupSteps.map((step, index) => <li key={step}><span>{index + 1}</span><p>{step}</p></li>)}</ol>}
+          <small><Icon name="info" size={13} />Installers are exact-ID allowlisted. Helix never accepts arbitrary package names, repositories, commands, or remote scripts from the browser.</small>
         </div>
       )}
     </section>
@@ -189,6 +215,14 @@ export function HooksPage({ csrfToken, canManage, onSessionExpired }: HooksPageP
   const [busyAction, setBusyAction] = useState<HookServiceAction | null>(null);
   const [pendingAction, setPendingAction] = useState<HookServiceAction | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [plan, setPlan] = useState<HookInstallPlan | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planRevision, setPlanRevision] = useState(0);
+  const [installOpen, setInstallOpen] = useState(false);
+  const [installJob, setInstallJob] = useState<HookInstallJob | null>(null);
+  const [installDispatching, setInstallDispatching] = useState(false);
+  const [installConfirmed, setInstallConfirmed] = useState(false);
 
   const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
     setLoading(true);
@@ -215,6 +249,30 @@ export function HooksPage({ csrfToken, canManage, onSessionExpired }: HooksPageP
   const sorted = useMemo(() => [...hooks].sort((left, right) => Number(right.installed) - Number(left.installed) || descriptorFor(left).name.localeCompare(descriptorFor(right).name)), [hooks]);
   const selected = hooks.find((hook) => hook.id === selectedId) ?? sorted[0] ?? null;
 
+  useEffect(() => {
+    if (selected === null || selected.installed || !['tailscale', 'jellyfin', 'pterodactyl'].includes(selected.id)) {
+      setPlan(null);
+      setPlanError(null);
+      setPlanLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setPlanLoading(true);
+    setPlanError(null);
+    void getHookInstallPlan(selected.id, csrfToken, controller.signal)
+      .then((next) => setPlan(next))
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return;
+        if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+        else {
+          setPlan(null);
+          setPlanError(describeError(reason));
+        }
+      })
+      .finally(() => { if (!controller.signal.aborted) setPlanLoading(false); });
+    return () => controller.abort();
+  }, [csrfToken, onSessionExpired, planRevision, selected?.id, selected?.installed]);
+
   const runAction = async (): Promise<void> => {
     if (selected === null || pendingAction === null || busyAction !== null) return;
     const action = pendingAction;
@@ -223,9 +281,19 @@ export function HooksPage({ csrfToken, canManage, onSessionExpired }: HooksPageP
     setError(null);
     setNotice(null);
     try {
-      await manageHookService(selected.id, action, csrfToken);
+      const result = await manageHookService(selected.id, action, csrfToken);
+      setInventory((current) => current === null ? current : {
+        ...current,
+        hooks: current.hooks.map((hook) => hook.id !== result.hookId ? hook : {
+          ...hook,
+          active: result.active,
+          activeState: result.activeState,
+          enabled: result.enabled,
+          enabledState: result.enabledState,
+        }),
+      });
       setNotice(`${descriptorFor(selected).name}: ${actionLabels[action]} completed and verified.`);
-      await refresh();
+      void refresh();
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
       else setError(describeError(reason));
@@ -234,14 +302,75 @@ export function HooksPage({ csrfToken, canManage, onSessionExpired }: HooksPageP
     }
   };
 
+  const startInstall = async (): Promise<void> => {
+    if (selected === null || !installConfirmed || installDispatching) return;
+    setInstallDispatching(true);
+    setError(null);
+    try {
+      const dispatch = await installHook(selected.id, csrfToken);
+      setInstallJob({
+        id: dispatch.jobId,
+        kind: 'hook_install',
+        status: 'queued',
+        stage: dispatch.reused ? 'Joining the active installation' : 'Queued',
+        progressPercent: 0,
+        result: null,
+        error: null,
+      });
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+      else setError(describeError(reason));
+    } finally {
+      setInstallDispatching(false);
+    }
+  };
+
+  useEffect(() => {
+    if (installJob === null || installJob.status === 'complete' || installJob.status === 'failed') return;
+    const controller = new AbortController();
+    let timer: number | null = null;
+    const poll = async (): Promise<void> => {
+      try {
+        const next = await getHookInstallJob(installJob.id, csrfToken, controller.signal);
+        setInstallJob(next);
+        if (next.status === 'complete') {
+          setNotice('Hook installation completed and the system service was verified.');
+          void refresh();
+        } else if (next.status !== 'failed') {
+          timer = window.setTimeout(() => void poll(), 1_500);
+        }
+      } catch (reason) {
+        if (controller.signal.aborted) return;
+        if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
+        else setError(describeError(reason));
+      }
+    };
+    timer = window.setTimeout(() => void poll(), 500);
+    return () => {
+      controller.abort();
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [csrfToken, installJob?.id, installJob?.status, onSessionExpired, refresh]);
+
   return (
     <div class="page page--hooks">
       <PageHead title="Hooks" detail="Bring host services into Helix without pretending Helix owns them." />
       <div class="hooks-toolbar"><div><strong>{hooks.filter((hook) => hook.installed && hook.active).length}</strong><span>connected</span><i /><strong>{hooks.filter((hook) => !hook.installed).length}</strong><span>available</span><InfoTip text="Discovery is read-only. Control is exposed only for exact services configured in the root-owned broker, and every change is verified after systemd returns." /></div><button class="button button--quiet" type="button" disabled={loading} aria-busy={loading} onClick={() => void refresh()}><Icon name="refresh" size={14} />{loading ? 'Checking…' : 'Check connections'}</button></div>
       <InlineError message={error} />
       {notice !== null && <div class="hooks-notice" role="status"><Icon name="check" size={15} />{notice}</div>}
-      {inventory === null && loading ? <div class="detail-loading" aria-busy="true"><Icon name="hooks" size={28} /><span>Discovering safe connections…</span></div> : <div class="hooks-layout"><aside class="hooks-list" aria-label="Available Hooks">{sorted.map((hook) => <HookCard key={hook.id} hook={hook} selected={selected?.id === hook.id} onSelect={() => { setSelectedId(hook.id); setNotice(null); }} />)}</aside>{selected !== null && <HookDetails hook={selected} canManage={canManage} busyAction={busyAction} onAction={(action) => setPendingAction(action)} />}</div>}
+      {inventory === null && loading ? <div class="detail-loading" aria-busy="true"><Icon name="hooks" size={28} /><span>Discovering safe connections…</span></div> : <div class="hooks-layout"><aside class="hooks-list" aria-label="Available Hooks">{sorted.map((hook) => <HookCard key={hook.id} hook={hook} selected={selected?.id === hook.id} onSelect={() => { setSelectedId(hook.id); setNotice(null); }} />)}</aside>{selected !== null && <HookDetails hook={selected} canManage={canManage} busyAction={busyAction} plan={plan} planLoading={planLoading} planError={planError} onAction={(action) => setPendingAction(action)} onInstall={() => { setInstallConfirmed(false); setInstallJob(null); setInstallOpen(true); }} onRetryPlan={() => setPlanRevision((value) => value + 1)} />}</div>}
       {pendingAction !== null && selected !== null && <Dialog title={`${actionLabels[pendingAction]} ${descriptorFor(selected).name}?`} onClose={() => setPendingAction(null)}><p class="hook-confirm-copy">{pendingAction === 'stop' || pendingAction === 'restart' ? 'Active users or streams may be interrupted. Helix will issue the exact systemd action and verify the resulting state.' : 'Helix will change only the configured service and verify the result.'}</p><div class="hook-confirm-actions"><button class="button button--quiet" type="button" onClick={() => setPendingAction(null)}>Cancel</button><button class={`button ${pendingAction === 'stop' ? 'button--danger' : 'button--primary'}`} type="button" onClick={() => void runAction()}>{actionLabels[pendingAction]}</button></div></Dialog>}
+      {installOpen && selected !== null && <Dialog title={installJob === null ? `Install ${descriptorFor(selected).name}?` : installJob.status === 'complete' ? 'Installation complete' : installJob.status === 'failed' ? 'Installation needs attention' : `Installing ${descriptorFor(selected).name}`} onClose={() => { if (installJob === null || ['complete', 'failed'].includes(installJob.status)) setInstallOpen(false); }} wide>
+        <InlineError message={error} />
+        {installJob === null ? <>
+          <div class="hook-install-review"><Icon name={descriptorFor(selected).icon} size={25} /><span><strong>Publisher repository, exact package, exact service</strong><p>Helix will add only the official signed repository shown in the preflight, install the allowlisted package, enable its exact systemd unit, and verify that it is active. It will not create an external account or reboot Linux.</p></span></div>
+          <label class="check-row"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.currentTarget.checked)} /><span><strong>Install {descriptorFor(selected).name} on this Linux host</strong><small>I understand this adds a publisher APT repository and packages to the host.</small></span></label>
+          <div class="dialog-actions"><button class="button button--quiet" type="button" onClick={() => setInstallOpen(false)}>Cancel</button><button class="button button--primary" type="button" disabled={!installConfirmed || installDispatching} onClick={() => void startInstall()}>{installDispatching ? 'Queuing…' : 'Install and verify'}</button></div>
+        </> : <>
+          <div class={`hook-install-progress hook-install-progress--${installJob.status}`} role="status"><Icon name={installJob.status === 'complete' ? 'check' : installJob.status === 'failed' ? 'warning' : 'update'} size={26} class={installJob.status === 'running' ? 'is-spinning' : undefined} /><strong>{installJob.stage}</strong><ProgressBar value={Math.max(installJob.progressPercent, installJob.status === 'running' ? 8 : 0)} /><span>{installJob.status === 'complete' ? 'The package and exact systemd service were verified.' : installJob.status === 'failed' ? installJob.error ?? 'The installer stopped before verification.' : 'This continues on the host if you leave the page.'}</span></div>
+          <div class="dialog-actions"><button class="button button--primary" type="button" disabled={!['complete', 'failed'].includes(installJob.status)} onClick={() => setInstallOpen(false)}>Close</button></div>
+        </>}
+      </Dialog>}
     </div>
   );
 }

@@ -48,7 +48,7 @@ const data: DashboardData = {
 
 describe('Servers route', () => {
   it('retains the native creation entry point after code splitting', () => {
-    const markup = render(<ServersPage data={data} csrfToken="csrf" canManageServers canManageBackups onSessionExpired={() => undefined} />);
+    const markup = render(<ServersPage data={data} csrfToken="csrf" canManageServers canManageBackups canManageNetwork onSessionExpired={() => undefined} />);
 
     expect(markup).toContain('New server');
     expect(markup).toContain('Native game hosting');
@@ -71,7 +71,7 @@ describe('Servers route', () => {
       ...data,
       servers: { data: [nativeServer], phase: 'ready', error: null },
     };
-    const markup = render(<ServersPage data={readonlyData} csrfToken="csrf" canManageServers={false} canManageBackups={false} onSessionExpired={() => undefined} />);
+    const markup = render(<ServersPage data={readonlyData} csrfToken="csrf" canManageServers={false} canManageBackups={false} canManageNetwork={false} onSessionExpired={() => undefined} />);
 
     expect(markup).toContain('Survival');
     expect(markup).toContain('Open');

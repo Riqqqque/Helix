@@ -95,9 +95,21 @@ export interface GamePortMapping {
     allowed: boolean | null;
     state: FirewallAllowanceState;
   };
+  privateJoinAddress: string | null;
   externalReachability: {
-    state: "unverified";
-    reachable: null;
+    state:
+      | "router_mapping_confirmed"
+      | "not_requested"
+      | "setup_available"
+      | "carrier_grade_nat"
+      | "private_or_reserved"
+      | "automatic_setup_unavailable";
+    reachable: boolean | null;
+    testedFromExternalNetwork: false;
+    routerMappingVerified: boolean;
+    externalIp: string | null;
+    joinAddress: string | null;
+    verifiedAtUnixMs: number | null;
     note: string;
   };
 }
@@ -109,6 +121,21 @@ export interface NetworkInventoryError {
 
 export interface NetworkInventory {
   collectedAtUnixMs: number;
+  addresses: {
+    privateIpv4: string | null;
+    source: "router_path" | "host_route";
+    note: string;
+  };
+  router: {
+    automaticPortForwardingAvailable: boolean;
+    discovery: "upnp_igd";
+    state: "available" | "carrier_grade_nat" | "private_or_reserved" | "unavailable";
+    externalIpv4: string | null;
+    externalAddressKind: "public" | "carrier_grade_nat" | "private_or_reserved" | "unknown";
+    privateIpv4: string | null;
+    error: string | null;
+    note: string;
+  };
   listeners: {
     source: "linux_proc_net";
     items: NetworkListener[];
@@ -394,7 +421,7 @@ function parseGamePort(value: unknown): GamePortMapping {
     item.external_reachability,
     "game port external reachability",
   );
-  if (outside.reachable !== null)
+  if (outside.reachable !== null && outside.reachable !== false)
     throw new ApiError(
       "Network inventory returned an invalid external reachability value.",
     );
@@ -428,11 +455,28 @@ function parseGamePort(value: unknown): GamePortMapping {
         "not_allowed_by_matching_rule",
       ] as const),
     },
+    privateJoinAddress: nullableText(item, "private_join_address", context),
     externalReachability: {
       state: literal(outside, "state", "game port external reachability", [
-        "unverified",
+        "router_mapping_confirmed",
+        "not_requested",
+        "setup_available",
+        "carrier_grade_nat",
+        "private_or_reserved",
+        "automatic_setup_unavailable",
       ] as const),
-      reachable: null,
+      reachable: outside.reachable === null ? null : false,
+      testedFromExternalNetwork: false,
+      routerMappingVerified:
+        outside.router_mapping_verified === undefined
+          ? false
+          : bool(outside, "router_mapping_verified", "game port external reachability"),
+      externalIp: nullableText(outside, "external_ip", "game port external reachability"),
+      joinAddress: nullableText(outside, "join_address", "game port external reachability"),
+      verifiedAtUnixMs:
+        outside.verified_at_unix_ms === undefined
+          ? null
+          : nullableInteger(outside, "verified_at_unix_ms", "game port external reachability"),
       note: text(outside, "note", "game port external reachability"),
     },
   };
@@ -446,6 +490,8 @@ export function parseNetworkInventory(value: unknown): NetworkInventory {
   const listeners = expectRecord(root.listeners, "network listeners");
   const docker = expectRecord(root.docker, "Docker network inventory");
   const firewall = expectRecord(root.firewall, "firewall inventory");
+  const addresses = expectRecord(root.addresses, "network addresses");
+  const router = expectRecord(root.router, "router inventory");
   const defaults = expectRecord(
     firewall.default_policy,
     "firewall default policy",
@@ -473,6 +519,21 @@ export function parseNetworkInventory(value: unknown): NetworkInventory {
         );
   return {
     collectedAtUnixMs: integer(root, "collected_at_unix_ms", context),
+    addresses: {
+      privateIpv4: nullableText(addresses, "private_ipv4", "network addresses"),
+      source: literal(addresses, "source", "network addresses", ["router_path", "host_route"] as const),
+      note: text(addresses, "note", "network addresses"),
+    },
+    router: {
+      automaticPortForwardingAvailable: bool(router, "automatic_port_forwarding_available", "router inventory"),
+      discovery: literal(router, "discovery", "router inventory", ["upnp_igd"] as const),
+      state: literal(router, "state", "router inventory", ["available", "carrier_grade_nat", "private_or_reserved", "unavailable"] as const),
+      externalIpv4: nullableText(router, "external_ipv4", "router inventory"),
+      externalAddressKind: literal(router, "external_address_kind", "router inventory", ["public", "carrier_grade_nat", "private_or_reserved", "unknown"] as const),
+      privateIpv4: nullableText(router, "private_ipv4", "router inventory"),
+      error: nullableText(router, "error", "router inventory"),
+      note: text(router, "note", "router inventory"),
+    },
     listeners: {
       source: literal(listeners, "source", "network listeners", [
         "linux_proc_net",

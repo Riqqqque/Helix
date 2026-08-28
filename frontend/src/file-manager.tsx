@@ -6,6 +6,7 @@ import { formatBytes, formatTimestamp } from './format';
 import { Icon } from './icons';
 import { Dialog } from './modal';
 import { StorageAnalyzerRoute } from './storage-analyzer-route';
+import type { StorageAnalysisMode } from './storage-analysis-api';
 
 const MAX_TEXT_EDITOR_BYTES = 4 * 1024 * 1024;
 const pageSizes = [25, 50, 100, 200] as const;
@@ -54,9 +55,11 @@ export interface FileManagerProps {
   csrfToken: string;
   onSessionExpired: () => void;
   initialPath: string;
+  analysis?: { path: string; mode: StorageAnalysisMode } | null;
+  onAnalysisClose?: () => void;
 }
 
-export function FileManager({ csrfToken, onSessionExpired, initialPath }: FileManagerProps) {
+export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis = null, onAnalysisClose }: FileManagerProps) {
   const [path, setPath] = useState(initialPath);
   const [listing, setListing] = useState<DirectoryListing | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -180,6 +183,11 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath }: FileMa
     setCursorHistory([null]);
     void load(path, null, 0, limit);
   };
+  const closeAnalysis = (): void => {
+    setAnalysisOpen(false);
+    onAnalysisClose?.();
+  };
+  const analysisTarget = analysis ?? (analysisOpen ? { path, mode: 'quick' as const } : null);
 
   return (
     <section class="file-manager surface" aria-busy={loading}>
@@ -227,7 +235,7 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath }: FileMa
       </div>
       {listing !== null && listing.omittedEntries > 0 && <p class="table-note">{listing.omittedEntries.toLocaleString()} entries could not be read or safely represented. The count above includes every representable name.</p>}
 
-      {analysisOpen && <StorageAnalyzerRoute path={path} csrfToken={csrfToken} onClose={() => setAnalysisOpen(false)} onNavigate={navigate} onSessionExpired={onSessionExpired} />}
+      {analysisTarget !== null && <StorageAnalyzerRoute path={analysisTarget.path} initialMode={analysisTarget.mode} csrfToken={csrfToken} onClose={closeAnalysis} onNavigate={(target) => { closeAnalysis(); navigate(target); }} onSessionExpired={onSessionExpired} />}
       {createKind !== null && <Dialog title={createKind === 'directory' ? 'Create folder' : 'Create file'} onClose={() => setCreateKind(null)}><form class="dialog-form" onSubmit={(event) => { event.preventDefault(); const operation = createKind === 'directory' ? createDirectory : createFile; void mutate(() => operation(path, createName, csrfToken), () => setCreateKind(null)); }}><label><span>Name</span><input autofocus required value={createName} onInput={(event) => setCreateName(event.currentTarget.value)} /></label><div class="dialog-actions"><button class="button button--quiet" type="button" onClick={() => setCreateKind(null)}>Cancel</button><button class="button button--primary" type="submit" disabled={busy || createName.trim().length === 0}>Create</button></div></form></Dialog>}
       {renameTarget !== null && <Dialog title={`Rename ${renameTarget.name}`} onClose={() => setRenameTarget(null)}><form class="dialog-form" onSubmit={(event) => { event.preventDefault(); void mutate(() => renameFile(renameTarget.path, renameName, csrfToken), () => setRenameTarget(null)); }}><label><span>New name</span><input autofocus required value={renameName} onInput={(event) => setRenameName(event.currentTarget.value)} /></label><div class="dialog-actions"><button class="button button--quiet" type="button" onClick={() => setRenameTarget(null)}>Cancel</button><button class="button button--primary" type="submit" disabled={busy || renameName.trim().length === 0}>Rename</button></div></form></Dialog>}
       {trashTarget !== null && <Dialog title="Move to trash?" onClose={() => setTrashTarget(null)}><div class="dialog-copy"><p><strong>{trashTarget.name}</strong> will move into this drive’s protected <code>.helix-trash</code> folder. Helix never permanently deletes it from this action.</p></div><div class="dialog-actions"><button class="button button--quiet" type="button" onClick={() => setTrashTarget(null)}>Cancel</button><button class="button button--danger" type="button" disabled={busy} onClick={() => void mutate(() => trashFile(trashTarget.path, csrfToken), () => setTrashTarget(null))}>Move to trash</button></div></Dialog>}

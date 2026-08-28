@@ -412,21 +412,34 @@ function HostIntegrationSettings({
   const [rebootOpen, setRebootOpen] = useState(false);
   const [recurringRebootOpen, setRecurringRebootOpen] = useState(false);
   const [optimisticStartOnBoot, setOptimisticStartOnBoot] = useState<boolean | null>(null);
+  const [confirmedStartOnBoot, setConfirmedStartOnBoot] = useState<boolean | null>(null);
   const integration = resource.data;
   const canWrite = user.capabilities.includes('system.settings.write');
   const canPower = user.capabilities.includes('system.power');
+  const displayedStartOnBoot = optimisticStartOnBoot ?? confirmedStartOnBoot ?? integration?.startOnBoot.enabled ?? null;
+
+  useEffect(() => {
+    if (confirmedStartOnBoot !== null && integration?.startOnBoot.enabled === confirmedStartOnBoot) {
+      setConfirmedStartOnBoot(null);
+    }
+  }, [confirmedStartOnBoot, integration?.startOnBoot.enabled]);
 
   const toggle = async (): Promise<void> => {
     if (integration === null || integration.startOnBoot.state === 'unavailable' || busy || !canWrite) return;
-    const target = integration.startOnBoot.enabled !== true;
+    const target = displayedStartOnBoot !== true;
     setBusy(true);
     setOptimisticStartOnBoot(target);
     setError(null);
     setNotice(null);
     try {
       const result = await setHelixStartOnBoot(target, csrfToken);
+      setConfirmedStartOnBoot(result.enabled);
+      setOptimisticStartOnBoot(null);
+      setBusy(false);
       setNotice(`${result.enabled ? 'Enabled' : 'Disabled'} for ${result.containers.length} Helix container${result.containers.length === 1 ? '' : 's'}. Running containers were not changed.`);
-      await onRefresh();
+      void onRefresh().catch((refreshError: unknown) => {
+        setError(refreshError instanceof Error ? refreshError.message : 'Helix updated the setting, but could not refresh its host state.');
+      });
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Helix could not update start on boot.');
     } finally {
@@ -445,7 +458,7 @@ function HostIntegrationSettings({
         {integration === null ? <div class="host-integration-empty"><Icon name="refresh" class={resource.phase === 'loading' ? 'is-spinning' : undefined} /><span>{resource.phase === 'loading' ? 'Reading Linux and Docker state…' : 'Host integration data is unavailable.'}</span></div> : <>
           <div class="host-integration-list">{serviceRow('Docker', integration.services.docker)}{serviceRow('Helix broker', integration.services.helixPrivd)}</div>
           <div class="host-container-policies">{([['Dashboard', integration.containers.dashboard], ['Gateway', integration.containers.gateway]] as const).map(([label, container]) => <div key={label}><span><i class={`status-dot status-dot--${container?.running === true ? 'good' : 'idle'}`} /><strong>{label}</strong></span><span>{container === null ? 'Not found' : container.running ? container.health ?? 'Running' : 'Stopped'}</span><small>Restart policy: <code>{container?.restartPolicy ?? 'unavailable'}</code></small></div>)}</div>
-          <div class="host-boot-control"><div><span>Helix starts after boot</span><strong>{busy && optimisticStartOnBoot !== null ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : integration.startOnBoot.state === 'mixed' ? 'Mixed policies' : integration.startOnBoot.state === 'unavailable' ? 'Unavailable' : integration.startOnBoot.enabled ? 'Enabled' : 'Disabled'}</strong><small>This changes restart policy only. It does not start or stop containers now.</small></div><button class="switch-button" role="switch" aria-checked={optimisticStartOnBoot ?? integration.startOnBoot.enabled ?? 'mixed'} aria-busy={busy} type="button" disabled={busy || !canWrite || integration.startOnBoot.state === 'unavailable'} onClick={() => void toggle()}><i /><span>{busy ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : integration.startOnBoot.enabled === true ? 'On' : 'Off'}</span></button></div>
+          <div class="host-boot-control"><div><span>Helix starts after boot</span><strong>{busy && optimisticStartOnBoot !== null ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : integration.startOnBoot.state === 'unavailable' ? 'Unavailable' : displayedStartOnBoot === true ? 'Enabled' : displayedStartOnBoot === false ? 'Disabled' : 'Mixed policies'}</strong><small>This changes restart policy only. It does not start or stop containers now.</small></div><button class="switch-button" role="switch" aria-checked={displayedStartOnBoot ?? 'mixed'} aria-busy={busy} type="button" disabled={busy || !canWrite || integration.startOnBoot.state === 'unavailable'} onClick={() => void toggle()}><i /><span>{busy ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : displayedStartOnBoot === true ? 'On' : 'Off'}</span></button></div>
           <div class="host-policy-caveat"><Icon name="info" size={15} /><span>{integration.startOnBoot.note ?? 'Docker restart policy is the source of truth.'} Container recreation or a future Compose change may reapply a different policy.</span></div>
           {notice !== null && <div class="host-integration-notice" role="status"><Icon name="check" size={14} />{notice}</div>}
           {!canWrite && <div class="host-integration-notice"><Icon name="info" size={14} />This account can view integration state but cannot change it.</div>}

@@ -1,7 +1,8 @@
 use crate::amp::AmpServer;
 use helix_privd::{
-    MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode, MinecraftModpackCreateSpec,
-    MinecraftSettingsPatch, MinecraftSoftware, ServerAction,
+    GameKind, GamePortPolicySpec, GamePortRangeSpec, MinecraftCreateSpec, MinecraftDifficulty,
+    MinecraftGameMode, MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware,
+    ServerAction,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -17,7 +18,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -41,6 +42,10 @@ const MIN_CONSOLE_HISTORY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_CONSOLE_HISTORY_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_BACKUP_CATALOG_ENTRIES: usize = 2_048;
 const MAX_SERVER_TRASH_ENTRIES: usize = 512;
+const MAX_PORT_POLICY_RANGES: usize = 32;
+const MAX_PORT_POLICY_PORTS: usize = 256;
+const MAX_PORT_POLICY_CANDIDATES: usize = 4_096;
+const MAX_MINECRAFT_STATUS_WORKERS: usize = 8;
 const DOCKER_TIMEOUT_SECONDS: u64 = 300;
 const USER_AGENT: &str = "Helix/0.1 (+https://github.com/Riqqqque/Helix)";
 
@@ -58,6 +63,8 @@ pub struct NativeConfig {
     pub console_history_files: u16,
     #[serde(default = "default_backup_trash_retention_days")]
     pub backup_trash_retention_days: u16,
+    #[serde(default)]
+    pub custom_artifact_roots: Vec<PathBuf>,
 }
 
 pub struct NativeManager {
@@ -67,7 +74,9 @@ pub struct NativeManager {
     docker_binary: PathBuf,
     console_retention: ConsoleRetention,
     backup_trash_retention_days: u16,
+    custom_artifact_roots: Vec<PathBuf>,
     operations: Mutex<HashSet<String>>,
+    port_policies: Mutex<()>,
     console_archives: Mutex<HashMap<String, Arc<Mutex<ConsoleArchiveWriter>>>>,
     console_stops: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
@@ -103,12 +112,20 @@ struct InstanceManifest {
     created_at_unix_ms: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StoredGamePortPolicy {
+    schema_version: u32,
+    policy: GamePortPolicySpec,
+}
+
 struct Artifact {
     software: MinecraftSoftware,
     version: String,
     build: String,
     java_version: u16,
     url: String,
+    local_source: Option<PathBuf>,
     expected_hash: Option<ExpectedHash>,
 }
 
@@ -286,6 +303,9 @@ impl NativeManager {
         validate_root(&config.instance_root, "native instance")?;
         validate_root(&config.backup_root, "native backup")?;
         validate_binary(&config.docker_binary, "Docker")?;
+        for root in &config.custom_artifact_roots {
+            validate_custom_artifact_root(root)?;
+        }
         if !(MIN_CONSOLE_HISTORY_BYTES..=MAX_CONSOLE_HISTORY_BYTES)
             .contains(&config.console_history_max_bytes)
             || !(2..=256).contains(&config.console_history_files)
@@ -363,7 +383,13 @@ impl NativeManager {
                 files: config.console_history_files,
             },
             backup_trash_retention_days: config.backup_trash_retention_days,
+            custom_artifact_roots: config
+                .custom_artifact_roots
+                .iter()
+                .map(|root| canonical_directory(root))
+                .collect::<Result<Vec<_>, _>>()?,
             operations: Mutex::new(HashSet::new()),
+            port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
         };
@@ -380,17 +406,25 @@ impl NativeManager {
     pub fn list_servers(&self) -> Result<Vec<AmpServer>, String> {
         let manifests = self.load_manifests()?;
         let states = self.runtime_states(&manifests);
+        let status_targets = manifests
+            .iter()
+            .filter(|manifest| {
+                states
+                    .get(&manifest.container_name)
+                    .is_some_and(|state| state.running)
+            })
+            .map(|manifest| (manifest.id.clone(), manifest.game_port))
+            .collect::<Vec<_>>();
+        let mut statuses = collect_minecraft_statuses(&status_targets, |port| {
+            minecraft_status(port, Duration::from_millis(450)).ok()
+        });
         let mut servers = Vec::with_capacity(manifests.len());
         for manifest in manifests {
             let state = states
                 .get(&manifest.container_name)
                 .cloned()
                 .unwrap_or_default();
-            let status = if state.running {
-                minecraft_status(manifest.game_port, Duration::from_millis(450)).ok()
-            } else {
-                None
-            };
+            let status = statuses.remove(&manifest.id);
             let data_path = self.instance_path(&manifest.id)?;
             let mut warnings = Vec::new();
             if !data_path.join("server.jar").is_file() {
@@ -438,6 +472,111 @@ impl NativeManager {
         }
         servers.sort_by_key(|server| server.name.to_lowercase());
         Ok(servers)
+    }
+
+    pub fn game_port_policy(&self, game: GameKind) -> Result<Value, String> {
+        let _policy = self
+            .port_policies
+            .lock()
+            .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
+        let policy = self.read_game_port_policy(game)?;
+        let manifests = self.load_manifests()?;
+        let candidates = policy_candidates(&policy)?;
+        let used = manifests
+            .iter()
+            .map(|manifest| manifest.game_port)
+            .collect::<HashSet<_>>();
+        let next_available = candidates
+            .iter()
+            .copied()
+            .find(|port| !used.contains(port) && ensure_port_available(*port, true).is_ok());
+        Ok(game_port_policy_response(
+            policy,
+            candidates,
+            used,
+            next_available,
+        ))
+    }
+
+    pub fn set_game_port_policy(&self, policy: GamePortPolicySpec) -> Result<Value, String> {
+        let policy = normalize_game_port_policy(policy)?;
+        let _policy_guard = self
+            .port_policies
+            .lock()
+            .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
+        let body = serde_json::to_string_pretty(&StoredGamePortPolicy {
+            schema_version: 1,
+            policy: policy.clone(),
+        })
+        .map_err(|_| "could not encode the game port policy".to_owned())?;
+        write_private_text(
+            &self.game_port_policy_path(policy.game),
+            &format!("{body}\n"),
+        )?;
+        sync_directory(&self.state_root)?;
+        drop(_policy_guard);
+        self.game_port_policy(policy.game)
+    }
+
+    fn resolve_game_port(
+        &self,
+        game: GameKind,
+        requested: Option<u16>,
+        manifests: &[InstanceManifest],
+    ) -> Result<(u16, bool), String> {
+        if let Some(port) = requested {
+            if port < 1_024 {
+                return Err("game port must be at least 1024".to_owned());
+            }
+            if manifests.iter().any(|manifest| manifest.game_port == port) {
+                return Err(format!(
+                    "game port {port} is already assigned to another Helix server"
+                ));
+            }
+            ensure_port_available(port, true)?;
+            return Ok((port, false));
+        }
+        let _policy = self
+            .port_policies
+            .lock()
+            .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
+        let policy = self.read_game_port_policy(game)?;
+        let used = manifests
+            .iter()
+            .map(|manifest| manifest.game_port)
+            .collect::<HashSet<_>>();
+        for port in policy_candidates(&policy)? {
+            if !used.contains(&port) && ensure_port_available(port, true).is_ok() {
+                return Ok((port, true));
+            }
+        }
+        Err("the Minecraft port pool has no available ports; add ports or expand its ranges in Servers > Port pools".to_owned())
+    }
+
+    fn read_game_port_policy(&self, game: GameKind) -> Result<GamePortPolicySpec, String> {
+        let path = self.game_port_policy_path(game);
+        if !path.exists() {
+            return Ok(default_game_port_policy(game));
+        }
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| "the game port policy is unavailable".to_owned())?;
+        if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > 64 * 1024 {
+            return Err("the game port policy is invalid".to_owned());
+        }
+        let stored: StoredGamePortPolicy = serde_json::from_slice(
+            &fs::read(&path).map_err(|_| "could not read the game port policy".to_owned())?,
+        )
+        .map_err(|_| "the game port policy is invalid".to_owned())?;
+        if stored.schema_version != 1 || stored.policy.game != game {
+            return Err("the game port policy version or game does not match".to_owned());
+        }
+        normalize_game_port_policy(stored.policy)
+    }
+
+    fn game_port_policy_path(&self, game: GameKind) -> PathBuf {
+        self.state_root.join(match game {
+            GameKind::Minecraft => "port-policy-minecraft.json",
+        })
     }
 
     pub fn list_trashed_servers(&self) -> Result<Value, String> {
@@ -671,6 +810,29 @@ impl NativeManager {
         if docker_version.is_empty() {
             return Err("the Helix execution backend did not report a version".to_owned());
         }
+        let custom_import_ready = !self.custom_artifact_roots.is_empty();
+        let mut supported_software = vec!["paper", "purpur", "folia", "vanilla", "fabric"];
+        let mut features = vec![
+            "publisher_checksum_verification_where_available",
+            "pinned_artifact_digest",
+            "isolated_execution",
+            "lifecycle",
+            "console",
+            "persistent_console_history",
+            "settings",
+            "restart_metadata",
+            "files",
+            "backups",
+            "recoverable_backup_trash",
+            "restore",
+            "logs",
+            "performance",
+            "operation_serialization",
+        ];
+        if custom_import_ready {
+            supported_software.push("custom");
+            features.push("local_custom_jar_import");
+        }
         Ok(json!({
             "schema_version": 1,
             "availability": "ready",
@@ -678,15 +840,10 @@ impl NativeManager {
             "execution_backend": "docker",
             "backend_version": docker_version,
             "supported_games": ["minecraft"],
-            "supported_minecraft_software": ["paper", "purpur", "folia", "vanilla", "fabric"],
-            "minecraft_software_catalog": minecraft_software_catalog(),
-            "features": [
-                "publisher_checksum_verification_where_available", "pinned_artifact_digest",
-                "isolated_execution", "lifecycle", "console",
-                "persistent_console_history", "settings", "restart_metadata", "files",
-                "backups", "recoverable_backup_trash", "restore", "logs", "performance",
-                "operation_serialization"
-            ],
+            "supported_minecraft_software": supported_software,
+            "minecraft_software_catalog": minecraft_software_catalog(custom_import_ready),
+            "features": features,
+            "custom_artifact_roots_configured": self.custom_artifact_roots.len(),
             "console_history_retention_bytes": self.console_retention.maximum_bytes,
             "console_history_retention_files": self.console_retention.files,
             "backup_trash_retention_days": self.backup_trash_retention_days,
@@ -1590,7 +1747,10 @@ impl NativeManager {
         {
             return Err("a Helix server with that name already exists".to_owned());
         }
-        ensure_port_available(spec.game_port, true)?;
+        let (game_port, allocated_automatically) =
+            self.resolve_game_port(GameKind::Minecraft, spec.game_port, &manifests)?;
+        let mut resolved_spec = spec.clone();
+        resolved_spec.game_port = Some(game_port);
         let rcon_port = allocate_rcon_port(&manifests)?;
         let id = Uuid::new_v4().to_string();
         let instance_name = instance_name(spec.name.trim(), &id);
@@ -1601,8 +1761,19 @@ impl NativeManager {
         let mut container_create_attempted = false;
 
         let result = (|| -> Result<Value, String> {
-            progress("Resolving a supported Minecraft build", 12);
-            let artifact = self.resolve_artifact(spec.software, spec.version.trim())?;
+            progress(
+                if matches!(spec.software, MinecraftSoftware::Custom) {
+                    "Validating the selected local server JAR"
+                } else {
+                    "Resolving a supported Minecraft build"
+                },
+                12,
+            );
+            let artifact = if matches!(spec.software, MinecraftSoftware::Custom) {
+                self.resolve_custom_artifact(&resolved_spec)?
+            } else {
+                self.resolve_artifact(resolved_spec.software, resolved_spec.version.trim())?
+            };
             if artifact.java_version < 17 || artifact.java_version > 25 {
                 return Err(format!(
                     "Minecraft {} requires Java {}, which this Helix release does not manage yet",
@@ -1616,12 +1787,20 @@ impl NativeManager {
             fs::set_permissions(&data_path, fs::Permissions::from_mode(0o750))
                 .map_err(|_| "could not protect the server directory".to_owned())?;
 
-            progress("Downloading and verifying the server", 30);
+            progress(
+                if artifact.local_source.is_some() {
+                    "Importing and hashing the local server JAR"
+                } else {
+                    "Downloading and verifying the server"
+                },
+                30,
+            );
             let jar_path = data_path.join("server.jar");
             let artifact_sha256 = self.download_artifact(&artifact, &jar_path)?;
             write_new_file(&data_path.join("eula.txt"), b"eula=true\n", 0o640)?;
             let rcon_password = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-            let properties = server_properties(spec, rcon_port, &rcon_password);
+            let properties =
+                server_properties(&resolved_spec, game_port, rcon_port, &rcon_password);
             write_new_file(
                 &data_path.join("server.properties"),
                 properties.as_bytes(),
@@ -1645,7 +1824,7 @@ impl NativeManager {
                 artifact_sha256,
                 memory_mb: spec.memory_mb,
                 max_players: spec.max_players,
-                game_port: spec.game_port,
+                game_port,
                 rcon_port,
                 rcon_password,
                 start_on_boot: spec.start_on_boot,
@@ -1674,7 +1853,8 @@ impl NativeManager {
             Ok(json!({
                 "instance_id": format!("helix:{id}"),
                 "instance_name": instance_name,
-                "game_port": spec.game_port,
+                "game_port": game_port,
+                "port_allocated_automatically": allocated_automatically,
                 "manager": "helix",
                 "execution_backend": "docker"
             }))
@@ -1705,6 +1885,9 @@ impl NativeManager {
         requested_version: &str,
     ) -> Result<Artifact, String> {
         match software {
+            MinecraftSoftware::Custom => {
+                Err("custom JAR servers use the local artifact import flow".to_owned())
+            }
             MinecraftSoftware::Paper => self.resolve_paper(requested_version),
             MinecraftSoftware::Purpur => self.resolve_purpur(requested_version),
             MinecraftSoftware::Folia => self.resolve_folia(requested_version),
@@ -1715,6 +1898,57 @@ impl NativeManager {
                 software_name(software)
             )),
         }
+    }
+
+    fn resolve_custom_artifact(&self, spec: &MinecraftCreateSpec) -> Result<Artifact, String> {
+        let custom = spec
+            .custom_jar
+            .as_ref()
+            .ok_or_else(|| "choose a local server JAR and Java runtime".to_owned())?;
+        if !matches!(custom.java_version, 17 | 21 | 25) {
+            return Err("custom JAR servers support Java 17, 21, or 25".to_owned());
+        }
+        validate_version(spec.version.trim())?;
+        let source = PathBuf::from(custom.source_path.trim());
+        if !source.is_absolute()
+            || !source
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("jar"))
+        {
+            return Err("the custom server source must be an absolute .jar path".to_owned());
+        }
+        let canonical = fs::canonicalize(&source)
+            .map_err(|_| "the custom server JAR is unavailable".to_owned())?;
+        if !self
+            .custom_artifact_roots
+            .iter()
+            .any(|root| canonical.starts_with(root))
+        {
+            return Err(
+                "the custom server JAR must be inside a Storage root managed by Helix".to_owned(),
+            );
+        }
+        let metadata = fs::symlink_metadata(&source)
+            .map_err(|_| "the custom server JAR is unavailable".to_owned())?;
+        if !metadata.file_type().is_file()
+            || metadata.len() < 16 * 1024
+            || metadata.len() > MAX_SERVER_JAR_BYTES
+        {
+            return Err(
+                "the custom server JAR is not a regular file within the supported size range"
+                    .to_owned(),
+            );
+        }
+        Ok(Artifact {
+            software: MinecraftSoftware::Custom,
+            version: spec.version.trim().to_owned(),
+            build: "local-import".to_owned(),
+            java_version: custom.java_version,
+            url: "local-import".to_owned(),
+            local_source: Some(canonical),
+            expected_hash: None,
+        })
     }
 
     fn resolve_paper(&self, requested_version: &str) -> Result<Artifact, String> {
@@ -1791,6 +2025,7 @@ impl NativeManager {
             build,
             java_version,
             url,
+            local_source: None,
             expected_hash: Some(ExpectedHash {
                 algorithm: HashAlgorithm::Sha256,
                 value: sha256,
@@ -1856,6 +2091,7 @@ impl NativeManager {
             build: format!("loader-{loader}_installer-{installer}"),
             java_version,
             url,
+            local_source: None,
             expected_hash: None,
         })
     }
@@ -1905,6 +2141,7 @@ impl NativeManager {
             build: format!("loader-{loader_version}-installer-{installer}"),
             java_version,
             url,
+            local_source: None,
             expected_hash: None,
         })
     }
@@ -1950,6 +2187,7 @@ impl NativeManager {
             build,
             java_version,
             url,
+            local_source: None,
             expected_hash: None,
         })
     }
@@ -1976,6 +2214,7 @@ impl NativeManager {
             build: version,
             java_version,
             url,
+            local_source: None,
             expected_hash: Some(ExpectedHash {
                 algorithm: HashAlgorithm::Sha1,
                 value: sha1,
@@ -2050,6 +2289,9 @@ impl NativeManager {
     }
 
     fn download_artifact(&self, artifact: &Artifact, destination: &Path) -> Result<String, String> {
+        if let Some(source) = &artifact.local_source {
+            return self.import_local_artifact(source, destination);
+        }
         require_https_host(
             &artifact.url,
             &[
@@ -2087,6 +2329,54 @@ impl NativeManager {
         fs::rename(&partial, destination)
             .map_err(|_| "could not commit the verified server download".to_owned())?;
         Ok(sha256)
+    }
+
+    fn import_local_artifact(&self, source: &Path, destination: &Path) -> Result<String, String> {
+        let canonical = fs::canonicalize(source)
+            .map_err(|_| "the custom server JAR is unavailable".to_owned())?;
+        if !self
+            .custom_artifact_roots
+            .iter()
+            .any(|root| canonical.starts_with(root))
+        {
+            return Err("the custom server JAR moved outside a managed Storage root".to_owned());
+        }
+        let mut input = File::open(&canonical)
+            .map_err(|_| "could not open the custom server JAR".to_owned())?;
+        let metadata = input
+            .metadata()
+            .map_err(|_| "could not inspect the custom server JAR".to_owned())?;
+        if !metadata.is_file()
+            || metadata.len() < 16 * 1024
+            || metadata.len() > MAX_SERVER_JAR_BYTES
+        {
+            return Err("the custom server JAR changed before import".to_owned());
+        }
+        let partial = destination.with_extension("jar.partial");
+        let result = (|| {
+            let mut output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&partial)
+                .map_err(|_| "could not stage the custom server JAR".to_owned())?;
+            let copied = std::io::copy(&mut input, &mut output)
+                .map_err(|_| "could not copy the custom server JAR".to_owned())?;
+            if copied != metadata.len() {
+                return Err("the custom server JAR changed during import".to_owned());
+            }
+            output
+                .sync_all()
+                .map_err(|_| "could not persist the custom server JAR".to_owned())?;
+            let sha256 = file_sha256(&partial)?;
+            fs::rename(&partial, destination)
+                .map_err(|_| "could not commit the custom server JAR".to_owned())?;
+            Ok(sha256)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(partial);
+        }
+        result
     }
 
     fn resolve_runtime_image(&self, java_version: u16) -> Result<String, String> {
@@ -2724,6 +3014,45 @@ impl NativeManager {
     }
 }
 
+fn collect_minecraft_statuses<Probe>(
+    targets: &[(String, u16)],
+    probe: Probe,
+) -> HashMap<String, MinecraftStatus>
+where
+    Probe: Fn(u16) -> Option<MinecraftStatus> + Sync,
+{
+    if targets.is_empty() {
+        return HashMap::new();
+    }
+    let next = AtomicUsize::new(0);
+    let results = Mutex::new(HashMap::with_capacity(targets.len()));
+    let workers = targets.len().min(MAX_MINECRAFT_STATUS_WORKERS);
+    thread::scope(|scope| {
+        for _ in 0..workers {
+            let probe = &probe;
+            let next = &next;
+            let results = &results;
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((id, port)) = targets.get(index) else {
+                        break;
+                    };
+                    let Some(status) = probe(*port) else {
+                        continue;
+                    };
+                    if let Ok(mut results) = results.lock() {
+                        results.insert(id.clone(), status);
+                    }
+                }
+            });
+        }
+    });
+    results
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 impl Clone for RuntimeState {
     fn clone(&self) -> Self {
         Self {
@@ -3325,6 +3654,22 @@ fn validate_root(path: &Path, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_custom_artifact_root(path: &Path) -> Result<(), String> {
+    if !path.is_absolute() || path == Path::new("/") || path.components().count() < 2 {
+        return Err("the custom artifact root must be an absolute path below /".to_owned());
+    }
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && metadata.file_type().is_symlink()
+    {
+        return Err("the custom artifact root cannot be a symlink".to_owned());
+    }
+    Ok(())
+}
+
+pub(crate) fn custom_artifact_root_is_safe(path: &Path) -> bool {
+    validate_custom_artifact_root(path).is_ok() && path.is_dir()
+}
+
 fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
     let canonical =
         fs::canonicalize(path).map_err(|_| format!("could not resolve {}", path.display()))?;
@@ -3350,6 +3695,13 @@ fn validate_create_spec(spec: &MinecraftCreateSpec) -> Result<(), String> {
     {
         return Err("server name must be 1–80 ordinary characters".to_owned());
     }
+    if matches!(spec.software, MinecraftSoftware::Custom) {
+        if spec.custom_jar.is_none() || spec.version.eq_ignore_ascii_case("latest") {
+            return Err("custom JAR servers require a local .jar path, Java version, and explicit Minecraft version".to_owned());
+        }
+    } else if spec.custom_jar.is_some() {
+        return Err("custom JAR details are only accepted for a custom server".to_owned());
+    }
     if !spec.version.eq_ignore_ascii_case("latest") {
         validate_version(spec.version.trim())?;
     }
@@ -3359,13 +3711,104 @@ fn validate_create_spec(spec: &MinecraftCreateSpec) -> Result<(), String> {
     if !(1..=10_000).contains(&spec.max_players) {
         return Err("player limit must be between 1 and 10,000".to_owned());
     }
-    if spec.game_port < 1024 {
+    if spec.game_port.is_some_and(|port| port < 1024) {
         return Err("game port must be at least 1024".to_owned());
     }
     if !spec.eula_accepted {
         return Err("the Minecraft EULA must be explicitly accepted".to_owned());
     }
     Ok(())
+}
+
+fn default_game_port_policy(game: GameKind) -> GamePortPolicySpec {
+    GamePortPolicySpec {
+        game,
+        ranges: vec![GamePortRangeSpec {
+            start: 25_565,
+            end: 25_599,
+        }],
+        ports: Vec::new(),
+        auto_forward_on_create: false,
+    }
+}
+
+fn normalize_game_port_policy(
+    mut policy: GamePortPolicySpec,
+) -> Result<GamePortPolicySpec, String> {
+    if policy.ranges.len() > MAX_PORT_POLICY_RANGES {
+        return Err(format!(
+            "a game port policy can contain at most {MAX_PORT_POLICY_RANGES} ranges"
+        ));
+    }
+    if policy.ports.len() > MAX_PORT_POLICY_PORTS {
+        return Err(format!(
+            "a game port policy can contain at most {MAX_PORT_POLICY_PORTS} individual ports"
+        ));
+    }
+    for range in &policy.ranges {
+        if range.start < 1_024 || range.end < range.start {
+            return Err("port ranges must be ordered and use ports 1024–65535".to_owned());
+        }
+    }
+    if policy.ports.iter().any(|port| *port < 1_024) {
+        return Err("individual game ports must use ports 1024–65535".to_owned());
+    }
+    policy.ranges.sort_by_key(|range| (range.start, range.end));
+    policy.ranges.dedup();
+    policy.ports.sort_unstable();
+    policy.ports.dedup();
+    if policy.ranges.is_empty() && policy.ports.is_empty() {
+        return Err("add at least one port or port range".to_owned());
+    }
+    let _ = policy_candidates(&policy)?;
+    Ok(policy)
+}
+
+fn policy_candidates(policy: &GamePortPolicySpec) -> Result<Vec<u16>, String> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    for port in &policy.ports {
+        if seen.insert(*port) {
+            candidates.push(*port);
+        }
+    }
+    for range in &policy.ranges {
+        for port in range.start..=range.end {
+            if seen.insert(port) {
+                candidates.push(port);
+                if candidates.len() > MAX_PORT_POLICY_CANDIDATES {
+                    return Err(format!(
+                        "a game port policy can cover at most {MAX_PORT_POLICY_CANDIDATES} unique ports"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+fn game_port_policy_response(
+    policy: GamePortPolicySpec,
+    candidates: Vec<u16>,
+    used: HashSet<u16>,
+    next_available: Option<u16>,
+) -> Value {
+    let used_ports = candidates
+        .iter()
+        .copied()
+        .filter(|port| used.contains(port))
+        .collect::<Vec<_>>();
+    let available_count = candidates.len().saturating_sub(used_ports.len());
+    json!({
+        "schema_version": 1,
+        "policy": policy,
+        "capacity": candidates.len(),
+        "assigned_ports": used_ports,
+        "available_count": available_count,
+        "next_available_port": next_available,
+        "allocation_order": "individual_ports_then_ranges",
+        "note": "Automatic allocation skips ports already assigned to Helix servers and ports currently bound on the host."
+    })
 }
 
 fn validate_version(version: &str) -> Result<(), String> {
@@ -3460,8 +3903,25 @@ fn numeric_version_parts(version: &str) -> Vec<u32> {
         .collect()
 }
 
-fn minecraft_software_catalog() -> Vec<Value> {
+fn minecraft_software_catalog(custom_import_ready: bool) -> Vec<Value> {
     vec![
+        software_catalog_entry(
+            "custom",
+            "Custom server JAR",
+            "custom_server",
+            if custom_import_ready {
+                "ready"
+            } else {
+                "configuration_required"
+            },
+            custom_import_ready,
+            "Bring an existing runnable Minecraft server JAR from a Helix Storage root while keeping Helix lifecycle, console history, settings, files, and backups.",
+            if custom_import_ready {
+                "You choose the Minecraft and Java versions. Helix hashes the imported file and isolates it, but it cannot verify the publisher or safely auto-update an unknown JAR."
+            } else {
+                "Add at least one narrow custom_artifact_roots path to the root-owned broker configuration. Helix will not turn broad read-only browsing of / into an executable import boundary."
+            },
+        ),
         software_catalog_entry(
             "paper",
             "Paper",
@@ -3796,7 +4256,12 @@ fn read_server_trash_record(path: &Path) -> Result<ServerTrashRecord, String> {
     .map_err(|_| "the removed server recovery record is invalid".to_owned())
 }
 
-fn server_properties(spec: &MinecraftCreateSpec, rcon_port: u16, rcon_password: &str) -> String {
+fn server_properties(
+    spec: &MinecraftCreateSpec,
+    game_port: u16,
+    rcon_port: u16,
+    rcon_password: &str,
+) -> String {
     format!(
         "# Managed by Helix\n\
          allow-flight=false\n\
@@ -3825,10 +4290,10 @@ fn server_properties(spec: &MinecraftCreateSpec, rcon_port: u16, rcon_password: 
          view-distance=10\n",
         spec.max_players,
         spec.name.trim(),
-        spec.game_port,
+        game_port,
         rcon_password,
         rcon_port,
-        spec.game_port,
+        game_port,
     )
 }
 
@@ -4240,6 +4705,7 @@ fn fallback_java_version(version: &str) -> u16 {
 
 fn software_name(software: MinecraftSoftware) -> &'static str {
     match software {
+        MinecraftSoftware::Custom => "Custom JAR",
         MinecraftSoftware::Vanilla => "Vanilla",
         MinecraftSoftware::Paper => "Paper",
         MinecraftSoftware::Purpur => "Purpur",
@@ -4591,6 +5057,153 @@ mod tests {
     use super::*;
 
     #[test]
+    fn port_policy_is_deterministic_deduplicated_and_bounded() {
+        let normalized = normalize_game_port_policy(GamePortPolicySpec {
+            game: GameKind::Minecraft,
+            ranges: vec![
+                GamePortRangeSpec {
+                    start: 25_565,
+                    end: 25_568,
+                },
+                GamePortRangeSpec {
+                    start: 25_565,
+                    end: 25_568,
+                },
+            ],
+            ports: vec![25_570, 25_565, 25_570],
+            auto_forward_on_create: true,
+        })
+        .unwrap();
+        assert_eq!(normalized.ports, vec![25_565, 25_570]);
+        assert_eq!(normalized.ranges.len(), 1);
+        assert_eq!(
+            policy_candidates(&normalized).unwrap(),
+            vec![25_565, 25_570, 25_566, 25_567, 25_568]
+        );
+        assert!(
+            normalize_game_port_policy(GamePortPolicySpec {
+                game: GameKind::Minecraft,
+                ranges: vec![GamePortRangeSpec {
+                    start: 1_024,
+                    end: 6_000,
+                }],
+                ports: Vec::new(),
+                auto_forward_on_create: false,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn automatic_create_specs_are_valid_before_a_port_is_resolved() {
+        let spec = MinecraftCreateSpec {
+            name: "Automatic".to_owned(),
+            software: MinecraftSoftware::Paper,
+            version: "latest".to_owned(),
+            memory_mb: 4_096,
+            max_players: 20,
+            game_port: None,
+            network_exposure: helix_privd::ServerNetworkExposure::Private,
+            start_on_boot: true,
+            eula_accepted: true,
+            custom_jar: None,
+        };
+        validate_create_spec(&spec).unwrap();
+    }
+
+    #[test]
+    fn minecraft_status_checks_are_parallel_and_worker_bounded() {
+        let targets = (0..24_u16)
+            .map(|index| (format!("server-{index}"), 20_000 + index))
+            .collect::<Vec<_>>();
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let statuses = collect_minecraft_statuses(&targets, |port| {
+            let current = active.fetch_add(1, Ordering::AcqRel) + 1;
+            peak.fetch_max(current, Ordering::AcqRel);
+            thread::sleep(Duration::from_millis(10));
+            active.fetch_sub(1, Ordering::AcqRel);
+            Some(MinecraftStatus {
+                players_online: u64::from(port),
+                max_players: 100,
+                version: None,
+            })
+        });
+
+        assert_eq!(statuses.len(), targets.len());
+        assert!(peak.load(Ordering::Acquire) > 1);
+        assert!(peak.load(Ordering::Acquire) <= MAX_MINECRAFT_STATUS_WORKERS);
+    }
+
+    #[test]
+    fn custom_server_import_accepts_only_managed_regular_jars_and_explicit_versions() {
+        let temporary = tempfile::tempdir().unwrap();
+        let managed = temporary.path().join("storage");
+        let outside = temporary.path().join("outside");
+        fs::create_dir_all(&managed).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let jar = managed.join("PrivateServer.JAR");
+        let outside_jar = outside.join("server.jar");
+        fs::write(&jar, vec![0x5a; 16 * 1024]).unwrap();
+        fs::write(&outside_jar, vec![0x5a; 16 * 1024]).unwrap();
+        let manager = NativeManager {
+            state_root: temporary.path().join("state"),
+            instance_root: temporary.path().join("instances"),
+            backup_root: temporary.path().join("backups"),
+            docker_binary: PathBuf::from("/usr/bin/docker"),
+            console_retention: ConsoleRetention {
+                maximum_bytes: default_console_history_max_bytes(),
+                files: default_console_history_files(),
+            },
+            backup_trash_retention_days: 30,
+            custom_artifact_roots: vec![fs::canonicalize(&managed).unwrap()],
+            operations: Mutex::new(HashSet::new()),
+            port_policies: Mutex::new(()),
+            console_archives: Mutex::new(HashMap::new()),
+            console_stops: Mutex::new(HashMap::new()),
+        };
+        let mut spec = MinecraftCreateSpec {
+            name: "Private build".to_owned(),
+            software: MinecraftSoftware::Custom,
+            version: "1.21.8".to_owned(),
+            memory_mb: 4096,
+            max_players: 20,
+            game_port: Some(25566),
+            network_exposure: helix_privd::ServerNetworkExposure::Private,
+            start_on_boot: false,
+            eula_accepted: true,
+            custom_jar: Some(helix_privd::CustomMinecraftJarSpec {
+                source_path: jar.to_string_lossy().into_owned(),
+                java_version: 21,
+            }),
+        };
+
+        validate_create_spec(&spec).unwrap();
+        let artifact = manager.resolve_custom_artifact(&spec).unwrap();
+        assert!(matches!(artifact.software, MinecraftSoftware::Custom));
+        assert_eq!(artifact.version, "1.21.8");
+        assert_eq!(artifact.java_version, 21);
+        assert_eq!(artifact.local_source, Some(fs::canonicalize(&jar).unwrap()));
+
+        spec.version = "latest".to_owned();
+        assert!(validate_create_spec(&spec).is_err());
+        spec.version = "1.21.8".to_owned();
+        spec.custom_jar.as_mut().unwrap().source_path = outside_jar.to_string_lossy().into_owned();
+        let outside_error = match manager.resolve_custom_artifact(&spec) {
+            Ok(_) => panic!("outside JAR was accepted"),
+            Err(error) => error,
+        };
+        assert!(outside_error.contains("Storage root"));
+        spec.custom_jar.as_mut().unwrap().source_path = jar.to_string_lossy().into_owned();
+        spec.custom_jar.as_mut().unwrap().java_version = 22;
+        let java_error = match manager.resolve_custom_artifact(&spec) {
+            Ok(_) => panic!("unsupported Java was accepted"),
+            Err(error) => error,
+        };
+        assert!(java_error.contains("Java 17, 21, or 25"));
+    }
+
+    #[test]
     fn directory_sync_requires_an_existing_directory() {
         let temporary = tempfile::tempdir().unwrap();
         sync_directory(temporary.path()).unwrap();
@@ -4666,7 +5279,7 @@ mod tests {
 
     #[test]
     fn software_catalog_distinguishes_runnable_and_explained_choices() {
-        let catalog = minecraft_software_catalog();
+        let catalog = minecraft_software_catalog(true);
         let ready = catalog
             .iter()
             .filter(|entry| entry["installable"] == true)
@@ -4674,8 +5287,19 @@ mod tests {
             .collect::<HashSet<_>>();
         assert_eq!(
             ready,
-            HashSet::from(["paper", "purpur", "folia", "vanilla", "fabric"])
+            HashSet::from(["paper", "purpur", "folia", "vanilla", "fabric", "custom"])
         );
+        assert!(catalog.iter().any(|entry| {
+            entry["id"] == "custom"
+                && entry["kind"] == "custom_server"
+                && entry["status"] == "ready"
+        }));
+        let unconfigured = minecraft_software_catalog(false);
+        assert!(unconfigured.iter().any(|entry| {
+            entry["id"] == "custom"
+                && entry["status"] == "configuration_required"
+                && entry["installable"] == false
+        }));
         assert!(catalog.iter().all(|entry| {
             entry["appeal"]
                 .as_str()
@@ -5072,7 +5696,9 @@ mod tests {
                 files: default_console_history_files(),
             },
             backup_trash_retention_days: 30,
+            custom_artifact_roots: Vec::new(),
             operations: Mutex::new(HashSet::new()),
+            port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
         };
@@ -5127,7 +5753,9 @@ mod tests {
                 files: default_console_history_files(),
             },
             backup_trash_retention_days: 30,
+            custom_artifact_roots: Vec::new(),
             operations: Mutex::new(HashSet::new()),
+            port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
         };

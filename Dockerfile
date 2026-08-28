@@ -27,6 +27,9 @@ FROM rust-build AS linux-test
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
+    rustup component add rustfmt clippy && \
+    cargo fmt --all -- --check && \
+    cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && \
     cargo test --locked --workspace --all-targets --all-features
 
 FROM scratch AS privd

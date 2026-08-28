@@ -1,7 +1,7 @@
 use super::{
     Artifact, InstanceManifest, MANIFEST_VERSION, MAX_METADATA_BYTES, MAX_SERVER_JAR_BYTES,
     MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSoftware, NativeManager,
-    allocate_rcon_port, allocate_run_uid, ensure_port_available, file_sha256, instance_name,
+    allocate_rcon_port, allocate_run_uid, file_sha256, instance_name,
     marketplace::modrinth_icon_proxy_url, now_unix_ms, server_properties, validate_create_spec,
     write_manifest, write_new_file,
 };
@@ -170,8 +170,10 @@ impl NativeManager {
             memory_mb: request.memory_mb,
             max_players: request.max_players,
             game_port: request.game_port,
+            network_exposure: request.network_exposure,
             start_on_boot: request.start_on_boot,
             eula_accepted: request.eula_accepted,
+            custom_jar: None,
         };
         validate_create_spec(&base_spec)?;
         let _operation = self.begin_creation_operation()?;
@@ -185,7 +187,13 @@ impl NativeManager {
         {
             return Err("a Helix server with that name already exists".to_owned());
         }
-        ensure_port_available(request.game_port, true)?;
+        let (game_port, allocated_automatically) = self.resolve_game_port(
+            helix_privd::GameKind::Minecraft,
+            request.game_port,
+            &manifests,
+        )?;
+        let mut base_spec = base_spec;
+        base_spec.game_port = Some(game_port);
         let rcon_port = allocate_rcon_port(&manifests)?;
         let id = Uuid::new_v4().to_string();
         let instance_name = instance_name(request.name.trim(), &id);
@@ -307,7 +315,7 @@ impl NativeManager {
             };
             write_new_file(
                 &staging_path.join("server.properties"),
-                server_properties(&server_spec, rcon_port, &rcon_password).as_bytes(),
+                server_properties(&server_spec, game_port, rcon_port, &rcon_password).as_bytes(),
                 0o640,
             )?;
             fs::remove_file(&archive_path).map_err(|_| {
@@ -334,7 +342,7 @@ impl NativeManager {
                 artifact_sha256,
                 memory_mb: request.memory_mb,
                 max_players: request.max_players,
-                game_port: request.game_port,
+                game_port,
                 rcon_port,
                 rcon_password,
                 start_on_boot: request.start_on_boot,
@@ -366,7 +374,8 @@ impl NativeManager {
                 "schema_version": 1,
                 "instance_id": format!("helix:{id}"),
                 "instance_name": instance_name,
-                "game_port": request.game_port,
+                "game_port": game_port,
+                "port_allocated_automatically": allocated_automatically,
                 "manager": "helix",
                 "execution_backend": "docker",
                 "modpack": {

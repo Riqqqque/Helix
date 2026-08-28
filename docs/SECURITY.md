@@ -183,7 +183,11 @@ entry into configured recoverable trash rather than claiming irreversible
 removal succeeded.
 
 The storage analyzer is bounded and cancellable, does not follow symbolic links,
-and avoids holding a complete large tree in memory. Mount replacement,
+stays on the selected filesystem, calculates allocated and logical sizes from
+metadata without opening file contents, and avoids holding a complete large tree
+in memory. Read-only analysis roots are configured independently from writable
+file-manager roots, so whole-host drive inspection does not expand mutation
+permissions. Mount replacement,
 permission changes, extremely deep/wide trees, low disk, and live multi-terabyte
 behavior still require disposable target-host testing.
 
@@ -246,9 +250,11 @@ The Network page deliberately separates:
 - sockets bound on this host;
 - Docker host/container port publication;
 - UFW installed/active/default/rule state; and
+- a same-router UPnP mapping and WAN-address classification; and
 - outside reachability.
 
-Outside reachability is currently `unverified`. Docker DNAT can take a different
+Outside reachability remains unverified even after the router confirms a
+mapping. Docker DNAT can take a different
 path than UFW INPUT. Helix never labels a listener or matching rule as proof a
 router, upstream firewall, CGNAT boundary, or ISP permits traffic.
 
@@ -261,9 +267,20 @@ A separate activation flow can enable an installed inactive UFW only after the
 operator supplies an exact confirmation and a TCP port that Helix independently
 observes listening. It stages and records an exact allow rule for that SSH port,
 enables UFW, verifies the active state and exact rule, and attempts to restore
-the inactive state if verification fails. Helix never resets UFW, changes its
-defaults, deletes an unowned rule, or opens a router. Live UFW mutation testing
-is still a release gate and must use a disposable host/rules.
+the inactive state if verification fails. Helix never resets UFW or changes its
+defaults.
+
+Native-server public setup discovers only UPnP Internet Gateway Devices on the
+local link. SSDP responses are bounded; the description URL must use plain HTTP
+to the literal private/link-local IPv4 sender; redirects, DNS names,
+credentials, fragments, cross-origin control URLs, oversized HTTP/XML bodies,
+and XML document types are rejected. Helix checks for any existing TCP mapping
+before creation, verifies its exact internal address, port, enabled flag, and
+description afterward, and journals ownership. Removal re-verifies that exact
+body and refuses drifted/unowned state. Only TCP is requested for Minecraft.
+UFW is supplemented only if already active. A CGNAT/private/reserved WAN address
+is reported as blocked rather than public. Live router/UFW mutation testing is
+still a release gate and must use disposable rules and a controlled router.
 
 ## Packages and Helix updates
 
@@ -312,10 +329,25 @@ updater.
 
 Native server/runtime and Modrinth requests use HTTPS with constrained expected
 hosts and bounded responses. Marketplace profiles restrict software kind,
-loader, game version, and server/client environment before installation.
-Paper/Purpur receive compatible plugins, Folia requires Folia content, and
-Fabric receives compatible server-side mods. Vanilla, Forge, and NeoForge do
-not receive a fake marketplace path.
+loader, and game version before installation. Modrinth's server-side metadata
+is advisory because projects do not always declare it accurately; missing or
+negative metadata produces a visible warning instead of a hard block.
+Paper/Purpur receive matching plugin JARs, Folia requires a Folia loader match,
+and Fabric receives matching mod JARs. Vanilla, Forge, and NeoForge do not
+receive a fake marketplace path. Custom JARs also have no automatic marketplace
+because their loader and publisher compatibility is unknown.
+
+Custom server creation accepts a local path only inside a configured Storage
+root. The broker canonicalizes it, rejects links/non-files/out-of-root paths,
+bounds its size, copies through a private create-new staging file, syncs and
+hashes the copy, and records only `local-import` rather than exposing the source
+path in the instance manifest. This protects the import boundary; it does not
+establish publisher trust or make arbitrary JAR code safe.
+
+Read and execute boundaries stay separate. A managed root of `/` can support
+broad inventory browsing, but it is never inherited as a custom artifact root.
+If no narrow `native.custom_artifact_roots` path is configured, the broker
+starts normally and advertises Custom JAR as configuration-required.
 
 The separate “Start with a modpack” flow accepts only opaque Modrinth IDs and
 ordinary server settings from the browser. The broker re-resolves metadata,
@@ -380,10 +412,15 @@ private address/port with explicit host, origin, and client-CIDR policy. An
 optional second private entry point can be used with an already configured
 Tailscale route.
 
-Helix does not install, enable, authenticate, or reconfigure Tailscale. Do not
-trust a wildcard hostname/origin/CIDR or the entire Tailscale carrier-grade NAT
-range just because one expected node uses Tailscale. Public-network exposure is
-not supported by the private alpha.
+On eligible Debian/Ubuntu hosts, the built-in Hook can add Tailscale's exact
+official signed APT repository, install the exact `tailscale` package, and
+enable and verify `tailscaled.service`. It does not run the publisher's remote
+root script, authenticate an account, execute `tailscale up`, approve a node,
+choose a tailnet, or reconfigure gateway trust. Do not trust a wildcard
+hostname/origin/CIDR or the entire Tailscale carrier-grade NAT range just
+because one expected node uses Tailscale. Public exposure of the dashboard is
+not supported by the private alpha; the narrow native-game UPnP operation does
+not change gateway trust or dashboard bindings.
 
 ## Root and platform limits
 
