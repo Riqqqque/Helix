@@ -155,14 +155,18 @@ export function parseHomarrCatalog(value: unknown): HomarrCatalog {
     if (name.trim().length === 0 || (!url.startsWith('http://') && !url.startsWith('https://'))) {
       throw new ApiError('Homarr catalog returned an invalid shortcut.');
     }
-    return {
+    const widget: HomarrWidgetCandidate = {
       name,
       url,
       icon: optionalText(item, 'icon', 2_048),
-      x: optionalGridNumber(item, 'x'),
-      y: optionalGridNumber(item, 'y'),
-      width: optionalGridNumber(item, 'width'),
     };
+    const x = optionalGridNumber(item, 'x');
+    const y = optionalGridNumber(item, 'y');
+    const width = optionalGridNumber(item, 'width');
+    if (x !== undefined) widget.x = x;
+    if (y !== undefined) widget.y = y;
+    if (width !== undefined) widget.width = width;
+    return widget;
   });
   const container = root.container === null || root.container === undefined
     ? null
