@@ -8,6 +8,10 @@ name: Helix
 # trusted, root-owned configuration. HTTP file access is sandboxed inside
 # helix-privd after canonicalize/managed-root checks, and that cross-process
 # flow is not what this query currently reports.
+#
+# The Rust job also sets CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES=-test
+# so #[cfg(test)] fixtures are not extracted. Rust CodeQL has no working
+# inline suppression, and it does not classify cfg(test) as test code.
 query-filters:
   - exclude:
       id: rust/path-injection

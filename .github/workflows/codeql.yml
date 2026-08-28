@@ -20,6 +20,11 @@ jobs:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      # Skip #[cfg(test)] extraction. Rust CodeQL does not honor // codeql[...]
+      # suppressions and does not treat cfg(test) as test code, so login
+      # fixtures otherwise reopen as critical alerts on every push.
+      CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES: ${{ matrix.language == 'rust' && '-test' || '' }}
     permissions:
       security-events: write
       packages: read
