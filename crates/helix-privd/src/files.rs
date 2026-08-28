@@ -410,7 +410,7 @@ impl FileManager {
         }
         let data = decode_upload_chunk(data_base64)?;
         let mut uploads = self.uploads.lock().map_err(|_| upload_lock_error())?;
-        prune_uploads(&mut uploads);
+        uploads.retain(|id, upload| id == upload_id || !upload.is_stale());
         let upload = uploads
             .get_mut(upload_id)
             .ok_or_else(|| "that upload is no longer active".to_owned())?;

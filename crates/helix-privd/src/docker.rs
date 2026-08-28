@@ -271,6 +271,7 @@ impl HostControl {
     }
 }
 
+#[allow(clippy::collapsible_if)]
 fn parse_docker_listing(stdout: &str) -> Vec<Value> {
     let trimmed = stdout.trim();
     if trimmed.starts_with('[') {
@@ -493,6 +494,7 @@ fn looks_like_homarr(name: &str, image: &str) -> bool {
     name.contains("homarr") || image.contains("homarr")
 }
 
+#[allow(clippy::collapsible_if)]
 fn published_tcp_ports(ports: &str) -> Vec<u16> {
     let mut found = Vec::new();
     for part in ports.split(',') {
@@ -596,6 +598,7 @@ fn safe_host_path(path: &str) -> bool {
         && !path.ends_with("/..")
 }
 
+#[allow(clippy::collapsible_if)]
 fn read_homarr_widgets(root: &str) -> Option<Vec<Value>> {
     let candidates = [
         format!("{root}/configs/default.json"),
