@@ -11,6 +11,7 @@ export interface HomeWidget {
   content: string;
   url: string;
   color: string;
+  icon: string;
 }
 
 export interface HomeTemplate {
@@ -42,16 +43,17 @@ const heights = new Set<HomeWidgetHeight>(['short', 'medium', 'tall']);
 const MAX_HOME_TEMPLATES = 8;
 export const MAX_WIDGETS_PER_HOME = 32;
 const MAX_TOTAL_WIDGETS = 64;
+export const HOMARR_HOME_ID = 'home-homarr';
 const MAX_NOTE_PAGES = 8;
 const MAX_NOTE_TEXT_CHARACTERS = 7_000;
 const defaultAccent = '#d7f64d';
 
 export const defaultHomeWidgets: ReadonlyArray<HomeWidget> = [
-  { id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Right now', content: '', url: '', color: '' },
-  { id: 'weather', kind: 'weather', size: 'wide', height: 'medium', title: 'Weather', content: '', url: '', color: '' },
-  { id: 'host', kind: 'host', size: 'wide', height: 'medium', title: 'Host pulse', content: '', url: '', color: '' },
-  { id: 'servers', kind: 'servers', size: 'wide', height: 'medium', title: 'Servers', content: '', url: '', color: '' },
-  { id: 'storage', kind: 'storage', size: 'wide', height: 'medium', title: 'Storage', content: '', url: '', color: '' },
+  { id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Right now', content: '', url: '', color: '', icon: '' },
+  { id: 'weather', kind: 'weather', size: 'wide', height: 'medium', title: 'Weather', content: '', url: '', color: '', icon: '' },
+  { id: 'host', kind: 'host', size: 'wide', height: 'medium', title: 'Host pulse', content: '', url: '', color: '', icon: '' },
+  { id: 'servers', kind: 'servers', size: 'wide', height: 'medium', title: 'Servers', content: '', url: '', color: '', icon: '' },
+  { id: 'storage', kind: 'storage', size: 'wide', height: 'medium', title: 'Storage', content: '', url: '', color: '', icon: '' },
   {
     id: 'notes',
     kind: 'note',
@@ -61,6 +63,7 @@ export const defaultHomeWidgets: ReadonlyArray<HomeWidget> = [
     content: '{"version":1,"activePageId":"page-1","editableOutsideLayout":true,"pages":[{"id":"page-1","title":"Scratchpad","content":"This note stays with your owner account. Use it for ISP details, port forwards, or weekend plans. Keep passwords in a password manager."}]}',
     url: '',
     color: '',
+    icon: '',
   },
 ];
 
@@ -155,6 +158,7 @@ export function normalizeHomeWidgets(value: unknown): HomeWidget[] {
           ? cleanText(record.url, 36)
           : '',
       color: normalizeWidgetColor(record.color),
+      icon: kind === 'shortcut' ? normalizeShortcutUrl(record.icon) : '',
     });
   }
 
@@ -418,4 +422,40 @@ export function newHomarrShortcuts<T extends { url: string }>(
     selected.push(item);
   }
   return selected;
+}
+
+export function homarrShortcutSize(width: number | undefined): HomeWidgetSize {
+  if (width === undefined) return 'compact';
+  if (width >= 8) return 'full';
+  if (width >= 3) return 'wide';
+  return 'compact';
+}
+
+export function replaceHomarrHome(
+  templates: readonly HomeTemplate[],
+  widgets: readonly HomeWidget[],
+): { templates: HomeTemplate[]; activeHomeId: string } | { error: string } {
+  const others = templates.filter((template) => template.id !== HOMARR_HOME_ID);
+  const remaining = MAX_TOTAL_WIDGETS - others.reduce((total, template) => total + template.widgets.length, 0);
+  const nextWidgets = widgets.slice(0, Math.min(MAX_WIDGETS_PER_HOME, Math.max(0, remaining)));
+  if (nextWidgets.length === 0) {
+    return { error: 'There is no room left for Homarr shortcuts across your Homes.' };
+  }
+  const home: HomeTemplate = {
+    id: HOMARR_HOME_ID,
+    name: 'Homarr',
+    accent: defaultAccent,
+    widgets: nextWidgets.map((widget) => ({ ...widget })),
+  };
+  const existing = templates.findIndex((template) => template.id === HOMARR_HOME_ID);
+  if (existing >= 0) {
+    return {
+      templates: templates.map((template, index) => (index === existing ? home : template)),
+      activeHomeId: HOMARR_HOME_ID,
+    };
+  }
+  if (templates.length >= MAX_HOME_TEMPLATES) {
+    return { error: 'You already have 8 Homes. Remove one, then import Homarr again.' };
+  }
+  return { templates: [...templates, home], activeHomeId: HOMARR_HOME_ID };
 }

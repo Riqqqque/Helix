@@ -7,6 +7,14 @@ binary or package release yet.
 
 ### Fixed
 
+- Homarr import keeps Homarr's board order and tile width, places shortcuts on
+  a dedicated Homarr Home, and no longer alphabetizes the catalog.
+- Homarr import keeps http(s) icons, maps Homarr icon names onto the
+  dashboard-icons set, and matches leftover shortcuts from the app name or
+  link. Uploaded Homarr media files stay in Homarr.
+- The Linux from-source installer asks yes/no questions on a terminal, offers
+  another loopback port when 8080 is taken, and can install compiler packages
+  or Rust without extra flags.
 - Homarr import reads the current Homarr SQLite app catalog (http(s) hrefs from
   the container mounts) instead of telling you to export classic JSON by hand.
 - README CI badge tracks the latest push to `main`, and CodeQL uses the repo
@@ -21,6 +29,9 @@ binary or package release yet.
 
 ### Added
 
+- `scripts/install-from-source.sh --port` / `--listen` for a loopback bind
+  other than 8080 on a fresh config. `--yes` skips prompts. `install-local.sh
+  --listen` matches that for new `/etc/helix/helix.toml` files only.
 - `scripts/install-from-source.sh` builds the unsigned local `helixd` package
   on systemd Linux and installs it with sudo. Missing compiler tools print
   apt, dnf/yum, zypper, pacman, apk, or emerge commands; `--install-deps`

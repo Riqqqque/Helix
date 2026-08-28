@@ -7,10 +7,10 @@ describe('Homarr catalog API', () => {
     availability: 'ready',
     container: 'homarr',
     widgets: [
-      { name: 'Plex', url: 'http://192.168.1.10:32400/web', icon: 'https://example.test/plex.png' },
+      { name: 'Plex', url: 'http://192.168.1.10:32400/web', icon: 'https://example.test/plex.png', x: 0, y: 0, width: 2 },
       { name: 'Radarr', url: 'http://192.168.1.10:7878', icon: null },
     ],
-    note: 'Choose which Homarr links to place on this Home.',
+    note: 'Helix places these on a Homarr Home in Homarr layout order and matches icons from names, links, or Homarr icon slugs. Uploaded Homarr files stay in Homarr.',
     collected_at_unix_ms: 1_800_000_000_000,
   };
 
@@ -19,7 +19,7 @@ describe('Homarr catalog API', () => {
       availability: 'ready',
       container: 'homarr',
       widgets: [
-        { name: 'Plex', url: 'http://192.168.1.10:32400/web', icon: 'https://example.test/plex.png' },
+        { name: 'Plex', url: 'http://192.168.1.10:32400/web', icon: 'https://example.test/plex.png', x: 0, y: 0, width: 2 },
         { name: 'Radarr', url: 'http://192.168.1.10:7878', icon: null },
       ],
     });

@@ -46,8 +46,11 @@ Weather, Notes, Shortcut, and Strand. Shortcuts accept only validated HTTP(S)
 URLs and open in a new tab. Strand widgets embed an enabled package that
 declared `helix:ui.widget`. While editing, **Import from Homarr** reads Homarr
 apps that already have an http(s) address. Current Homarr stores those in SQLite; older
-Homarr JSON configs still work. Relative icons, notes, and Homarr-only apps stay
-in Homarr. Shortcuts already on this Home are left unchecked. **Full screen**
+Homarr JSON configs still work. Helix places them on a dedicated **Homarr** Home in
+Homarr's layout order as short tiles, instead of dumping them onto Main. Icons come
+from Homarr's http(s) icon URLs, Homarr icon names via the dashboard-icons set, or
+Helix's matcher on the app name and link. Uploaded Homarr media files, notes, and
+Homarr-only apps stay in Homarr. Re-import replaces the Homarr Home. **Full screen**
 hides the sidebar and the top bar (Helix, refresh, theme, account). Exit full
 screen from the Home page button to bring them back.
 

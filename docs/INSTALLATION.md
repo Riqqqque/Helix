@@ -9,14 +9,18 @@ Ubuntu 24.04 GitHub Actions passed the declared Rust 1.88/stable builds and one 
 This is not clean-VM, cross-version-upgrade, schema-downgrade, complete fault-injection, low-disk/power-loss, reference-performance, platform-support, signed-release, or supported-installer evidence. CI first verified the hosted runner's `/usr/share` ancestor was root-owned with its unusual `0777` mode, then normalized it to the conventional root-owned `0755` baseline so Helix's production path checks ran unchanged.
 
 On 64-bit systemd Linux (x86_64 or aarch64), `./scripts/install-from-source.sh`
-is the shortest path: it compiles this checkout, then uses sudo to install that
-same unsigned `helixd` package on loopback. Missing compiler tools print apt,
-dnf/yum, zypper, pacman, apk, or emerge commands; `--install-deps` installs those
-packages. Rust 1.88+ and Node.js 22.12+ are still required. The script does not
-install `helix-privd`. Debian/Ubuntu, Fedora/RHEL-family (including Amazon Linux
-and Rocky), openSUSE, Arch, Gentoo (systemd), and other GNU-userland systemd
-distros are the intended compile/install targets. PID 1 must be systemd. NixOS
-and Guix are not FHS targets. BusyBox userland (default Alpine) is not enough.
+is the shortest path: one command after clone. On a terminal it asks yes/no
+questions, compiles this checkout, then uses sudo to install that same unsigned
+`helixd` package on loopback. If 8080 is already taken it offers another
+loopback port (`--port` / `--listen` also work). Missing compiler tools print
+apt, dnf/yum, zypper, pacman, apk, or emerge commands; `--install-deps` or a
+yes answer installs those packages. Rust 1.88+ and Node.js 22.12+ are still
+required for the compile; the wizard can install Rust through rustup. The
+script does not install `helix-privd`. Debian/Ubuntu, Fedora/RHEL-family
+(including Amazon Linux and Rocky), openSUSE, Arch, Gentoo (systemd), and
+other GNU-userland systemd distros are the intended compile/install targets.
+PID 1 must be systemd. NixOS and Guix are not FHS targets. BusyBox userland
+(default Alpine) is not enough.
 
 Do not use development binaries as a production installation, and do not publish a one-line installer until clean-install, upgrade, rollback, uninstall, permission, interruption, and fault-injection tests pass on supported Ubuntu releases. The bundle checksum detects accidental or local bundle modification; it is not a signature or proof of publisher authenticity.
 

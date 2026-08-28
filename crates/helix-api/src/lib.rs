@@ -503,7 +503,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static(
-                "default-src 'self'; base-uri 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self'",
+                "default-src 'self'; base-uri 'self'; connect-src 'self'; img-src 'self' data: https: http:; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self'",
             ),
         ))
         .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
