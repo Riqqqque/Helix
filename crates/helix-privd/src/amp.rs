@@ -22,6 +22,7 @@ const MAX_HTTP_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_LOCAL_INSTANCES: usize = 4_096;
 const MAX_INVENTORY_ISSUE_DETAILS: usize = 64;
 const API_TIMEOUT: Duration = Duration::from_secs(20);
+const AMP_KILL_UNSUPPORTED: &str = "Helix cannot force-kill AMP instances; they remain under AMP. Use Stop, or kill from the AMP panel.";
 
 pub struct AmpClient {
     endpoint: SocketAddr,
@@ -232,6 +233,9 @@ impl AmpClient {
                 "panel_started_by_helix": false
             }));
         }
+        if action == ServerAction::Kill {
+            return Err(AMP_KILL_UNSUPPORTED.to_owned());
+        }
         if !panel_was_running && matches!(action, ServerAction::Update | ServerAction::Backup) {
             return Err(
                 "the AMP manager is stopped; start this instance before updating or backing it up"
@@ -250,6 +254,7 @@ impl AmpClient {
         let result = match action {
             ServerAction::Start => self.call(port, "Core", "Start", json!({})),
             ServerAction::Stop => self.call(port, "Core", "Stop", json!({})),
+            ServerAction::Kill => return Err(AMP_KILL_UNSUPPORTED.to_owned()),
             ServerAction::Restart if panel_was_running => {
                 self.call(port, "Core", "Restart", json!({}))
             }

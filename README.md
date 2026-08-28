@@ -53,8 +53,8 @@ The current private-alpha build includes:
   modpack” path;
 - bounded per-game port pools with collision-safe automatic allocation, plus
   exact opt-in Minecraft TCP forwarding on compatible same-LAN UPnP routers;
-- start, stop, restart, update, backup, settings, files, performance, logs, and
-  console tools for native instances;
+- start, stop, restart, confirmed native kill when stop hangs, update, backup,
+  settings, files, performance, logs, and console tools for native instances;
 - bounded persistent native console history that survives browser closes and
   spans retained server boots;
 - recoverable native backup deletion and explicit restart-required metadata on

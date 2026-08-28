@@ -22,8 +22,11 @@ buttons.
 
 After creation, a native server has Overview, Console, Settings, Files,
 Performance, Backups, Advanced, and compatible Marketplace tools. Lifecycle
-buttons start, stop, restart, update to the newest compatible build for the
-configured Minecraft release, and back up through bounded background jobs.
+buttons start, stop, restart, kill a hung container, update to the newest
+compatible build for the configured Minecraft release, and back up through
+bounded background jobs. Stop waits up to 45 seconds for a clean Minecraft
+shutdown. Kill is a confirmed native-only SIGKILL for when that stop is stuck;
+unsaved chunks can be lost. Imported AMP instances do not get Kill.
 Arbitrary historical build selection is not implemented yet.
 
 **Use your own JAR** accepts an absolute `.jar` path that already lives inside
@@ -87,7 +90,8 @@ server-safe subset rather than full-pack parity.
 
 AMP stays separate. Helix can import verified instance identity, status,
 players, ports, console data, and supported lifecycle actions that the adapter
-can prove. **Open AMP** uses the configured public panel port, not the private
+can prove. Helix does not force-kill AMP instances; use Stop here or kill from
+the AMP panel. **Open AMP** uses the configured public panel port, not the private
 loopback API port. AMP-only settings stay in AMP.
 
 Hide removes an import from this browser's list without touching AMP. Deleting

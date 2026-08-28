@@ -162,7 +162,7 @@ export interface ManagedServer {
   appearance: ServerAppearance;
 }
 
-export type ServerAction = 'start' | 'stop' | 'restart' | 'update' | 'backup';
+export type ServerAction = 'start' | 'stop' | 'restart' | 'kill' | 'update' | 'backup';
 export type MinecraftSoftware = 'custom' | 'vanilla' | 'paper' | 'purpur' | 'folia' | 'fabric' | 'neoforge';
 
 export interface MinecraftCreateInput {

@@ -502,10 +502,22 @@ function CustomJarBrowser({
   );
 }
 
+export function serverWorkloadIsRunning(server: ManagedServer): boolean {
+  if (server.manager === "helix") {
+    return server.panelRunning || server.status === "online";
+  }
+  return server.status === "online";
+}
+
 export function serverActionDescription(
   server: ManagedServer,
   action: ServerAction,
 ): string {
+  if (action === "kill") {
+    return server.manager === "amp_import"
+      ? "Helix cannot force-kill AMP instances; they remain under AMP. Use Stop, or kill from the AMP panel."
+      : "Stop waits up to 45 seconds for a clean Minecraft shutdown. Kill sends SIGKILL to the container now. Unsaved chunks can be lost. Use this when Stop is stuck.";
+  }
   if (server.manager === "amp_import") {
     if (action === "start")
       return `Helix will ask AMP to start ${server.name} and wait for AMP to report the instance online.`;
@@ -1454,6 +1466,10 @@ function CreateServerDialog({
   );
 }
 
+function actionLabel(action: ServerAction): string {
+  return `${action.charAt(0).toUpperCase()}${action.slice(1)}`;
+}
+
 function ServerActionDialog({
   server,
   action,
@@ -1472,7 +1488,10 @@ function ServerActionDialog({
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<BrokerJob | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const label = action[0]?.toUpperCase() + action.slice(1);
+  const [effectiveAction, setEffectiveAction] = useState<ServerAction>(action);
+  const [killConfirm, setKillConfirm] = useState(false);
+  const label = actionLabel(effectiveAction);
+  const destructive = effectiveAction === "stop" || effectiveAction === "kill";
   const polling = useJobPolling({
     job,
     csrfToken,
@@ -1481,18 +1500,20 @@ function ServerActionDialog({
     onComplete,
     onSessionExpired,
   });
-  const submit = async (): Promise<void> => {
+  const queueAction = async (next: ServerAction): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
-      const dispatch = await runServerAction(server.id, action, csrfToken);
+      const dispatch = await runServerAction(server.id, next, csrfToken);
+      setEffectiveAction(next);
+      setKillConfirm(false);
       if (dispatch.jobId === null) {
         await onComplete();
         onClose();
       } else {
         setJob({
           id: dispatch.jobId,
-          kind: `server_${action}`,
+          kind: `server_${next}`,
           status: "queued",
           stage: "Queued",
           progressPercent: 0,
@@ -1512,6 +1533,10 @@ function ServerActionDialog({
   if (job !== null) {
     const active = job.status === "queued" || job.status === "running";
     const canClose = !active || polling.paused;
+    const canEscapeWithKill =
+      server.manager === "helix" &&
+      active &&
+      (effectiveAction === "stop" || effectiveAction === "restart");
     return (
       <Dialog
         title={
@@ -1531,9 +1556,11 @@ function ServerActionDialog({
                   ? "check"
                   : job.status === "failed"
                     ? "warning"
-                    : action === "backup"
+                    : effectiveAction === "backup"
                       ? "backup"
-                      : "activity"
+                      : effectiveAction === "kill"
+                        ? "kill"
+                        : "activity"
               }
               size={26}
             />
@@ -1541,7 +1568,9 @@ function ServerActionDialog({
           <strong>{job.stage}</strong>
           <span>
             {active
-              ? "This runs in the background. Closing after a status-check problem will not interrupt it."
+              ? effectiveAction === "kill"
+                ? "SIGKILL is in flight. Closing after a status-check problem will not interrupt it."
+                : "This runs in the background. Closing after a status-check problem will not interrupt it."
               : job.status === "complete"
                 ? `${server.name} is ready.`
                 : (job.error ?? "Helix could not finish the action.")}
@@ -1550,12 +1579,25 @@ function ServerActionDialog({
             value={
               active ? Math.max(job.progressPercent, 12) : job.progressPercent
             }
-            tone={job.status === "failed" ? "danger" : "normal"}
+            tone={
+              job.status === "failed" || effectiveAction === "kill"
+                ? "danger"
+                : "normal"
+            }
           />
           <small>
-            {active ? "Working safely…" : `${job.progressPercent}%`}
+            {active
+              ? effectiveAction === "kill"
+                ? "Sending SIGKILL…"
+                : "Working safely…"
+              : `${job.progressPercent}%`}
           </small>
         </div>
+        {canEscapeWithKill && killConfirm && (
+          <div class="dialog-copy">
+            <p>{serverActionDescription(server, "kill")}</p>
+          </div>
+        )}
         <InlineError message={polling.error ?? error} />
         <div class="dialog-actions">
           {polling.paused && (
@@ -1567,6 +1609,35 @@ function ServerActionDialog({
               Resume status check
             </button>
           )}
+          {canEscapeWithKill &&
+            (killConfirm ? (
+              <>
+                <button
+                  class="button button--quiet"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setKillConfirm(false)}
+                >
+                  Keep waiting
+                </button>
+                <button
+                  class="button button--danger"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void queueAction("kill")}
+                >
+                  {busy ? "Queuing…" : "Kill now"}
+                </button>
+              </>
+            ) : (
+              <button
+                class="button button--danger-quiet"
+                type="button"
+                onClick={() => setKillConfirm(true)}
+              >
+                Kill instead
+              </button>
+            ))}
           <button
             class="button button--primary"
             type="button"
@@ -1590,10 +1661,10 @@ function ServerActionDialog({
           Cancel
         </button>
         <button
-          class={`button ${action === "stop" ? "button--danger" : "button--primary"}`}
+          class={`button ${destructive ? "button--danger" : "button--primary"}`}
           type="button"
           disabled={busy}
-          onClick={() => void submit()}
+          onClick={() => void queueAction(action)}
         >
           {busy ? "Queuing…" : label}
         </button>
@@ -1621,6 +1692,7 @@ function ServerRow({
   const [menuOpen, setMenuOpen] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const online = server.status === "online";
+  const running = serverWorkloadIsRunning(server);
   const memoryPercent =
     server.memoryLimitMb > 0
       ? (server.memoryUsedMb / server.memoryLimitMb) * 100
@@ -1687,7 +1759,7 @@ function ServerRow({
         <strong>{server.tps === null ? "—" : server.tps.toFixed(1)}</strong>
       </div>
       <div class="server-actions">
-        {online ? (
+        {running ? (
           <button
             class="button button--quiet"
             type="button"
@@ -1760,7 +1832,7 @@ function ServerRow({
                 Update
               </button>
             )}
-            {online && (
+            {running && (
               <button
                 class="danger-link"
                 type="button"
@@ -1770,6 +1842,18 @@ function ServerRow({
               >
                 <Icon name="stop" size={15} />
                 Stop
+              </button>
+            )}
+            {running && server.manager === "helix" && (
+              <button
+                class="danger-link"
+                type="button"
+                disabled={!canManageServers}
+                title={manageTitle}
+                onClick={() => confirmAction("kill")}
+              >
+                <Icon name="kill" size={15} />
+                Kill
               </button>
             )}
           </div>
@@ -3501,6 +3585,7 @@ function NativeServerPage({
       </div>
     );
   const online = detail.status === "online";
+  const containerUp = detail.status === "online" || detail.status === "starting";
   const tailscaleAddress =
     hostInventory?.interfaces
       .find((item) => item.name.toLowerCase().startsWith("tailscale"))
@@ -3570,7 +3655,7 @@ function NativeServerPage({
             <Icon name="edit" size={15} />
             Icon
           </button>
-          {online ? (
+          {containerUp ? (
             <>
               <button
                 class="button button--quiet"
@@ -3591,6 +3676,16 @@ function NativeServerPage({
               >
                 <Icon name="stop" size={15} />
                 Stop
+              </button>
+              <button
+                class="button button--danger-quiet"
+                type="button"
+                disabled={!canManageServers}
+                title={manageTitle}
+                onClick={() => setPending("kill")}
+              >
+                <Icon name="kill" size={15} />
+                Kill
               </button>
             </>
           ) : (

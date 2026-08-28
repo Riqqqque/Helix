@@ -276,6 +276,7 @@ pub enum ServerAction {
     Start,
     Stop,
     Restart,
+    Kill,
     Update,
     Backup,
 }
@@ -660,6 +661,25 @@ mod tests {
         assert_eq!(encoded["operation"], "restore_trashed_backup");
         assert_eq!(encoded["trash_id"], "8953dc16-3891-42bf-802f-711b3ba2965a");
         assert!(encoded.get("path").is_none());
+    }
+
+    #[test]
+    fn server_kill_is_a_distinct_typed_action() {
+        let encoded = serde_json::to_value(BrokerRequest::ServerAction {
+            instance_id: "helix:6f55caa9-1264-4baf-8335-d3f31a704614".to_owned(),
+            action: ServerAction::Kill,
+        })
+        .expect("serialize kill");
+        assert_eq!(encoded["operation"], "server_action");
+        assert_eq!(encoded["action"], "kill");
+        let parsed: BrokerRequest = serde_json::from_value(encoded).expect("parse kill");
+        let BrokerRequest::ServerAction {
+            action: ServerAction::Kill,
+            ..
+        } = parsed
+        else {
+            panic!("kill must round-trip as its own action");
+        };
     }
 
     #[test]
