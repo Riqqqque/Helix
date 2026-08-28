@@ -69,7 +69,7 @@ describe('Servers route', () => {
 
     expect(markup).toContain('Minecraft: Java Edition');
     expect(markup).toContain('V Rising');
-    expect(markup).toContain('Wine runtime');
+    expect(markup).toContain('Click to install');
     expect(markup).toContain('game-mark--minecraft');
     expect(markup).toContain('game-mark--vrising');
     expect(markup).not.toContain('Not available on Linux');

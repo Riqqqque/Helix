@@ -17,6 +17,8 @@ export interface HostInventory {
   services: ServiceInfo[];
   processes: ProcessInfo[];
   loadAverage: [number, number, number];
+  processCount: number;
+  cpuModel: string | null;
   collectedAtUnixMs: number;
 }
 
@@ -513,6 +515,8 @@ export function parseHostInventory(value: unknown): HostInventory {
       };
     }),
     loadAverage: load as [number, number, number],
+    processCount: number(root, 'process_count'),
+    cpuModel: optionalString(root, 'cpu_model'),
     collectedAtUnixMs: number(root, 'collected_at_unix_ms'),
   };
 }

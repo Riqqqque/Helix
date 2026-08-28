@@ -44,7 +44,9 @@ export type IconName =
   | 'logs'
   | 'performance'
   | 'advanced'
-  | 'back';
+  | 'back'
+  | 'security'
+  | 'expand';
 
 const paths: Record<IconName, JSX.Element> = {
   overview: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
@@ -91,6 +93,8 @@ const paths: Record<IconName, JSX.Element> = {
   performance: <><path d="M4 17a8 8 0 1 1 16 0"/><path d="m12 13 4-4M7 17h10"/></>,
   advanced: <><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="11" cy="18" r="2"/></>,
   back: <path d="m15 18-6-6 6-6"/>,
+  security: <><path d="M12 3 5 6v6c0 5 3.4 8.4 7 9.5 3.6-1.1 7-4.5 7-9.5V6Z"/><path d="m9 12 2 2 4-4"/></>,
+  expand: <><path d="M9 3H3v6M15 3h6v6M9 21H3v-6M21 15v6h-6"/></>,
 };
 
 export function Icon({ name, size = 18, class: className }: { name: IconName; size?: number; class?: string | undefined }) {

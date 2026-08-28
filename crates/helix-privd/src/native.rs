@@ -2272,7 +2272,7 @@ impl NativeManager {
         let mut container_create_attempted = false;
 
         let result = (|| -> Result<Value, String> {
-            progress("Building or reusing the Helix Wine runtime", 14);
+            progress("Building or reusing the isolated V Rising runtime", 14);
             let runtime_image = self.ensure_vrising_runtime_image(&mut progress)?;
 
             progress("Preparing the isolated V Rising directory", 28);
@@ -2324,12 +2324,12 @@ impl NativeManager {
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
 
-            progress("Creating the Helix Wine workload", 52);
+            progress("Creating the isolated V Rising container", 52);
             container_create_attempted = true;
             self.create_container(&manifest, &data_path)?;
 
             progress(
-                "Downloading V Rising through SteamCMD and starting Wine",
+                "Downloading V Rising through SteamCMD and starting the runtime",
                 62,
             );
             self.clear_ready_marker(&manifest)?;
@@ -2337,7 +2337,7 @@ impl NativeManager {
             self.wait_until_ready(&manifest, Duration::from_secs(45 * 60), |elapsed| {
                 let percent = 62_u64.saturating_add((elapsed / 40).min(35));
                 progress(
-                    "SteamCMD / Wine startup (first install can take a while)",
+                    "First install downloads the dedicated server (this can take a while)",
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
@@ -3599,7 +3599,10 @@ impl NativeManager {
         {
             return Ok(vrising::RUNTIME_IMAGE.to_owned());
         }
-        progress("Building the Helix Wine runtime image (one-time)", 16);
+        progress(
+            "Building the isolated V Rising runtime image (one-time)",
+            16,
+        );
         let staging = self.state_root.join(".staging").join("vrising-runtime");
         let _ = fs::remove_dir_all(&staging);
         fs::create_dir_all(&staging)

@@ -87,19 +87,19 @@ impl Default for HostControlConfig {
 }
 
 pub struct HostControl {
-    config: HostControlConfig,
-    runner: Arc<dyn HostCommandRunner>,
-    mutation: Mutex<()>,
+    pub(crate) config: HostControlConfig,
+    pub(crate) runner: Arc<dyn HostCommandRunner>,
+    pub(crate) mutation: Mutex<()>,
 }
 
 #[derive(Clone, Debug)]
-struct CommandOutput {
-    success: bool,
-    stdout: String,
-    stderr: String,
+pub(crate) struct CommandOutput {
+    pub(crate) success: bool,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
 }
 
-trait HostCommandRunner: Send + Sync {
+pub(crate) trait HostCommandRunner: Send + Sync {
     fn run(
         &self,
         program: &Path,
@@ -346,6 +346,12 @@ impl HostControl {
                     } else {
                         json!([])
                     },
+                    "memory_used_bytes": if installed {
+                        self.unit_memory_bytes(&hook.unit)
+                    } else {
+                        None
+                    },
+                    "cpu_percent": Value::Null,
                     "error": if enabled_state.is_err() || active_state.is_err() {
                         Value::String("Helix could not verify every systemd state for this service.".to_owned())
                     } else {
@@ -852,7 +858,7 @@ impl HostControl {
         }
     }
 
-    fn systemctl_state(&self, verb: &str, unit: &str) -> Result<String, String> {
+    pub(crate) fn systemctl_state(&self, verb: &str, unit: &str) -> Result<String, String> {
         let output = self.runner.run(
             &self.config.systemctl_binary,
             &[verb.to_owned(), unit.to_owned()],
@@ -872,6 +878,33 @@ impl HostControl {
 
     fn unit_is_active(&self, unit: &str) -> Result<bool, String> {
         Ok(self.systemctl_state("is-active", unit)? == "active")
+    }
+
+    fn unit_memory_bytes(&self, unit: &str) -> Option<u64> {
+        let output = self
+            .runner
+            .run(
+                &self.config.systemctl_binary,
+                &[
+                    "show".to_owned(),
+                    "-p".to_owned(),
+                    "MemoryCurrent".to_owned(),
+                    "--value".to_owned(),
+                    unit.to_owned(),
+                ],
+                Duration::from_secs(5),
+            )
+            .ok()?;
+        let text = first_line(&output.stdout)?;
+        if text == "[not set]" || text == "[NotSet]" {
+            return None;
+        }
+        let bytes = text.parse::<u64>().ok()?;
+        if bytes == 0 || bytes == u64::MAX {
+            None
+        } else {
+            Some(bytes)
+        }
     }
 
     fn inspect_container(&self, name: &str) -> Result<ContainerStatus, String> {
@@ -1858,7 +1891,7 @@ fn parse_proc_kib(value: &str) -> Option<u64> {
     kib.checked_mul(1024)
 }
 
-fn parse_human_bytes(value: &str) -> Option<u64> {
+pub(crate) fn parse_human_bytes(value: &str) -> Option<u64> {
     let value = value.trim();
     let split = value
         .bytes()
@@ -1877,7 +1910,7 @@ fn parse_human_bytes(value: &str) -> Option<u64> {
     Some((number * multiplier).max(0.0) as u64)
 }
 
-fn require_success(output: CommandOutput) -> Result<CommandOutput, String> {
+pub(crate) fn require_success(output: CommandOutput) -> Result<CommandOutput, String> {
     if output.success {
         return Ok(output);
     }
@@ -1887,7 +1920,7 @@ fn require_success(output: CommandOutput) -> Result<CommandOutput, String> {
     Err(message.chars().take(500).collect())
 }
 
-fn first_line(value: &str) -> Option<&str> {
+pub(crate) fn first_line(value: &str) -> Option<&str> {
     value.lines().map(str::trim).find(|line| !line.is_empty())
 }
 

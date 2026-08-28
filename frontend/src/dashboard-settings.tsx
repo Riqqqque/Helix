@@ -36,6 +36,7 @@ const navigationLabels: Record<PrimaryDashboardSectionId, { label: string; icon:
   storage: { label: 'Storage', icon: 'storage' },
   network: { label: 'Network', icon: 'network' },
   host: { label: 'Host', icon: 'host' },
+  security: { label: 'Security', icon: 'security' },
   terminal: { label: 'Terminal', icon: 'terminal' },
   servers: { label: 'Servers', icon: 'servers' },
   hooks: { label: 'Hooks', icon: 'hooks' },

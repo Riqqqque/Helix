@@ -60,7 +60,7 @@ boundary.
 
 Helix-native Minecraft instances run in Docker containers managed by the
 broker. Current native install paths cover Paper, Purpur, Folia, Leaves, Fabric, and
-Vanilla. V Rising uses a separate Helix-owned Wine + SteamCMD image rather than
+Vanilla. V Rising uses a separate Helix-owned isolated runtime image rather than
 installing Wine on the host. The manager provides creation, lifecycle actions,
 settings where they exist, files, performance, console or logs, updates,
 backups, restore, a start-on-boot Docker restart policy, and compatible

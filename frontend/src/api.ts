@@ -576,6 +576,7 @@ export function parseSystemOverview(value: unknown): SystemOverview {
     operatingSystem: expectNullableHostText(record, 'operating_system', context),
     architecture: expectHostText(record, 'architecture', context),
     kernelVersion: expectNullableHostText(record, 'kernel_version', context),
+    helixVersion: expectHostText(record, 'helix_version', context),
     uptimeSeconds: expectNumber(record, 'uptime_seconds', context, {
       integer: true,
       minimum: 0,

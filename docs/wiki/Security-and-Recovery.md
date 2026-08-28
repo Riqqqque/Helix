@@ -37,6 +37,22 @@ preserving a verified listening SSH port; it never resets or changes defaults.
 Exact selected APT candidates have a guarded update path with no rollback claim.
 Helix self-update remains unavailable.
 
+## Security center
+
+The **Security** page is a first-class dashboard section. Each card explains
+what the control does, why Helix recommends it, and what changes if you turn
+it off. Recommended items are the defaults for a private LAN dashboard.
+
+Writable switches still require typing an exact confirmation phrase:
+
+- start Helix after host boot;
+- forward Minecraft ports when creating a server;
+- enable or disable `unattended-upgrades` when that unit is already installed.
+
+Helix will not disable UFW from this page, rewrite sshd, or offer a root shell.
+CSRF pairing, the private LAN bind, AppArmor, SSH PermitRootLogin, ASLR, and
+Docker live-restore are observed and explained, not casual toggles.
+
 ## Data and recovery
 
 Critical state and replaceable metrics use separate durability domains. Native

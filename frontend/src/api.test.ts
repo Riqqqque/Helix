@@ -21,6 +21,7 @@ const validOverview = {
   operating_system: 'Ubuntu 26.04 LTS',
   architecture: 'x86_64',
   kernel_version: '6.17.0',
+  helix_version: '0.1.0',
   uptime_seconds: 90_061,
   cpu: {
     usage_percent: 12.5,

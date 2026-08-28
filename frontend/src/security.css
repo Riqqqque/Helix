@@ -1,0 +1,61 @@
+.page--security { max-width: 1180px; }
+.security-identity {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 18px 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--line);
+}
+.security-identity > div {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  background: var(--surface);
+}
+.security-identity span,
+.security-identity small { color: var(--muted); font-size: 11px; }
+.security-identity strong { font: 650 0.95rem/1.2 var(--font-display); }
+.security-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-end;
+  margin-bottom: 14px;
+}
+.security-toolbar p { margin: 0; max-width: 720px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.security-filters { display: flex; gap: 6px; }
+.security-filters button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.security-filters button.is-active {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.security-list { display: grid; gap: 10px; }
+.security-card { display: grid; gap: 10px; padding: 18px 20px; }
+.security-card header { display: grid; gap: 8px; }
+.security-card header > div { display: flex; gap: 8px; align-items: center; }
+.security-card header em { color: var(--muted); font-size: 11px; font-style: normal; }
+.security-card h2 { margin: 0; font: 650 1.12rem/1.2 var(--font-display); }
+.security-card > p { margin: 0; color: var(--muted); line-height: 1.5; }
+.security-card details { color: var(--muted); }
+.security-card summary { cursor: pointer; color: var(--text); }
+.security-card details p { margin: 8px 0 0; line-height: 1.5; }
+.security-locked { display: flex; gap: 6px; color: var(--muted); }
+.security-confirm { margin: 0 0 12px; color: var(--muted); line-height: 1.5; }
+@media (max-width: 900px) {
+  .security-identity { grid-template-columns: 1fr 1fr; }
+  .security-toolbar { flex-direction: column; align-items: stretch; }
+}
+@media (max-width: 620px) {
+  .security-identity { grid-template-columns: 1fr; }
+}

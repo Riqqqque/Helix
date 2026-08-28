@@ -12,8 +12,9 @@ import {
 const inventory = {
   schema_version: 1,
   hooks: [
-    { id: 'plex', kind: 'systemd', unit: 'plexmediaserver.service', installed: true, active: true, active_state: 'active', enabled: true, enabled_state: 'enabled', controllable: true, actions: ['start', 'stop', 'restart', 'enable', 'disable'], panel_port: null, instance_count: null, unverified_instance_count: null, error: null },
-    { id: 'amp', kind: 'api', installed: true, active: true, active_state: 'connected', enabled: true, enabled_state: 'configured', controllable: false, actions: [], panel_port: 8080, instance_count: 4, unverified_instance_count: 0, error: null },
+    { id: 'plex', kind: 'systemd', unit: 'plexmediaserver.service', installed: true, active: true, active_state: 'active', enabled: true, enabled_state: 'enabled', controllable: true, actions: ['start', 'stop', 'restart', 'enable', 'disable'], panel_port: null, instance_count: null, unverified_instance_count: null, memory_used_bytes: 128_000_000, cpu_percent: null, error: null },
+    { id: 'amp', kind: 'api', installed: true, active: true, active_state: 'connected', enabled: true, enabled_state: 'configured', controllable: false, actions: [], panel_port: 8080, instance_count: 4, unverified_instance_count: 0, memory_used_bytes: null, cpu_percent: null, error: null },
+    { id: 'docker', kind: 'docker', installed: true, active: true, active_state: 'running', enabled: true, enabled_state: 'installed', controllable: false, actions: [], panel_port: 9000, instance_count: 8, unverified_instance_count: null, memory_used_bytes: 2_147_483_648, cpu_percent: 12.5, error: null },
   ],
   collected_at_unix_ms: 1_800_000_000_000,
 };
@@ -38,8 +39,9 @@ afterEach(() => vi.unstubAllGlobals());
 describe('hooks API', () => {
   it('keeps systemd control and external API connections distinct', () => {
     const parsed = parseHookInventory(inventory);
-    expect(parsed.hooks[0]).toMatchObject({ id: 'plex', kind: 'systemd', controllable: true });
+    expect(parsed.hooks[0]).toMatchObject({ id: 'plex', kind: 'systemd', controllable: true, memoryUsedBytes: 128_000_000 });
     expect(parsed.hooks[1]).toMatchObject({ id: 'amp', kind: 'api', panelPort: 8080, instanceCount: 4 });
+    expect(parsed.hooks[2]).toMatchObject({ id: 'docker', kind: 'docker', panelPort: 9000, cpuPercent: 12.5 });
   });
 
   it('rejects duplicate identities and invented actions', () => {

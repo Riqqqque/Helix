@@ -21,11 +21,11 @@ use axum::{
 };
 use helix_core::{DatabaseStatus, HealthReport, HealthStatus, VERSION, unix_timestamp_ms};
 use helix_privd::{
-    BrokerClient, BrokerClientError, BrokerRequest, FileUploadPurpose, FileUploadTarget,
-    FirewallRuleSpec, GameKind, GamePortPolicySpec, HookServiceAction, MinecraftCreateSpec,
-    MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, PackageUpdateCandidate,
-    RecurringRebootSpec, ServerAction, ServerNetworkExposure, StorageAnalysisMode,
-    VRisingCreateSpec,
+    BrokerClient, BrokerClientError, BrokerRequest, DockerContainerActionKind, FileUploadPurpose,
+    FileUploadTarget, FirewallRuleSpec, GameKind, GamePortPolicySpec, HookServiceAction,
+    MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware,
+    PackageUpdateCandidate, RecurringRebootSpec, ServerAction, ServerNetworkExposure,
+    StorageAnalysisMode, VRisingCreateSpec,
 };
 use helix_state::{
     DatabaseSet, ServerAppearanceUpdateOutcome, UserPreferencesRecord, UserPreferencesUpdateInput,
@@ -288,6 +288,11 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/hooks/{hook_id}/install", post(install_hook))
         .route("/hooks/jobs/{job_id}", get(hook_install_job))
         .route("/hooks/{hook_id}/actions", post(manage_hook_service))
+        .route("/docker/inventory", get(docker_inventory))
+        .route("/docker/actions", post(docker_container_action))
+        .route("/docker/homarr", get(homarr_widget_catalog))
+        .route("/security", get(security_inventory))
+        .route("/security/controls", post(set_security_control))
         .route("/marketplace/modrinth/image", get(marketplace_image))
         .route("/files", get(list_directory))
         .route("/files/directory", post(create_directory))
@@ -738,6 +743,7 @@ enum PrimaryDashboardSection {
     Storage,
     Network,
     Host,
+    Security,
     Terminal,
     Servers,
     Hooks,
@@ -753,6 +759,8 @@ enum HomeWidgetKind {
     Weather,
     Note,
     Shortcut,
+    Graphs,
+    Docker,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -874,6 +882,7 @@ impl Default for DashboardPreferences {
                 PrimaryDashboardSection::Storage,
                 PrimaryDashboardSection::Network,
                 PrimaryDashboardSection::Host,
+                PrimaryDashboardSection::Security,
                 PrimaryDashboardSection::Terminal,
                 PrimaryDashboardSection::Servers,
                 PrimaryDashboardSection::Hooks,
@@ -1051,6 +1060,19 @@ fn reconcile_legacy_home_preferences(preferences: &mut DashboardPreferences) {
     }
     if !preferences
         .navigation_order
+        .contains(&PrimaryDashboardSection::Security)
+    {
+        let insertion = preferences
+            .navigation_order
+            .iter()
+            .position(|section| *section == PrimaryDashboardSection::Terminal)
+            .unwrap_or(preferences.navigation_order.len());
+        preferences
+            .navigation_order
+            .insert(insertion, PrimaryDashboardSection::Security);
+    }
+    if !preferences
+        .navigation_order
         .contains(&PrimaryDashboardSection::Hooks)
     {
         preferences
@@ -1090,14 +1112,14 @@ fn validate_dashboard_preferences(preferences: &DashboardPreferences) -> Result<
     if !matches!(
         preferences.metrics_refresh_ms,
         1_000 | 2_000 | 5_000 | 10_000 | 30_000
-    ) || preferences.navigation_order.len() != 8
+    ) || preferences.navigation_order.len() != 9
         || preferences.home_widgets.len() > 32
         || preferences.home_templates.is_empty()
         || preferences.home_templates.len() > 8
     {
         return Err(());
     }
-    let mut section_mask = 0_u8;
+    let mut section_mask = 0_u16;
     for section in &preferences.navigation_order {
         let bit = match section {
             PrimaryDashboardSection::Overview => 1 << 0,
@@ -1105,16 +1127,17 @@ fn validate_dashboard_preferences(preferences: &DashboardPreferences) -> Result<
             PrimaryDashboardSection::Storage => 1 << 2,
             PrimaryDashboardSection::Network => 1 << 3,
             PrimaryDashboardSection::Host => 1 << 4,
-            PrimaryDashboardSection::Terminal => 1 << 5,
-            PrimaryDashboardSection::Servers => 1 << 6,
-            PrimaryDashboardSection::Hooks => 1 << 7,
+            PrimaryDashboardSection::Security => 1 << 5,
+            PrimaryDashboardSection::Terminal => 1 << 6,
+            PrimaryDashboardSection::Servers => 1 << 7,
+            PrimaryDashboardSection::Hooks => 1 << 8,
         };
         if section_mask & bit != 0 {
             return Err(());
         }
         section_mask |= bit;
     }
-    if section_mask != 0b1111_1111 {
+    if section_mask != 0b1_1111_1111 {
         return Err(());
     }
 
@@ -1380,6 +1403,22 @@ struct HookServiceActionBody {
 struct HookInstallBody {
     confirmation: String,
     repository_change_acknowledged: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DockerContainerActionBody {
+    name: String,
+    action: DockerContainerActionKind,
+    confirmation: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecurityControlBody {
+    id: String,
+    enabled: bool,
+    confirmation: String,
 }
 
 #[derive(Deserialize)]
@@ -1724,6 +1763,68 @@ async fn manage_hook_service(
         BrokerRequest::ManageHookService {
             hook_id,
             action: body.action,
+        },
+    )
+    .await
+}
+
+async fn docker_inventory(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "system.view").await?;
+    broker_json(&state, BrokerRequest::DockerInventory {}).await
+}
+
+async fn docker_container_action(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<DockerContainerActionBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "system.settings.write").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::DockerContainerAction {
+            name: body.name,
+            action: body.action,
+            confirmation: body.confirmation,
+        },
+    )
+    .await
+}
+
+async fn homarr_widget_catalog(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "dashboard.customize").await?;
+    broker_json(&state, BrokerRequest::HomarrWidgetCatalog {}).await
+}
+
+async fn security_inventory(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "system.view").await?;
+    broker_json(&state, BrokerRequest::SecurityInventory {}).await
+}
+
+async fn set_security_control(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<SecurityControlBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "system.settings.write").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetSecurityControl {
+            id: body.id,
+            enabled: body.enabled,
+            confirmation: body.confirmation,
         },
     )
     .await
@@ -2525,7 +2626,8 @@ async fn create_vrising(
 ) -> Result<impl IntoResponse, ApiError> {
     auth::validate_post_headers(&headers)?;
     auth::require_capability(&state, &headers, "games.manage").await?;
-    let Json(spec) = body.map_err(auth::map_json_rejection)?;
+    let Json(mut spec) = body.map_err(auth::map_json_rejection)?;
+    spec.wine_runtime_acknowledged = true;
     spec.validate().map_err(ApiError::BrokerRejected)?;
     broker_json(&state, BrokerRequest::CreateVRising { spec }).await
 }
@@ -3335,6 +3437,7 @@ mod tests {
                 PrimaryDashboardSection::Storage,
                 PrimaryDashboardSection::Network,
                 PrimaryDashboardSection::Host,
+                PrimaryDashboardSection::Security,
                 PrimaryDashboardSection::Terminal,
                 PrimaryDashboardSection::Servers,
                 PrimaryDashboardSection::Hooks,
@@ -3400,6 +3503,26 @@ mod tests {
             preferences.navigation_order.last(),
             Some(&PrimaryDashboardSection::Hooks)
         );
+        assert!(validate_dashboard_preferences(&preferences).is_ok());
+    }
+
+    #[test]
+    fn legacy_dashboard_navigation_inserts_security_before_terminal() {
+        let mut preferences = DashboardPreferences::default();
+        preferences
+            .navigation_order
+            .retain(|section| *section != PrimaryDashboardSection::Security);
+        reconcile_legacy_home_preferences(&mut preferences);
+        let security = preferences
+            .navigation_order
+            .iter()
+            .position(|section| *section == PrimaryDashboardSection::Security);
+        let terminal = preferences
+            .navigation_order
+            .iter()
+            .position(|section| *section == PrimaryDashboardSection::Terminal);
+        assert!(security.is_some());
+        assert_eq!(security.unwrap() + 1, terminal.unwrap());
         assert!(validate_dashboard_preferences(&preferences).is_ok());
     }
 

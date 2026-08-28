@@ -23,7 +23,7 @@ describe('dashboard shell', () => {
     const inventory: HostInventory = {
       disks: [{ name: 'sda', path: '/dev/sda', parent: null, deviceType: 'disk', sizeBytes: 1_000_000_000_000, fileSystem: null, label: null, mountPoints: ['/'], model: 'WD Boot', serial: null, transport: 'sata', rotational: false, readOnly: false, hotplug: false }],
       mounts: [{ target: '/', source: '/dev/sda2', fileSystem: 'ext4', sizeBytes: 900_000_000_000, usedBytes: 810_000_000_000, availableBytes: 90_000_000_000, usePercent: 90, readOnly: false }],
-      interfaces: [], routes: [], listeners: [], services: [], processes: [], loadAverage: [0, 0, 0], collectedAtUnixMs: 1,
+      interfaces: [], routes: [], listeners: [], services: [], processes: [], loadAverage: [0, 0, 0], processCount: 128, cpuModel: 'AMD Ryzen', collectedAtUnixMs: 1,
     };
     const markup = render(<DiskMap inventory={inventory} onBrowse={() => undefined} onAnalyze={() => undefined} />);
 
@@ -37,7 +37,7 @@ describe('dashboard shell', () => {
     const sidebar = markup.match(/<nav[^>]*class="sidebar-nav"[^>]*>.*?<\/nav>/u)?.[0] ?? '';
     const links = Array.from(sidebar.matchAll(/href="([^"]+)"/gu), (match) => match[1]);
 
-    expect(links).toEqual(['#overview', '#home', '#storage', '#network', '#host', '#terminal', '#servers', '#hooks', '#settings']);
+    expect(links).toEqual(['#overview', '#home', '#storage', '#network', '#host', '#security', '#terminal', '#servers', '#hooks', '#settings']);
     expect(sidebar).toContain('>Arrange<');
     expect(sidebar).toMatch(/nav-item nav-item--settings/u);
     expect(markup).not.toContain('Control plane');
@@ -68,6 +68,7 @@ describe('dashboard shell', () => {
       ['#storage', 'Storage'],
       ['#network', 'Network'],
       ['#host', 'Host'],
+      ['#security', 'Security'],
       ['#terminal', 'Terminal'],
       ['#servers', 'Servers'],
       ['#hooks', 'Hooks'],
@@ -75,8 +76,8 @@ describe('dashboard shell', () => {
     ] as const) {
       vi.stubGlobal('window', { location: { hash } });
       const markup = render(<Dashboard {...dashboardProps} />);
-      if (hash === '#home' || hash === '#hooks' || hash === '#terminal') {
-        expect(markup).toContain(hash === '#home' ? 'Loading Home…' : hash === '#hooks' ? 'Loading Hooks…' : 'Loading terminal…');
+      if (hash === '#home' || hash === '#hooks' || hash === '#terminal' || hash === '#overview') {
+        expect(markup).toContain(hash === '#home' ? 'Loading Home…' : hash === '#hooks' ? 'Loading Hooks…' : hash === '#overview' ? 'Loading Overview…' : 'Loading terminal…');
       } else {
         expect(markup).toContain(`<h1>${title}</h1>`);
       }

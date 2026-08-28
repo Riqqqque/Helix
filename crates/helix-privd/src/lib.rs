@@ -70,6 +70,19 @@ pub enum BrokerRequest {
         hook_id: String,
         action: HookServiceAction,
     },
+    DockerInventory {},
+    DockerContainerAction {
+        name: String,
+        action: DockerContainerActionKind,
+        confirmation: String,
+    },
+    HomarrWidgetCatalog {},
+    SecurityInventory {},
+    SetSecurityControl {
+        id: String,
+        enabled: bool,
+        confirmation: String,
+    },
     HostIntegrationStatus {},
     SetHelixStartOnBoot {
         enabled: bool,
@@ -262,6 +275,14 @@ pub enum HookServiceAction {
     Restart,
     Enable,
     Disable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DockerContainerActionKind {
+    Start,
+    Stop,
+    Restart,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -464,10 +485,7 @@ impl VRisingCreateSpec {
             );
         }
         if !self.wine_runtime_acknowledged {
-            return Err(
-                "acknowledge that Helix runs the official Windows dedicated server under Wine"
-                    .to_owned(),
-            );
+            return Err("Helix could not confirm the isolated V Rising runtime install".to_owned());
         }
         Ok(())
     }
@@ -1164,6 +1182,40 @@ mod tests {
     }
 
     #[test]
+    fn docker_and_security_requests_are_typed_without_shell_fields() {
+        let inventory = serde_json::to_value(BrokerRequest::DockerInventory {})
+            .expect("serialize docker inventory");
+        assert_eq!(inventory["operation"], "docker_inventory");
+        assert_eq!(inventory.as_object().expect("inventory object").len(), 1);
+
+        let action = serde_json::to_value(BrokerRequest::DockerContainerAction {
+            name: "plex".to_owned(),
+            action: DockerContainerActionKind::Restart,
+            confirmation: "plex".to_owned(),
+        })
+        .expect("serialize docker action");
+        assert_eq!(action["operation"], "docker_container_action");
+        assert_eq!(action["name"], "plex");
+        assert_eq!(action["action"], "restart");
+        assert!(action.get("command").is_none());
+        assert!(action.get("arguments").is_none());
+
+        let security = serde_json::to_value(BrokerRequest::SecurityInventory {})
+            .expect("serialize security inventory");
+        assert_eq!(security["operation"], "security_inventory");
+
+        let toggle = serde_json::to_value(BrokerRequest::SetSecurityControl {
+            id: "helix_start_on_boot".to_owned(),
+            enabled: true,
+            confirmation: "start helix after boot".to_owned(),
+        })
+        .expect("serialize security toggle");
+        assert_eq!(toggle["operation"], "set_security_control");
+        assert_eq!(toggle["id"], "helix_start_on_boot");
+        assert!(toggle.get("command").is_none());
+    }
+
+    #[test]
     fn vrising_create_spec_rejects_public_exposure_and_missing_wine_ack() {
         let mut spec = VRisingCreateSpec {
             name: "Castle".to_owned(),
@@ -1177,7 +1229,7 @@ mod tests {
         };
         spec.validate().expect("valid V Rising spec");
         spec.wine_runtime_acknowledged = false;
-        assert!(spec.validate().unwrap_err().contains("Wine"));
+        assert!(spec.validate().unwrap_err().contains("runtime"));
         spec.wine_runtime_acknowledged = true;
         spec.network_exposure = ServerNetworkExposure::Public;
         assert!(spec.validate().unwrap_err().contains("private"));

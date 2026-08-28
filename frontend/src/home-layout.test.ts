@@ -50,6 +50,7 @@ describe('home layout', () => {
     expect(parseWeatherWidgetConfiguration('{"location":"Denver, Colorado","unit":"celsius"}')).toEqual({ location: 'Denver, Colorado', unit: 'celsius' });
     expect(parseWeatherWidgetConfiguration('{')).toEqual({ location: '', unit: 'fahrenheit' });
     expect(normalizeHomeWidgets([{ id: 'forecast', kind: 'weather', size: 'wide', title: 'Forecast', content: '{"location":"Denver","unit":"fahrenheit"}' }])[0]?.kind).toBe('weather');
+    expect(normalizeHomeWidgets([{ id: 'live', kind: 'graphs', size: 'wide', title: 'Live graphs' }, { id: 'boxes', kind: 'docker', size: 'wide', title: 'Docker' }]).map((widget) => widget.kind)).toEqual(['graphs', 'docker']);
   });
 
   it('reorders and resizes widgets predictably', () => {

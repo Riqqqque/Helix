@@ -20,8 +20,10 @@ not imply production support or a completed security review.
 Helix brings the common jobs for one server into one place:
 
 - multiple exportable Home layouts with drag-and-drop/resizable status, clock,
-  weather, paged-note, and shortcut widgets plus color controls;
-- live host, storage, network, service, process, and Helix resource views;
+  weather, graphs, Docker, paged-note, and shortcut widgets plus color controls;
+  pin the site to open Home, or use full-screen Home;
+- live host, storage, network, service, process, Docker, and Helix resource views;
+- a Security center for explained, confirmed host and Helix protections;
 - mounted-drive browsing, bounded text editing, recoverable deletion, and
   cancellable largest-file/folder analysis;
 - a native Docker-backed Minecraft manager for Paper, Purpur, Folia, Leaves, Fabric,
@@ -31,8 +33,8 @@ Helix brings the common jobs for one server into one place:
   `.mrpack` creation;
 - optional AMP discovery and control without pretending AMP instances are
   Helix-native;
-- Hooks for exact Plex, AMP, Tailscale, Pterodactyl Wings, and Jellyfin service
-  discovery/control, including eligible one-click Tailscale/Jellyfin installs;
+- Hooks for exact Plex, AMP, Tailscale, Pterodactyl Wings, Jellyfin, and Docker
+  service discovery/control, including eligible one-click Tailscale/Jellyfin installs;
 - an optional current-password-gated non-root Linux PTY; and
 - selected APT updates, immediate/recurring host reboot, UFW safety activation,
   and exact Helix start-on-boot controls with explicit preflight/confirmation.

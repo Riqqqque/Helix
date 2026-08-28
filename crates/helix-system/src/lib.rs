@@ -3,7 +3,7 @@
 use helix_core::{
     CpuOverview, DiscoveryAvailability, HostOverview, MemoryOverview, NetworkAddressOverview,
     NetworkInterfaceOverview, NetworkOverview, StorageMountOverview, StorageOverview, SwapOverview,
-    unix_timestamp_ms,
+    VERSION, unix_timestamp_ms,
 };
 use std::{
     cmp::Ordering as CompareOrdering,
@@ -197,6 +197,7 @@ impl HostSampler {
             },
             kernel_version: System::kernel_version(),
             uptime_seconds: System::uptime(),
+            helix_version: VERSION.to_owned(),
             cpu: CpuOverview {
                 usage_percent: cpu_usage,
                 logical_cores: state.system.cpus().len(),

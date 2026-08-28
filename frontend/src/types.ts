@@ -114,6 +114,7 @@ export interface SystemOverview {
   operatingSystem: string | null;
   architecture: string;
   kernelVersion: string | null;
+  helixVersion: string;
   uptimeSeconds: number;
   cpu: CpuSnapshot;
   memory: MemorySnapshot;

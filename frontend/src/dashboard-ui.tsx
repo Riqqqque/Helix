@@ -34,3 +34,26 @@ export function Metric({ icon, label, value, detail, percent, help }: { icon: Ic
     </div>
   );
 }
+
+export function Sparkline({ values, label }: { values: Array<number | null>; label: string }) {
+  const points = values.map((value, index) => ({ index, value })).filter((item): item is { index: number; value: number } => item.value !== null && Number.isFinite(item.value));
+  if (points.length < 2) {
+    return <div class="sparkline sparkline--empty" aria-label={`${label} graph unavailable`}>Waiting for samples</div>;
+  }
+  const width = 240;
+  const height = 56;
+  const min = Math.min(...points.map((item) => item.value));
+  const max = Math.max(...points.map((item) => item.value));
+  const span = Math.max(0.1, max - min);
+  const last = values.length - 1;
+  const d = points.map((item, index) => {
+    const x = last <= 0 ? 0 : (item.index / last) * width;
+    const y = height - ((item.value - min) / span) * (height - 6) - 3;
+    return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
+  }).join(' ');
+  return (
+    <svg class="sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={label}>
+      <path d={d} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  );
+}

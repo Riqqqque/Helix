@@ -13,9 +13,11 @@ import {
   type HookInventory,
   type HookServiceAction,
 } from './hooks-api';
+import { formatBytes, formatPercent } from './format';
 import { Icon, type IconName } from './icons';
 import { InfoTip } from './info-tip';
 import { Dialog } from './modal';
+import { DockerInventoryPanel } from './docker-panel';
 import './hooks.css';
 
 interface HookDescriptor {
@@ -80,6 +82,16 @@ const descriptors: Record<string, HookDescriptor> = {
     docs: 'https://jellyfin.org/docs/general/installation/linux/',
     setupSteps: ['Install Jellyfin using its supported package instructions.', 'Complete the first-run setup in Jellyfin Web.', 'Refresh Hooks to detect jellyfin.service.'],
   },
+  docker: {
+    name: 'Docker',
+    category: 'Containers',
+    summary: 'Every container on this host, plus Portainer when it is present',
+    detail: 'Helix reads Docker directly. You can see CPU, memory, and running state for all containers, start or stop them with the exact name, and open Portainer if that container is published. Helix dashboard and gateway containers stay protected.',
+    icon: 'host',
+    color: '#2496ed',
+    docs: 'https://docs.docker.com/',
+    setupSteps: ['Install Docker Engine on this Linux host.', 'Refresh Hooks; Helix lists every container Docker reports.', 'If Portainer is running, Open Portainer uses its published port on this LAN address.'],
+  },
 };
 
 const actionLabels: Record<HookServiceAction, string> = {
@@ -111,6 +123,7 @@ function panelHref(hook: HookConnection): string | null {
   if (typeof window === 'undefined') return null;
   const hostname = window.location.hostname;
   if (hook.id === 'amp' && hook.panelPort !== null) return `http://${hostname}:${hook.panelPort}/`;
+  if (hook.id === 'docker' && hook.panelPort !== null) return `http://${hostname}:${hook.panelPort}/`;
   if (hook.id === 'plex') return `http://${hostname}:32400/web/`;
   if (hook.id === 'jellyfin') return `http://${hostname}:8096/`;
   if (hook.id === 'tailscale' && hook.installed) return 'https://login.tailscale.com/admin/machines';
@@ -130,19 +143,31 @@ function HookCard({ hook, selected, onSelect }: { hook: HookConnection; selected
   return (
     <button class={`hook-card${selected ? ' is-selected' : ''}`} type="button" onClick={onSelect} aria-pressed={selected}>
       <span class="hook-card__icon" style={{ '--hook-color': descriptor.color }}><Icon name={descriptor.icon} size={22} /></span>
-      <span class="hook-card__copy"><span>{descriptor.category}</span><strong>{descriptor.name}</strong><small>{descriptor.summary}</small></span>
+      <span class="hook-card__copy">
+        <span>{descriptor.category}</span>
+        <strong>{descriptor.name}</strong>
+        <small>{descriptor.summary}</small>
+        {(hook.memoryUsedBytes !== null || hook.cpuPercent !== null) && (
+          <em class="hook-card__resources">
+            {hook.memoryUsedBytes !== null ? formatBytes(hook.memoryUsedBytes) : 'Memory unknown'}
+            {hook.cpuPercent !== null ? ` · ${formatPercent(hook.cpuPercent)} CPU` : ''}
+          </em>
+        )}
+      </span>
       <span class={`hook-card__state hook-card__state--${tone}`}><i />{statusLabel(hook)}</span>
     </button>
   );
 }
 
-function HookDetails({ hook, canManage, busyAction, plan, planLoading, planError, onAction, onInstall, onRetryPlan }: {
+function HookDetails({ hook, canManage, busyAction, plan, planLoading, planError, csrfToken, onSessionExpired, onAction, onInstall, onRetryPlan }: {
   hook: HookConnection;
   canManage: boolean;
   busyAction: HookServiceAction | null;
   plan: HookInstallPlan | null;
   planLoading: boolean;
   planError: string | null;
+  csrfToken: string;
+  onSessionExpired: () => void;
   onAction: (action: HookServiceAction) => void;
   onInstall: () => void;
   onRetryPlan: () => void;
@@ -161,10 +186,11 @@ function HookDetails({ hook, canManage, busyAction, plan, planLoading, planError
       {hook.installed ? (
         <>
           <dl class="hook-facts">
-            <div><dt>Connection</dt><dd>{hook.kind === 'api' ? 'Protected API adapter' : hook.unit}</dd></div>
+            <div><dt>Connection</dt><dd>{hook.kind === 'api' ? 'Protected API adapter' : hook.kind === 'docker' ? 'Docker Engine' : hook.unit}</dd></div>
             <div><dt>Runtime</dt><dd>{hook.activeState.replaceAll('_', ' ')}</dd></div>
             <div><dt>After boot</dt><dd>{hook.enabledState.replaceAll('_', ' ')}</dd></div>
             {hook.instanceCount !== null && <div><dt>Imported servers</dt><dd>{hook.instanceCount}{hook.unverifiedInstanceCount ? ` · ${hook.unverifiedInstanceCount} unverified` : ''}</dd></div>}
+            {(hook.memoryUsedBytes !== null || hook.cpuPercent !== null) && <div><dt>Host resources</dt><dd>{[hook.memoryUsedBytes === null ? null : formatBytes(hook.memoryUsedBytes), hook.cpuPercent === null ? null : `${formatPercent(hook.cpuPercent)} CPU`].filter(Boolean).join(' · ')}</dd></div>}
           </dl>
           <div class="hook-actions">
             {operationalActions.map((action) => <button key={action} class={`button ${action === 'stop' ? 'button--danger-quiet' : action === 'restart' ? 'button--quiet' : 'button--primary'}`} type="button" disabled={!canManage || !hook.controllable || busyAction !== null || (action === 'start' && hook.active) || (action === 'stop' && !hook.active)} onClick={() => onAction(action)} aria-busy={busyAction === action}><Icon name={action === 'start' ? 'play' : action === 'stop' ? 'stop' : 'restart'} size={14} />{busyAction === action ? `${actionLabels[action]}ing…` : actionLabels[action]}</button>)}
@@ -172,6 +198,7 @@ function HookDetails({ hook, canManage, busyAction, plan, planLoading, planError
           </div>
           {hook.kind === 'systemd' && <div class="hook-boot-control"><span><strong>Start after host boot</strong><small>Changes only <code>{hook.unit}</code>. It does not stop or start the service now.</small></span><button class="switch-button" role="switch" type="button" disabled={!canManage || !hook.controllable || busyAction !== null} aria-checked={busyAction === 'enable' ? true : busyAction === 'disable' ? false : hook.enabled} aria-busy={busyAction === 'enable' || busyAction === 'disable'} onClick={() => onAction(hook.enabled ? 'disable' : 'enable')}><i /><span>{busyAction === 'enable' || busyAction === 'disable' ? 'Saving…' : hook.enabled ? 'On' : 'Off'}</span></button></div>}
           {!hook.controllable && <small class="hook-boundary"><Icon name="info" size={13} />This adapter is read-only here. Use its own panel for settings Helix cannot verify safely.</small>}
+          {hook.id === 'docker' && <DockerInventoryPanel csrfToken={csrfToken} canManage={canManage} onSessionExpired={onSessionExpired} />}
         </>
       ) : (
         <div class="hook-setup">
@@ -358,7 +385,7 @@ export function HooksPage({ csrfToken, canManage, onSessionExpired }: HooksPageP
       <div class="hooks-toolbar"><div><strong>{hooks.filter((hook) => hook.installed && hook.active).length}</strong><span>connected</span><i /><strong>{hooks.filter((hook) => !hook.installed).length}</strong><span>available</span><InfoTip text="Discovery is read-only. Control is exposed only for exact services configured in the root-owned broker, and every change is verified after systemd returns." /></div><button class="button button--quiet" type="button" disabled={loading} aria-busy={loading} onClick={() => void refresh()}><Icon name="refresh" size={14} />{loading ? 'Checking…' : 'Check connections'}</button></div>
       <InlineError message={error} />
       {notice !== null && <div class="hooks-notice" role="status"><Icon name="check" size={15} />{notice}</div>}
-      {inventory === null && loading ? <div class="detail-loading" aria-busy="true"><Icon name="hooks" size={28} /><span>Discovering safe connections…</span></div> : <div class="hooks-layout"><aside class="hooks-list" aria-label="Available Hooks">{sorted.map((hook) => <HookCard key={hook.id} hook={hook} selected={selected?.id === hook.id} onSelect={() => { setSelectedId(hook.id); setNotice(null); }} />)}</aside>{selected !== null && <HookDetails hook={selected} canManage={canManage} busyAction={busyAction} plan={plan} planLoading={planLoading} planError={planError} onAction={(action) => setPendingAction(action)} onInstall={() => { setInstallConfirmed(false); setInstallJob(null); setInstallOpen(true); }} onRetryPlan={() => setPlanRevision((value) => value + 1)} />}</div>}
+      {inventory === null && loading ? <div class="detail-loading" aria-busy="true"><Icon name="hooks" size={28} /><span>Discovering safe connections…</span></div> : <div class="hooks-layout"><aside class="hooks-list" aria-label="Available Hooks">{sorted.map((hook) => <HookCard key={hook.id} hook={hook} selected={selected?.id === hook.id} onSelect={() => { setSelectedId(hook.id); setNotice(null); }} />)}</aside>{selected !== null && <HookDetails hook={selected} canManage={canManage} busyAction={busyAction} plan={plan} planLoading={planLoading} planError={planError} csrfToken={csrfToken} onSessionExpired={onSessionExpired} onAction={(action) => setPendingAction(action)} onInstall={() => { setInstallConfirmed(false); setInstallJob(null); setInstallOpen(true); }} onRetryPlan={() => setPlanRevision((value) => value + 1)} />}</div>}
       {pendingAction !== null && selected !== null && <Dialog title={`${actionLabels[pendingAction]} ${descriptorFor(selected).name}?`} onClose={() => setPendingAction(null)}><p class="hook-confirm-copy">{pendingAction === 'stop' || pendingAction === 'restart' ? 'Active users or streams may be interrupted. Helix will issue the exact systemd action and verify the resulting state.' : 'Helix will change only the configured service and verify the result.'}</p><div class="hook-confirm-actions"><button class="button button--quiet" type="button" onClick={() => setPendingAction(null)}>Cancel</button><button class={`button ${pendingAction === 'stop' ? 'button--danger' : 'button--primary'}`} type="button" onClick={() => void runAction()}>{actionLabels[pendingAction]}</button></div></Dialog>}
       {installOpen && selected !== null && <Dialog title={installJob === null ? `Install ${descriptorFor(selected).name}?` : installJob.status === 'complete' ? 'Installation complete' : installJob.status === 'failed' ? 'Installation needs attention' : `Installing ${descriptorFor(selected).name}`} onClose={() => { if (installJob === null || ['complete', 'failed'].includes(installJob.status)) setInstallOpen(false); }} wide>
         <InlineError message={error} />
