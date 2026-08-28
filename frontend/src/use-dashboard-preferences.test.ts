@@ -13,6 +13,7 @@ const defaults: DashboardPreferences = {
   homeTemplates: defaultHomeTemplates.map((template) => ({ ...template, widgets: template.widgets.map((widget) => ({ ...widget })) })),
   activeHomeId: 'home-main',
   colors: { accent: '', text: '', surface: '' },
+  serversEnabled: true,
 };
 
 describe('dashboard preference reconciliation', () => {
@@ -23,11 +24,15 @@ describe('dashboard preference reconciliation', () => {
     })).toBe(false);
   });
 
-  it('migrates a customized browser layout only into an unset record', () => {
+    it('migrates a customized browser layout only into an unset record', () => {
     const local = { ...defaults, metricsRefreshMs: 5_000 as const };
     expect(shouldMigrateLocalPreferences(0, local)).toBe(true);
     expect(shouldMigrateLocalPreferences(1, local)).toBe(false);
     expect(shouldMigrateLocalPreferences(0, defaults)).toBe(false);
+  });
+
+  it('migrates a disabled Servers module into an unset record', () => {
+    expect(shouldMigrateLocalPreferences(0, { ...defaults, serversEnabled: false })).toBe(true);
   });
 
   it('rebases only fields changed by this browser after a CAS conflict', () => {

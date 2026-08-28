@@ -17,8 +17,13 @@ import {
   setupOwner,
 } from './api';
 import { Dashboard } from './app';
+import { saveServersEnabled } from './dashboard-preferences';
 import { focusOnMount } from './focus';
 import { t } from './i18n';
+import {
+  getDashboardPreferences,
+  putDashboardPreferences,
+} from './preferences-api';
 import { PROJECT_SOURCE_URL } from './project';
 import {
   applyThemePreference,
@@ -156,6 +161,7 @@ function SetupView({
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
+  const [includeServers, setIncludeServers] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -191,6 +197,19 @@ function SetupView({
         displayName,
         password,
       });
+      if (!includeServers) {
+        saveServersEnabled(false);
+        try {
+          const current = await getDashboardPreferences(session.csrfToken);
+          await putDashboardPreferences(
+            current.revision,
+            { ...current.preferences, serversEnabled: false },
+            session.csrfToken,
+          );
+        } catch {
+          // Setup already created the owner. Settings can still enable Servers later.
+        }
+      }
       onAuthenticated(session);
     } catch (requestError) {
       if (requestError instanceof ApiError && requestError.status === 409) {
@@ -302,6 +321,29 @@ function SetupView({
               required
             />
           </label>
+          <div class="setup-modules">
+            <span>{t('auth.setup.servers')}</span>
+            <div class="setup-modules__choices">
+              <button
+                type="button"
+                class={includeServers ? 'is-active' : ''}
+                aria-pressed={includeServers}
+                onClick={() => setIncludeServers(true)}
+              >
+                <strong>{t('auth.setup.serversInclude')}</strong>
+                <small>{t('auth.setup.serversIncludeHelp')}</small>
+              </button>
+              <button
+                type="button"
+                class={!includeServers ? 'is-active' : ''}
+                aria-pressed={!includeServers}
+                onClick={() => setIncludeServers(false)}
+              >
+                <strong>{t('auth.setup.serversSkip')}</strong>
+                <small>{t('auth.setup.serversSkipHelp')}</small>
+              </button>
+            </div>
+          </div>
           {error !== null && <div class="form-error" role="alert">{error}</div>}
           <button
             class="primary-button"

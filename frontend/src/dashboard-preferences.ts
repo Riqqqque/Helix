@@ -27,6 +27,7 @@ export const defaultDashboardColors: DashboardColors = { accent: '', text: '', s
 const NAVIGATION_STORAGE_KEY = 'helix.dashboard.navigation';
 const REFRESH_STORAGE_KEY = 'helix.dashboard.refresh-interval';
 const COLORS_STORAGE_KEY = 'helix.dashboard.colors';
+const SERVERS_ENABLED_STORAGE_KEY = 'helix.dashboard.servers-enabled';
 
 export const DASHBOARD_PREFERENCES_EVENT = 'helix:dashboard-preferences';
 
@@ -135,6 +136,26 @@ export function saveDashboardColors(value: DashboardColors): void {
     if (canStore()) globalThis.localStorage.setItem(COLORS_STORAGE_KEY, JSON.stringify(normalizeDashboardColors(value)));
   } catch {
     // Browser storage is only a local fallback for the server-backed preference.
+  }
+  announcePreferenceChange();
+}
+
+export function readServersEnabled(): boolean {
+  try {
+    if (!canStore()) return true;
+    const stored = globalThis.localStorage.getItem(SERVERS_ENABLED_STORAGE_KEY);
+    if (stored === null) return true;
+    return stored !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+export function saveServersEnabled(enabled: boolean): void {
+  try {
+    if (canStore()) globalThis.localStorage.setItem(SERVERS_ENABLED_STORAGE_KEY, enabled ? 'true' : 'false');
+  } catch {
+    // Browser storage is a convenience; the dashboard remains usable without it.
   }
   announcePreferenceChange();
 }

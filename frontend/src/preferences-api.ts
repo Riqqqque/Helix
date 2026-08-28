@@ -23,6 +23,7 @@ export interface DashboardPreferences {
   homeTemplates: HomeTemplate[];
   activeHomeId: string;
   colors: DashboardColors;
+  serversEnabled: boolean;
 }
 
 export interface DashboardPreferencesRecord {
@@ -42,6 +43,7 @@ export function normalizeDashboardPreferences(value: DashboardPreferences): Dash
     homeTemplates,
     activeHomeId,
     colors: normalizeDashboardColors(value.colors),
+    serversEnabled: value.serversEnabled !== false,
   };
 }
 
@@ -94,7 +96,18 @@ function parsePreferences(value: unknown): DashboardPreferences {
   if (JSON.stringify(colors) !== JSON.stringify(record.colors)) {
     throw new ApiError('Dashboard preferences returned an invalid colors value.');
   }
-  return { navigationOrder, metricsRefreshMs, homeWidgets, homeTemplates, activeHomeId, colors };
+  if (record.serversEnabled !== undefined && typeof record.serversEnabled !== 'boolean') {
+    throw new ApiError('Dashboard preferences returned an invalid serversEnabled value.');
+  }
+  return {
+    navigationOrder,
+    metricsRefreshMs,
+    homeWidgets,
+    homeTemplates,
+    activeHomeId,
+    colors,
+    serversEnabled: record.serversEnabled !== false,
+  };
 }
 
 export function parseDashboardPreferencesRecord(value: unknown): DashboardPreferencesRecord {

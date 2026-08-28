@@ -9,12 +9,15 @@ import {
 import { ApiError } from "./api";
 import {
   createMinecraftServer,
+  createVRisingServer,
   getDirectory,
+  getMinecraftVersions,
   getTrashedNativeServers,
   getServerBackups,
   getServerDetail,
   getServerLogs,
   getMinecraftPortPolicy,
+  getVRisingPortPolicy,
   restoreServerBackup,
   restoreTrashedServerBackup,
   restoreTrashedNativeServer,
@@ -22,6 +25,8 @@ import {
   saveServerSettings,
   sendConsoleCommand,
   saveMinecraftPortPolicy,
+  saveVRisingPortPolicy,
+  setNativeStartOnBoot,
   setServerNetworkExposure,
   trashServerBackup,
   trashNativeServer,
@@ -35,6 +40,7 @@ import {
   type MinecraftSettingField,
   type MinecraftCreateInput,
   type MinecraftSoftware,
+  type MinecraftVersionCatalog,
   type NativeServerDetail,
   type ServerAction,
   type ServerBackup,
@@ -54,11 +60,17 @@ import {
 } from "./dashboard-ui";
 import { FileManager } from "./file-manager";
 import {
+  droppedTransferFiles,
+  MAX_CUSTOM_JAR_UPLOAD_BYTES,
+  uploadHostFile,
+} from "./file-upload";
+import {
   formatBytes,
   formatDuration,
   formatPercent,
   formatTimestamp,
 } from "./format";
+import { GameMark } from "./game-marks";
 import { Icon, type IconName } from "./icons";
 import { InfoTip } from "./info-tip";
 import { useJobPolling } from "./job-polling";
@@ -117,6 +129,11 @@ export const minecraftCreateSoftwareOptions: ReadonlyArray<{
     detail: "Region-threaded Paper for compatible high-concurrency worlds",
   },
   {
+    id: "leaves",
+    name: "Leaves",
+    detail: "Paper-compatible fork with extra world and gameplay controls",
+  },
+  {
     id: "fabric",
     name: "Fabric",
     detail: "Lightweight mod loader for Fabric server mods",
@@ -147,7 +164,7 @@ function MinecraftSoftwarePicker({
   readiness: ServerManagerReadiness | null;
   readinessError: string | null;
   catalogOpen: boolean;
-  onSelect: (software: MinecraftSoftware) => void;
+  onSelect: (software: InstallableMinecraftSoftware) => void;
   onCatalogToggle: () => void;
 }) {
   const supported = new Set(
@@ -230,8 +247,8 @@ function MinecraftSoftwarePicker({
               );
               const selectable =
                 entry.installable &&
-                option !== undefined &&
-                supported.has(option.id);
+                ((option !== undefined && supported.has(option.id)) ||
+                  (entry.id === "custom" && supported.has("custom")));
               return (
                 <article class={selectable ? "is-ready" : ""} key={entry.id}>
                   <div>
@@ -249,7 +266,8 @@ function MinecraftSoftwarePicker({
                       type="button"
                       disabled={!selectable}
                       onClick={() => {
-                        if (option !== undefined) onSelect(option.id);
+                        if (entry.id === "custom") onSelect("custom");
+                        else if (option !== undefined) onSelect(option.id);
                       }}
                     >
                       {selectable
@@ -270,6 +288,102 @@ function MinecraftSoftwarePicker({
 }
 
 type MinecraftCreateMode = "software" | "modpack" | "custom";
+
+function MinecraftVersionField({
+  version,
+  catalog,
+  loading,
+  error,
+  allowLatest,
+  onChange,
+}: {
+  version: string;
+  catalog: MinecraftVersionCatalog | null;
+  loading: boolean;
+  error: string | null;
+  allowLatest: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [manual, setManual] = useState(false);
+  const options = catalog?.versions ?? [];
+  const known = new Set(options);
+  const current = version.trim();
+  const isLatest = current.toLowerCase() === "latest";
+  const listed = (allowLatest && isLatest) || known.has(current);
+  const catalogFailed = error !== null && options.length === 0 && !loading;
+  const showInput =
+    manual || catalogFailed || (!listed && current.length > 0 && !isLatest);
+  const selectValue = showInput
+    ? "__manual__"
+    : allowLatest && (isLatest || current.length === 0)
+      ? "latest"
+      : known.has(current)
+        ? current
+        : loading
+          ? ""
+          : allowLatest
+            ? "latest"
+            : "__manual__";
+  const latestLabel =
+    catalog?.latestVersion !== null && catalog?.latestVersion !== undefined
+      ? ` (${catalog.latestVersion})`
+      : "";
+  return (
+    <label class="field">
+      <span>Minecraft version</span>
+      <select
+        required={!showInput}
+        value={selectValue}
+        disabled={loading && options.length === 0 && !showInput}
+        onChange={(event) => {
+          const next = event.currentTarget.value;
+          if (next === "__manual__") {
+            setManual(true);
+            if (isLatest || current.length === 0) onChange("");
+            return;
+          }
+          setManual(false);
+          onChange(next);
+        }}
+      >
+        {loading && options.length === 0 && !showInput && (
+          <option value="" disabled>
+            Loading published versions…
+          </option>
+        )}
+        {allowLatest && (
+          <option value="latest">Latest stable{latestLabel}</option>
+        )}
+        {options.map((item) => (
+          <option value={item} key={item}>
+            {item}
+          </option>
+        ))}
+        <option value="__manual__">Enter a version not listed…</option>
+      </select>
+      {showInput && (
+        <input
+          required
+          value={isLatest ? "" : version}
+          onInput={(event) => onChange(event.currentTarget.value)}
+          placeholder="1.21.8"
+          autocomplete="off"
+          autocapitalize="none"
+          spellcheck={false}
+        />
+      )}
+      <small>
+        {loading
+          ? "Loading published versions…"
+          : error !== null
+            ? `${error} You can type a release such as 1.21.8.`
+            : allowLatest
+              ? "Pick a published release or keep latest so Helix chooses the current stable build."
+              : "Custom JARs need the exact Minecraft version they were built for."}
+      </small>
+    </label>
+  );
+}
 
 function CustomJarBrowser({
   csrfToken,
@@ -591,6 +705,7 @@ function PortPoolDialog({
   onSessionExpired: () => void;
 }) {
   const [policy, setPolicy] = useState<GamePortPolicy | null>(null);
+  const [game, setGame] = useState<"minecraft" | "vrising">("minecraft");
   const [ranges, setRanges] = useState("");
   const [ports, setPorts] = useState("");
   const [autoForward, setAutoForward] = useState(false);
@@ -598,7 +713,10 @@ function PortPoolDialog({
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    void getMinecraftPortPolicy(csrfToken, controller.signal)
+    setPolicy(null);
+    setError(null);
+    const load = game === "minecraft" ? getMinecraftPortPolicy : getVRisingPortPolicy;
+    void load(csrfToken, controller.signal)
       .then((value) => {
         setPolicy(value);
         setRanges(value.ranges.map((range) => `${range.start}-${range.end}`).join(", "));
@@ -611,7 +729,7 @@ function PortPoolDialog({
         else setError(describeError(requestError));
       });
     return () => controller.abort();
-  }, [canManageNetwork, csrfToken, onSessionExpired]);
+  }, [canManageNetwork, csrfToken, game, onSessionExpired]);
 
   const save = async (): Promise<void> => {
     setBusy(true);
@@ -622,8 +740,13 @@ function PortPoolDialog({
       if (parsedRanges.length === 0 && parsedPorts.length === 0) {
         throw new Error("Add at least one port or port range.");
       }
-      const saved = await saveMinecraftPortPolicy(
-        { ranges: parsedRanges, ports: parsedPorts, autoForwardOnCreate: autoForward },
+      const savePolicy = game === "minecraft" ? saveMinecraftPortPolicy : saveVRisingPortPolicy;
+      const saved = await savePolicy(
+        {
+          ranges: parsedRanges,
+          ports: parsedPorts,
+          autoForwardOnCreate: game === "minecraft" ? autoForward : false,
+        },
         csrfToken,
       );
       setPolicy(saved);
@@ -639,7 +762,29 @@ function PortPoolDialog({
   };
 
   return (
-    <Dialog title="Minecraft port pool" onClose={onClose} wide>
+    <Dialog title="Port pools" onClose={onClose} wide>
+      <div class="port-pool-game-tabs" role="tablist" aria-label="Game port pool">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={game === "minecraft"}
+          class={game === "minecraft" ? "is-active" : ""}
+          disabled={busy}
+          onClick={() => setGame("minecraft")}
+        >
+          Minecraft
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={game === "vrising"}
+          class={game === "vrising" ? "is-active" : ""}
+          disabled={busy}
+          onClick={() => setGame("vrising")}
+        >
+          V Rising
+        </button>
+      </div>
       <div class="port-pool-summary">
         <div><strong>{policy?.capacity ?? "—"}</strong><span>configured</span></div>
         <div><strong>{policy?.availableCount ?? "—"}</strong><span>unassigned</span></div>
@@ -655,7 +800,7 @@ function PortPoolDialog({
             value={ranges}
             disabled={busy || policy === null}
             onInput={(event) => setRanges(event.currentTarget.value)}
-            placeholder="25565-25599, 25610-25619"
+            placeholder={game === "vrising" ? "9876-9910" : "25565-25599, 25610-25619"}
           />
           <small>Separate ranges with commas or spaces. A single port is accepted here too.</small>
         </label>
@@ -665,28 +810,34 @@ function PortPoolDialog({
             value={ports}
             disabled={busy || policy === null}
             onInput={(event) => setPorts(event.currentTarget.value)}
-            placeholder="25565, 25570, 25580"
+            placeholder={game === "vrising" ? "9876, 9878" : "25565, 25570, 25580"}
           />
           <small>Optional. These are tried before the ranges; duplicates are removed safely.</small>
         </label>
       </div>
-      <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
-        <input
-          class="toggle-input"
-          type="checkbox"
-          checked={autoForward}
-          disabled={busy || policy === null || !canManageNetwork}
-          onChange={(event) => setAutoForward(event.currentTarget.checked)}
-        />
-        <span>
-          <strong>Default new Minecraft servers to public setup</strong>
-          <small>
-            {canManageNetwork
-              ? "The creation review still shows this choice. Helix will never enable UFW or overwrite an unowned router mapping."
-              : "Requires network.firewall.write permission."}
-          </small>
-        </span>
-      </label>
+      {game === "minecraft" ? (
+        <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
+          <input
+            class="toggle-input"
+            type="checkbox"
+            checked={autoForward}
+            disabled={busy || policy === null || !canManageNetwork}
+            onChange={(event) => setAutoForward(event.currentTarget.checked)}
+          />
+          <span>
+            <strong>Default new Minecraft servers to public setup</strong>
+            <small>
+              {canManageNetwork
+                ? "The creation review still shows this choice. Helix will never enable UFW or overwrite an unowned router mapping."
+                : "Requires network.firewall.write permission."}
+            </small>
+          </span>
+        </label>
+      ) : (
+        <p class="dialog-intro">
+          V Rising stays private in this Helix release. Helix does not offer UPnP for its UDP game and query ports.
+        </p>
+      )}
       <InlineError message={error} />
       <div class="dialog-actions">
         <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
@@ -738,6 +889,13 @@ function CreateServerDialog({
   );
   const [readinessError, setReadinessError] = useState<string | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [versions, setVersions] = useState<MinecraftVersionCatalog | null>(null);
+  const [versionsError, setVersionsError] = useState<string | null>(null);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [jarDropActive, setJarDropActive] = useState(false);
+  const [jarUploading, setJarUploading] = useState(false);
+  const [jarUploadPercent, setJarUploadPercent] = useState(0);
+  const jarInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -756,6 +914,46 @@ function CreateServerDialog({
       });
     return () => controller.abort();
   }, [csrfToken, onSessionExpired]);
+
+  useEffect(() => {
+    if (mode === "modpack") {
+      setVersionsLoading(false);
+      return;
+    }
+    const softwareId = mode === "custom" ? "custom" : software;
+    const controller = new AbortController();
+    setVersions(null);
+    setVersionsLoading(true);
+    setVersionsError(null);
+    void getMinecraftVersions(softwareId, csrfToken, controller.signal)
+      .then((catalog) => {
+        if (controller.signal.aborted) return;
+        setVersions(catalog);
+        setVersion((current) => {
+          if (mode === "custom") {
+            if (
+              current.trim().toLowerCase() === "latest" ||
+              current.trim().length === 0
+            ) {
+              return catalog.latestVersion ?? catalog.versions[0] ?? "";
+            }
+            return current;
+          }
+          if (current.trim().toLowerCase() === "latest") return "latest";
+          if (catalog.versions.includes(current.trim())) return current;
+          return "latest";
+        });
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (isSessionError(requestError)) onSessionExpired();
+        else setVersionsError(describeError(requestError));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setVersionsLoading(false);
+      });
+    return () => controller.abort();
+  }, [csrfToken, mode, onSessionExpired, software]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -795,7 +993,7 @@ function CreateServerDialog({
     customJarPath.trim().startsWith("/") &&
     /\.jar$/iu.test(customJarPath.trim()) &&
     version.trim().length > 0 &&
-    !version.trim().toLowerCase().includes("latest");
+    version.trim().toLowerCase() !== "latest";
   const canReview =
     name.trim().length >= 2 &&
     (mode === "modpack"
@@ -811,6 +1009,38 @@ function CreateServerDialog({
     setMode(next);
     setError(null);
     if (next === "modpack") preloadModpackPicker();
+    if (next === "custom") {
+      setVersion((current) =>
+        current.trim().toLowerCase() === "latest" ? "" : current,
+      );
+    } else if (next === "software") {
+      setVersion((current) =>
+        current.trim().length === 0 ? "latest" : current,
+      );
+    }
+  };
+
+  const uploadCustomJar = async (file: File): Promise<void> => {
+    setJarUploading(true);
+    setJarUploadPercent(0);
+    setError(null);
+    try {
+      const uploaded = await uploadHostFile({
+        file,
+        purpose: "custom_jar",
+        csrfToken,
+        onProgress: setJarUploadPercent,
+      });
+      setCustomJarPath(uploaded.path);
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setJarUploading(false);
+      setJarUploadPercent(0);
+      setJarDropActive(false);
+      if (jarInput.current !== null) jarInput.current.value = "";
+    }
   };
 
   const submit = async (): Promise<void> => {
@@ -1047,7 +1277,7 @@ function CreateServerDialog({
             </span>
             <span class="create-mode-copy">
               <strong>Choose server software</strong>
-              <small>Paper, Purpur, Folia, Fabric, or Vanilla</small>
+              <small>Paper, Purpur, Leaves, Folia, Fabric, or Vanilla</small>
             </span>
           </button>
           <button
@@ -1077,7 +1307,7 @@ function CreateServerDialog({
             </span>
             <span class="create-mode-copy">
               <strong>Use your own JAR</strong>
-              <small>Import a server JAR already available in Storage</small>
+              <small>Drop a JAR here or choose one already in Storage</small>
             </span>
           </button>
         </div>
@@ -1111,18 +1341,27 @@ function CreateServerDialog({
                   readiness={readiness}
                   readinessError={readinessError}
                   catalogOpen={catalogOpen}
-                  onSelect={setSoftware}
+                  onSelect={(id) => {
+                    if (id === "custom") {
+                      selectMode("custom");
+                      setCatalogOpen(false);
+                      return;
+                    }
+                    setSoftware(id);
+                    if (mode !== "software") setMode("software");
+                    setCatalogOpen(false);
+                  }}
                   onCatalogToggle={() => setCatalogOpen((open) => !open)}
                 />
-                <label class="field">
-                  <span>Minecraft version</span>
-                  <input
-                    required
-                    value={version}
-                    onInput={(event) => setVersion(event.currentTarget.value)}
-                    placeholder="latest"
-                  />
-                </label>
+                <MinecraftVersionField
+                  key={`software-${software}`}
+                  version={version}
+                  catalog={versions}
+                  loading={versionsLoading}
+                  error={versionsError}
+                  allowLatest
+                  onChange={setVersion}
+                />
               </>
             ) : mode === "custom" ? (
               <>
@@ -1136,12 +1375,44 @@ function CreateServerDialog({
                       ? "Checking the protected local import path…"
                       : customReady
                         ? "Custom JAR import is ready. Helix copies the file into a private container workspace; the original stays untouched."
-                        : "Custom JAR import is unavailable because the native manager or its Storage roots are not ready."}
+                        : "Custom JAR import is unavailable because the native manager is not ready."}
                   </span>
                 </div>
-                <div class="field field--wide">
+                <div
+                  class={`field field--wide custom-jar-import${jarDropActive ? " is-drop-target" : ""}`}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    if (customReady && !jarUploading) setJarDropActive(true);
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    if (event.dataTransfer !== null) {
+                      event.dataTransfer.dropEffect =
+                        customReady && !jarUploading ? "copy" : "none";
+                    }
+                  }}
+                  onDragLeave={(event) => {
+                    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                    setJarDropActive(false);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setJarDropActive(false);
+                    if (!customReady || jarUploading) return;
+                    try {
+                      const files = droppedTransferFiles(event.dataTransfer);
+                      const jar = files.find((file) => /\.jar$/iu.test(file.name));
+                      if (jar === undefined) {
+                        throw new Error("Drop a .jar file.");
+                      }
+                      void uploadCustomJar(jar);
+                    } catch (dropError) {
+                      setError(describeError(dropError));
+                    }
+                  }}
+                >
                   <div class="field-heading">
-                    <label for="custom-server-jar">Server JAR path</label>
+                    <label for="custom-server-jar">Server JAR</label>
                     <button
                       class="field-inline-action"
                       type="button"
@@ -1152,6 +1423,34 @@ function CreateServerDialog({
                       {customBrowserOpen ? "Close browser" : "Browse Storage"}
                     </button>
                   </div>
+                  <label
+                    class={`custom-jar-drop${jarDropActive ? " is-active" : ""}${jarUploading ? " is-busy" : ""}`}
+                  >
+                    <Icon name="file" size={22} />
+                    <strong>
+                      {jarUploading
+                        ? `Uploading… ${jarUploadPercent}%`
+                        : customJarPath.length > 0
+                          ? customJarPath.split("/").at(-1)
+                          : "Drop a server JAR here"}
+                    </strong>
+                    <span>
+                      {customJarPath.length > 0
+                        ? customJarPath
+                        : `Up to ${Math.round(MAX_CUSTOM_JAR_UPLOAD_BYTES / (1024 * 1024))} MiB · or browse Storage`}
+                    </span>
+                    {jarUploading && <ProgressBar value={jarUploadPercent} />}
+                    <input
+                      ref={jarInput}
+                      type="file"
+                      accept=".jar,application/java-archive"
+                      disabled={!customReady || jarUploading}
+                      onChange={(event) => {
+                        const file = event.currentTarget.files?.[0];
+                        if (file !== undefined) void uploadCustomJar(file);
+                      }}
+                    />
+                  </label>
                   <input
                     id="custom-server-jar"
                     required
@@ -1165,11 +1464,11 @@ function CreateServerDialog({
                     spellcheck={false}
                   />
                   <small>
-                    Use an absolute <code>.jar</code> path inside a drive or
-                    folder shown in Storage. Helix rejects symlinks, paths
-                    outside managed roots, and files larger than 768 MiB.
+                    Drop a <code>.jar</code> from this computer or use an
+                    absolute path inside Storage. Helix copies the file into a
+                    private workspace, rejects folders/symlinks, and caps
+                    imports at 768 MiB.
                   </small>
-                </div>
                 {customBrowserOpen && customReady && (
                   <CustomJarBrowser
                     csrfToken={csrfToken}
@@ -1182,16 +1481,16 @@ function CreateServerDialog({
                     onSessionExpired={onSessionExpired}
                   />
                 )}
-                <label class="field">
-                  <span>Minecraft version</span>
-                  <input
-                    required
-                    value={version}
-                    onInput={(event) => setVersion(event.currentTarget.value)}
-                    placeholder="1.21.8"
-                  />
-                  <small>Enter the exact version; “latest” is not accepted.</small>
-                </label>
+                </div>
+                <MinecraftVersionField
+                  key="custom-jar"
+                  version={version}
+                  catalog={versions}
+                  loading={versionsLoading}
+                  error={versionsError}
+                  allowLatest={false}
+                  onChange={setVersion}
+                />
                 <label class="field">
                   <span>Java runtime</span>
                   <select
@@ -1910,7 +2209,7 @@ const nativeServerTabs: ReadonlyArray<{
 ];
 
 export function supportsMarketplaceSoftware(software: string): boolean {
-  return /^(?:paper|purpur|folia|fabric)$/iu.test(software.trim());
+  return /^(?:paper|purpur|folia|leaves|fabric)$/iu.test(software.trim());
 }
 
 function ConsolePanel({
@@ -2104,10 +2403,12 @@ function ConsolePanel({
             <InfoTip text="Helix stores this server’s console output on the host. Closing the dashboard does not stop collection or erase earlier boots." />
           </h2>
           <p>
-            Commands use a loopback-only channel; output stays available across
-            dashboard sessions.
+            {detail.kind === "vrising"
+              ? "V Rising has no RCON command channel. This view follows the dedicated-server log."
+              : "Commands use a loopback-only channel; output stays available across dashboard sessions."}
           </p>
         </div>
+        {detail.kind !== "vrising" && (
         <div class="quick-commands">
           <button
             type="button"
@@ -2134,6 +2435,7 @@ function ConsolePanel({
             Whitelist
           </button>
         </div>
+        )}
       </div>
       <InlineError message={error} />
       {commandNotice !== null && (
@@ -2280,6 +2582,18 @@ function ConsolePanel({
           </small>
         </span>
       </div>
+      {detail.kind === "vrising" ? (
+        <p class="console-retention-note">
+          <Icon name="info" size={14} />
+          <span>
+            <strong>No command console for V Rising.</strong>
+            <small>
+              Stunlock does not expose a supported RCON path here. Use Files for
+              ServerHostSettings.json and restart the server after edits.
+            </small>
+          </span>
+        </p>
+      ) : (
       <form
         class="console-command"
         onSubmit={(event) => {
@@ -2313,6 +2627,7 @@ function ConsolePanel({
           {busy ? "Sending…" : "Run"}
         </button>
       </form>
+      )}
     </section>
   );
 }
@@ -2325,7 +2640,7 @@ function SettingsPanel({
   onRestart,
   onSessionExpired,
 }: {
-  detail: NativeServerDetail;
+  detail: NativeServerDetail & { settings: MinecraftSettings };
   csrfToken: string;
   canManageServers: boolean;
   restartSuccessRevision: number;
@@ -3513,6 +3828,8 @@ function NativeServerPage({
   const [refreshKey, setRefreshKey] = useState(0);
   const [restartSuccessRevision, setRestartSuccessRevision] = useState(0);
   const [exposureBusy, setExposureBusy] = useState(false);
+  const [bootBusy, setBootBusy] = useState(false);
+  const [bootError, setBootError] = useState<string | null>(null);
   const detailLoad = useRef<Promise<void> | null>(null);
   const detailController = useRef<AbortController | null>(null);
   const load = useCallback((force = false): Promise<void> => {
@@ -3586,6 +3903,7 @@ function NativeServerPage({
     );
   const online = detail.status === "online";
   const containerUp = detail.status === "online" || detail.status === "starting";
+  const isVRising = detail.kind === "vrising";
   const tailscaleAddress =
     hostInventory?.interfaces
       .find((item) => item.name.toLowerCase().startsWith("tailscale"))
@@ -3599,7 +3917,7 @@ function NativeServerPage({
     (item) => item.instanceId === detail.id && item.protocol === "udp",
   );
   const joinAddress =
-    tcpEvidence?.privateJoinAddress ??
+    (isVRising ? udpEvidence?.privateJoinAddress : tcpEvidence?.privateJoinAddress) ??
     (network?.addresses.privateIpv4 === null || network?.addresses.privateIpv4 === undefined
       ? "Private address unavailable"
       : formatJoinAddress(network.addresses.privateIpv4, detail.gamePort));
@@ -3619,6 +3937,19 @@ function NativeServerPage({
       setExposureBusy(false);
     }
   };
+  const updateStartOnBoot = async (enabled: boolean): Promise<void> => {
+    setBootBusy(true);
+    setBootError(null);
+    try {
+      await setNativeStartOnBoot(detail.id, enabled, csrfToken);
+      await refresh();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setBootError(describeError(requestError));
+    } finally {
+      setBootBusy(false);
+    }
+  };
   const tcpDiagnostic = portDiagnostic(tcpEvidence);
   const udpDiagnostic = portDiagnostic(udpEvidence);
   const manageTitle = canManageServers
@@ -3635,12 +3966,13 @@ function NativeServerPage({
           <ServerArtwork server={server} size="detail" />
           <div>
             <span class="eyebrow">
-              HELIX MANAGED · {detail.software.toUpperCase()}
+              HELIX MANAGED · {isVRising ? "V RISING" : detail.software.toUpperCase()}
             </span>
             <h1>{detail.name}</h1>
             <p>
-              {joinAddress} · {detail.minecraftVersion} · Java{" "}
-              {detail.javaVersion}
+              {isVRising
+                ? `${joinAddress} · Wine runtime · UDP ${detail.gamePort}${detail.queryPort === null ? "" : ` / ${detail.queryPort}`}`
+                : `${joinAddress} · ${detail.minecraftVersion} · Java ${detail.javaVersion}`}
             </p>
           </div>
         </div>
@@ -3713,13 +4045,12 @@ function NativeServerPage({
       <InlineError message={error} />
       <nav class="server-tabs" aria-label="Server tools">
         {nativeServerTabs
-          .filter(
-            (item) =>
-              item.id === "overview" ||
-              (item.id === "marketplace"
-                ? supportsMarketplaceSoftware(detail.software)
-                : detail.capabilities.includes(item.id)),
-          )
+          .filter((item) => {
+            if (item.id === "overview") return true;
+            if (item.id === "marketplace") return supportsMarketplaceSoftware(detail.software);
+            if (item.id === "settings") return detail.settings !== null && detail.capabilities.includes("settings");
+            return detail.capabilities.includes(item.id);
+          })
           .map((item) => (
             <button
               class={tab === item.id ? "is-active" : ""}
@@ -3783,6 +4114,16 @@ function NativeServerPage({
                 </article>
                 <article>
                   <span>PUBLIC INTERNET</span>
+                  {isVRising ? (
+                    <>
+                      <strong>Private only</strong>
+                      <small>
+                        Helix does not offer UPnP for V Rising. Forward UDP {detail.gamePort}
+                        {detail.queryPort === null ? "" : ` and ${detail.queryPort}`} yourself if you need outside access.
+                      </small>
+                    </>
+                  ) : (
+                    <>
                   <strong>
                     {publicConfigured && publicJoinAddress !== null
                       ? publicJoinAddress
@@ -3822,15 +4163,19 @@ function NativeServerPage({
                     </button>
                   )}
                   {!publicConfigured && publicEvidence?.state !== "setup_available" && <a href="#network">Review Network</a>}
+                    </>
+                  )}
                 </article>
               </div>
               <InlineError message={networkError} />
               <div class="join-evidence">
+                {!isVRising && (
                 <span
                   class={`state-label state-label--${tcpDiagnostic.tone}`}
                 >
                   TCP · {tcpDiagnostic.label}
                 </span>
+                )}
                 <span
                   class={`state-label state-label--${udpDiagnostic.tone}`}
                 >
@@ -3838,7 +4183,9 @@ function NativeServerPage({
                 </span>
                 <small>
                   {networkError ??
-                    `${tcpDiagnostic.detail} ${udpDiagnostic.detail}`}
+                    (isVRising
+                      ? udpDiagnostic.detail
+                      : `${tcpDiagnostic.detail} ${udpDiagnostic.detail}`)}
                 </small>
               </div>
             </section>
@@ -3847,7 +4194,7 @@ function NativeServerPage({
                 <div class="section-title">
                   <div>
                     <h2>Right now</h2>
-                    <p>Live Minecraft and runtime state</p>
+                    <p>{isVRising ? "Live Wine runtime state" : "Live Minecraft and runtime state"}</p>
                   </div>
                   <span
                     class={`state-label state-label--${online ? "good" : "idle"}`}
@@ -3859,7 +4206,9 @@ function NativeServerPage({
                   <div>
                     <span>Players</span>
                     <strong>
-                      {detail.playersOnline} / {detail.maxPlayers}
+                      {isVRising
+                        ? `— / ${detail.maxPlayers}`
+                        : `${detail.playersOnline} / ${detail.maxPlayers}`}
                     </strong>
                   </div>
                   <div>
@@ -3885,7 +4234,7 @@ function NativeServerPage({
                 <div class="section-title">
                   <div>
                     <h2>Build</h2>
-                    <p>Resolved and pinned by Helix</p>
+                    <p>{isVRising ? "Helix-owned Wine runtime" : "Resolved and pinned by Helix"}</p>
                   </div>
                 </div>
                 <dl>
@@ -3893,27 +4242,59 @@ function NativeServerPage({
                     <dt>Software</dt>
                     <dd>{detail.software}</dd>
                   </div>
-                  <div>
-                    <dt>Minecraft</dt>
-                    <dd>{detail.minecraftVersion}</dd>
-                  </div>
-                  <div>
-                    <dt>Build</dt>
-                    <dd>{detail.build}</dd>
-                  </div>
-                  <div>
-                    <dt>Java</dt>
-                    <dd>{detail.javaVersion}</dd>
-                  </div>
+                  {isVRising ? (
+                    <>
+                      <div>
+                        <dt>Steam app</dt>
+                        <dd>{detail.build}</dd>
+                      </div>
+                      <div>
+                        <dt>Runtime</dt>
+                        <dd>Wine + Xvfb container</dd>
+                      </div>
+                      <div>
+                        <dt>Query UDP</dt>
+                        <dd>{detail.queryPort ?? "—"}</dd>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <dt>Minecraft</dt>
+                        <dd>{detail.minecraftVersion}</dd>
+                      </div>
+                      <div>
+                        <dt>Build</dt>
+                        <dd>{detail.build}</dd>
+                      </div>
+                      <div>
+                        <dt>Java</dt>
+                        <dd>{detail.javaVersion}</dd>
+                      </div>
+                    </>
+                  )}
                   <div>
                     <dt>Created</dt>
                     <dd>{formatTimestamp(detail.createdAtUnixMs)}</dd>
                   </div>
-                  <div>
-                    <dt>Startup</dt>
-                    <dd>{detail.startOnBoot ? "With host" : "Manual"}</dd>
-                  </div>
                 </dl>
+                <label class="check-row startup-toggle">
+                  <input
+                    class="toggle-input"
+                    type="checkbox"
+                    checked={detail.startOnBoot}
+                    disabled={bootBusy || !canManageServers}
+                    title={manageTitle}
+                    onChange={(event) => void updateStartOnBoot(event.currentTarget.checked)}
+                  />
+                  <span>
+                    <strong>Start with the host</strong>
+                    <small>
+                      Docker restart policy unless-stopped. Survives host reboot without starting or stopping the server now.
+                    </small>
+                  </span>
+                </label>
+                <InlineError message={bootError} />
               </section>
             </div>
           </>
@@ -3926,9 +4307,9 @@ function NativeServerPage({
             onSessionExpired={onSessionExpired}
           />
         )}
-        {tab === "settings" && (
+        {tab === "settings" && detail.settings !== null && (
           <SettingsPanel
-            detail={detail}
+            detail={{ ...detail, settings: detail.settings }}
             csrfToken={csrfToken}
             canManageServers={canManageServers}
             restartSuccessRevision={restartSuccessRevision}
@@ -4425,20 +4806,27 @@ function ImportedServerPage({
   );
 }
 
-type ServerFilter = "all" | "minecraft" | "imported";
+type ServerFilter = "all" | "minecraft" | "vrising" | "imported";
 
 function isMinecraftServer(server: ManagedServer): boolean {
-  if (server.manager === "helix") return true;
-  return /minecraft|paper|purpur|folia|fabric|forge|spigot|bukkit|velocity|sponge/iu.test(
+  if (server.kind === "vrising") return false;
+  if (server.kind === "minecraft") return true;
+  return /minecraft|paper|purpur|folia|leaves|fabric|forge|spigot|bukkit|velocity|sponge/iu.test(
     `${server.software} ${server.version}`,
   );
 }
 
-function NewServerChooser({
+function isVRisingServer(server: ManagedServer): boolean {
+  return server.kind === "vrising" || /v\s*rising/iu.test(server.software);
+}
+
+export function NewServerChooser({
   onMinecraft,
+  onVRising,
   onClose,
 }: {
   onMinecraft: () => void;
+  onVRising: () => void;
   onClose: () => void;
 }) {
   return (
@@ -4446,7 +4834,7 @@ function NewServerChooser({
       <div class="game-create-grid">
         <button type="button" onClick={onMinecraft}>
           <span class="game-create-icon game-create-icon--minecraft">
-            <Icon name="servers" size={28} />
+            <GameMark game="minecraft" size={32} />
           </span>
           <span>
             <strong>Minecraft: Java Edition</strong>
@@ -4457,27 +4845,29 @@ function NewServerChooser({
           </span>
           <em>Ready</em>
         </button>
-        <article class="is-pending">
-          <span class="game-create-icon game-create-icon--vrising">V</span>
+        <button type="button" onClick={onVRising}>
+          <span class="game-create-icon game-create-icon--vrising">
+            <GameMark game="vrising" size={32} />
+          </span>
           <span>
             <strong>V Rising</strong>
             <small>
-              Publisher-supported server binaries are currently Windows-only.
-              Helix will not pretend an unvalidated Wine container is
-              production-ready.
+              Official Windows dedicated server in a Helix-owned Wine container.
+              First create builds Wine once; removing the last V Rising server
+              deletes that runtime.
             </small>
           </span>
-          <em>Not available on Linux</em>
-        </article>
+          <em>Wine runtime</em>
+        </button>
       </div>
       <div class="server-platform-note">
         <Icon name="info" size={16} />
         <span>
-          <strong>This is not a host setup problem</strong>The official V Rising
-          dedicated server is currently Windows-only. A Linux option would
-          depend on Wine, two UDP ports, persistent settings and saves,
-          SteamCMD updates, and tested rollback. Helix leaves creation disabled
-          instead of presenting a fake “fix” for an unverified runtime.
+          <strong>Wine is unofficial</strong>
+          Stunlock ships a Windows dedicated server. Helix runs it under Wine +
+          Xvfb inside an isolated container so the host OS never gets Wine
+          packages. First start downloads the game through SteamCMD and can take
+          a while. This path is not publisher-supported.
         </span>
       </div>
       <div class="dialog-actions">
@@ -4485,6 +4875,172 @@ function NewServerChooser({
           Close
         </button>
       </div>
+    </Dialog>
+  );
+}
+
+function CreateVRisingDialog({
+  csrfToken,
+  onClose,
+  onComplete,
+  onSessionExpired,
+}: {
+  csrfToken: string;
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [memory, setMemory] = useState(4096);
+  const [players, setPlayers] = useState(40);
+  const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
+  const [gamePort, setGamePort] = useState(9876);
+  const [queryPort, setQueryPort] = useState(9877);
+  const [startOnBoot, setStartOnBoot] = useState(true);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [job, setJob] = useState<BrokerJob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [portPolicy, setPortPolicy] = useState<GamePortPolicy | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getVRisingPortPolicy(csrfToken, controller.signal)
+      .then((policy) => {
+        setPortPolicy(policy);
+        if (policy.nextAvailablePort !== null) {
+          setGamePort(policy.nextAvailablePort);
+          setQueryPort(policy.nextAvailablePort + 1);
+        }
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (isSessionError(requestError)) onSessionExpired();
+        else setError(describeError(requestError));
+      });
+    return () => controller.abort();
+  }, [csrfToken, onSessionExpired]);
+
+  const polling = useJobPolling({
+    job,
+    csrfToken,
+    onJob: setJob,
+    onComplete: async () => {
+      await onComplete();
+      onClose();
+    },
+    onSessionExpired,
+  });
+
+  const submit = async (): Promise<void> => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const payload: Parameters<typeof createVRisingServer>[0] = {
+        name: name.trim(),
+        memory_mb: memory,
+        max_players: players,
+        start_on_boot: startOnBoot,
+        wine_runtime_acknowledged: acknowledged,
+      };
+      if (portMode === "manual") {
+        payload.game_port = gamePort;
+        payload.query_port = queryPort;
+      }
+      const result = await createVRisingServer(payload, csrfToken);
+      setJob({
+        id: result.jobId,
+        kind: "vrising_create",
+        status: "queued",
+        stage: "Queued",
+        progressPercent: 0,
+        createdAtUnixMs: Date.now(),
+        updatedAtUnixMs: Date.now(),
+        result: null,
+        error: null,
+      });
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const busy = submitting || (job !== null && job.status !== "failed");
+  return (
+    <Dialog title="New V Rising server" onClose={onClose} wide>
+      {job !== null && job.status !== "failed" ? (
+        <div class="create-progress">
+          <strong>{job.stage}</strong>
+          <ProgressBar value={job.progressPercent} />
+          <small>
+            First create can build the Wine image and download the dedicated server through SteamCMD. Leave this open.
+          </small>
+          {polling.error !== null && <InlineError message={polling.error} />}
+        </div>
+      ) : (
+        <>
+          <p class="dialog-intro">
+            Helix builds a local Wine + SteamCMD image if needed, then runs the official Windows dedicated server in an isolated container. The host never gets Wine packages.
+          </p>
+          <div class="form-grid">
+            <label class="field field--wide">
+              <span>Server name</span>
+              <input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} />
+            </label>
+            <label class="field">
+              <span>Memory (MiB)</span>
+              <input type="number" min={2048} max={24576} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} />
+            </label>
+            <label class="field">
+              <span>Player limit</span>
+              <input type="number" min={1} max={128} value={players} disabled={busy} onInput={(event) => setPlayers(Number(event.currentTarget.value))} />
+            </label>
+            <label class="field field--wide">
+              <span>Ports</span>
+              <select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}>
+                <option value="automatic">Automatic from the V Rising pool{portPolicy?.nextAvailablePort ? ` (next ${portPolicy.nextAvailablePort})` : ""}</option>
+                <option value="manual">Specific UDP ports</option>
+              </select>
+            </label>
+            {portMode === "manual" && (
+              <>
+                <label class="field">
+                  <span>Game UDP</span>
+                  <input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} />
+                </label>
+                <label class="field">
+                  <span>Query UDP</span>
+                  <input type="number" min={1024} max={65535} value={queryPort} disabled={busy} onInput={(event) => setQueryPort(Number(event.currentTarget.value))} />
+                </label>
+              </>
+            )}
+          </div>
+          <label class="check-row">
+            <input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} />
+            <span>
+              <strong>Start with the host</strong>
+              <small>Docker restart policy unless-stopped. Survives host reboot without starting the server now.</small>
+            </span>
+          </label>
+          <label class="check-row">
+            <input class="toggle-input" type="checkbox" checked={acknowledged} disabled={busy} onChange={(event) => setAcknowledged(event.currentTarget.checked)} />
+            <span>
+              <strong>I understand this uses Wine</strong>
+              <small>Stunlock does not support Linux. Helix isolates Wine in a container and removes that image when the last V Rising server is uninstalled.</small>
+            </span>
+          </label>
+          <InlineError message={error ?? (job?.error ?? null)} />
+          <div class="dialog-actions">
+            <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
+            <button class="button button--primary" type="button" disabled={busy || name.trim().length === 0 || !acknowledged} onClick={() => void submit()}>
+              {submitting ? "Starting…" : "Create V Rising server"}
+            </button>
+          </div>
+        </>
+      )}
     </Dialog>
   );
 }
@@ -4506,6 +5062,7 @@ export function ServersPage({
 }) {
   const [chooseGame, setChooseGame] = useState(false);
   const [creatingMinecraft, setCreatingMinecraft] = useState(false);
+  const [creatingVRising, setCreatingVRising] = useState(false);
   const [portPoolOpen, setPortPoolOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<ServerFilter>("all");
@@ -4599,7 +5156,9 @@ export function ServersPage({
       filter === "all" ||
       (filter === "minecraft"
         ? isMinecraftServer(server)
-        : server.manager !== "helix"),
+        : filter === "vrising"
+          ? isVRisingServer(server)
+          : server.manager !== "helix"),
   );
   const online = servers.filter((server) => server.status === "online").length;
   const helixManaged = servers.filter(
@@ -4679,6 +5238,13 @@ export function ServersPage({
           Minecraft <span>{servers.filter(isMinecraftServer).length}</span>
         </button>
         <button
+          class={filter === "vrising" ? "is-active" : ""}
+          type="button"
+          onClick={() => setFilter("vrising")}
+        >
+          V Rising <span>{servers.filter(isVRisingServer).length}</span>
+        </button>
+        <button
           class={filter === "imported" ? "is-active" : ""}
           type="button"
           onClick={() => setFilter("imported")}
@@ -4720,7 +5286,7 @@ export function ServersPage({
             </strong>
             <span>
               {servers.length === 0
-                ? "Create a native Minecraft server with New server. Helix Native stays separate from any AMP import."
+                ? "Create a native Minecraft or V Rising server with New server. Helix Native stays separate from any AMP import."
                 : "Create a native server, change the filter, or restore a hidden connection below."}
             </span>
           </div>
@@ -4791,6 +5357,10 @@ export function ServersPage({
             setChooseGame(false);
             setCreatingMinecraft(true);
           }}
+          onVRising={() => {
+            setChooseGame(false);
+            setCreatingVRising(true);
+          }}
         />
       )}
       {creatingMinecraft && (
@@ -4804,6 +5374,17 @@ export function ServersPage({
           }}
           onSessionExpired={onSessionExpired}
           canManageNetwork={canManageNetwork}
+        />
+      )}
+      {creatingVRising && (
+        <CreateVRisingDialog
+          csrfToken={csrfToken}
+          onClose={() => setCreatingVRising(false)}
+          onComplete={async () => {
+            await data.refresh();
+            await loadRemoved();
+          }}
+          onSessionExpired={onSessionExpired}
         />
       )}
       {portPoolOpen && (

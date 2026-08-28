@@ -86,6 +86,7 @@ impl NativeManager {
         limit: u8,
     ) -> Result<Value, String> {
         let manifest = self.load_manifest(native_id(instance_id))?;
+        self.require_minecraft_content(&manifest)?;
         let profile = content_profile(manifest.software)?;
         validate_search(query, offset, limit)?;
         let facets = json!([
@@ -115,6 +116,7 @@ impl NativeManager {
     ) -> Result<Value, String> {
         validate_modrinth_id(project_id, "project")?;
         let manifest = self.load_manifest(native_id(instance_id))?;
+        self.require_minecraft_content(&manifest)?;
         let profile = content_profile(manifest.software)?;
         let project = self.fetch_modrinth_project(project_id)?;
         validate_project_platform(&project, &profile)?;
@@ -181,6 +183,7 @@ impl NativeManager {
             validate_modrinth_id(version_id, "version")?;
         }
         let manifest = self.load_manifest(native_id(instance_id))?;
+        self.require_minecraft_content(&manifest)?;
         let profile = content_profile(manifest.software)?;
         let _operation = self.begin_instance_operation(&manifest.id, "marketplace install")?;
         let resolved = self.resolve_content_tree(
@@ -607,6 +610,12 @@ fn content_profile(software: MinecraftSoftware) -> Result<ContentProfile, String
             search_project_type: "plugin",
             directory: "plugins",
             accepted_loaders: &["folia"],
+        }),
+        MinecraftSoftware::Leaves => Ok(ContentProfile {
+            kind: "plugin",
+            search_project_type: "plugin",
+            directory: "plugins",
+            accepted_loaders: &["leaves", "paper", "spigot", "bukkit"],
         }),
         MinecraftSoftware::Fabric => Ok(ContentProfile {
             kind: "mod",
@@ -1224,6 +1233,9 @@ mod tests {
         let fabric = content_profile(MinecraftSoftware::Fabric).unwrap();
         assert_eq!(fabric.kind, "mod");
         assert_eq!(fabric.directory, "mods");
+        let leaves = content_profile(MinecraftSoftware::Leaves).unwrap();
+        assert_eq!(leaves.kind, "plugin");
+        assert!(leaves.accepted_loaders.contains(&"paper"));
         assert!(content_profile(MinecraftSoftware::Vanilla).is_err());
     }
 

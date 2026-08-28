@@ -483,12 +483,14 @@ export function DashboardSettingsPage({
   refreshIntervalMs,
   navigationOrder,
   colors,
+  serversEnabled,
   preferenceSyncStatus,
   hostIntegration,
   onThemeChange,
   onRefreshIntervalChange,
   onNavigationOrderChange,
   onColorsChange,
+  onServersEnabledChange,
   onAccountUpdated,
   onHostIntegrationRefresh,
 }: {
@@ -498,12 +500,14 @@ export function DashboardSettingsPage({
   refreshIntervalMs: RefreshIntervalMs;
   navigationOrder: readonly PrimaryDashboardSectionId[];
   colors: DashboardColors;
+  serversEnabled: boolean;
   preferenceSyncStatus: 'loading' | 'synced' | 'saving' | 'local';
   hostIntegration: DashboardResource<HostIntegration>;
   onThemeChange: (theme: ThemePreference) => void;
   onRefreshIntervalChange: (value: RefreshIntervalMs) => void;
   onNavigationOrderChange: (value: PrimaryDashboardSectionId[]) => void;
   onColorsChange: (value: DashboardColors) => void;
+  onServersEnabledChange: (value: boolean) => void;
   onAccountUpdated: () => void;
   onHostIntegrationRefresh: () => Promise<void>;
 }) {
@@ -515,6 +519,26 @@ export function DashboardSettingsPage({
         <section class="settings-card">
           <div class="settings-card__head"><div><Icon name="performance" /><span><h2>Live data</h2><p>Control how often visible host and server statistics update.</p></span></div><InfoTip text="Faster refreshes query the host more often. Polling pauses while this tab is hidden." /></div>
           <label class="settings-select-row"><span><strong>Refresh interval</strong><small>Applies throughout the dashboard</small></span><select value={refreshIntervalMs} onChange={(event) => onRefreshIntervalChange(Number(event.currentTarget.value) as RefreshIntervalMs)}>{refreshIntervalOptions.map((option) => <option key={option} value={option}>{intervalLabel(option)}</option>)}</select></label>
+        </section>
+        <section class="settings-card">
+          <div class="settings-card__head"><div><Icon name="servers" /><span><h2>Game servers</h2><p>Show or hide the Servers page without touching running game containers.</p></span></div><InfoTip text="Owner setup can skip Servers. Turning this on later is the same as choosing it during setup. Hiding the page does not stop Minecraft, V Rising, or imported servers." /></div>
+          <div class="host-boot-control">
+            <div>
+              <span>Servers dashboard</span>
+              <strong>{serversEnabled ? 'Enabled' : 'Hidden'}</strong>
+              <small>Native Minecraft, V Rising, AMP imports, and port pools live here. Existing servers keep running if you hide the page.</small>
+            </div>
+            <button
+              class="switch-button"
+              role="switch"
+              aria-checked={serversEnabled}
+              type="button"
+              onClick={() => onServersEnabledChange(!serversEnabled)}
+            >
+              <i />
+              <span>{serversEnabled ? 'On' : 'Off'}</span>
+            </button>
+          </div>
         </section>
         <section class="settings-card">
           <div class="settings-card__head"><div><Icon name="moon" /><span><h2>Appearance</h2><p>Choose the contrast that works best on this screen.</p></span></div></div>

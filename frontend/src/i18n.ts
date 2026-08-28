@@ -33,6 +33,13 @@ const englishMessages = {
   'auth.setup.passwordHelp':
     'Use 13–256 characters. Avoid Helix, your login or display name, obvious repetition, and common passwords. Spaces and Unicode are supported.',
   'auth.setup.confirmPassword': 'Confirm password',
+  'auth.setup.servers': 'Game servers',
+  'auth.setup.serversInclude': 'Include the Servers page',
+  'auth.setup.serversIncludeHelp':
+    'Native Minecraft, V Rising, and AMP imports. Helix can turn this on later from Settings.',
+  'auth.setup.serversSkip': 'Skip for now',
+  'auth.setup.serversSkipHelp':
+    'The rest of Helix still works. Existing or later game servers keep running even while this page is hidden.',
   'auth.setup.submit': 'Create owner and continue',
   'auth.setup.submitting': 'Creating owner…',
   'auth.setup.footnote':

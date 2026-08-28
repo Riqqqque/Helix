@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getMinecraftPortPolicy,
+  getMinecraftVersions,
   getDirectory,
   getServerBackups,
   getServerDetail,
@@ -9,6 +10,8 @@ import {
   restoreTrashedServerBackup,
   runServerAction,
   saveMinecraftPortPolicy,
+  saveVRisingPortPolicy,
+  setNativeStartOnBoot,
   setServerNetworkExposure,
   saveServerSettings,
   trashServerBackup,
@@ -65,6 +68,46 @@ describe('file manager API', () => {
     expect(url.searchParams.get('path')).toBe('/HDD10tb1/TV & Movies');
     expect(url.searchParams.get('cursor')).toBe('movie 050.mkv');
     expect(url.searchParams.get('limit')).toBe('50');
+  });
+});
+
+describe('Minecraft version catalog', () => {
+  it('loads published releases for the selected software', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      schema_version: 1,
+      software: 'paper',
+      allows_latest: true,
+      latest_version: '1.21.8',
+      versions: ['1.21.8', '1.21.7', '1.21.4'],
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getMinecraftVersions('paper', 'csrf')).resolves.toEqual({
+      software: 'paper',
+      allowsLatest: true,
+      latestVersion: '1.21.8',
+      versions: ['1.21.8', '1.21.7', '1.21.4'],
+    });
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://helix.local');
+    expect(url.pathname).toBe('/api/v1/servers/minecraft/versions');
+    expect(url.searchParams.get('software')).toBe('paper');
+  });
+
+  it('keeps custom JAR catalogs from advertising latest', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      schema_version: 1,
+      software: 'custom',
+      allows_latest: false,
+      latest_version: '1.21.8',
+      versions: ['1.21.8'],
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getMinecraftVersions('custom', 'csrf')).resolves.toMatchObject({
+      software: 'custom',
+      allowsLatest: false,
+      latestVersion: '1.21.8',
+    });
   });
 });
 
@@ -162,6 +205,51 @@ describe('native server API', () => {
     const [exposurePath, exposureRequest] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(exposurePath).toContain('helix%3Aserver-id/network');
     expect(JSON.parse(String(exposureRequest.body))).toEqual({ enabled: true });
+  });
+
+  it('never enables UPnP auto-forward when saving the V Rising pool', async () => {
+    const response = {
+      schema_version: 1,
+      policy: {
+        game: 'vrising',
+        ranges: [{ start: 9876, end: 9910 }],
+        ports: [],
+        auto_forward_on_create: false,
+      },
+      capacity: 35,
+      assigned_ports: [],
+      available_count: 35,
+      next_available_port: 9876,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(response), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await saveVRisingPortPolicy({
+      ranges: [{ start: 9876, end: 9910 }],
+      ports: [],
+      autoForwardOnCreate: true,
+    }, 'csrf');
+
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(request.body))).toEqual({
+      game: 'vrising',
+      ranges: [{ start: 9876, end: 9910 }],
+      ports: [],
+      auto_forward_on_create: false,
+    });
+  });
+
+  it('updates native start-on-boot without starting the server now', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ enabled: false }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(setNativeStartOnBoot('helix:server-id', false, 'csrf')).resolves.toEqual({ enabled: false });
+    const [path, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toContain('helix%3Aserver-id/start-on-boot');
+    expect(request.method).toBe('PUT');
+    expect(JSON.parse(String(request.body))).toEqual({ enabled: false });
   });
 
   it('parses a background action job without waiting for the work', async () => {

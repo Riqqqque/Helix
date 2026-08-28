@@ -15,6 +15,7 @@ const validRecord: DashboardPreferencesRecord = {
     homeTemplates: [{ id: 'home-main', name: 'Main', accent: '#d7f64d', widgets: [{ id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Right now', content: '', url: '', color: '' }] }],
     activeHomeId: 'home-main',
     colors: { accent: '', text: '', surface: '' },
+    serversEnabled: true,
   },
   updatedAtUnixMs: 1_800_000_000_000,
 };
@@ -32,6 +33,15 @@ describe('dashboard preferences API', () => {
       revision: 0,
       updatedAtUnixMs: null,
     })).toMatchObject({ revision: 0, updatedAtUnixMs: null });
+  });
+
+  it('defaults a missing serversEnabled flag to enabled', () => {
+    const preferences = { ...validRecord.preferences };
+    Reflect.deleteProperty(preferences, 'serversEnabled');
+    expect(parseDashboardPreferencesRecord({
+      ...validRecord,
+      preferences,
+    }).preferences.serversEnabled).toBe(true);
   });
 
   it('rejects missing navigation pages and unsupported refresh rates', () => {

@@ -9,6 +9,8 @@ import {
   saveDashboardColors,
   saveNavigationOrder,
   saveRefreshInterval,
+  saveServersEnabled,
+  readServersEnabled,
   type DashboardColors,
   type PrimaryDashboardSectionId,
   type RefreshIntervalMs,
@@ -43,6 +45,7 @@ interface DashboardPreferenceState extends DashboardPreferences {
   setActiveHomeId: (value: string) => void;
   setHomeState: (templates: HomeTemplate[], activeHomeId: string) => void;
   setColors: (value: DashboardColors) => void;
+  setServersEnabled: (value: boolean) => void;
 }
 
 const SAVE_DEBOUNCE_MS = 700;
@@ -63,7 +66,8 @@ export function shouldMigrateLocalPreferences(
     !sameValue(preferences.homeWidgets, defaultHomeWidgets) ||
     !sameValue(preferences.homeTemplates, defaultHomeTemplates) ||
     preferences.activeHomeId !== defaultHomeTemplates[0]?.id ||
-    !sameValue(preferences.colors, defaultDashboardColors)
+    !sameValue(preferences.colors, defaultDashboardColors) ||
+    preferences.serversEnabled !== true
   );
 }
 
@@ -74,6 +78,7 @@ function cachePreferences(preferences: DashboardPreferences): void {
   saveHomeTemplates(preferences.homeTemplates);
   saveActiveHomeId(preferences.activeHomeId, preferences.homeTemplates);
   saveDashboardColors(preferences.colors);
+  saveServersEnabled(preferences.serversEnabled);
 }
 
 export function mergePreferenceChanges(
@@ -89,6 +94,7 @@ export function mergePreferenceChanges(
     homeTemplates: homeDirty ? local.homeTemplates : remote.homeTemplates,
     activeHomeId: homeDirty ? local.activeHomeId : remote.activeHomeId,
     colors: dirty.has('colors') ? local.colors : remote.colors,
+    serversEnabled: dirty.has('serversEnabled') ? local.serversEnabled : remote.serversEnabled,
   };
 }
 
@@ -105,6 +111,7 @@ export function useDashboardPreferences(
     activeHomeId: localActiveHomeId.current,
     homeWidgets: localTemplates.current.find((template) => template.id === localActiveHomeId.current)?.widgets ?? [],
     colors: readDashboardColors(),
+    serversEnabled: readServersEnabled(),
   });
   const [preferences, setPreferences] = useState<DashboardPreferences>(localInitial.current);
   const [syncStatus, setSyncStatus] = useState<PreferenceSyncStatus>('loading');
@@ -123,6 +130,7 @@ export function useDashboardPreferences(
     homeTemplates: 0,
     activeHomeId: 0,
     colors: 0,
+    serversEnabled: 0,
   });
   const retryTimerRef = useRef<number | null>(null);
 
@@ -179,6 +187,7 @@ export function useDashboardPreferences(
           dirtyRef.current.add('homeTemplates');
           dirtyRef.current.add('activeHomeId');
           dirtyRef.current.add('colors');
+          dirtyRef.current.add('serversEnabled');
           setSyncStatus('saving');
           setSyncTick((current) => current + 1);
           return;
@@ -283,5 +292,6 @@ export function useDashboardPreferences(
     setActiveHomeId: (value) => changeHome(preferences.homeTemplates, value),
     setHomeState: changeHome,
     setColors: (value) => change('colors', value),
+    setServersEnabled: (value: boolean) => change('serversEnabled', value),
   };
 }

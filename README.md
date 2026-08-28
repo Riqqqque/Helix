@@ -47,7 +47,7 @@ The current private-alpha build includes:
 - APT/dpkg inventory, explicit package-list refresh, and an exact selected-
   candidate update job with held-package, disk, no-removal simulation, conffile,
   final-version, and never-auto-reboot guards;
-- native Docker-backed Minecraft instances for Paper, Purpur, Folia, Fabric,
+- native Docker-backed Minecraft instances for Paper, Purpur, Folia, Leaves, Fabric,
   Vanilla, and a guarded local custom-JAR import, plus a compatibility-aware
   Modrinth plugin/mod marketplace and a narrow Fabric-only “Start with a
   modpack” path;
@@ -164,15 +164,15 @@ dashboard gateway. See
 ## Minecraft scope
 
 The native manager currently exposes install paths for Paper, Purpur, Folia,
-Fabric, Vanilla, and an owner-supplied custom server JAR already inside a
-configured Storage root. The custom flow copies and hashes the JAR into a
-private unprivileged container workspace, pins Java 17, 21, or 25, and never
-modifies the source. Helix cannot verify the custom JAR's publisher or select a
-future update for it. Deployments that browse broadly from `/` must configure
-one or more narrower native `custom_artifact_roots`; Helix never promotes a
-whole-host read boundary into an executable import boundary. The Modrinth
-marketplace filters content by the selected server software, loader, and
-Minecraft version. A missing or negative Modrinth server-side flag is shown as
+Leaves, Fabric, Vanilla, and an owner-supplied custom server JAR. The create
+wizard loads published Minecraft releases for the selected software. Custom JARs
+can be dropped from this computer or chosen from Storage; Helix copies and
+hashes the file into a private unprivileged container workspace, pins Java 17,
+21, or 25, and never modifies the source. Helix cannot verify the custom JAR's
+publisher or select a future update for it. Extra import folders can be added
+with `native.custom_artifact_roots`; Helix never promotes `/` into an executable
+import boundary. The Modrinth marketplace filters content by the selected server
+software, loader, and Minecraft version. A missing or negative Modrinth server-side flag is shown as
 a warning instead of hiding the project or blocking its install; Helix still
 prevents plugin/mod mixing and writes only to the matching `plugins/` or `mods/`
 directory. Unsupported server software does not get a fake install path.
@@ -196,10 +196,13 @@ traffic path. Capacity still depends on hardware, world behavior, server build,
 mods/plugins, and configuration. See
 [Game hosting capacity](docs/GAME-HOSTING-CAPACITY.md).
 
-The server chooser also reserves a clear V Rising entry rather than pretending
-it works on Linux. Stunlock's current dedicated-server distribution is
-Windows-only, so a Linux one-click path remains disabled until a reviewed Wine
-lifecycle can be installed, updated, backed up, and rolled back safely.
+The server chooser uses original Helix marks for Minecraft (isometric grass
+block) and V Rising (blood moon and castle). V Rising installs through a
+Helix-owned Wine + SteamCMD container. The host OS never gets Wine packages.
+First create can take a while while SteamCMD downloads the Windows dedicated
+server. Removing the last V Rising server deletes that runtime image. This path
+is unofficial and not publisher-supported; it has not been proven on a live
+host yet.
 
 ## Make a Strand
 

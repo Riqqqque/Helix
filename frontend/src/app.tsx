@@ -244,27 +244,31 @@ function HelixBrand() {
 function Sidebar({
   active,
   order,
+  serversEnabled,
   onOrderChange,
 }: {
   active: DashboardSectionId;
   order: readonly PrimaryDashboardSectionId[];
+  serversEnabled: boolean;
   onOrderChange: (order: PrimaryDashboardSectionId[]) => void;
 }) {
   const [arranging, setArranging] = useState(false);
+  const visibleOrder = arranging || serversEnabled ? order : order.filter((id) => id !== 'servers');
   return (
     <aside class="sidebar">
       <HelixBrand />
       <nav class="sidebar-nav" aria-label="Dashboard">
         <div class="sidebar-nav__head"><span>Pages</span><button type="button" class={arranging ? 'is-active' : ''} aria-pressed={arranging} onClick={() => setArranging((value) => !value)}><Icon name={arranging ? 'check' : 'edit'} size={13} /><span>{arranging ? 'Done' : 'Arrange'}</span></button></div>
         <div class="sidebar-nav__primary">
-          {order.map((section, index) => {
+          {visibleOrder.map((section) => {
             const item = navigation.find((entry) => entry.id === section)!;
+            const fullIndex = order.indexOf(section);
             return (
               <div class="nav-item-wrap" key={item.id}>
                 <a href={`#${item.id}`} class={`nav-item${active === item.id ? ' is-active' : ''}`} aria-current={active === item.id ? 'page' : undefined} title={item.description} onPointerEnter={preloadForSection(item.id)} onFocus={preloadForSection(item.id)}>
                   <Icon name={item.icon} size={19} /><span>{item.label}</span>
                 </a>
-                {arranging && <div class="nav-item-order"><button type="button" disabled={index === 0} onClick={() => { const next = [...order]; [next[index - 1], next[index]] = [next[index]!, next[index - 1]!]; onOrderChange(next); }} aria-label={`Move ${item.label} up`}><Icon name="chevron" size={12} class="icon--up" /></button><button type="button" disabled={index === order.length - 1} onClick={() => { const next = [...order]; [next[index], next[index + 1]] = [next[index + 1]!, next[index]!]; onOrderChange(next); }} aria-label={`Move ${item.label} down`}><Icon name="chevron" size={12} class="icon--down" /></button></div>}
+                {arranging && <div class="nav-item-order"><button type="button" disabled={fullIndex <= 0} onClick={() => { const next = [...order]; [next[fullIndex - 1], next[fullIndex]] = [next[fullIndex]!, next[fullIndex - 1]!]; onOrderChange(next); }} aria-label={`Move ${item.label} up`}><Icon name="chevron" size={12} class="icon--up" /></button><button type="button" disabled={fullIndex < 0 || fullIndex >= order.length - 1} onClick={() => { const next = [...order]; [next[fullIndex], next[fullIndex + 1]] = [next[fullIndex + 1]!, next[fullIndex]!]; onOrderChange(next); }} aria-label={`Move ${item.label} down`}><Icon name="chevron" size={12} class="icon--down" /></button></div>}
               </div>
             );
           })}
@@ -279,8 +283,17 @@ function Sidebar({
   );
 }
 
-function MobileNav({ active, order }: { active: DashboardSectionId; order: readonly PrimaryDashboardSectionId[] }) {
-  const items = [...order, 'settings' as const].map((id) => navigation.find((entry) => entry.id === id)!);
+function MobileNav({
+  active,
+  order,
+  serversEnabled,
+}: {
+  active: DashboardSectionId;
+  order: readonly PrimaryDashboardSectionId[];
+  serversEnabled: boolean;
+}) {
+  const visible = serversEnabled ? order : order.filter((id) => id !== 'servers');
+  const items = [...visible, 'settings' as const].map((id) => navigation.find((entry) => entry.id === id)!);
   return (
     <nav class="mobile-nav" aria-label="Dashboard">
       {items.map((item) => (
@@ -574,11 +587,30 @@ export interface DashboardProps {
   onLogout: () => Promise<void>;
 }
 
+function ServersModuleDisabled({ onEnable }: { onEnable: () => void }) {
+  return (
+    <div class="page page--servers-disabled">
+      <PageHead title="Servers" detail="This Helix does not show the game-server dashboard yet." />
+      <section class="surface servers-disabled-card">
+        <Icon name="servers" size={28} />
+        <strong>Game servers are turned off</strong>
+        <p>
+          Existing Minecraft, V Rising, and imported servers keep running. Turn this on to create, start, stop, and manage them from Helix.
+        </p>
+        <button class="button button--primary" type="button" onClick={onEnable}>
+          Enable Servers
+        </button>
+        <small>You can also do this later from Settings.</small>
+      </section>
+    </div>
+  );
+}
+
 export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated, onLogout }: DashboardProps) {
   const active = useActiveSection();
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
   const dashboardPreferences = useDashboardPreferences(csrfToken, onSessionExpired);
-  const { navigationOrder, metricsRefreshMs: refreshIntervalMs } = dashboardPreferences;
+  const { navigationOrder, metricsRefreshMs: refreshIntervalMs, serversEnabled } = dashboardPreferences;
   const data = useDashboardData(csrfToken, onSessionExpired, refreshIntervalMs);
   useEffect(() => {
     applyDashboardColors(dashboardPreferences.colors);
@@ -602,5 +634,5 @@ export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated,
     dashboardPreferences.setMetricsRefreshMs(next);
   };
 
-  return <><a class="skip-link" href="#main-content">Skip to content</a><div class="dashboard-shell"><Sidebar active={active} order={navigationOrder} onOrderChange={changeNavigationOrder} /><div class="dashboard-workspace"><Topbar section={active} hostname={hostname} refreshedAt={refreshedAt} user={user} onRefresh={data.refresh} onLogout={onLogout} theme={theme} onThemeChange={setTheme} /><MobileNav active={active} order={navigationOrder} /><main id="main-content" tabIndex={-1}>{active === 'overview' && <OverviewPage data={data} />}{active === 'home' && <HomeRoute overview={data.overview.data} inventory={data.inventory.data} servers={data.servers.data ?? []} displayName={user.displayName} templates={dashboardPreferences.homeTemplates} activeHomeId={dashboardPreferences.activeHomeId} syncStatus={dashboardPreferences.syncStatus} onHomeChange={dashboardPreferences.setHomeState} csrfToken={csrfToken} />}{active === 'storage' && <StoragePage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}{active === 'network' && <NetworkPage data={data} csrfToken={csrfToken} canManageFirewall={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} />}{active === 'host' && <HostPage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}{active === 'terminal' && <TerminalRoute csrfToken={csrfToken} canOpen={user.capabilities.includes('terminal.open')} onSessionExpired={onSessionExpired} />}{active === 'servers' && <ServersRoute data={data} csrfToken={csrfToken} canManageServers={user.capabilities.includes('games.manage')} canManageBackups={user.capabilities.includes('games.backups.manage')} canManageNetwork={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} />}{active === 'hooks' && <HooksRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}{active === 'settings' && <SettingsRoute user={user} csrfToken={csrfToken} theme={theme} refreshIntervalMs={refreshIntervalMs} navigationOrder={navigationOrder} colors={dashboardPreferences.colors} preferenceSyncStatus={dashboardPreferences.syncStatus} hostIntegration={data.integration} onThemeChange={setTheme} onRefreshIntervalChange={changeRefreshInterval} onNavigationOrderChange={changeNavigationOrder} onColorsChange={dashboardPreferences.setColors} onAccountUpdated={onAccountUpdated} onHostIntegrationRefresh={data.refresh} />}</main></div></div></>;
+  return <><a class="skip-link" href="#main-content">Skip to content</a><div class="dashboard-shell"><Sidebar active={active} order={navigationOrder} serversEnabled={serversEnabled} onOrderChange={changeNavigationOrder} /><div class="dashboard-workspace"><Topbar section={active} hostname={hostname} refreshedAt={refreshedAt} user={user} onRefresh={data.refresh} onLogout={onLogout} theme={theme} onThemeChange={setTheme} /><MobileNav active={active} order={navigationOrder} serversEnabled={serversEnabled} /><main id="main-content" tabIndex={-1}>{active === 'overview' && <OverviewPage data={data} />}{active === 'home' && <HomeRoute overview={data.overview.data} inventory={data.inventory.data} servers={data.servers.data ?? []} displayName={user.displayName} templates={dashboardPreferences.homeTemplates} activeHomeId={dashboardPreferences.activeHomeId} syncStatus={dashboardPreferences.syncStatus} onHomeChange={dashboardPreferences.setHomeState} csrfToken={csrfToken} />}{active === 'storage' && <StoragePage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}{active === 'network' && <NetworkPage data={data} csrfToken={csrfToken} canManageFirewall={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} />}{active === 'host' && <HostPage data={data} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />}{active === 'terminal' && <TerminalRoute csrfToken={csrfToken} canOpen={user.capabilities.includes('terminal.open')} onSessionExpired={onSessionExpired} />}{active === 'servers' && (serversEnabled ? <ServersRoute data={data} csrfToken={csrfToken} canManageServers={user.capabilities.includes('games.manage')} canManageBackups={user.capabilities.includes('games.backups.manage')} canManageNetwork={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} /> : <ServersModuleDisabled onEnable={() => dashboardPreferences.setServersEnabled(true)} />)}{active === 'hooks' && <HooksRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}{active === 'settings' && <SettingsRoute user={user} csrfToken={csrfToken} theme={theme} refreshIntervalMs={refreshIntervalMs} navigationOrder={navigationOrder} colors={dashboardPreferences.colors} serversEnabled={serversEnabled} preferenceSyncStatus={dashboardPreferences.syncStatus} hostIntegration={data.integration} onThemeChange={setTheme} onRefreshIntervalChange={changeRefreshInterval} onNavigationOrderChange={changeNavigationOrder} onColorsChange={dashboardPreferences.setColors} onServersEnabledChange={dashboardPreferences.setServersEnabled} onAccountUpdated={onAccountUpdated} onHostIntegrationRefresh={data.refresh} />}</main></div></div></>;
 }

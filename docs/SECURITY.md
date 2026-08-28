@@ -226,6 +226,11 @@ does not enable/disable Docker or change current container running state. A
 future container recreation may reapply Compose policy, which the UI states
 explicitly.
 
+Native game servers have a separate `PUT /api/v1/servers/{instance_id}/start-on-boot`
+control. It updates that instance’s Docker restart policy and manifest flag
+without starting or stopping the workload now. It does not change Helix
+dashboard/gateway containers.
+
 One-shot whole-host reboot requires:
 
 - capability `system.power`;
@@ -332,22 +337,24 @@ hosts and bounded responses. Marketplace profiles restrict software kind,
 loader, and game version before installation. Modrinth's server-side metadata
 is advisory because projects do not always declare it accurately; missing or
 negative metadata produces a visible warning instead of a hard block.
-Paper/Purpur receive matching plugin JARs, Folia requires a Folia loader match,
+Paper/Purpur/Leaves receive matching plugin JARs, Folia requires a Folia loader match,
 and Fabric receives matching mod JARs. Vanilla, Forge, and NeoForge do not
 receive a fake marketplace path. Custom JARs also have no automatic marketplace
 because their loader and publisher compatibility is unknown.
 
-Custom server creation accepts a local path only inside a configured Storage
-root. The broker canonicalizes it, rejects links/non-files/out-of-root paths,
-bounds its size, copies through a private create-new staging file, syncs and
-hashes the copy, and records only `local-import` rather than exposing the source
-path in the instance manifest. This protects the import boundary; it does not
-establish publisher trust or make arbitrary JAR code safe.
+Custom server creation accepts a dropped `.jar` or a local path inside a
+configured Storage root. Browser uploads use sequential JSON chunks, ZIP magic
+on the first chunk, and Helix's private import directory. Storage-browser paths
+are still canonicalized, reject links/non-files/out-of-root paths, and copy
+through a private create-new staging file. The source is untouched. Helix
+records `local-import` rather than exposing the original path. This protects
+the import boundary; it does not establish publisher trust or make arbitrary
+JAR code safe.
 
 Read and execute boundaries stay separate. A managed root of `/` can support
 broad inventory browsing, but it is never inherited as a custom artifact root.
-If no narrow `native.custom_artifact_roots` path is configured, the broker
-starts normally and advertises Custom JAR as configuration-required.
+Dropped JARs land in Helix's private `{state_root}/imports` directory. Extra
+Storage paths still need an explicit `native.custom_artifact_roots` entry.
 
 The separate “Start with a modpack” flow accepts only opaque Modrinth IDs and
 ordinary server settings from the browser. The broker re-resolves metadata,
