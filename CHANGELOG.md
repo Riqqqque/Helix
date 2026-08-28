@@ -5,6 +5,11 @@ binary or package release yet.
 
 ## Unreleased
 
+### Fixed
+
+- Homarr import reads the current Homarr SQLite app catalog (http(s) hrefs from
+  the container mounts) instead of telling you to export classic JSON by hand.
+
 ### Added
 
 - Notifications bell for capacity warnings, dismissible Overview/Storage

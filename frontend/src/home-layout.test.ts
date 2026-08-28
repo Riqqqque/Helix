@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   defaultHomeWidgets,
   exportHomeTemplate,
+  homeShortcutUrls,
   importHomeTemplate,
   moveHomeWidget,
+  newHomarrShortcuts,
   nextHomeWidgetHeight,
   nextHomeWidgetSize,
   normalizeHomeTemplates,
@@ -14,6 +16,7 @@ import {
   readHomeWidgets,
   reorderHomeWidgets,
   saveHomeWidgets,
+  type HomeWidget,
 } from './home-layout';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -83,5 +86,19 @@ describe('home layout', () => {
     const imported = importHomeTemplate(exportHomeTemplate(templates[0]!));
     expect(imported).toMatchObject({ name: 'Work', accent: '#ff8800', widgets: [] });
     expect(imported.id).not.toBe('work');
+  });
+
+  it('imports Homarr shortcuts that are not already on Home', () => {
+    const existing: HomeWidget[] = [
+      { id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Now', content: '', url: '', color: '' },
+      { id: 'plex', kind: 'shortcut', size: 'compact', height: 'medium', title: 'Plex', content: '', url: 'http://192.168.1.10:32400/web', color: '' },
+    ];
+    expect(homeShortcutUrls(existing)).toEqual(new Set(['http://192.168.1.10:32400/web']));
+    expect(newHomarrShortcuts([
+      { url: 'http://192.168.1.10:32400/web' },
+      { url: 'http://192.168.1.10:7878' },
+      { url: 'http://192.168.1.10:7878' },
+      { url: '' },
+    ], existing)).toEqual([{ url: 'http://192.168.1.10:7878' }]);
   });
 });
