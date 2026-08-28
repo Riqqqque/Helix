@@ -51,10 +51,11 @@ mods or plugins.
 ## Start here
 
 On 64-bit systemd Linux, clone the source and run
-`./scripts/install-from-source.sh`, then create the owner with your own display
-name. That puts `helixd` on loopback. Host files, firewall, packages, and native
-game servers still need the broker from the container deployment guide. Nothing
-ships with a demo city or demo server.
+`./scripts/install-from-source.sh`. On a terminal that one command walks
+through yes/no setup and puts `helixd` on loopback (another port if 8080 is
+taken). Create the owner with your own display name. Host files, firewall,
+packages, and native game servers still need the broker from the container
+deployment guide. Nothing ships with a demo city or demo server.
 
 - [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started)
 - [How Helix Works](https://github.com/Riqqqque/Helix/wiki/How-Helix-Works)

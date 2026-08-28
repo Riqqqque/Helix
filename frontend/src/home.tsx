@@ -3,9 +3,10 @@ import type { HostInventory, ManagedServer } from './control-api';
 import { calculatePercent, formatBytes, formatDuration, formatPercent } from './format';
 import {
   exportHomeTemplate,
+  homarrShortcutSize,
   homeShortcutUrls,
+  HOMARR_HOME_ID,
   importHomeTemplate,
-  MAX_WIDGETS_PER_HOME,
   moveHomeWidget,
   newHomarrShortcuts,
   nextHomeWidgetHeight,
@@ -14,6 +15,7 @@ import {
   parseNoteWidgetConfiguration,
   parseWeatherWidgetConfiguration,
   reorderHomeWidgets,
+  replaceHomarrHome,
   serializeNoteWidgetConfiguration,
   serializeWeatherWidgetConfiguration,
   type HomeTemplate,
@@ -23,6 +25,7 @@ import {
 } from './home-layout';
 import { DockerInventoryPanel } from './docker-panel';
 import { getHomarrCatalog, type HomarrWidgetCandidate } from './docker-api';
+import { shortcutIconUrl, shortcutLetter } from './shortcut-icons';
 import { Sparkline } from './dashboard-ui';
 import { Icon, type IconName } from './icons';
 import { InfoTip } from './info-tip';
@@ -63,19 +66,31 @@ const widgetIcons: Record<HomeWidgetKind, IconName> = {
   strand: 'strands',
 };
 
+function ShortcutMark({ name, url, icon, size = 22 }: { name: string; url: string; icon?: string; size?: number }) {
+  const resolved = shortcutIconUrl({ name, url, icon });
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [resolved]);
+  if (resolved !== null && !failed) {
+    return <img class="home-shortcut-icon" src={resolved} alt="" width={size} height={size} onError={() => setFailed(true)} />;
+  }
+  return <span class="home-shortcut-badge" aria-hidden="true">{shortcutLetter(name)}</span>;
+}
+
 function makeWidget(kind: HomeWidgetKind): HomeWidget {
   const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   const defaults: Record<HomeWidgetKind, Omit<HomeWidget, 'id' | 'kind'>> = {
-    clock: { size: 'compact', height: 'medium', title: 'Right now', content: '', url: '', color: '' },
-    host: { size: 'wide', height: 'medium', title: 'Host pulse', content: '', url: '', color: '' },
-    servers: { size: 'wide', height: 'medium', title: 'Servers', content: '', url: '', color: '' },
-    storage: { size: 'wide', height: 'medium', title: 'Storage', content: '', url: '', color: '' },
-    weather: { size: 'wide', height: 'medium', title: 'Weather', content: '', url: '', color: '' },
-    note: { size: 'compact', height: 'medium', title: 'Notes', content: '', url: '', color: '' },
-    shortcut: { size: 'compact', height: 'medium', title: 'Shortcut', content: '', url: '', color: '' },
-    graphs: { size: 'wide', height: 'medium', title: 'Live graphs', content: '', url: '', color: '' },
-    docker: { size: 'wide', height: 'tall', title: 'Docker', content: '', url: '', color: '' },
-    strand: { size: 'wide', height: 'tall', title: 'Strand', content: '', url: '', color: '' },
+    clock: { size: 'compact', height: 'medium', title: 'Right now', content: '', url: '', color: '', icon: '' },
+    host: { size: 'wide', height: 'medium', title: 'Host pulse', content: '', url: '', color: '', icon: '' },
+    servers: { size: 'wide', height: 'medium', title: 'Servers', content: '', url: '', color: '', icon: '' },
+    storage: { size: 'wide', height: 'medium', title: 'Storage', content: '', url: '', color: '', icon: '' },
+    weather: { size: 'wide', height: 'medium', title: 'Weather', content: '', url: '', color: '', icon: '' },
+    note: { size: 'compact', height: 'medium', title: 'Notes', content: '', url: '', color: '', icon: '' },
+    shortcut: { size: 'compact', height: 'medium', title: 'Shortcut', content: '', url: '', color: '', icon: '' },
+    graphs: { size: 'wide', height: 'medium', title: 'Live graphs', content: '', url: '', color: '', icon: '' },
+    docker: { size: 'wide', height: 'tall', title: 'Docker', content: '', url: '', color: '', icon: '' },
+    strand: { size: 'wide', height: 'tall', title: 'Strand', content: '', url: '', color: '', icon: '' },
   };
   return { id: `${kind}-${suffix}`, kind, ...defaults[kind] };
 }
@@ -416,14 +431,17 @@ function WidgetBody({ widget, editing, onChange, data, csrfToken, canManageDocke
   if (editing) {
     return (
       <div class="home-shortcut-editor">
-        <label><span>Web address</span><input value={widget.url} maxLength={2_048} placeholder="https://example.com" inputMode="url" onInput={(event) => onChange({ url: event.currentTarget.value })} /></label>
+        <label><span>Web address</span><input value={widget.url} maxLength={2_048} placeholder="https://example.com" inputMode="url" onInput={(event) => {
+          const url = event.currentTarget.value;
+          onChange({ url, icon: shortcutIconUrl({ name: widget.title, url, icon: widget.icon }) ?? '' });
+        }} /></label>
         {widget.url.trim().length > 0 && href.length === 0 && <small role="alert">Use a complete http:// or https:// address.</small>}
       </div>
     );
   }
   return href.length === 0
     ? <div class="home-widget__empty">Turn on edit mode to add this shortcut’s address.</div>
-    : <a class="home-shortcut" href={href} target="_blank" rel="noopener noreferrer"><Icon name="external" /><span><strong>{widget.title}</strong><small>{new URL(href).hostname}</small></span></a>;
+    : <a class="home-shortcut" href={href} target="_blank" rel="noopener noreferrer"><ShortcutMark name={widget.title} url={href} icon={widget.icon} size={35} /><span><strong>{widget.title}</strong><small>{new URL(href).hostname}</small></span></a>;
 }
 
 function WidgetSettings({ widget, onChange, onClose }: {
@@ -536,7 +554,8 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
   const [homarrSelected, setHomarrSelected] = useState<string[]>([]);
   const activeTemplate = templates.find((template) => template.id === activeHomeId) ?? templates[0]!;
   const widgets = activeTemplate.widgets;
-  const existingShortcutUrls = homeShortcutUrls(widgets);
+  const homarrHome = templates.find((template) => template.id === HOMARR_HOME_ID);
+  const existingShortcutUrls = homeShortcutUrls(homarrHome?.widgets ?? []);
 
   const changeWidgets = (update: (current: HomeWidget[]) => HomeWidget[]): void => {
     onHomeChange(
@@ -564,10 +583,10 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
     setHomarrOpen(true);
     try {
       const catalog = await getHomarrCatalog(csrfToken);
-      const already = existingShortcutUrls;
+      const already = homeShortcutUrls(templates.find((template) => template.id === HOMARR_HOME_ID)?.widgets ?? []);
       const importable = catalog.widgets.filter((widget) => !already.has(widget.url));
       setHomarrWidgets(catalog.widgets);
-      setHomarrSelected(importable.map((widget) => widget.url));
+      setHomarrSelected(catalog.widgets.map((widget) => widget.url));
       if (catalog.availability !== 'ready') {
         setHomarrError(catalog.note);
         setHomarrNote(null);
@@ -577,17 +596,17 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
         setHomarrNote(catalog.note ?? 'Homarr has no http(s) shortcuts Helix can import.');
         return;
       }
-      if (widgets.length >= MAX_WIDGETS_PER_HOME) {
+      if (templates.length >= 8 && templates.every((template) => template.id !== HOMARR_HOME_ID)) {
         setHomarrNote(catalog.note);
-        setHomarrError('This Home is full. Remove a widget before importing Homarr shortcuts.');
+        setHomarrError('You already have 8 Homes. Remove one, then import Homarr again.');
         setHomarrSelected([]);
         return;
       }
       if (importable.length === 0) {
-        setHomarrNote('Those Homarr apps are already shortcuts on this Home.');
+        setHomarrNote('Those Homarr apps are already on the Homarr Home. Uncheck any you want to drop, then import again to refresh the layout.');
         return;
       }
-      setHomarrNote(catalog.note ?? 'Choose which Homarr links to place on this Home. Relative icons, notes, and Homarr-only apps stay in Homarr.');
+      setHomarrNote(catalog.note ?? 'Helix puts these on a Homarr Home in Homarr’s layout order, with matching icons. Main stays as it is.');
     } catch (reason) {
       setHomarrWidgets([]);
       setHomarrSelected([]);
@@ -599,21 +618,25 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
   };
   const importHomarr = (): void => {
     const chosen = homarrWidgets.filter((widget) => homarrSelected.includes(widget.url));
-    const additions = newHomarrShortcuts(chosen, widgets);
+    const additions = newHomarrShortcuts(chosen, []);
     if (additions.length === 0) return;
-    changeWidgets((current) => [
-      ...current,
-      ...additions.map((widget, index) => ({
-        id: `shortcut-homarr-${Date.now().toString(36)}-${index.toString(36)}`,
-        kind: 'shortcut' as const,
-        size: 'compact' as const,
-        height: 'medium' as const,
-        title: widget.name.slice(0, 80),
-        content: '',
-        url: widget.url,
-        color: '',
-      })),
-    ]);
+    const shortcuts = additions.map((widget, index) => ({
+      id: `shortcut-homarr-${Date.now().toString(36)}-${index.toString(36)}`,
+      kind: 'shortcut' as const,
+      size: homarrShortcutSize(widget.width),
+      height: 'short' as const,
+      title: widget.name.slice(0, 80),
+      content: '',
+      url: widget.url,
+      color: '',
+      icon: shortcutIconUrl({ name: widget.name, url: widget.url, icon: widget.icon }) ?? '',
+    }));
+    const result = replaceHomarrHome(templates, shortcuts);
+    if ('error' in result) {
+      setHomarrError(result.error);
+      return;
+    }
+    onHomeChange(result.templates, result.activeHomeId);
     setHomarrOpen(false);
     setAdding(false);
   };
@@ -640,8 +663,8 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
               {homarrLoading
                 ? 'Reading Homarr apps from this host…'
                 : homarrWidgets.length > 0
-                  ? (homarrNote ?? 'Choose which Homarr links to place on this Home. Relative icons, notes, and Homarr-only apps stay in Homarr.')
-                  : (homarrError ?? homarrNote ?? 'Choose which Homarr links to place on this Home.')}
+                  ? (homarrNote ?? 'Helix puts these on a Homarr Home in Homarr’s layout order, with matching icons. Main stays as it is.')
+                  : (homarrError ?? homarrNote ?? 'Helix puts these on a Homarr Home in Homarr’s layout order, with matching icons.')}
             </span>
           </div>
           {homarrError !== null && homarrWidgets.length > 0 && <p class="home-homarr-error" role="status">{homarrError}</p>}
@@ -652,19 +675,19 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
                 <input
                   type="checkbox"
                   checked={homarrSelected.includes(widget.url)}
-                  disabled={alreadyOnHome}
                   onChange={() => setHomarrSelected((current) => current.includes(widget.url) ? current.filter((item) => item !== widget.url) : [...current, widget.url])}
                 />
+                <ShortcutMark name={widget.name} url={widget.url} icon={widget.icon ?? undefined} size={28} />
                 <span>
                   <strong>{widget.name}</strong>
-                  <small>{alreadyOnHome ? 'Already on this Home' : widget.url}</small>
+                  <small>{alreadyOnHome ? 'Already on Homarr Home' : widget.url}</small>
                 </span>
               </label>
             );
           })}
           <div class="home-homarr-actions">
             <button class="button button--quiet" type="button" onClick={() => setHomarrOpen(false)}>Cancel</button>
-            <button class="button button--primary" type="button" disabled={homarrSelected.length === 0 || homarrLoading} onClick={importHomarr}>Add {homarrSelected.length} shortcut{homarrSelected.length === 1 ? '' : 's'}</button>
+            <button class="button button--primary" type="button" disabled={homarrSelected.length === 0 || homarrLoading} onClick={importHomarr}>Place {homarrSelected.length} on Homarr Home</button>
           </div>
         </section>
       )}
@@ -678,7 +701,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
       <section class={`home-grid${editing ? ' is-editing' : ''}`} aria-label="Home widgets">
         {widgets.map((widget, index) => (
           <article
-            class={`home-widget home-widget--${widget.size} home-widget--height-${widget.height}${draggedWidgetId === widget.id ? ' is-dragging' : ''}${dropTargetId === widget.id ? ` is-drop-${dropPlacement}` : ''}`}
+            class={`home-widget home-widget--${widget.size} home-widget--height-${widget.height} home-widget--kind-${widget.kind}${draggedWidgetId === widget.id ? ' is-dragging' : ''}${dropTargetId === widget.id ? ` is-drop-${dropPlacement}` : ''}`}
             key={widget.id}
             style={widget.color.length > 0 ? { '--widget-accent': widget.color } : undefined}
             onDragOver={(event) => {
@@ -698,7 +721,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
             onDrop={(event) => { event.preventDefault(); if (draggedWidgetId !== null) changeWidgets((current) => reorderHomeWidgets(current, draggedWidgetId, widget.id, dropPlacement)); finishDrag(); }}
           >
             <header>
-              <div><Icon name={widgetIcons[widget.kind]} size={16} />{editing ? <input class="home-widget__title-input" value={widget.title} maxLength={80} aria-label={`${widget.kind} widget title`} onInput={(event) => updateWidget(widget.id, { title: event.currentTarget.value })} /> : <h2>{widget.title}</h2>}</div>
+              <div>{widget.kind === 'shortcut' ? <ShortcutMark name={widget.title} url={widget.url} icon={widget.icon} size={16} /> : <Icon name={widgetIcons[widget.kind]} size={16} />}{editing ? <input class="home-widget__title-input" value={widget.title} maxLength={80} aria-label={`${widget.kind} widget title`} onInput={(event) => updateWidget(widget.id, { title: event.currentTarget.value })} /> : <h2>{widget.title}</h2>}</div>
               {editing && <WidgetControls widget={widget} first={index === 0} last={index === widgets.length - 1} onMove={(offset) => changeWidgets((current) => moveHomeWidget(current, widget.id, offset))} onResize={() => updateWidget(widget.id, { size: nextHomeWidgetSize(widget.size) })} onHeight={() => updateWidget(widget.id, { height: nextHomeWidgetHeight(widget.height) })} onSettings={() => setSettingsWidgetId((current) => current === widget.id ? null : widget.id)} onDragStart={(event) => { setDraggedWidgetId(widget.id); event.dataTransfer?.setData('text/plain', widget.id); if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = 'move'; }} onDragEnd={finishDrag} onRemove={() => changeWidgets((current) => current.filter((candidate) => candidate.id !== widget.id))} />}
             </header>
             {editing && settingsWidgetId === widget.id && <WidgetSettings widget={widget} onChange={(patch) => updateWidget(widget.id, patch)} onClose={() => setSettingsWidgetId(null)} />}

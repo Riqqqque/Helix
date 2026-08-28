@@ -3,11 +3,13 @@ use helix_privd::DockerContainerActionKind;
 use rusqlite::{Connection, OpenFlags, backup::Backup};
 use serde_json::{Map, Value, json};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+const DASHBOARD_ICONS_PNG: &str = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png";
 
 const MAX_CONTAINERS: usize = 64;
 const MAX_HOMARR_WIDGETS: usize = 64;
@@ -217,7 +219,7 @@ impl HostControl {
             "container": name,
             "source": scan.source,
             "widgets": scan.widgets,
-            "note": "Choose which Homarr links to place on this Home. Relative icons, notes, and Homarr-only apps stay in Homarr.",
+            "note": "Helix places these on a Homarr Home in Homarr layout order and matches icons from names, links, or Homarr icon slugs. Uploaded Homarr files stay in Homarr.",
             "collected_at_unix_ms": now_unix_ms()
         }))
     }
@@ -717,6 +719,7 @@ pub(crate) fn parse_homarr_config(text: &str) -> Option<Vec<Value>> {
     let value: Value = serde_json::from_str(text).ok()?;
     let mut widgets = Vec::new();
     collect_homarr_services(&value, &mut widgets);
+    sort_homarr_widgets(&mut widgets);
     let widgets = finalize_homarr_widgets(widgets);
     if widgets.is_empty() {
         None
@@ -752,6 +755,14 @@ fn collect_homarr_services(value: &Value, widgets: &mut Vec<Value>) {
     }
 }
 
+#[derive(Clone, Copy)]
+struct HomarrPlacement {
+    x: i64,
+    y: i64,
+    width: i64,
+    breakpoint: i64,
+}
+
 fn homarr_shortcut(object: &Map<String, Value>) -> Option<Value> {
     let name = object
         .get("name")
@@ -767,10 +778,15 @@ fn homarr_shortcut(object: &Map<String, Value>) -> Option<Value> {
         .or_else(|| object.get("iconUrl"))
         .or_else(|| object.get("icon_url"))
         .and_then(Value::as_str);
-    homarr_http_shortcut(name, url, icon)
+    homarr_http_shortcut(name, url, icon, homarr_json_placement(object).as_ref())
 }
 
-fn homarr_http_shortcut(name: &str, url: &str, icon: Option<&str>) -> Option<Value> {
+fn homarr_http_shortcut(
+    name: &str,
+    url: &str,
+    icon: Option<&str>,
+    placement: Option<&HomarrPlacement>,
+) -> Option<Value> {
     let name = name.trim();
     let url = url.trim();
     if name.is_empty() {
@@ -782,16 +798,138 @@ fn homarr_http_shortcut(name: &str, url: &str, icon: Option<&str>) -> Option<Val
     if name.chars().count() > 80 || name.chars().any(char::is_control) {
         return None;
     }
-    let icon = icon
-        .map(str::trim)
-        .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
-        .filter(|value| value.len() <= 2_048)
-        .map(str::to_owned);
-    Some(json!({
+    let icon = resolve_homarr_icon(icon);
+    let mut widget = json!({
         "name": name,
         "url": url,
         "icon": icon
-    }))
+    });
+    if let Some(placement) = placement {
+        widget["x"] = json!(placement.x);
+        widget["y"] = json!(placement.y);
+        widget["width"] = json!(placement.width);
+    }
+    Some(widget)
+}
+
+fn resolve_homarr_icon(raw: Option<&str>) -> Option<String> {
+    let raw = raw?.trim();
+    if raw.is_empty() || raw.len() > 2_048 {
+        return None;
+    }
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        return Some(raw.to_owned());
+    }
+    let slug = homarr_icon_slug(raw)?;
+    Some(format!("{DASHBOARD_ICONS_PNG}/{slug}.png"))
+}
+
+fn homarr_icon_slug(raw: &str) -> Option<String> {
+    let last = raw
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(raw)
+        .split('?')
+        .next()
+        .unwrap_or(raw);
+    let stem = match last.rsplit_once('.') {
+        Some((name, extension))
+            if matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "svg" | "webp" | "jpg" | "jpeg" | "gif" | "ico"
+            ) =>
+        {
+            name
+        }
+        _ => last,
+    };
+    let slug = stem
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '_'], "-")
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+        .collect::<String>();
+    let slug = slug.trim_matches('-').to_owned();
+    if slug.len() < 2 || slug.len() > 80 {
+        return None;
+    }
+    if generic_homarr_icon_slug(&slug) {
+        return None;
+    }
+    Some(slug)
+}
+
+fn generic_homarr_icon_slug(slug: &str) -> bool {
+    matches!(
+        slug,
+        "avatar"
+            | "blank"
+            | "default"
+            | "file"
+            | "icon"
+            | "image"
+            | "img"
+            | "logo"
+            | "media"
+            | "placeholder"
+            | "thumbnail"
+            | "upload"
+    ) || (slug.len() >= 32
+        && slug
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() || character == '-'))
+}
+
+fn json_grid_int(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok())),
+        _ => None,
+    }
+}
+
+fn nested_grid_int(object: &Map<String, Value>, path: &[&str]) -> Option<i64> {
+    let mut current = object;
+    for (index, key) in path.iter().enumerate() {
+        let value = current.get(*key)?;
+        if index + 1 == path.len() {
+            return json_grid_int(value);
+        }
+        current = value.as_object()?;
+    }
+    None
+}
+
+fn homarr_json_placement(object: &Map<String, Value>) -> Option<HomarrPlacement> {
+    let x = object
+        .get("x")
+        .and_then(json_grid_int)
+        .or_else(|| nested_grid_int(object, &["location", "x"]))
+        .or_else(|| nested_grid_int(object, &["position", "x"]))
+        .or_else(|| nested_grid_int(object, &["shape", "lg", "location", "x"]))
+        .or_else(|| nested_grid_int(object, &["grid", "x"]))?;
+    let y = object
+        .get("y")
+        .and_then(json_grid_int)
+        .or_else(|| nested_grid_int(object, &["location", "y"]))
+        .or_else(|| nested_grid_int(object, &["position", "y"]))
+        .or_else(|| nested_grid_int(object, &["shape", "lg", "location", "y"]))
+        .or_else(|| nested_grid_int(object, &["grid", "y"]))?;
+    let width = object
+        .get("width")
+        .and_then(json_grid_int)
+        .or_else(|| nested_grid_int(object, &["size", "width"]))
+        .or_else(|| nested_grid_int(object, &["shape", "lg", "size", "width"]))
+        .or_else(|| nested_grid_int(object, &["grid", "width"]))
+        .unwrap_or(1);
+    Some(HomarrPlacement {
+        x,
+        y,
+        width,
+        breakpoint: 0,
+    })
 }
 
 fn finalize_homarr_widgets(mut widgets: Vec<Value>) -> Vec<Value> {
@@ -807,17 +945,28 @@ fn finalize_homarr_widgets(mut widgets: Vec<Value>) -> Vec<Value> {
 }
 
 fn sort_homarr_widgets(widgets: &mut [Value]) {
+    let has_layout = widgets
+        .iter()
+        .any(|widget| widget.get("y").and_then(json_grid_int).is_some());
+    if !has_layout {
+        return;
+    }
     widgets.sort_by(|left, right| {
-        let left_name = left.get("name").and_then(Value::as_str).unwrap_or("");
-        let right_name = right.get("name").and_then(Value::as_str).unwrap_or("");
-        match left_name.cmp(right_name) {
-            std::cmp::Ordering::Equal => left
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .cmp(right.get("url").and_then(Value::as_str).unwrap_or("")),
-            order => order,
-        }
+        let left_y = left.get("y").and_then(json_grid_int).unwrap_or(i64::MAX);
+        let right_y = right.get("y").and_then(json_grid_int).unwrap_or(i64::MAX);
+        left_y
+            .cmp(&right_y)
+            .then_with(|| {
+                let left_x = left.get("x").and_then(json_grid_int).unwrap_or(i64::MAX);
+                let right_x = right.get("x").and_then(json_grid_int).unwrap_or(i64::MAX);
+                left_x.cmp(&right_x)
+            })
+            .then_with(|| {
+                left.get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .cmp(right.get("name").and_then(Value::as_str).unwrap_or(""))
+            })
     });
 }
 
@@ -857,7 +1006,9 @@ fn find_homarr_sqlite(root: &str) -> Result<Option<PathBuf>, String> {
 
 fn query_homarr_sqlite(path: &Path) -> Result<Vec<Value>, String> {
     let snapshot = snapshot_homarr_sqlite(path)?;
-    read_homarr_apps(&snapshot)
+    let mut widgets = read_homarr_apps(&snapshot)?;
+    sort_homarr_widgets(&mut widgets);
+    Ok(widgets)
 }
 
 fn snapshot_homarr_sqlite(path: &Path) -> Result<Connection, String> {
@@ -903,9 +1054,11 @@ fn read_homarr_apps(connection: &Connection) -> Result<Vec<Value>, String> {
     } else {
         None
     };
-    let sql = homarr_app_select_sql(table, icon_column).ok_or_else(|| {
+    let has_id = column_named(&columns, "id");
+    let sql = homarr_app_select_sql(table, icon_column, has_id).ok_or_else(|| {
         "the Homarr SQLite catalog does not have the expected app columns".to_owned()
     })?;
+    let layouts = read_homarr_item_layouts(connection);
     let mut statement = connection
         .prepare(sql)
         .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?;
@@ -920,23 +1073,110 @@ fn read_homarr_apps(connection: &Connection) -> Result<Vec<Value>, String> {
         if widgets.len() >= MAX_HOMARR_WIDGETS {
             break;
         }
+        let id = row
+            .get::<_, Option<String>>(0)
+            .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?;
         let name = row
-            .get::<_, String>(0)
+            .get::<_, String>(1)
             .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?;
         let href = row
-            .get::<_, Option<String>>(1)
+            .get::<_, Option<String>>(2)
             .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?;
         let icon = row
-            .get::<_, Option<String>>(2)
+            .get::<_, Option<String>>(3)
             .map_err(|_| "could not read the Homarr SQLite catalog".to_owned())?;
         let Some(href) = href.as_deref() else {
             continue;
         };
-        if let Some(widget) = homarr_http_shortcut(&name, href, icon.as_deref()) {
+        let placement = id.as_deref().and_then(|value| layouts.get(value));
+        if let Some(widget) = homarr_http_shortcut(&name, href, icon.as_deref(), placement) {
             widgets.push(widget);
         }
     }
     Ok(widgets)
+}
+
+fn sqlite_table_exists(connection: &Connection, table: &str) -> bool {
+    let sql = match table {
+        "item" => "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'item' LIMIT 1",
+        "item_layout" => {
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'item_layout' LIMIT 1"
+        }
+        "layout" => "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'layout' LIMIT 1",
+        _ => return false,
+    };
+    connection.query_row(sql, [], |_| Ok(())).is_ok()
+}
+
+fn homarr_options_app_id(options: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(options).ok()?;
+    value
+        .pointer("/json/appId")
+        .or_else(|| value.get("appId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn better_homarr_placement(candidate: &HomarrPlacement, current: &HomarrPlacement) -> bool {
+    candidate.breakpoint > current.breakpoint
+}
+
+fn read_homarr_item_layouts(connection: &Connection) -> HashMap<String, HomarrPlacement> {
+    if !sqlite_table_exists(connection, "item") || !sqlite_table_exists(connection, "item_layout") {
+        return HashMap::new();
+    }
+    let sql = if sqlite_table_exists(connection, "layout") {
+        "SELECT i.options, l.x_offset, l.y_offset, l.width, COALESCE(ly.breakpoint, 0)
+         FROM item i
+         INNER JOIN item_layout l ON l.item_id = i.id
+         LEFT JOIN layout ly ON ly.id = l.layout_id"
+    } else {
+        "SELECT i.options, l.x_offset, l.y_offset, l.width, 0
+         FROM item i
+         INNER JOIN item_layout l ON l.item_id = i.id"
+    };
+    let Ok(mut statement) = connection.prepare(sql) else {
+        return HashMap::new();
+    };
+    let Ok(mut rows) = statement.query([]) else {
+        return HashMap::new();
+    };
+    let mut layouts = HashMap::new();
+    while let Ok(Some(row)) = rows.next() {
+        let Ok(options) = row.get::<_, String>(0) else {
+            continue;
+        };
+        let Some(app_id) = homarr_options_app_id(&options) else {
+            continue;
+        };
+        let Ok(x) = row.get::<_, i64>(1) else {
+            continue;
+        };
+        let Ok(y) = row.get::<_, i64>(2) else {
+            continue;
+        };
+        let Ok(width) = row.get::<_, i64>(3) else {
+            continue;
+        };
+        let breakpoint = row.get::<_, i64>(4).unwrap_or(0);
+        let candidate = HomarrPlacement {
+            x,
+            y,
+            width,
+            breakpoint,
+        };
+        layouts
+            .entry(app_id)
+            .and_modify(|current| {
+                if better_homarr_placement(&candidate, current) {
+                    *current = candidate;
+                }
+            })
+            .or_insert(candidate);
+    }
+    layouts
 }
 
 fn homarr_app_table(connection: &Connection) -> Result<(&'static str, Vec<String>), String> {
@@ -978,14 +1218,40 @@ fn column_named(columns: &[String], wanted: &str) -> bool {
     columns.iter().any(|name| name == wanted)
 }
 
-fn homarr_app_select_sql(table: &str, icon_column: Option<&str>) -> Option<&'static str> {
-    match (table, icon_column) {
-        ("app", Some("icon_url")) => Some("SELECT name, href, icon_url FROM app LIMIT 96"),
-        ("app", Some("iconUrl")) => Some(r#"SELECT name, href, "iconUrl" FROM app LIMIT 96"#),
-        ("app", None) => Some("SELECT name, href, NULL FROM app LIMIT 96"),
-        ("apps", Some("icon_url")) => Some("SELECT name, href, icon_url FROM apps LIMIT 96"),
-        ("apps", Some("iconUrl")) => Some(r#"SELECT name, href, "iconUrl" FROM apps LIMIT 96"#),
-        ("apps", None) => Some("SELECT name, href, NULL FROM apps LIMIT 96"),
+fn homarr_app_select_sql(
+    table: &str,
+    icon_column: Option<&str>,
+    has_id: bool,
+) -> Option<&'static str> {
+    match (table, icon_column, has_id) {
+        ("app", Some("icon_url"), true) => {
+            Some("SELECT id, name, href, icon_url FROM app LIMIT 96")
+        }
+        ("app", Some("icon_url"), false) => {
+            Some("SELECT NULL, name, href, icon_url FROM app LIMIT 96")
+        }
+        ("app", Some("iconUrl"), true) => {
+            Some(r#"SELECT id, name, href, "iconUrl" FROM app LIMIT 96"#)
+        }
+        ("app", Some("iconUrl"), false) => {
+            Some(r#"SELECT NULL, name, href, "iconUrl" FROM app LIMIT 96"#)
+        }
+        ("app", None, true) => Some("SELECT id, name, href, NULL FROM app LIMIT 96"),
+        ("app", None, false) => Some("SELECT NULL, name, href, NULL FROM app LIMIT 96"),
+        ("apps", Some("icon_url"), true) => {
+            Some("SELECT id, name, href, icon_url FROM apps LIMIT 96")
+        }
+        ("apps", Some("icon_url"), false) => {
+            Some("SELECT NULL, name, href, icon_url FROM apps LIMIT 96")
+        }
+        ("apps", Some("iconUrl"), true) => {
+            Some(r#"SELECT id, name, href, "iconUrl" FROM apps LIMIT 96"#)
+        }
+        ("apps", Some("iconUrl"), false) => {
+            Some(r#"SELECT NULL, name, href, "iconUrl" FROM apps LIMIT 96"#)
+        }
+        ("apps", None, true) => Some("SELECT id, name, href, NULL FROM apps LIMIT 96"),
+        ("apps", None, false) => Some("SELECT NULL, name, href, NULL FROM apps LIMIT 96"),
         _ => None,
     }
 }
@@ -1074,6 +1340,28 @@ mod tests {
         .unwrap();
         assert_eq!(widgets.len(), 1);
         assert_eq!(widgets[0]["name"], "Plex");
+    }
+
+    #[test]
+    fn homarr_parser_keeps_grid_order_and_icon_slugs() {
+        let widgets = parse_homarr_config(
+            r#"{
+                "services": [
+                    {"name": "Zebra", "href": "http://192.168.1.10:9090", "icon": "sonarr", "x": 4, "y": 1, "width": 2},
+                    {"name": "Apple", "href": "http://192.168.1.10:8081", "x": 0, "y": 0, "width": 1}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(widgets.len(), 2);
+        assert_eq!(widgets[0]["name"], "Apple");
+        assert_eq!(widgets[0]["y"], 0);
+        assert_eq!(widgets[1]["name"], "Zebra");
+        assert_eq!(
+            widgets[1]["icon"],
+            format!("{DASHBOARD_ICONS_PNG}/sonarr.png")
+        );
+        assert_eq!(widgets[1]["width"], 2);
     }
 
     #[test]
@@ -1232,6 +1520,78 @@ mod tests {
         assert_eq!(widgets.len(), 1);
         assert_eq!(widgets[0]["name"], "Sonarr");
         assert_eq!(widgets[0]["icon"], "https://example.test/sonarr.png");
+    }
+
+    #[test]
+    fn homarr_sqlite_uses_item_layout_and_icon_slugs() {
+        let root = tempfile::tempdir().expect("homarr layout sqlite fixture");
+        let db_dir = root.path().join("db");
+        fs::create_dir(&db_dir).expect("homarr db dir");
+        let db = db_dir.join("db.sqlite");
+        let connection = Connection::open(&db).expect("create layout sqlite");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE app (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    icon_url TEXT NOT NULL,
+                    href TEXT
+                );
+                CREATE TABLE item (
+                    id TEXT PRIMARY KEY,
+                    board_id TEXT,
+                    kind TEXT,
+                    options TEXT NOT NULL,
+                    advanced_options TEXT
+                );
+                CREATE TABLE layout (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    board_id TEXT,
+                    column_count INTEGER,
+                    breakpoint INTEGER
+                );
+                CREATE TABLE item_layout (
+                    item_id TEXT,
+                    section_id TEXT,
+                    layout_id TEXT,
+                    x_offset INTEGER,
+                    y_offset INTEGER,
+                    width INTEGER,
+                    height INTEGER
+                );
+                INSERT INTO app VALUES
+                    ('app-plex', 'Plex', 'https://example.test/plex.png', 'http://192.168.1.10:32400/web'),
+                    ('app-radarr', 'Radarr', 'radarr', 'http://192.168.1.10:7878');
+                INSERT INTO item VALUES
+                    ('item-plex', 'board', 'app', '{"json":{"appId":"app-plex"}}', '{"json":{}}'),
+                    ('item-radarr', 'board', 'app', '{"json":{"appId":"app-radarr"}}', '{"json":{}}');
+                INSERT INTO layout VALUES ('lg', 'lg', 'board', 12, 1200);
+                INSERT INTO item_layout VALUES
+                    ('item-radarr', 'section', 'lg', 0, 0, 1, 1),
+                    ('item-plex', 'section', 'lg', 4, 2, 2, 1);
+                "#,
+            )
+            .expect("seed layout sqlite");
+        drop(connection);
+
+        let HomarrSqliteRead::Found(widgets) =
+            read_homarr_sqlite_catalog(root.path().to_str().expect("utf8 path"))
+        else {
+            panic!("expected a Homarr sqlite catalog");
+        };
+        let widgets = finalize_homarr_widgets(widgets);
+        assert_eq!(widgets.len(), 2);
+        assert_eq!(widgets[0]["name"], "Radarr");
+        assert_eq!(widgets[0]["y"], 0);
+        assert_eq!(
+            widgets[0]["icon"],
+            format!("{DASHBOARD_ICONS_PNG}/radarr.png")
+        );
+        assert_eq!(widgets[1]["name"], "Plex");
+        assert_eq!(widgets[1]["y"], 2);
+        assert_eq!(widgets[1]["icon"], "https://example.test/plex.png");
     }
 
     #[test]

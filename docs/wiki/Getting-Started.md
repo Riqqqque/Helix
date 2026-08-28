@@ -16,9 +16,10 @@ reviewed Linux broker configuration and Docker on the Linux host.
 ## Choose a path
 
 1. **Linux systemd package** on a 64-bit x86_64 or aarch64 host you control.
-   Clone the source and run `./scripts/install-from-source.sh`. That compiles
-   Helix and installs `helixd` on loopback. Host, file, and native-server
-   controls stay unavailable until `helix-privd` is configured.
+   Clone the source and run `./scripts/install-from-source.sh`. On a terminal
+   that one command walks through yes/no setup, compiles Helix, and installs
+   `helixd` on loopback (another port if 8080 is taken). Host, file, and
+   native-server controls stay unavailable until `helix-privd` is configured.
 2. **Loopback preview** from a local `cargo`/`npm` build on Windows, macOS, or
    Linux. This is enough to create the owner, see Home greet your name, and use
    read-only dashboard pages.
@@ -26,8 +27,8 @@ reviewed Linux broker configuration and Docker on the Linux host.
    every placeholder with that host's address, groups, and storage roots, then
    follow the container deployment guide.
 
-The Linux script is one command after clone, but it is still an unsigned
-source build of a [scoped package lifecycle](https://github.com/Riqqqque/Helix/blob/main/docs/INSTALLATION.md),
+The Linux script is one command after clone, then yes/no questions on a
+terminal. It is still an unsigned source build of a [scoped package lifecycle](https://github.com/Riqqqque/Helix/blob/main/docs/INSTALLATION.md),
 not a signed or supported production installer.
 
 ## Install on Linux
@@ -36,14 +37,21 @@ From the repository root on a systemd host:
 
 ```bash
 ./scripts/install-from-source.sh
+```
+
+On a terminal the script asks before installing missing compiler packages,
+offers rustup when Rust is missing or too old, picks another loopback port
+when 8080 is busy (or you can pass `--port 8081`), and asks whether to start
+helixd. Fresh installs print a one-time owner token; open the URL it prints
+and paste the token. Need another token:
+
+```bash
 sudo -u helix -- helixctl --config /etc/helix/helix.toml setup-token
 ```
 
-Open http://127.0.0.1:8080 and paste the token. If a C toolchain is missing,
-the script prints apt, dnf/yum, zypper, pacman, apk, or emerge commands. Pass
-`--install-deps` to install those packages. Rust 1.88+ and Node.js 22.12+ are
-still required; rustup is the usual way to get a new enough compiler. First
-compile takes a while.
+CI and pipes stay non-interactive. Pass `--yes` to skip prompts, or
+`--install-deps` to install only the compiler packages. Rust 1.88+ and
+Node.js 22.12+ are still required for the compile.
 
 Debian/Ubuntu CI covers the package lifecycle. Fedora, RHEL-family, openSUSE,
 Arch, and other systemd GNU/Linux distros are intended source-install targets.

@@ -9,6 +9,10 @@ cd -- "$repo_root" || exit 1
 
 start_service=1
 install_deps=0
+assume_yes=0
+listen_addr="127.0.0.1:8080"
+listen_from_args=0
+missing=()
 
 fail() {
   printf 'error: %s\n' "$*" >&2
@@ -21,20 +25,112 @@ fi
 
 usage() {
   cat <<'USAGE'
-Usage: ./scripts/install-from-source.sh [--no-start] [--install-deps]
+Usage: ./scripts/install-from-source.sh [--no-start] [--install-deps] [--yes]
+       ./scripts/install-from-source.sh [--port PORT | --listen 127.0.0.1:PORT]
        ./scripts/install-from-source.sh --print-family
 
 Build Helix from this checkout and install helixd as a systemd service.
 
+On a terminal, this is one command after clone: the script asks yes/no
+questions for missing compiler packages, an optional rustup install, a
+different loopback port when 8080 is busy, and whether to start helixd.
+CI and pipes stay non-interactive.
+
 Run as a normal user on 64-bit systemd Linux (x86_64 or aarch64). The script
 asks for sudo only to install files, or to install missing compiler packages
-when you pass --install-deps. It does not install helix-privd, so host, file,
+when you pass --install-deps or say yes. It does not install helix-privd, so host, file,
 firewall, package, and native game-server controls stay unavailable until you
 follow docs/CONTAINER-DEPLOYMENT.md.
 
 There is no signed download. This is an unsigned source build of the scoped
 local package, not a supported production installer.
 USAGE
+}
+
+is_interactive() {
+  ((assume_yes == 0)) && [[ -t 0 && -t 1 ]]
+}
+
+ask_yes_no() {
+  local prompt=$1
+  local default=${2:-y}
+  local reply=""
+  if [[ "$default" == y ]]; then
+    printf '%s [Y/n] ' "$prompt"
+  else
+    printf '%s [y/N] ' "$prompt"
+  fi
+  read -r reply || true
+  reply=${reply,,}
+  reply=${reply//[[:space:]]/}
+  if [[ -z "$reply" ]]; then
+    [[ "$default" == y ]]
+    return
+  fi
+  [[ "$reply" == y || "$reply" == yes ]]
+}
+
+validate_loopback_listen() {
+  local value=$1
+  local port=""
+  if [[ "$value" =~ ^127\.0\.0\.1:([0-9]{1,5})$ ]]; then
+    port=${BASH_REMATCH[1]}
+  elif [[ "$value" =~ ^\[::1\]:([0-9]{1,5})$ ]]; then
+    port=${BASH_REMATCH[1]}
+  else
+    return 1
+  fi
+  ((10#$port >= 1024 && 10#$port <= 65535))
+}
+
+listen_port() {
+  local value=$1
+  if [[ "$value" =~ :([0-9]{1,5})$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+helix_open_url() {
+  local listen=$1
+  printf 'http://%s' "$listen"
+}
+
+tcp_listen_port_busy() {
+  local port=$1
+  if command -v ss >/dev/null 2>&1; then
+    ss -lnt 2>/dev/null | grep -Eq ":${port}[[:space:]]"
+    return
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -lnt 2>/dev/null | grep -Eq ":${port}[[:space:]]"
+    return
+  fi
+  (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1
+}
+
+find_free_loopback_port() {
+  local start=$1
+  local port
+  for ((port = start; port <= 8099; port++)); do
+    if ! tcp_listen_port_busy "$port"; then
+      printf '%s' "$port"
+      return 0
+    fi
+  done
+  return 1
+}
+
+install_rustup_toolchain() {
+  command -v curl >/dev/null 2>&1 || fail "curl is required to install Rust with rustup"
+  printf 'Installing Rust 1.88 with rustup into %s/.cargo ...\n' "$HOME"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.88.0
+  if [[ -f "$HOME/.cargo/env" ]]; then
+    # shellcheck source=/dev/null
+    . "$HOME/.cargo/env"
+  fi
+  command -v rustc >/dev/null 2>&1 || fail "rustup finished but rustc is not on PATH; open a new shell and re-run this script"
 }
 
 os_release_file() {
@@ -276,6 +372,25 @@ while (($# > 0)); do
       install_deps=1
       shift
       ;;
+    --yes)
+      assume_yes=1
+      shift
+      ;;
+    --port)
+      (($# >= 2)) || fail "--port requires a number"
+      [[ "$2" =~ ^[0-9]{1,5}$ ]] || fail "port must be 1024-65535"
+      listen_addr="127.0.0.1:$2"
+      validate_loopback_listen "$listen_addr" || fail "port must be 1024-65535 on 127.0.0.1"
+      listen_from_args=1
+      shift 2
+      ;;
+    --listen)
+      (($# >= 2)) || fail "--listen requires 127.0.0.1:PORT or [::1]:PORT"
+      listen_addr=$2
+      validate_loopback_listen "$listen_addr" || fail "listen address must be 127.0.0.1:PORT or [::1]:PORT with port 1024-65535"
+      listen_from_args=1
+      shift 2
+      ;;
     --print-family)
       pkg_family
       printf '\n'
@@ -306,77 +421,178 @@ if [[ "$family" == "nix" ]]; then
   fail "this installer writes /usr FHS paths; NixOS and Guix are not targets. Use a systemd GNU/Linux distro or run helixd from this checkout"
 fi
 
+collect_missing_tools() {
+  missing=()
+  for required_command in rustc cargo node npm git sudo; do
+    command -v "$required_command" >/dev/null 2>&1 || missing+=("$required_command")
+  done
+  if command -v pkg-config >/dev/null 2>&1; then
+    :
+  elif command -v pkgconf >/dev/null 2>&1; then
+    export PKG_CONFIG
+    PKG_CONFIG="$(command -v pkgconf)"
+  else
+    missing+=("pkg-config")
+  fi
+  if ! command -v cc >/dev/null 2>&1 &&
+    ! command -v gcc >/dev/null 2>&1 &&
+    ! command -v clang >/dev/null 2>&1; then
+    missing+=("c-compiler")
+  fi
+  if ! command -v sha256sum >/dev/null 2>&1 ||
+    ! sha256sum --help >/dev/null 2>&1 ||
+    ! sha256sum --help 2>&1 | grep -q -- '--strict'; then
+    missing+=("gnu-sha256sum")
+  fi
+  if ! command -v realpath >/dev/null 2>&1 ||
+    ! realpath -e / >/dev/null 2>&1; then
+    missing+=("gnu-realpath")
+  fi
+  gnu_mktemp=""
+  if command -v mktemp >/dev/null 2>&1; then
+    gnu_mktemp="$(mktemp --tmpdir="${TMPDIR:-/tmp}" helix-gnu-check.XXXXXX 2>/dev/null || true)"
+  fi
+  if [[ -z "$gnu_mktemp" || ! -f "$gnu_mktemp" ]]; then
+    missing+=("gnu-mktemp")
+  else
+    rm -f -- "$gnu_mktemp"
+  fi
+  if ! command -v flock >/dev/null 2>&1; then
+    missing+=("util-linux-flock")
+  fi
+  if ! command -v mountpoint >/dev/null 2>&1; then
+    missing+=("util-linux-mountpoint")
+  fi
+}
+
+rustc_is_new_enough() {
+  local rust_version rust_major rust_minor
+  command -v rustc >/dev/null 2>&1 || return 1
+  rust_version="$(rustc --version | awk '{print $2}')"
+  [[ "$rust_version" =~ ^([0-9]+)\.([0-9]+) ]] || return 1
+  rust_major="${BASH_REMATCH[1]}"
+  rust_minor="${BASH_REMATCH[2]}"
+  ((rust_major > 1)) || ((rust_major == 1 && rust_minor >= 88))
+}
+
+node_is_new_enough() {
+  command -v node >/dev/null 2>&1 || return 1
+  node --input-type=commonjs -e '
+    const [major, minor] = process.versions.node.split(".").map(Number);
+    if (!(major > 22 || (major === 22 && minor >= 12))) process.exit(1);
+  '
+}
+
+resolve_listen_address() {
+  local port suggested chosen
+  if ((listen_from_args == 1)); then
+    port="$(listen_port "$listen_addr")" || fail "could not read port from $listen_addr"
+    if tcp_listen_port_busy "$port"; then
+      printf 'warning: %s is already in use; helixd may fail to bind.\n' "$listen_addr" >&2
+    fi
+    return 0
+  fi
+  port=8080
+  if tcp_listen_port_busy 8080; then
+    suggested="$(find_free_loopback_port 8081 || true)"
+    if is_interactive; then
+      printf '\nPort 8080 is already in use on this host.\n'
+      if [[ -n "$suggested" ]] && ask_yes_no "Use 127.0.0.1:${suggested} instead?" y; then
+        port=$suggested
+      else
+        printf 'Loopback port to use (1024-65535): '
+        read -r chosen || true
+        [[ "$chosen" =~ ^[0-9]{1,5}$ ]] || fail "need a port number"
+        port=$chosen
+        validate_loopback_listen "127.0.0.1:${port}" || fail "port must be 1024-65535"
+      fi
+    elif [[ -n "$suggested" ]]; then
+      printf 'warning: 8080 is in use; installing on 127.0.0.1:%s\n' "$suggested" >&2
+      port=$suggested
+    else
+      fail "port 8080 is in use; re-run with --port PORT"
+    fi
+  fi
+  listen_addr="127.0.0.1:${port}"
+}
+
 if [[ ! -e /sys/fs/cgroup/cgroup.controllers ]]; then
   printf 'warning: cgroup v2 is not visible; host resource views may be incomplete.\n' >&2
+fi
+
+if is_interactive; then
+  cat <<'EOF'
+Helix from-source setup
+
+This compiles helixd and installs it as a systemd service on loopback.
+Answer yes or no when asked. First compile can take a while. Host files,
+firewall, packages, and game servers need helix-privd later.
+
+EOF
 fi
 
 if ((install_deps == 1)); then
   install_distro_packages
 fi
 
-missing=()
-for required_command in rustc cargo node npm git sudo; do
-  command -v "$required_command" >/dev/null 2>&1 || missing+=("$required_command")
+collect_missing_tools
+compiler_missing=()
+for item in "${missing[@]}"; do
+  case "$item" in
+    rustc|cargo|node|npm) ;;
+    *) compiler_missing+=("$item") ;;
+  esac
 done
-if command -v pkg-config >/dev/null 2>&1; then
-  :
-elif command -v pkgconf >/dev/null 2>&1; then
-  export PKG_CONFIG
-  PKG_CONFIG="$(command -v pkgconf)"
-else
-  missing+=("pkg-config")
-fi
-if ! command -v cc >/dev/null 2>&1 &&
-  ! command -v gcc >/dev/null 2>&1 &&
-  ! command -v clang >/dev/null 2>&1; then
-  missing+=("c-compiler")
-fi
-if ! command -v sha256sum >/dev/null 2>&1 ||
-  ! sha256sum --help >/dev/null 2>&1 ||
-  ! sha256sum --help 2>&1 | grep -q -- '--strict'; then
-  missing+=("gnu-sha256sum")
-fi
-if ! command -v realpath >/dev/null 2>&1 ||
-  ! realpath -e / >/dev/null 2>&1; then
-  missing+=("gnu-realpath")
-fi
-gnu_mktemp=""
-if command -v mktemp >/dev/null 2>&1; then
-  gnu_mktemp="$(mktemp --tmpdir="${TMPDIR:-/tmp}" helix-gnu-check.XXXXXX 2>/dev/null || true)"
-fi
-if [[ -z "$gnu_mktemp" || ! -f "$gnu_mktemp" ]]; then
-  missing+=("gnu-mktemp")
-else
-  rm -f -- "$gnu_mktemp"
-fi
-if ! command -v flock >/dev/null 2>&1; then
-  missing+=("util-linux-flock")
-fi
-if ! command -v mountpoint >/dev/null 2>&1; then
-  missing+=("util-linux-mountpoint")
+if ((${#compiler_missing[@]} > 0)) && is_interactive && ((install_deps == 0)); then
+  printf 'Missing compiler tools: %s\n' "${compiler_missing[*]}"
+  if ask_yes_no "Install the compiler packages for this distro with sudo?" y; then
+    install_distro_packages
+    collect_missing_tools
+  fi
 fi
 if ((${#missing[@]} > 0)); then
-  printf 'error: missing build tools: %s\n' "${missing[*]}" >&2
-  print_prereqs
-  exit 1
+  rust_or_node_only=1
+  for item in "${missing[@]}"; do
+    case "$item" in
+      rustc|cargo|node|npm) ;;
+      *) rust_or_node_only=0 ;;
+    esac
+  done
+  if ((rust_or_node_only == 0)); then
+    printf 'error: missing build tools: %s\n' "${missing[*]}" >&2
+    print_prereqs
+    exit 1
+  fi
 fi
 
-rust_version="$(rustc --version | awk '{print $2}')"
-[[ "$rust_version" =~ ^([0-9]+)\.([0-9]+) ]] ||
-  fail "could not parse rustc version: $rust_version"
-rust_major="${BASH_REMATCH[1]}"
-rust_minor="${BASH_REMATCH[2]}"
-if ((rust_major < 1)) || ((rust_major == 1 && rust_minor < 88)); then
-  printf 'error: Rust 1.88 or newer is required (found rustc %s)\n' "$rust_version" >&2
-  print_rust_and_node >&2
-  exit 1
+if ! rustc_is_new_enough; then
+  if is_interactive; then
+    if command -v rustc >/dev/null 2>&1; then
+      printf 'Rust 1.88 or newer is required (found rustc %s).\n' "$(rustc --version | awk '{print $2}')"
+    else
+      printf 'Rust 1.88 or newer is required and rustc is not installed.\n'
+    fi
+    if ask_yes_no "Install Rust 1.88 with rustup into your home directory?" y; then
+      install_rustup_toolchain
+    fi
+  fi
+  if ! rustc_is_new_enough; then
+    if command -v rustc >/dev/null 2>&1; then
+      printf 'error: Rust 1.88 or newer is required (found rustc %s)\n' "$(rustc --version | awk '{print $2}')" >&2
+    else
+      printf 'error: Rust 1.88 or newer is required\n' >&2
+    fi
+    print_rust_and_node >&2
+    exit 1
+  fi
 fi
 
-if ! node --input-type=commonjs -e '
-      const [major, minor] = process.versions.node.split(".").map(Number);
-      if (!(major > 22 || (major === 22 && minor >= 12))) process.exit(1);
-    '; then
-  printf 'error: Node.js 22.12 or newer is required (found %s)\n' "$(node --version)" >&2
+if ! node_is_new_enough; then
+  if command -v node >/dev/null 2>&1; then
+    printf 'error: Node.js 22.12 or newer is required (found %s)\n' "$(node --version)" >&2
+  else
+    printf 'error: Node.js 22.12 or newer is required\n' >&2
+  fi
   print_rust_and_node >&2
   exit 1
 fi
@@ -386,7 +602,15 @@ if [[ "$host_target" == *linux-musl* ]]; then
   printf 'warning: musl targets are untested. Prefer a glibc distro (Debian, Fedora, Arch, openSUSE).\n' >&2
 fi
 
+resolve_listen_address
+if is_interactive && ((start_service == 1)); then
+  if ! ask_yes_no "Start helixd when the install finishes?" y; then
+    start_service=0
+  fi
+fi
+
 printf 'Building Helix from this checkout, then installing helixd with sudo.\n'
+printf 'Dashboard URL after install: %s\n' "$(helix_open_url "$listen_addr")"
 printf 'First compile can take a while. Host and game controls are not included.\n\n'
 
 "$script_dir/build-release.sh"
@@ -408,21 +632,23 @@ bundle_dir="$repo_root/target/helix-release/helix-$version-$host_target"
   fail "release build did not produce a safe bundle at $bundle_dir"
 
 printf '\nInstalling helixd with sudo...\n'
+install_args=(--listen "$listen_addr")
 if [[ "$start_service" -eq 0 ]]; then
-  sudo -- "$bundle_dir/install-local.sh" --no-start
-else
-  sudo -- "$bundle_dir/install-local.sh"
+  install_args+=(--no-start)
 fi
+sudo -- "$bundle_dir/install-local.sh" "${install_args[@]}"
 
-cat <<'EOF'
+dashboard_url="$(helix_open_url "$listen_addr")"
+cat <<EOF
 
-helixd is installed on 127.0.0.1:8080.
+helixd is installed on ${listen_addr}.
 
-Create the owner from this host:
+If this was a fresh install, the one-time owner token was printed above.
+Need another token from this host:
 
   sudo -u helix -- helixctl --config /etc/helix/helix.toml setup-token
 
-Then open http://127.0.0.1:8080 and paste the token within 15 minutes.
+Then open ${dashboard_url} and paste the token within 15 minutes.
 
 This local package is the dashboard only. Host files, UFW or firewalld, APT or
 DNF updates, and native game servers need helix-privd. Selected package updates

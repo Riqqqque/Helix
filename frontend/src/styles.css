@@ -4670,6 +4670,17 @@ textarea:focus {
 .home-widget--height-tall > :last-child {
   min-height: 285px;
 }
+.home-widget--kind-shortcut.home-widget--height-short {
+  min-height: 118px;
+}
+.home-widget--kind-shortcut.home-widget--height-short > :last-child {
+  min-height: 52px;
+}
+.home-widget--kind-shortcut.home-widget--height-short .home-shortcut {
+  min-height: 52px;
+  padding: 10px 14px;
+  gap: 10px;
+}
 .home-widget > header {
   min-height: 54px;
   display: flex;
@@ -4685,9 +4696,23 @@ textarea:focus {
   align-items: center;
   gap: 8px;
 }
-.home-widget > header > div:first-child > svg {
+.home-widget > header > div:first-child > svg,
+.home-widget > header > div:first-child .home-shortcut-icon,
+.home-widget > header > div:first-child .home-shortcut-badge {
   flex: 0 0 auto;
   color: var(--widget-accent, var(--home-accent, var(--accent)));
+}
+.home-widget > header > div:first-child .home-shortcut-icon,
+.home-widget > header > div:first-child .home-shortcut-badge {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+.home-widget > header > div:first-child .home-shortcut-badge {
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
 }
 .home-widget h2 {
   overflow: hidden;
@@ -5065,13 +5090,28 @@ textarea:focus {
 .home-shortcut:hover {
   background: var(--surface-hover);
 }
-.home-shortcut > svg {
+.home-shortcut > svg,
+.home-shortcut .home-shortcut-icon,
+.home-shortcut .home-shortcut-badge {
   width: 35px;
   height: 35px;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 5px;
   color: var(--accent);
+  flex: 0 0 auto;
+}
+.home-shortcut .home-shortcut-icon {
+  padding: 4px;
+  object-fit: contain;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.home-shortcut .home-shortcut-badge {
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 .home-shortcut > span {
   min-width: 0;
@@ -7324,6 +7364,22 @@ textarea:focus {
   gap: 10px;
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
+}
+.home-homarr-item .home-shortcut-icon,
+.home-homarr-item .home-shortcut-badge {
+  width: 28px;
+  height: 28px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+.home-homarr-item .home-shortcut-badge {
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
 }
 .home-homarr-item strong {
   display: block;

@@ -89,12 +89,22 @@ Helix has no signed binary download. On a 64-bit systemd machine you control
 git clone https://github.com/Riqqqque/Helix.git
 cd Helix
 ./scripts/install-from-source.sh
+```
+
+That is the whole install. On a terminal the script asks yes/no questions for
+missing compiler packages, an optional rustup install, a different loopback
+port when 8080 is already taken, and whether to start helixd. Fresh installs
+print a one-time owner token; open the URL the script prints (default
+http://127.0.0.1:8080) and paste it. Need another token later:
+
+```bash
 sudo -u helix -- helixctl --config /etc/helix/helix.toml setup-token
 ```
 
-Open http://127.0.0.1:8080 and paste the token. Missing compiler tools print
-the matching apt, dnf/yum, zypper, pacman, apk, or emerge commands, plus rustup and Node
-22.12+. Pass `--install-deps` to install only those compiler packages.
+Pass `--port 8081` or `--listen 127.0.0.1:8081` if you already know 8080 is
+busy. `--yes` skips prompts. `--install-deps` installs only the compiler
+packages. Rust 1.88+ and Node.js 22.12+ are still required for the compile;
+the wizard can install Rust through rustup when you say yes.
 
 Debian, Ubuntu, Mint, Pop!_OS, Fedora, RHEL-family, openSUSE, Arch, and
 other systemd GNU/Linux distros are the intended source-install targets.

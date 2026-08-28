@@ -6,6 +6,7 @@ umask 077
 script_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 bundle_dir=""
 start_service=1
+listen_override=""
 
 fail() {
   printf 'error: %s\n' "$*" >&2
@@ -14,11 +15,12 @@ fail() {
 
 usage() {
   cat <<'USAGE'
-Usage: sudo ./install-local.sh [--bundle DIRECTORY] [--no-start]
+Usage: sudo ./install-local.sh [--bundle DIRECTORY] [--no-start] [--listen 127.0.0.1:PORT]
 
 Install or upgrade Helix from a locally extracted, checksummed release bundle.
 The package-file transaction does not modify an existing Helix configuration or
-roll back application databases.
+roll back application databases. --listen only applies when writing a new
+/etc/helix/helix.toml; an existing config is kept as-is.
 USAGE
 }
 
@@ -32,6 +34,11 @@ while (($# > 0)); do
     --no-start)
       start_service=0
       shift
+      ;;
+    --listen)
+      (($# >= 2)) || fail "--listen requires 127.0.0.1:PORT or [::1]:PORT"
+      listen_override=$2
+      shift 2
       ;;
     -h|--help)
       usage
@@ -159,6 +166,43 @@ verify_payload_file() {
   [[ "$actual" == "$expected" ]] || fail "staged payload checksum changed: $manifest_key"
 }
 
+helix_validate_loopback_listen() {
+  local value=$1
+  local port=""
+  if [[ "$value" =~ ^127\.0\.0\.1:([0-9]{1,5})$ ]]; then
+    port=${BASH_REMATCH[1]}
+  elif [[ "$value" =~ ^\[::1\]:([0-9]{1,5})$ ]]; then
+    port=${BASH_REMATCH[1]}
+  else
+    return 1
+  fi
+  ((10#$port >= 1024 && 10#$port <= 65535))
+}
+
+helix_rewrite_listen() {
+  local file=$1
+  local listen=$2
+  local rewritten
+  helix_validate_loopback_listen "$listen" ||
+    fail "listen address must be 127.0.0.1:PORT or [::1]:PORT with port 1024-65535"
+  rewritten="$(mktemp --tmpdir=/etc/helix '.helix.toml.helix-listen.XXXXXXXX')"
+  if ! awk -v listen="$listen" '
+    BEGIN { replaced = 0 }
+    /^listen[[:space:]]*=/ {
+      print "listen = \"" listen "\""
+      replaced = 1
+      next
+    }
+    { print }
+    END { if (replaced != 1) exit 2 }
+  ' "$file" >"$rewritten"; then
+    rm -f -- "$rewritten"
+    fail "could not set server.listen in a new Helix config"
+  fi
+  install -o root -g helix -m 0640 -- "$rewritten" "$file"
+  rm -f -- "$rewritten"
+}
+
 verify_payload_tree() {
   local manifest_prefix=$1
   local tree=$2
@@ -186,6 +230,11 @@ verify_payload_tree() {
 helix_require_linux_root
 helix_acquire_package_lock
 helix_assert_system_paths_safe
+
+if [[ -n "$listen_override" ]]; then
+  helix_validate_loopback_listen "$listen_override" ||
+    fail "listen address must be 127.0.0.1:PORT or [::1]:PORT with port 1024-65535"
+fi
 
 critical_state_database=/var/lib/helix/state/helix-state.db
 critical_state_existed_before=0
@@ -326,10 +375,16 @@ if [[ -e /etc/helix/helix.toml || -L /etc/helix/helix.toml ]]; then
   [[ "$(stat -c '%u' -- /etc/helix/helix.toml)" == "0" ]] ||
     fail "/etc/helix/helix.toml must be owned by root"
   printf 'Preserving existing configuration: /etc/helix/helix.toml\n'
+  if [[ -n "$listen_override" ]]; then
+    printf 'warning: --listen was ignored because /etc/helix/helix.toml already exists\n' >&2
+  fi
 else
   config_staging="$(mktemp --tmpdir=/etc/helix '.helix.toml.helix-new.XXXXXXXX')"
   install -o root -g helix -m 0640 -- "$bundle_dir/packaging/helix.toml" "$config_staging"
   verify_payload_file ./packaging/helix.toml "$config_staging"
+  if [[ -n "$listen_override" ]]; then
+    helix_rewrite_listen "$config_staging" "$listen_override"
+  fi
   mv -T -- "$config_staging" /etc/helix/helix.toml
   config_staging=""
 fi

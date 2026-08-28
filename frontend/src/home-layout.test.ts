@@ -5,6 +5,7 @@ import {
   homeShortcutUrls,
   importHomeTemplate,
   moveHomeWidget,
+  homarrShortcutSize,
   newHomarrShortcuts,
   nextHomeWidgetHeight,
   nextHomeWidgetSize,
@@ -14,8 +15,10 @@ import {
   parseNoteWidgetConfiguration,
   parseWeatherWidgetConfiguration,
   readHomeWidgets,
+  replaceHomarrHome,
   reorderHomeWidgets,
   saveHomeWidgets,
+  HOMARR_HOME_ID,
   type HomeWidget,
 } from './home-layout';
 
@@ -27,7 +30,7 @@ describe('home layout', () => {
       { id: 'one', kind: 'note', size: 'compact', title: 'A', content: 'B' },
       { id: 'one', kind: 'clock', size: 'wide', title: 'Duplicate' },
       { id: '../bad', kind: 'clock', size: 'wide', title: 'Bad' },
-    ])).toEqual([{ id: 'one', kind: 'note', size: 'compact', height: 'medium', title: 'A', content: 'B', url: '', color: '' }]);
+    ])).toEqual([{ id: 'one', kind: 'note', size: 'compact', height: 'medium', title: 'A', content: 'B', url: '', color: '', icon: '' }]);
   });
 
   it('ships a first-run note that can be edited without layout mode', () => {
@@ -75,8 +78,8 @@ describe('home layout', () => {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => values.set(key, value),
     });
-    saveHomeWidgets([{ id: 'link', kind: 'shortcut', size: 'compact', height: 'short', title: 'Docs', content: '', url: 'https://example.com', color: '#ff8800' }]);
-    expect(readHomeWidgets()).toEqual([{ id: 'link', kind: 'shortcut', size: 'compact', height: 'short', title: 'Docs', content: '', url: 'https://example.com', color: '#ff8800' }]);
+    saveHomeWidgets([{ id: 'link', kind: 'shortcut', size: 'compact', height: 'short', title: 'Docs', content: '', url: 'https://example.com', color: '#ff8800', icon: 'https://example.test/docs.png' }]);
+    expect(readHomeWidgets()).toEqual([{ id: 'link', kind: 'shortcut', size: 'compact', height: 'short', title: 'Docs', content: '', url: 'https://example.com', color: '#ff8800', icon: 'https://example.test/docs.png' }]);
   });
 
   it('migrates legacy notes and bounds shared Home templates', () => {
@@ -90,8 +93,8 @@ describe('home layout', () => {
 
   it('imports Homarr shortcuts that are not already on Home', () => {
     const existing: HomeWidget[] = [
-      { id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Now', content: '', url: '', color: '' },
-      { id: 'plex', kind: 'shortcut', size: 'compact', height: 'medium', title: 'Plex', content: '', url: 'http://192.168.1.10:32400/web', color: '' },
+      { id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Now', content: '', url: '', color: '', icon: '' },
+      { id: 'plex', kind: 'shortcut', size: 'compact', height: 'medium', title: 'Plex', content: '', url: 'http://192.168.1.10:32400/web', color: '', icon: '' },
     ];
     expect(homeShortcutUrls(existing)).toEqual(new Set(['http://192.168.1.10:32400/web']));
     expect(newHomarrShortcuts([
@@ -100,5 +103,23 @@ describe('home layout', () => {
       { url: 'http://192.168.1.10:7878' },
       { url: '' },
     ], existing)).toEqual([{ url: 'http://192.168.1.10:7878' }]);
+  });
+
+  it('places Homarr shortcuts on a dedicated Homarr Home in catalog order', () => {
+    const templates = [
+      { id: 'home-main', name: 'Main', accent: '#d7f64d', widgets: defaultHomeWidgets.map((widget) => ({ ...widget })) },
+    ];
+    const result = replaceHomarrHome(templates, [
+      { id: 'shortcut-homarr-0', kind: 'shortcut', size: 'compact', height: 'short', title: 'Radarr', content: '', url: 'http://192.168.1.10:7878', color: '', icon: 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/radarr.png' },
+      { id: 'shortcut-homarr-1', kind: 'shortcut', size: 'wide', height: 'short', title: 'Plex', content: '', url: 'http://192.168.1.10:32400/web', color: '', icon: 'https://example.test/plex.png' },
+    ]);
+    expect('templates' in result).toBe(true);
+    if (!('templates' in result)) return;
+    expect(result.activeHomeId).toBe(HOMARR_HOME_ID);
+    expect(result.templates.map((template) => template.id)).toEqual(['home-main', HOMARR_HOME_ID]);
+    expect(result.templates[1]?.widgets.map((widget) => widget.title)).toEqual(['Radarr', 'Plex']);
+    expect(homarrShortcutSize(1)).toBe('compact');
+    expect(homarrShortcutSize(4)).toBe('wide');
+    expect(homarrShortcutSize(8)).toBe('full');
   });
 });

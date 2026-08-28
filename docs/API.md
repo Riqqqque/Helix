@@ -109,8 +109,11 @@ Open Portainer uses a published port when a Portainer container is detected.
 Dashboard and gateway container names stay protected. Homarr import reads the
 container bind or volume mounts, then classic JSON if present, otherwise a
 read-only snapshot of `db/db.sqlite` when the `app`/`apps` table has `name` and
-`href`. Only http(s) addresses are returned. Relative Homarr icons, empty hrefs,
-and MySQL/Postgres Homarr catalogs fail closed.
+`href`. Only http(s) addresses are returned. Homarr board layout (`item` /
+`item_layout`) is used for order and tile width when those tables exist. Icon
+names and slugs are mapped onto the public dashboard-icons CDN; http(s) icon
+URLs are kept. Uploaded Homarr media files, empty hrefs, and MySQL/Postgres
+Homarr catalogs fail closed.
 
 ### Security center
 

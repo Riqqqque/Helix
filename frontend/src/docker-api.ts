@@ -40,6 +40,9 @@ export interface HomarrWidgetCandidate {
   name: string;
   url: string;
   icon: string | null;
+  x?: number;
+  y?: number;
+  width?: number;
 }
 
 export interface HomarrCatalog {
@@ -73,6 +76,15 @@ function optionalNumber(record: Record<string, unknown>, key: string): number | 
   if (value === null || value === undefined) return null;
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     throw new ApiError(`Docker inventory returned an invalid ${key} value.`);
+  }
+  return value;
+}
+
+function optionalGridNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 10_000) {
+    throw new ApiError('Homarr catalog returned an invalid layout value.');
   }
   return value;
 }
@@ -143,7 +155,14 @@ export function parseHomarrCatalog(value: unknown): HomarrCatalog {
     if (name.trim().length === 0 || (!url.startsWith('http://') && !url.startsWith('https://'))) {
       throw new ApiError('Homarr catalog returned an invalid shortcut.');
     }
-    return { name, url, icon: optionalText(item, 'icon', 2_048) };
+    return {
+      name,
+      url,
+      icon: optionalText(item, 'icon', 2_048),
+      x: optionalGridNumber(item, 'x'),
+      y: optionalGridNumber(item, 'y'),
+      width: optionalGridNumber(item, 'width'),
+    };
   });
   const container = root.container === null || root.container === undefined
     ? null
