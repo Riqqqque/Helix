@@ -47,7 +47,8 @@ URLs and open in a new tab. Strand widgets embed an enabled package that
 declared `helix:ui.widget`. While editing, **Import from Homarr** reads Homarr
 apps that already have an http(s) address. Current Homarr stores those in SQLite; older
 Homarr JSON configs still work. Helix places them on a dedicated **Homarr** Home in
-Homarr's layout order as short tiles, instead of dumping them onto Main. Icons come
+Homarr's layout order as short tiles, instead of dumping them onto Main.
+Long names stay inside the picker rows and tiles. Icons come
 from Homarr's http(s) icon URLs, Homarr icon names via the dashboard-icons set, or
 Helix's matcher on the app name and link. Uploaded Homarr media files, notes, and
 Homarr-only apps stay in Homarr. Re-import replaces the Homarr Home. **Full screen**
