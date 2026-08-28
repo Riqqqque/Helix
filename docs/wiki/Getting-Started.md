@@ -61,7 +61,10 @@ Read the
 [container deployment guide](https://github.com/Riqqqque/Helix/blob/main/docs/CONTAINER-DEPLOYMENT.md)
 and the
 [current security model](https://github.com/Riqqqque/Helix/blob/main/docs/SECURITY.md)
-first. Helix does not install Tailscale or open router ports.
+first. The optional Hooks installer can install and start the exact Tailscale
+package on an eligible Debian/Ubuntu host, but the owner must authenticate it
+and explicitly configure the secondary private gateway. Helix does not open
+router ports.
 
 Never post setup tokens, passwords, cookies, CSRF proofs, private addresses,
 hostnames, storage paths, server logs, or world data in an issue or screenshot.

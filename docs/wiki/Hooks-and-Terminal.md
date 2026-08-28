@@ -16,10 +16,30 @@ controllable. Installed services report running and start-after-boot state.
 Supported buttons issue only start, stop, restart, enable, or disable for that
 exact unit and verify the result. AMP uses its separate loopback API adapter.
 
-When a service is absent, Helix provides concise setup steps and links to the
-official instructions. It does not run a remote shell script, add a package
-repository, invent an account credential, or silently authenticate a tailnet.
-Once the supported service exists, **Check connections** detects it.
+When a service is absent, Helix runs a read-only host preflight first. On a
+supported Debian or Ubuntu release and architecture, Tailscale and Jellyfin
+have one-click installers. Each installer accepts only one built-in hook ID,
+downloads repository material from the publisher's exact HTTPS host, validates
+the repository definition, adds the exact signed APT source, installs the exact
+allowlisted package, enables the exact systemd service, and verifies that it is
+active. Hook installs and System Updates share one package-operation lock.
+
+Helix never runs a downloaded root script and the browser cannot supply a
+package, repository, unit, executable, or shell command. If repository setup or
+APT fails before package installation, prior repository files are restored.
+There is no general package rollback claim after APT has changed the host.
+
+Tailscale account login is deliberately separate. After the package and
+`tailscaled.service` are ready, the owner runs `tailscale up` in Terminal and
+approves the one-time link in the intended tailnet. Helix neither stores those
+credentials nor chooses tailnet policy. Jellyfin likewise leaves its first-run
+owner and media-library wizard inside Jellyfin Web.
+
+Pterodactyl Wings is guided instead of falsely labeled one-click. Helix checks
+the supported Linux release, architecture, Docker, systemd, and command
+prerequisites, then identifies the remaining owner steps. The node must first
+exist in a Pterodactyl Panel because that panel generates the node-specific
+`config.yml` and credentials.
 
 Open-service buttons use the local Helix hostname with the known panel port.
 Deep library, account, network, or application-specific settings remain in the
@@ -43,6 +63,11 @@ does not store commands, keystrokes, output, or environment values. The browser
 keeps 10,000 lines of local scrollback only for that page. Disconnecting or
 closing the page kills the PTY; use `tmux` or a system service for work that must
 survive a browser disconnect.
+
+The quick-check buttons send ordinary read-only commands into the same PTY.
+Output remains terminal-native so ANSI colors, wrapping, prompts, columns, and
+interactive programs behave like an SSH terminal rather than a reformatted log
+viewer.
 
 If the page says unavailable, verify the optional `helix-terminald@USER` service,
 its separate socket group, `/run/helix/terminal/terminal.sock`, the dashboard's

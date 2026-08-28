@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/helix-mark.svg" width="112" height="112" alt="Helix logo">
+  <img src="docs/assets/helix-mark.png" width="112" height="112" alt="Helix logo">
 </p>
 
 <h1 align="center">Helix</h1>
@@ -39,16 +39,20 @@ The current private-alpha build includes:
 - mounted-drive browsing, bounded text editing, folder/file creation, rename,
   recoverable deletion, and cancellable largest-file/folder analysis inside
   configured storage roots;
-- separate views for local listeners, Docker port publications, UFW state, game
-  port mappings, and externally unverified reachability;
+- separate views for private/public addresses, local listeners, Docker port
+  publications, UFW state, game-port mappings, router-confirmed UPnP mappings,
+  CGNAT, and still-unverified outside reachability;
 - narrowly scoped, named UFW allow rules with exact Helix ownership metadata,
   verified deletion, and bounded Undo when UFW is available and active;
 - APT/dpkg inventory, explicit package-list refresh, and an exact selected-
   candidate update job with held-package, disk, no-removal simulation, conffile,
   final-version, and never-auto-reboot guards;
 - native Docker-backed Minecraft instances for Paper, Purpur, Folia, Fabric,
-  and Vanilla, plus a compatibility-aware Modrinth plugin/mod marketplace and
-  a narrow Fabric-only “Start with a modpack” path;
+  Vanilla, and a guarded local custom-JAR import, plus a compatibility-aware
+  Modrinth plugin/mod marketplace and a narrow Fabric-only “Start with a
+  modpack” path;
+- bounded per-game port pools with collision-safe automatic allocation, plus
+  exact opt-in Minecraft TCP forwarding on compatible same-LAN UPnP routers;
 - start, stop, restart, update, backup, settings, files, performance, logs, and
   console tools for native instances;
 - bounded persistent native console history that survives browser closes and
@@ -59,7 +63,8 @@ The current private-alpha build includes:
   remains its own manager; Helix does not relabel AMP instances as native;
 - a Hooks page for bounded discovery and verified lifecycle control of AMP,
   Plex, Tailscale, Pterodactyl Wings, Jellyfin, and root-configured systemd
-  services, while each upstream service keeps ownership of its settings;
+  services, with exact one-click Tailscale/Jellyfin APT installs on eligible
+  Debian/Ubuntu hosts and a prerequisite-aware Wings guide;
 - an optional real Linux PTY that runs as one configured unprivileged host
   user, requires the current Helix password for every one-use connection, and
   does not record commands or output;
@@ -79,16 +84,18 @@ validated.
 
 Helix does not currently:
 
-- make a listening port reachable from the internet, configure a router, or
-  prove outside reachability;
+- bypass CGNAT/ISP policy, configure routers without compatible UPnP, expose the
+  dashboard publicly, or prove game-port reachability from an outside network;
 - disable or reset UFW, or change its default policies. A separate confirmed
   activation flow can enable an installed inactive UFW only after preserving a
   verified listening SSH port;
 - perform broad unattended upgrades or claim package rollback. Only exact
   selected APT candidates are supported and Linux never reboots automatically;
 - update itself from Git, GitHub, or an unsigned artifact;
-- install, authenticate, or reconfigure Tailscale. Hooks provides guided setup,
-  detection, service control, and a constrained route for an existing setup;
+- authenticate a Tailscale account or silently change tailnet policy. On an
+  eligible Debian/Ubuntu host, Hooks can install the exact `tailscale` package
+  from Tailscale's signed repository and verify `tailscaled`; the owner still
+  runs `tailscale up` and approves the machine;
 - provide a supported Forge, NeoForge, Quilt, CurseForge, or broad/full-parity
   modpack workflow;
 - provide MFA, a public-network security review, or a signed release channel;
@@ -128,21 +135,32 @@ Read [How Helix works](docs/HOW-HELIX-WORKS.md) for the longer walkthrough.
 
 The development service defaults to loopback. The container deployment supports
 an explicitly configured private-LAN gateway and an optional second private
-entry point suitable for Tailscale routing. Helix does not install, enable, or
-reconfigure Tailscale, and “Tailscale-compatible” is not a claim that remote
-access was configured or audited.
+entry point suitable for Tailscale routing. Hooks can install and start the
+exact Tailscale service on eligible Debian/Ubuntu hosts, but it does not log in,
+approve a machine, choose a tailnet, or widen gateway trust. “Tailscale-
+compatible” is not a claim that remote access was configured or audited.
 
-A public domain is not required for a private deployment. Public exposure is
-not supported by this alpha. See
+A public domain is not required for a private deployment. Public exposure of
+the Helix dashboard is not supported by this alpha. Opt-in native-game TCP
+forwarding is a separate, narrowly owned UPnP feature and never widens the
+dashboard gateway. See
 [Container deployment](docs/CONTAINER-DEPLOYMENT.md) for the exact boundary.
 
 ## Minecraft scope
 
 The native manager currently exposes install paths for Paper, Purpur, Folia,
-Fabric, and Vanilla. The Modrinth marketplace filters content by the selected
-server software and Minecraft version: plugin servers receive compatible
-plugins, Fabric receives compatible server-side mods, and unsupported software
-does not get a fake install path.
+Fabric, Vanilla, and an owner-supplied custom server JAR already inside a
+configured Storage root. The custom flow copies and hashes the JAR into a
+private unprivileged container workspace, pins Java 17, 21, or 25, and never
+modifies the source. Helix cannot verify the custom JAR's publisher or select a
+future update for it. Deployments that browse broadly from `/` must configure
+one or more narrower native `custom_artifact_roots`; Helix never promotes a
+whole-host read boundary into an executable import boundary. The Modrinth
+marketplace filters content by the selected server software, loader, and
+Minecraft version. A missing or negative Modrinth server-side flag is shown as
+a warning instead of hiding the project or blocking its install; Helix still
+prevents plugin/mod mixing and writes only to the matching `plugins/` or `mods/`
+directory. Unsupported server software does not get a fake install path.
 
 NeoForge and Forge appear only as explained future catalog entries. Broad
 modpack creation is not a supported claim, but one narrow path is implemented:
@@ -218,6 +236,7 @@ or [Container deployment](docs/CONTAINER-DEPLOYMENT.md).
 
 Useful starting points:
 
+- [Wiki](https://github.com/Riqqqque/Helix/wiki) — operator-facing documentation
 - [Progress](PROGRESS.md) — what is implemented and what remains unvalidated
 - [Next work](NEXT.md) — the current validation and implementation order
 - [Roadmap](ROADMAP.md) — longer-term sequencing

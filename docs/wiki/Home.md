@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Riqqqque/Helix/main/docs/assets/helix-mark.png" width="96" height="96" alt="Helix logo">
+</p>
+
 # Helix Wiki
 
 Helix is a local-first Linux dashboard for the host, its files, and game
@@ -21,14 +25,14 @@ Helix brings the common jobs for one server into one place:
 - mounted-drive browsing, bounded text editing, recoverable deletion, and
   cancellable largest-file/folder analysis;
 - a native Docker-backed Minecraft manager for Paper, Purpur, Folia, Fabric,
-  and Vanilla;
+  Vanilla, and guarded local custom-JAR imports;
 - persistent bounded console history, settings with restart guidance, backups,
   a compatibility-aware Modrinth marketplace, and narrow server-safe Fabric
   `.mrpack` creation;
 - optional AMP discovery and control without pretending AMP instances are
   Helix-native;
 - Hooks for exact Plex, AMP, Tailscale, Pterodactyl Wings, and Jellyfin service
-  discovery/control;
+  discovery/control, including eligible one-click Tailscale/Jellyfin installs;
 - an optional current-password-gated non-root Linux PTY; and
 - selected APT updates, immediate/recurring host reboot, UFW safety activation,
   and exact Helix start-on-boot controls with explicit preflight/confirmation.
@@ -61,8 +65,8 @@ APT candidates do have a guarded path but no rollback claim. Helix can inspect
 UFW, manage exact owned allow rules, and separately enable inactive UFW only
 after preserving a verified SSH listener; it cannot configure a router or prove
 outside reachability. It can work behind an already configured private
-Tailscale route and control an existing service, but does not install or
-authenticate Tailscale.
+Tailscale route and install/start the exact service on eligible Debian/Ubuntu
+hosts, but it does not authenticate the tailnet or widen network trust.
 
 Modpack creation is limited to listed stable server-capable Fabric releases
 from Modrinth and intentionally builds a server-safe subset. Forge, NeoForge,
