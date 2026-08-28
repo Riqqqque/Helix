@@ -292,8 +292,7 @@ Early Helix does not need:
 - a separate database server;
 - a mail or DNS server implementation;
 - a proprietary cloud requirement;
-- distributed consensus;
-- an embedded AI model; or
+- distributed consensus; or
 - a general-purpose root command runner.
 
 Remote nodes can be reconsidered only after single-host identity, protocol,

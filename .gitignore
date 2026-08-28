@@ -13,3 +13,4 @@
 *.helix-genome
 *.log
 coverage/
+/.cursor/
