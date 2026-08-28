@@ -66,8 +66,8 @@ const widgetIcons: Record<HomeWidgetKind, IconName> = {
   strand: 'strands',
 };
 
-function ShortcutMark({ name, url, icon, size = 22 }: { name: string; url: string; icon?: string; size?: number }) {
-  const resolved = shortcutIconUrl({ name, url, icon });
+function ShortcutMark({ name, url, icon, size = 22 }: { name: string; url: string; icon?: string | null; size?: number }) {
+  const resolved = shortcutIconUrl({ name, url, icon: icon ?? null });
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     setFailed(false);
@@ -677,7 +677,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
                   checked={homarrSelected.includes(widget.url)}
                   onChange={() => setHomarrSelected((current) => current.includes(widget.url) ? current.filter((item) => item !== widget.url) : [...current, widget.url])}
                 />
-                <ShortcutMark name={widget.name} url={widget.url} icon={widget.icon ?? undefined} size={28} />
+                <ShortcutMark name={widget.name} url={widget.url} icon={widget.icon} size={28} />
                 <span>
                   <strong>{widget.name}</strong>
                   <small>{alreadyOnHome ? 'Already on Homarr Home' : widget.url}</small>
