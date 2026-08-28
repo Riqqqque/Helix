@@ -35,7 +35,9 @@ and broad/full-pack modpack parity are not current features. Exact selected APT
 candidates have a guarded explicit path with no rollback claim. One narrow path creates a
 declared-hash-verified server-safe subset from listed stable server-capable
 Fabric `.mrpack` releases on Modrinth. Tailscale can sit in front of a separately
-constrained private entry point, but Helix does not install or manage it.
+constrained private entry point. Its Hook can install and start the exact
+service on eligible Debian/Ubuntu hosts, but Helix does not authenticate the
+tailnet or configure the gateway trust boundary.
 
 Read the
 [full walkthrough](https://github.com/Riqqqque/Helix/blob/main/docs/HOW-HELIX-WORKS.md)

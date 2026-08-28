@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Riqqqque/Helix/main/docs/assets/helix-mark.png" width="52" height="52" alt="Helix">
+</p>
+
 **Helix**
 
 - [Home](https://github.com/Riqqqque/Helix/wiki)
