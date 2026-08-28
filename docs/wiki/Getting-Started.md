@@ -15,18 +15,33 @@ reviewed Linux broker configuration and Docker on the Linux host.
 
 ## Choose a path
 
-1. **Loopback preview** on the machine you cloned. This is enough to create the
-   owner, see Home greet your name, and use read-only dashboard pages.
-   Broker-backed host, storage, network, and native-server controls stay
-   unavailable until `helix-privd` is configured on Linux.
-2. **Private LAN on a Linux server you control.** Copy the examples, replace
+1. **Ubuntu systemd package** on a 64-bit Ubuntu 24.04 host you control. Clone
+   the source and run `./scripts/install-from-source.sh`. That compiles Helix
+   and installs `helixd` on loopback. Host, file, and native-server controls
+   stay unavailable until `helix-privd` is configured.
+2. **Loopback preview** from a local `cargo`/`npm` build on Windows, macOS, or
+   Linux. This is enough to create the owner, see Home greet your name, and use
+   read-only dashboard pages.
+3. **Private LAN with host and game controls.** Copy the examples, replace
    every placeholder with that host's address, groups, and storage roots, then
-   follow the container deployment guide. This is not a one-command installer.
+   follow the container deployment guide.
 
-The local package flow in
-[Installation](https://github.com/Riqqqque/Helix/blob/main/docs/INSTALLATION.md)
-is a scoped lifecycle test. For a first server, use Compose plus the broker
-unit rather than that package.
+The Ubuntu script is one command after clone, but it is still an unsigned
+source build of a [scoped package lifecycle](https://github.com/Riqqqque/Helix/blob/main/docs/INSTALLATION.md),
+not a signed or supported production installer.
+
+## Install on Ubuntu
+
+From the repository root on the Ubuntu host:
+
+```bash
+./scripts/install-from-source.sh
+sudo -u helix -- helixctl --config /etc/helix/helix.toml setup-token
+```
+
+Open http://127.0.0.1:8080 and paste the token. If Rust 1.88+, Node.js 22.12+,
+or a C toolchain is missing, the script prints the exact apt/rustup commands.
+First compile takes a while.
 
 ## Build the source
 

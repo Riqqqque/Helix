@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Riqqqque/Helix/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/Riqqqque/Helix/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/Riqqqque/Helix/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI status" src="https://github.com/Riqqqque/Helix/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
   <img alt="Status: private alpha" src="https://img.shields.io/badge/status-private%20alpha-f0c76a">
   <img alt="Rust MSRV: 1.88" src="https://img.shields.io/badge/rust-1.88%2B-71e6a3">
   <a href="LICENSE"><img alt="License: AGPL-3.0-or-later" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-71e6a3"></a>
@@ -80,13 +80,31 @@ marketplace matrices are still release gates. See
 [the verified state](PROGRESS.md) for the distinction between implemented and
 validated.
 
-## Run it
+## Install on Ubuntu
 
-There is no supported binary installer. Use the source:
+Helix has no signed binary download. On a 64-bit Ubuntu 24.04 machine you
+control:
 
-1. **Loopback preview** on the machine you cloned — owner setup, Home, and
-   read-only dashboard pages. Host controls stay unavailable until the Linux
-   broker is configured.
+```bash
+git clone https://github.com/Riqqqque/Helix.git
+cd Helix
+./scripts/install-from-source.sh
+sudo -u helix -- helixctl --config /etc/helix/helix.toml setup-token
+```
+
+Open http://127.0.0.1:8080 and paste the token. If Rust 1.88+, Node.js 22.12+,
+or a C toolchain is missing, the script prints the exact apt/rustup commands
+instead of guessing. First compile takes a while.
+
+That package is `helixd` on loopback. It does not install `helix-privd`, so
+host files, UFW, packages, and native game servers stay unavailable until you
+follow [Container deployment](docs/CONTAINER-DEPLOYMENT.md).
+
+## Other ways to run it
+
+1. **Loopback preview** from a local `cargo`/`npm` build on Windows, macOS, or
+   Linux — owner setup, Home, and read-only dashboard pages. Host controls stay
+   unavailable until the Linux broker is configured.
 2. **Private LAN on a Linux server** — copy `.env.example` to `.env` and
    `deploy/privd.example.json` to the host broker config, then replace every
    placeholder with *that* host's address, groups, and storage roots.
@@ -114,7 +132,7 @@ Helix does not currently:
 - claim a full client modpack copy, unsigned CurseForge API access, or every
   historical Minecraft build;
 - provide MFA, a public-network security review, or a signed release channel;
-- run third-party Strands; or
+- run portable Wasm Strands or native Strand sidecars;
 - replace independent backups and restore drills.
 
 Helix self-update stays disabled until the backend can stage and verify a signed
@@ -245,7 +263,7 @@ or [Container deployment](docs/CONTAINER-DEPLOYMENT.md).
 | `crates/helix-terminal` | Framed unprivileged PTY bridge for the optional Linux terminal |
 | `crates/helix-state` | Critical SQLite state, preferences, migrations, backups, and integrity |
 | `crates/helix-auth` | Identity, password, session, and token primitives |
-| `crates/helix-strand-kit` | Non-executing Strand preview scaffolding and validation |
+| `crates/helix-strand-kit` | Strand project scaffolding, `helix.strand/1` pack/unpack, and validation |
 | `crates/helix-system` | Bounded read-only host discovery |
 | `frontend` | Preact UI, adapters, responsive styling, and tests |
 | `deploy` / `compose.yaml` | Private-alpha Linux broker and container examples |

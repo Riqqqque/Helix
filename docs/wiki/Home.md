@@ -50,9 +50,11 @@ mods or plugins.
 
 ## Start here
 
-Clone the source, create an owner with your own display name, and put Helix on a
-private LAN by filling `.env` and the broker config with **that host's**
-addresses and storage roots. Nothing ships with a demo city or demo server.
+On 64-bit Ubuntu 24.04, clone the source and run
+`./scripts/install-from-source.sh`, then create the owner with your own display
+name. That puts `helixd` on loopback. Host files, UFW, packages, and native
+game servers still need the broker from the container deployment guide. Nothing
+ships with a demo city or demo server.
 
 - [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started)
 - [How Helix Works](https://github.com/Riqqqque/Helix/wiki/How-Helix-Works)

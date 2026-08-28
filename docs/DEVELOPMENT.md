@@ -72,6 +72,11 @@ npm audit --audit-level=moderate
 
 The committed `package-lock.json` is required for clean and CI builds. Use `npm ci` rather than rewriting it incidentally. An intentional dependency change updates `package.json` and the lockfile together and records its audit, bundle, and licensing impact.
 
+On 64-bit Ubuntu 24.04 with systemd, `./scripts/install-from-source.sh` compiles
+this checkout and installs `helixd`. That is the local package path, not
+`helix-privd`. See [Installation](INSTALLATION.md) and
+[Getting Started](wiki/Getting-Started.md).
+
 Return to the repository root before running workspace commands:
 
 ```powershell
