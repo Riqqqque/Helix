@@ -18,7 +18,7 @@ for required_command in basename cargo chmod cp find install mkdir mountpoint no
 done
 
 if [[ "$(uname -s)" != "Linux" ]]; then
-  fail "Ubuntu release bundles must be built on Linux; use build-release.ps1 from Windows with WSL"
+  fail "Linux release bundles must be built on Linux; use build-release.ps1 from Windows with WSL"
 fi
 
 host_target="$(rustc -vV | sed -n 's/^host: //p')"

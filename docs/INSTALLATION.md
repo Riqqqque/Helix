@@ -8,13 +8,19 @@ Ubuntu 24.04 GitHub Actions passed the declared Rust 1.88/stable builds and one 
 
 This is not clean-VM, cross-version-upgrade, schema-downgrade, complete fault-injection, low-disk/power-loss, reference-performance, platform-support, signed-release, or supported-installer evidence. CI first verified the hosted runner's `/usr/share` ancestor was root-owned with its unusual `0777` mode, then normalized it to the conventional root-owned `0755` baseline so Helix's production path checks ran unchanged.
 
-On 64-bit Ubuntu 24.04 with systemd, `./scripts/install-from-source.sh` is the shortest path: it compiles this checkout, then uses sudo to install that same unsigned `helixd` package on loopback. Missing Rust 1.88+, Node.js 22.12+, or a C toolchain prints the exact apt/rustup commands. The script does not install `helix-privd`.
+On 64-bit systemd Linux (x86_64 or aarch64), `./scripts/install-from-source.sh`
+is the shortest path: it compiles this checkout, then uses sudo to install that
+same unsigned `helixd` package on loopback. Missing compiler tools print apt,
+dnf, zypper, pacman, or apk commands; `--install-deps` installs those packages.
+Rust 1.88+ and Node.js 22.12+ are still required. The script does not install
+`helix-privd`. Debian/Ubuntu, Fedora/RHEL-family, openSUSE, and Arch are the
+intended targets. PID 1 must be systemd.
 
 Do not use development binaries as a production installation, and do not publish a one-line installer until clean-install, upgrade, rollback, uninstall, permission, interruption, and fault-injection tests pass on supported Ubuntu releases. The bundle checksum detects accidental or local bundle modification; it is not a signature or proof of publisher authenticity.
 
 ## Supported environment policy
 
-The first supported environment will be a documented set of 64-bit Ubuntu Server releases using systemd and cgroup v2. Exact releases and architectures must be chosen from current upstream support information and tested before publication. “Linux” by itself is not a useful compatibility claim.
+The first supported environment will be a documented set of 64-bit Ubuntu Server releases using systemd and cgroup v2. Exact releases and architectures must be chosen from current upstream support information and tested before publication. “Linux” by itself is not a useful compatibility claim. The from-source installer still targets other systemd GNU-userland distros (Fedora/RHEL-family, openSUSE, Arch, Debian derivatives); those are intended to compile and install `helixd`, not a claim that APT, UFW, or one-click hooks were validated there.
 
 The package must not require these technologies for Helix itself:
 

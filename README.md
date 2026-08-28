@@ -80,10 +80,10 @@ marketplace matrices are still release gates. See
 [the verified state](PROGRESS.md) for the distinction between implemented and
 validated.
 
-## Install on Ubuntu
+## Install on Linux
 
-Helix has no signed binary download. On a 64-bit Ubuntu 24.04 machine you
-control:
+Helix has no signed binary download. On a 64-bit systemd machine you control
+(x86_64 or aarch64):
 
 ```bash
 git clone https://github.com/Riqqqque/Helix.git
@@ -92,13 +92,19 @@ cd Helix
 sudo -u helix -- helixctl --config /etc/helix/helix.toml setup-token
 ```
 
-Open http://127.0.0.1:8080 and paste the token. If Rust 1.88+, Node.js 22.12+,
-or a C toolchain is missing, the script prints the exact apt/rustup commands
-instead of guessing. First compile takes a while.
+Open http://127.0.0.1:8080 and paste the token. Missing compiler tools print
+the matching apt, dnf, zypper, pacman, or apk commands, plus rustup and Node
+22.12+. Pass `--install-deps` to install only those compiler packages.
+
+Debian, Ubuntu, Mint, Pop!_OS, Fedora, RHEL-family, openSUSE, and Arch are
+the intended source-install targets. PID 1 must be systemd. First compile
+takes a while.
 
 That package is `helixd` on loopback. It does not install `helix-privd`, so
-host files, UFW, packages, and native game servers stay unavailable until you
-follow [Container deployment](docs/CONTAINER-DEPLOYMENT.md).
+host files, firewall, packages, and native game servers stay unavailable until
+you follow [Container deployment](docs/CONTAINER-DEPLOYMENT.md). Selected APT
+updates and one-click Tailscale/Jellyfin installs still need a Debian-family
+APT host.
 
 ## Other ways to run it
 

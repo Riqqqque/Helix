@@ -50,9 +50,9 @@ mods or plugins.
 
 ## Start here
 
-On 64-bit Ubuntu 24.04, clone the source and run
+On 64-bit systemd Linux, clone the source and run
 `./scripts/install-from-source.sh`, then create the owner with your own display
-name. That puts `helixd` on loopback. Host files, UFW, packages, and native
+name. That puts `helixd` on loopback. Host files, firewall, packages, and native
 game servers still need the broker from the container deployment guide. Nothing
 ships with a demo city or demo server.
 
