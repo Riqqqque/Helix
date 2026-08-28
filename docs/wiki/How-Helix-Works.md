@@ -8,7 +8,8 @@ There is no caller-supplied root command endpoint.
 The native Minecraft manager creates and controls Docker-backed Paper, Purpur,
 Folia, Fabric, and Vanilla instances. Console capture and game containers do not
 depend on the dashboard being open. Console history is bounded and rotates; it
-is persistent, not unlimited.
+is persistent, not unlimited. Native Stop waits for a clean shutdown; Kill is a
+confirmed SIGKILL for when that stop hangs. AMP instances do not get Kill.
 
 AMP integration is a bridge to a separate loopback AMP API. Helix may show and
 invoke the AMP actions it understands, but AMP remains responsible for its own

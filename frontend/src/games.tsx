@@ -478,7 +478,7 @@ function InstanceDetail({ instance }: { instance: GameInstanceSummary }) {
         </div>
         <div class="game-detail__actions">
           <GameStatus status={instance.status} />
-          {[t('games.detail.start'), t('games.detail.stop'), t('games.detail.restart'), t('games.detail.backup')].map((label) => (
+          {[t('games.detail.start'), t('games.detail.stop'), t('games.detail.kill'), t('games.detail.restart'), t('games.detail.backup')].map((label) => (
             <button key={label} type="button" disabled title={t('games.action.unavailable')}>{label}</button>
           ))}
         </div>

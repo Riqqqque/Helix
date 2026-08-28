@@ -106,6 +106,7 @@ const englishMessages = {
   'games.detail.server': 'Game server',
   'games.detail.start': 'Start',
   'games.detail.stop': 'Stop',
+  'games.detail.kill': 'Kill',
   'games.detail.restart': 'Restart',
   'games.detail.backup': 'Back up now',
   'games.detail.overview': 'Overview',

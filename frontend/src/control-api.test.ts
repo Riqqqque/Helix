@@ -178,6 +178,19 @@ describe('native server API', () => {
     expect(request.method).toBe('POST');
   });
 
+  it('posts kill as its own typed server action', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ job_id: '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0' }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(runServerAction('helix:server-id', 'kill', 'csrf')).resolves.toEqual({
+      jobId: '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0',
+    });
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(request.body))).toEqual({ action: 'kill' });
+  });
+
   it('sends the guarded settings revision and parses the committed version', async () => {
     const committed = { ...settings, expectedRevision: 'b'.repeat(64) };
     const fetchMock = vi.fn().mockResolvedValue(

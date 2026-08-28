@@ -7,6 +7,7 @@ import {
   importedServerPanelUrl,
   minecraftCreateSoftwareOptions,
   serverActionDescription,
+  serverWorkloadIsRunning,
   ServersPage,
   supportsMarketplaceSoftware,
 } from './servers';
@@ -98,6 +99,58 @@ describe('Servers route', () => {
     expect(serverActionDescription(nativeServer, 'update')).toContain('restart and health-check Minecraft');
     expect(serverActionDescription({ ...nativeServer, status: 'offline' }, 'update')).toContain('keeping this server stopped');
     expect(serverActionDescription({ ...nativeServer, status: 'offline' }, 'update')).toContain('not automatically health-validated or rolled back');
+    expect(serverActionDescription(nativeServer, 'kill')).toContain('SIGKILL');
+    expect(serverActionDescription(nativeServer, 'kill')).toContain('when Stop is stuck');
+    expect(serverActionDescription(ampServer, 'kill')).toContain('cannot force-kill AMP');
+  });
+
+  it('offers native Kill when the container is up, including hung Stop', () => {
+    const onlineData: DashboardData = {
+      ...data,
+      servers: { data: [nativeServer], phase: 'ready', error: null },
+    };
+    const hung: ManagedServer = { ...nativeServer, status: 'offline', panelRunning: true };
+    const hungData: DashboardData = {
+      ...data,
+      servers: { data: [hung], phase: 'ready', error: null },
+    };
+    const stopped: ManagedServer = { ...nativeServer, status: 'offline', panelRunning: false };
+    const stoppedData: DashboardData = {
+      ...data,
+      servers: { data: [stopped], phase: 'ready', error: null },
+    };
+    const ampServer: ManagedServer = {
+      ...nativeServer,
+      manager: 'amp_import',
+      executionBackend: 'external',
+    };
+    const ampData: DashboardData = {
+      ...data,
+      servers: { data: [ampServer], phase: 'ready', error: null },
+    };
+
+    expect(serverWorkloadIsRunning(nativeServer)).toBe(true);
+    expect(serverWorkloadIsRunning(hung)).toBe(true);
+    expect(serverWorkloadIsRunning(stopped)).toBe(false);
+    expect(serverWorkloadIsRunning(ampServer)).toBe(true);
+
+    const onlineMarkup = render(<ServersPage data={onlineData} csrfToken="csrf" canManageServers canManageBackups canManageNetwork onSessionExpired={() => undefined} />);
+    expect(onlineMarkup).toContain('Kill');
+    expect(onlineMarkup).toContain('Stop');
+
+    const hungMarkup = render(<ServersPage data={hungData} csrfToken="csrf" canManageServers canManageBackups canManageNetwork onSessionExpired={() => undefined} />);
+    expect(hungMarkup).toContain('Kill');
+    expect(hungMarkup).toContain('Restart');
+    expect(hungMarkup).not.toContain('m8 5 11 7-11 7V5Z');
+
+    const stoppedMarkup = render(<ServersPage data={stoppedData} csrfToken="csrf" canManageServers canManageBackups canManageNetwork onSessionExpired={() => undefined} />);
+    expect(stoppedMarkup).toContain('Start');
+    expect(stoppedMarkup).toContain('m8 5 11 7-11 7V5Z');
+    expect(stoppedMarkup).not.toContain('Kill');
+
+    const ampMarkup = render(<ServersPage data={ampData} csrfToken="csrf" canManageServers canManageBackups canManageNetwork onSessionExpired={() => undefined} />);
+    expect(ampMarkup).toContain('Stop');
+    expect(ampMarkup).not.toContain('Kill');
   });
 
   it('builds AMP deep links from the manager port and opaque instance identity', () => {

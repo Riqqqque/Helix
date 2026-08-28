@@ -986,10 +986,18 @@ impl BrokerContext {
             helix_privd::ServerAction::Start => "start",
             helix_privd::ServerAction::Stop => "stop",
             helix_privd::ServerAction::Restart => "restart",
+            helix_privd::ServerAction::Kill => "kill",
             helix_privd::ServerAction::Update => "update",
             helix_privd::ServerAction::Backup => "backup",
         };
-        let resource_key = format!("server:{instance_id}");
+        let resource_key = if action == helix_privd::ServerAction::Kill {
+            format!("server:{instance_id}:kill")
+        } else {
+            format!("server:{instance_id}")
+        };
+        if action == helix_privd::ServerAction::Kill {
+            self.reject_kill_during_mutating_job(&instance_id)?;
+        }
         let reuse_key = format!("action:{action_name}");
         let (job_id, reused) = self.queue_job(
             &format!("server_{action_name}"),
@@ -1010,6 +1018,7 @@ impl BrokerContext {
                         helix_privd::ServerAction::Start => "Starting Minecraft",
                         helix_privd::ServerAction::Stop => "Stopping Minecraft cleanly",
                         helix_privd::ServerAction::Restart => "Restarting and checking Minecraft",
+                        helix_privd::ServerAction::Kill => "Killing the container now",
                         helix_privd::ServerAction::Update => {
                             "Backing up and checking for an update"
                         }
@@ -1032,6 +1041,30 @@ impl BrokerContext {
             return Err("could not start the server action job".to_owned());
         }
         Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
+    fn reject_kill_during_mutating_job(&self, instance_id: &str) -> Result<(), String> {
+        let resource_key = format!("server:{instance_id}");
+        let jobs = self
+            .jobs
+            .lock()
+            .map_err(|_| "job registry failed".to_owned())?;
+        let blocked = jobs.values().any(|job| {
+            job.resource_key.as_deref() == Some(resource_key.as_str())
+                && matches!(job.status, JobState::Queued | JobState::Running)
+                && !matches!(
+                    job.kind.as_str(),
+                    "server_start" | "server_stop" | "server_restart"
+                )
+        });
+        if blocked {
+            Err(
+                "cannot kill this server while a backup, update, restore, or install is in progress"
+                    .to_owned(),
+            )
+        } else {
+            Ok(())
+        }
     }
 
     fn start_restore_job(
@@ -1378,6 +1411,7 @@ fn server_action_completion_stage(
     match action {
         helix_privd::ServerAction::Start | helix_privd::ServerAction::Restart => "Online",
         helix_privd::ServerAction::Stop => "Stopped",
+        helix_privd::ServerAction::Kill => "Killed",
         helix_privd::ServerAction::Backup => "Backup ready",
         helix_privd::ServerAction::Update => unreachable!(),
     }
@@ -1877,6 +1911,57 @@ mod tests {
             .unwrap();
         assert!(!reused);
         assert_ne!(first, third);
+    }
+
+    #[test]
+    fn kill_can_queue_beside_stop_but_not_beside_backup() {
+        let context = context();
+        let (stop, reused) = context
+            .queue_job(
+                "server_stop",
+                Some("server:helix:test"),
+                Some("action:stop"),
+            )
+            .unwrap();
+        assert!(!reused);
+        context
+            .reject_kill_during_mutating_job("helix:test")
+            .expect("stop should not block kill");
+        let (kill, reused) = context
+            .queue_job(
+                "server_kill",
+                Some("server:helix:test:kill"),
+                Some("action:kill"),
+            )
+            .unwrap();
+        assert!(!reused);
+        assert_ne!(stop, kill);
+        context.finish_job(&kill, Ok(json!({"forced": true})), "Killed");
+        context.finish_job(&stop, Ok(json!({"online": false})), "Stopped");
+
+        let _backup = context
+            .queue_job(
+                "server_backup",
+                Some("server:helix:test"),
+                Some("action:backup"),
+            )
+            .unwrap();
+        let error = context
+            .reject_kill_during_mutating_job("helix:test")
+            .expect_err("backup should block kill");
+        assert!(error.contains("backup"));
+    }
+
+    #[test]
+    fn kill_completion_stage_is_distinct_from_stop() {
+        assert_eq!(
+            server_action_completion_stage(helix_privd::ServerAction::Kill, &Ok(json!({}))),
+            "Killed"
+        );
+        assert_eq!(
+            server_action_completion_stage(helix_privd::ServerAction::Stop, &Ok(json!({}))),
+            "Stopped"
+        );
     }
 
     #[test]

@@ -224,7 +224,7 @@ or output. Disconnect ends the PTY.
 | `GET` | `/api/v1/servers/{instance_id}` | `games.view` | Native or AMP detail |
 | `GET` | `/api/v1/servers/removed` | `games.view` | Recoverable removed native servers and retention policy |
 | `POST` | `/api/v1/servers/removed/{trash_id}/restore` | `games.manage` | Restore an exact removed native server before expiry |
-| `POST` | `/api/v1/servers/{instance_id}/actions` | `games.manage` | Typed start/stop/restart/update/backup action |
+| `POST` | `/api/v1/servers/{instance_id}/actions` | `games.manage` | Typed start/stop/restart/kill/update/backup action |
 | `PUT` | `/api/v1/servers/{instance_id}/network` | `games.manage` + `network.firewall.write` | Create or remove the exact verified Helix-owned TCP router/UFW exposure for a native server |
 | `POST` | `/api/v1/servers/{instance_id}/remove` | `games.manage` | Stop/remove exact native workload and move data to recoverable trash |
 | `GET` | `/api/v1/jobs/{job_id}` | `games.view` | Read current bounded job state/log |
@@ -237,7 +237,11 @@ Forge and NeoForge are catalog explanations, not installable readiness values.
 Accepted work is not completed work. Creation, install, update, and backup jobs
 return bounded broker-lifetime status that the frontend polls. Job state is not
 yet a crash-persistent queue. Incompatible per-instance operations are
-serialized or rejected rather than run concurrently.
+serialized or rejected rather than run concurrently. Native `kill` is the
+exception for a hung stop/restart: it uses `docker kill`, skips the exclusive
+instance lock, and queues beside that lifecycle job. It is rejected during
+backup, update, restore, or marketplace install. AMP `kill` is rejected; AMP
+instances stay under AMP.
 
 Minecraft creation accepts either one explicit port or no port, which allocates
 the first genuinely free candidate from the stored Minecraft policy while the

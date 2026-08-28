@@ -1673,23 +1673,31 @@ impl NativeManager {
 
     pub fn server_action(&self, id: &str, action: ServerAction) -> Result<Value, String> {
         let manifest = self.load_manifest(id.strip_prefix("helix:").unwrap_or(id))?;
+        match action {
+            ServerAction::Kill => self.kill_instance(&manifest),
+            exclusive => self.exclusive_server_action(&manifest, exclusive),
+        }
+    }
+
+    fn exclusive_server_action(
+        &self,
+        manifest: &InstanceManifest,
+        action: ServerAction,
+    ) -> Result<Value, String> {
         let _operation = self.begin_instance_operation(&manifest.id, "server action")?;
-        self.ensure_console_archiver(&manifest)?;
+        self.ensure_console_archiver(manifest)?;
         let was_running = self.container_running(&manifest.container_name);
         let detail = match action {
             ServerAction::Start => {
                 if !was_running {
                     self.docker(["start", manifest.container_name.as_str()], 90)?;
                 }
-                self.wait_for_minecraft(&manifest, Duration::from_secs(6 * 60), |_| {})?;
+                self.wait_for_minecraft(manifest, Duration::from_secs(6 * 60), |_| {})?;
                 json!({"online": true, "already_running": was_running})
             }
             ServerAction::Stop => {
                 if was_running {
-                    self.docker(
-                        ["stop", "--time", "45", manifest.container_name.as_str()],
-                        75,
-                    )?;
+                    self.terminate_container(&manifest.container_name, false)?;
                 }
                 json!({"online": false, "already_stopped": !was_running})
             }
@@ -1702,15 +1710,15 @@ impl NativeManager {
                 } else {
                     self.docker(["start", manifest.container_name.as_str()], 90)?;
                 }
-                self.wait_for_minecraft(&manifest, Duration::from_secs(6 * 60), |_| {})?;
+                self.wait_for_minecraft(manifest, Duration::from_secs(6 * 60), |_| {})?;
                 json!({"online": true, "previously_running": was_running})
             }
             ServerAction::Backup => {
-                let path = self.backup(&manifest)?;
+                let path = self.backup(manifest)?;
                 json!({"backup_id": backup_id_from_path(&path)})
             }
             ServerAction::Update => {
-                let changed = self.update(&manifest)?;
+                let changed = self.update(manifest)?;
                 json!({
                     "updated": changed,
                     "already_current": !changed,
@@ -1720,6 +1728,9 @@ impl NativeManager {
                     "rollback_on_failed_startup": changed && was_running
                 })
             }
+            ServerAction::Kill => {
+                return Err("kill cannot run under the exclusive server lock".to_owned());
+            }
         };
         Ok(json!({
             "instance_id": format!("helix:{}", manifest.id),
@@ -1727,6 +1738,37 @@ impl NativeManager {
             "accepted": true,
             "detail": detail
         }))
+    }
+
+    fn kill_instance(&self, manifest: &InstanceManifest) -> Result<Value, String> {
+        self.ensure_console_archiver(manifest)?;
+        let was_running = self.container_running(&manifest.container_name);
+        if was_running {
+            self.terminate_container(&manifest.container_name, true)?;
+        }
+        Ok(json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "action": ServerAction::Kill,
+            "accepted": true,
+            "detail": {
+                "online": false,
+                "already_stopped": !was_running,
+                "forced": true
+            }
+        }))
+    }
+
+    fn terminate_container(&self, name: &str, force: bool) -> Result<(), String> {
+        let result = if force {
+            self.docker(["kill", name], 20)
+        } else {
+            self.docker(["stop", "--time", "45", name], 75)
+        };
+        match result {
+            Ok(_) => Ok(()),
+            Err(_) if !self.container_running(name) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn create_minecraft<F>(

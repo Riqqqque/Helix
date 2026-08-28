@@ -82,7 +82,9 @@ permanent or unlimited.
 
 Per-instance guards serialize incompatible work. Creation, update, backup, and
 marketplace installs expose background job status, but current job state lives
-for the broker process lifetime and is not yet a crash-persistent queue.
+for the broker process lifetime and is not yet a crash-persistent queue. Native
+kill is a confirmed SIGKILL that can run beside a hung stop or restart; it is
+not offered for AMP.
 
 AMP is not the native runtime. When configured, Helix reaches a separately
 protected loopback AMP API and exposes only the AMP operations it understands.

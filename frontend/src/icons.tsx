@@ -23,6 +23,7 @@ export type IconName =
   | 'chevron'
   | 'play'
   | 'stop'
+  | 'kill'
   | 'restart'
   | 'backup'
   | 'update'
@@ -68,6 +69,7 @@ const paths: Record<IconName, JSX.Element> = {
   chevron: <path d="m9 18 6-6-6-6"/>,
   play: <path d="m8 5 11 7-11 7V5Z"/>,
   stop: <rect x="6" y="6" width="12" height="12" rx="1"/>,
+  kill: <><rect x="6" y="6" width="12" height="12" rx="1"/><path d="m9 9 6 6M15 9l-6 6"/></>,
   restart: <><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></>,
   backup: <><path d="M5 5h12l2 2v14H5V5Z"/><path d="M8 5v6h8V5M8 21v-6h8v6"/></>,
   update: <><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 21h16"/></>,
