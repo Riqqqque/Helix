@@ -53,6 +53,7 @@
 .modpack-grid article > div > span,
 .modpack-grid p,
 .modpack-grid article > small { color: var(--quiet); font-size: 8px; line-height: 1.45; }
+.modpack-grid article > div > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modpack-grid p { display: -webkit-box; overflow: hidden; margin: 0; color: var(--muted); -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .modpack-grid article > small { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .modpack-grid footer span { min-width: 0; overflow: hidden; color: var(--quiet); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }

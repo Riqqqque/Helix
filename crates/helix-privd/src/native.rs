@@ -38,6 +38,7 @@ mod valheim;
 mod vrising;
 
 const MANIFEST_VERSION: u32 = 1;
+const READY_MARKER: &str = ".helix-ready";
 const MAX_MANIFEST_BYTES: u64 = 128 * 1024;
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SERVER_JAR_BYTES: u64 = 768 * 1024 * 1024;
@@ -522,7 +523,7 @@ impl NativeManager {
             }
             if manifest.is_terraria()
                 && !data_path.join("serverconfig.txt").is_file()
-                && !data_path.join(".helix-ready").is_file()
+                && !data_path.join(READY_MARKER).is_file()
             {
                 warnings.push("Terraria dedicated server files are not installed yet".to_owned());
             }
@@ -4169,7 +4170,7 @@ impl NativeManager {
         if !manifest.uses_ready_marker() {
             return Ok(());
         }
-        let marker = self.instance_path(&manifest.id)?.join(".helix-ready");
+        let marker = self.instance_path(&manifest.id)?.join(READY_MARKER);
         if marker.exists() {
             fs::remove_file(&marker).map_err(|_| "could not clear the ready marker".to_owned())?;
         }
@@ -4187,7 +4188,7 @@ impl NativeManager {
     {
         let started = Instant::now();
         let deadline = started + timeout;
-        let marker = self.instance_path(&manifest.id)?.join(".helix-ready");
+        let marker = self.instance_path(&manifest.id)?.join(READY_MARKER);
         let label = display_software(manifest);
         while Instant::now() < deadline {
             if marker.is_file() && self.container_running(&manifest.container_name) {

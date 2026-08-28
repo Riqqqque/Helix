@@ -69,10 +69,6 @@ function useAuthTheme(): [ThemePreference, (theme: ThemePreference) => void] {
 function AuthBrand() {
   return (
     <div class="brand" aria-label="Helix">
-      <span class="brand__mark" aria-hidden="true">
-        <span />
-        <span />
-      </span>
       <span class="brand__wordmark">HELIX</span>
     </div>
   );

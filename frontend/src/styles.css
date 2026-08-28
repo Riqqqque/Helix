@@ -7244,7 +7244,7 @@ textarea:focus {
   display: grid;
   gap: 12px;
   min-width: 0;
-  padding: 12px 16px 14px;
+  padding: 16px 22px 18px;
 }
 .docker-panel__head {
   display: flex;

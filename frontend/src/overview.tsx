@@ -156,7 +156,7 @@ export function OverviewPage({ data, themeLabel, csrfToken, canManageDocker, onS
           <div class="interface-summary">{(inventory.data?.interfaces ?? []).filter((item) => item.name !== 'lo').slice(0, 4).map((item) => <div key={item.name}><span class={`status-dot status-dot--${item.state.toLowerCase() === 'up' ? 'good' : 'idle'}`} /><strong>{item.name}</strong><span>{item.addresses.find((address) => address.family === 'inet')?.address ?? 'No IPv4 address'}</span></div>)}</div>
         </section>
         <section class="surface overview-docker">
-          <div class="section-title"><div><h2>Containers</h2><p>Every Docker container on this host</p></div><a href="#hooks">Open Portainer <Icon name="chevron" size={14} /></a></div>
+          <div class="section-title"><div><h2>Containers</h2><p>Every Docker container on this host</p></div></div>
           <DockerInventoryRoute csrfToken={csrfToken} canManage={canManageDocker} compact onSessionExpired={onSessionExpired} />
         </section>
       </div>

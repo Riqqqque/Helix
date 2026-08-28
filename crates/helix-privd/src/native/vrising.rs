@@ -6,7 +6,6 @@ pub(crate) const STEAM_APP_ID: &str = "1829350";
 pub(crate) const DOCKERFILE: &str = include_str!("../../vrising/Dockerfile");
 pub(crate) const ENTRYPOINT: &str = include_str!("../../vrising/entrypoint.sh");
 pub(crate) const ARTIFACT_URL: &str = "steam://1829350";
-pub(crate) const READY_MARKER: &str = ".helix-ready";
 const EMPTY_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 pub(crate) fn default_port_policy() -> GamePortPolicySpec {

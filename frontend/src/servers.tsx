@@ -1799,7 +1799,7 @@ function CreateServerDialog({
             <Icon name="activity" />
             <span>
               {mode === "modpack"
-                ? "Only opaque Modrinth project and version IDs leave the browser. The broker re-resolves all metadata and will never activate Forge, NeoForge, Quilt, client-only content, unsafe archive paths, or an unverified download."
+                ? "Only opaque catalog project and version IDs leave the browser. The broker re-resolves Modrinth or CurseForge metadata, pins a supported loader, and refuses client-only files, unsafe archive paths, and unverified downloads."
                 : mode === "custom"
                   ? "Helix will import a private copy, pin its SHA-256 and Java runtime, isolate it as an unprivileged container, reserve the ports, write the Minecraft configuration, and start it. Your source file is never modified."
                   : "Helix will resolve a supported build and Java runtime, verify the download, isolate the workload, write the configuration, reserve the ports, and start Minecraft."}

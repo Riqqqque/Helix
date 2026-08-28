@@ -910,40 +910,6 @@ impl NativeManager {
         result
     }
 
-    fn download_pinned_fabric_artifact(
-        &self,
-        artifact: &Artifact,
-        destination: &Path,
-        maximum_seconds: u64,
-    ) -> Result<String, String> {
-        if !matches!(artifact.software, MinecraftSoftware::Fabric) {
-            return Err("the modpack runtime resolved to a non-Fabric server".to_owned());
-        }
-        require_exact_https_host(&artifact.url, "meta.fabricmc.net")?;
-        let partial = destination.with_extension("jar.partial");
-        self.curl_no_redirect(
-            &artifact.url,
-            &partial,
-            MAX_SERVER_JAR_BYTES,
-            maximum_seconds,
-        )?;
-        let metadata = fs::symlink_metadata(&partial)
-            .map_err(|_| "the pinned Fabric server download is unavailable".to_owned())?;
-        if !metadata.file_type().is_file()
-            || metadata.len() < 16 * 1024
-            || metadata.len() > MAX_SERVER_JAR_BYTES
-        {
-            let _ = fs::remove_file(&partial);
-            return Err(
-                "the pinned Fabric server file is outside the expected size range".to_owned(),
-            );
-        }
-        let sha256 = file_sha256(&partial)?;
-        fs::rename(&partial, destination)
-            .map_err(|_| "could not commit the pinned Fabric server file".to_owned())?;
-        Ok(sha256)
-    }
-
     fn rollback_modpack_creation(
         &self,
         id: &str,

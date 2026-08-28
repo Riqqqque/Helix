@@ -26,15 +26,16 @@ Helix brings the common jobs for one server into one place:
 - a Security center for explained, confirmed host and Helix protections;
 - mounted-drive browsing, bounded text editing, recoverable deletion, and
   cancellable largest-file/folder analysis;
-- a native Docker-backed Minecraft manager for Paper, Purpur, Folia, Leaves, Fabric,
-  Vanilla, and guarded local custom-JAR imports;
+- a native Docker-backed manager for Minecraft (Paper, Purpur, Folia, Leaves,
+  Fabric, Forge, NeoForge, Quilt, Pufferfish, Vanilla, custom JAR), V Rising,
+  Valheim, and Terraria;
 - persistent bounded console history, settings with restart guidance, backups,
-  a compatibility-aware Modrinth marketplace, and narrow server-safe Fabric
-  `.mrpack` creation;
+  a compatibility-aware Modrinth marketplace, and server-safe Modrinth or
+  CurseForge modpack create;
 - optional AMP discovery and control without pretending AMP instances are
   Helix-native;
-- Hooks for exact Plex, AMP, Tailscale, Pterodactyl Wings, Jellyfin, and Docker
-  service discovery/control, including eligible one-click Tailscale/Jellyfin installs;
+- Hooks for Plex, AMP, Tailscale, Pterodactyl Wings, Jellyfin, Docker, and
+  Portainer, including eligible one-click Tailscale/Jellyfin installs;
 - an optional current-password-gated non-root Linux PTY; and
 - selected APT updates, immediate/recurring host reboot, UFW safety activation,
   and exact Helix start-on-boot controls with explicit preflight/confirmation.
@@ -74,9 +75,10 @@ outside reachability. It can work behind an already configured private
 Tailscale route and install/start the exact service on eligible Debian/Ubuntu
 hosts, but it does not authenticate the tailnet or widen network trust.
 
-Modpack creation is limited to listed stable server-capable Fabric releases
-from Modrinth and intentionally builds a server-safe subset. Forge, NeoForge,
-Quilt, CurseForge, and broad/full-pack parity are not supported.
+Modpack creation searches Modrinth or the public CurseForge catalog without an
+owner API key, pins a supported loader (Fabric, Forge, NeoForge, or Quilt),
+and starts an isolated server. The result is a server-safe subset, not a full
+client copy. Broad pack matrices and every upstream failure mode stay open.
 
 The authoritative implementation ledger is
 [`PROGRESS.md`](https://github.com/Riqqqque/Helix/blob/main/PROGRESS.md).
