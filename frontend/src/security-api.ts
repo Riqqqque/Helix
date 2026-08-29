@@ -110,8 +110,69 @@ export function parseSecurityInventory(value: unknown): SecurityInventory {
   };
 }
 
-export function getSecurityInventory(csrfToken: string, signal?: AbortSignal): Promise<SecurityInventory> {
-  return requestJson('/api/v1/security', parseSecurityInventory, { csrfToken, signal, timeoutMs: 20_000 });
+function followAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return promise;
+  return new Promise((resolve, reject) => {
+    const abort = (): void => {
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+const SECURITY_INVENTORY_CACHE_MS = 8_000;
+let securityInventoryInflight: { csrf: string; promise: Promise<SecurityInventory> } | null = null;
+let securityInventoryCache: { csrf: string; at: number; value: SecurityInventory } | null = null;
+
+export function resetSecurityInventoryPrefetch(): void {
+  securityInventoryInflight = null;
+  securityInventoryCache = null;
+}
+
+export function prefetchSecurityInventory(csrfToken: string): void {
+  void getSecurityInventory(csrfToken).catch(() => undefined);
+}
+
+export function getSecurityInventory(
+  csrfToken: string,
+  signal?: AbortSignal,
+  options?: { fresh?: boolean },
+): Promise<SecurityInventory> {
+  const fresh = options?.fresh === true;
+  if (
+    !fresh
+    && securityInventoryCache !== null
+    && securityInventoryCache.csrf === csrfToken
+    && Date.now() - securityInventoryCache.at < SECURITY_INVENTORY_CACHE_MS
+  ) {
+    return followAbort(Promise.resolve(securityInventoryCache.value), signal);
+  }
+  if (!fresh && securityInventoryInflight !== null && securityInventoryInflight.csrf === csrfToken) {
+    return followAbort(securityInventoryInflight.promise, signal);
+  }
+  const promise = requestJson('/api/v1/security', parseSecurityInventory, { csrfToken, timeoutMs: 20_000 }).then((value) => {
+    securityInventoryCache = { csrf: csrfToken, at: Date.now(), value };
+    return value;
+  });
+  securityInventoryInflight = { csrf: csrfToken, promise };
+  void promise.finally(() => {
+    if (securityInventoryInflight?.promise === promise) securityInventoryInflight = null;
+  });
+  return followAbort(promise, signal);
 }
 
 export function setSecurityControl(

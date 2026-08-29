@@ -742,6 +742,13 @@ impl NativeManager {
         ))
     }
 
+    pub fn minecraft_auto_forward_on_create(&self) -> Option<bool> {
+        let _policy = self.port_policies.lock().ok()?;
+        self.read_game_port_policy(GameKind::Minecraft)
+            .ok()
+            .map(|policy| policy.auto_forward_on_create)
+    }
+
     pub fn set_game_port_policy(&self, policy: GamePortPolicySpec) -> Result<Value, String> {
         let policy = normalize_game_port_policy(policy)?;
         let _policy_guard = self

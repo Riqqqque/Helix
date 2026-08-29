@@ -8,7 +8,7 @@ import {
 
 const defaults: DashboardPreferences = {
     navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands', 'globe'],
-  metricsRefreshMs: 1_000,
+  metricsRefreshMs: 5_000,
   homeWidgets: defaultHomeWidgets.map((widget) => ({ ...widget })),
   homeTemplates: defaultHomeTemplates.map((template) => ({ ...template, widgets: template.widgets.map((widget) => ({ ...widget })) })),
   activeHomeId: 'home-main',
@@ -26,10 +26,11 @@ describe('dashboard preference reconciliation', () => {
   });
 
     it('migrates a customized browser layout only into an unset record', () => {
-    const local = { ...defaults, metricsRefreshMs: 5_000 as const };
+    const local = { ...defaults, metricsRefreshMs: 2_000 as const };
     expect(shouldMigrateLocalPreferences(0, local)).toBe(true);
     expect(shouldMigrateLocalPreferences(1, local)).toBe(false);
     expect(shouldMigrateLocalPreferences(0, defaults)).toBe(false);
+    expect(shouldMigrateLocalPreferences(0, { ...defaults, metricsRefreshMs: 1_000 })).toBe(false);
   });
 
   it('migrates a disabled Servers module into an unset record', () => {

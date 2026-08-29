@@ -5,6 +5,18 @@ binary or package release yet.
 
 ## Unreleased
 
+### Changed
+
+- Hooks and Security feel quicker. Those pages no longer wait on a full Host
+  status, Network inventory (listeners, UPnP), Docker `stats`, or Minecraft
+  port-candidate scan just to fill a few cards. Independent probes run together.
+  Hovering the nav starts the page request. Recheck keeps the last cards on
+  screen. The Docker hook card lists containers from `docker ps`; open the
+  Docker panel when you want live CPU and memory.
+- New dashboards poll host metrics every five seconds. A saved one-second
+  interval is unchanged. Overview still loads Helix container integration
+  when you open Overview or Settings, not on every other page.
+
 ### Fixed
 
 - AMP Idle/sleep is no longer shown as online. Sleeping instances keep their

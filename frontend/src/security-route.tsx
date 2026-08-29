@@ -19,8 +19,13 @@ export function loadSecurityRoute(): Promise<SecurityComponent> {
   return pendingSecurity;
 }
 
-export function preloadSecurityRoute(): void {
+export function preloadSecurityRoute(csrfToken?: string): void {
   void loadSecurityRoute().catch(() => undefined);
+  if (csrfToken !== undefined) {
+    void import('./security-api').then((module) => {
+      module.prefetchSecurityInventory(csrfToken);
+    }).catch(() => undefined);
+  }
 }
 
 export function SecurityRoute(props: SecurityPageProps) {

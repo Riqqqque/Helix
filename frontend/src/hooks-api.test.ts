@@ -7,6 +7,7 @@ import {
   manageHookService,
   parseHookInstallPlan,
   parseHookInventory,
+  resetHookInventoryPrefetch,
 } from './hooks-api';
 
 const inventory = {
@@ -34,7 +35,10 @@ const installPlan = {
   collected_at_unix_ms: 1_800_000_000_000,
 };
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  resetHookInventoryPrefetch();
+});
 
 describe('hooks API', () => {
   it('keeps systemd control and external API connections distinct', () => {
@@ -47,6 +51,25 @@ describe('hooks API', () => {
   it('rejects duplicate identities and invented actions', () => {
     expect(() => parseHookInventory({ ...inventory, hooks: [inventory.hooks[0], inventory.hooks[0]] })).toThrow();
     expect(() => parseHookInventory({ ...inventory, hooks: [{ ...inventory.hooks[0], actions: ['reboot-host'] }] })).toThrow();
+  });
+
+  it('reuses an in-flight inventory request for prefetch and page load', async () => {
+    let resolveFetch: ((value: Response) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation(
+      () => new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const csrf = 'EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE';
+
+    const first = getHookInventory(csrf);
+    const second = getHookInventory(csrf);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolveFetch?.(new Response(JSON.stringify(inventory), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const [firstInventory, secondInventory] = await Promise.all([first, second]);
+    expect(firstInventory.hooks.map((hook) => hook.id)).toEqual(['plex', 'amp', 'docker']);
+    expect(secondInventory).toBe(firstInventory);
   });
 
   it('uses exact inventory and typed action routes', async () => {

@@ -31,6 +31,14 @@ struct HomarrCatalogScan {
 
 impl HostControl {
     pub fn docker_inventory(&self) -> Result<Value, String> {
+        self.collect_docker_inventory(true)
+    }
+
+    pub fn docker_inventory_listing(&self) -> Result<Value, String> {
+        self.collect_docker_inventory(false)
+    }
+
+    fn collect_docker_inventory(&self, include_stats: bool) -> Result<Value, String> {
         let listed = match self.list_docker_containers() {
             Ok(output) => output,
             Err(error) => {
@@ -55,7 +63,7 @@ impl HostControl {
             .filter_map(|item| item.get("name").and_then(Value::as_str).map(str::to_owned))
             .take(MAX_CONTAINERS)
             .collect();
-        if !running.is_empty() {
+        if include_stats && !running.is_empty() {
             let mut args = vec![
                 "stats".to_owned(),
                 "--no-stream".to_owned(),

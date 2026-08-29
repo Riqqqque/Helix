@@ -47,9 +47,10 @@ describe('dashboard preferences', () => {
     expect(moveNavigationItem(order, 'overview', -1)).toEqual(order);
   });
 
-  it('defaults invalid refresh values to one second', () => {
+  it('defaults invalid or missing refresh values to five seconds', () => {
     expect(normalizeRefreshInterval('5000')).toBe(5_000);
-    expect(normalizeRefreshInterval(999)).toBe(1_000);
+    expect(normalizeRefreshInterval(999)).toBe(5_000);
+    expect(normalizeRefreshInterval(null)).toBe(5_000);
   });
 
   it('round trips preferences through browser storage', () => {

@@ -55,7 +55,9 @@ Writable switches still require typing an exact confirmation phrase:
 Helix will not disable UFW from this page, rewrite sshd, or offer a root shell.
 Sysctl values are observed, not rewritten. CSRF pairing, the private LAN bind,
 AppArmor, SSH directives, ASLR, and Docker live-restore are explained, not
-casual toggles.
+casual toggles. The page reads those facts directly (UFW status, the two Helix
+container restart policies, the Minecraft create-forward flag) instead of
+waiting on the full Host or Network inventories.
 
 ## Data and recovery
 
