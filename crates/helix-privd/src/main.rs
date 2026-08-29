@@ -2320,6 +2320,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .transpose()
         .map_err(io::Error::other)?
         .map(Arc::new);
+    let native_state_root = config
+        .native
+        .as_ref()
+        .map(|native| native.state_root.clone());
     let native = config
         .native
         .map(|mut native| {
@@ -2335,10 +2339,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         .transpose()
         .map_err(io::Error::other)?
         .map(Arc::new);
-    let native_state_root = config
-        .native
-        .as_ref()
-        .map(|native| native.state_root.clone());
     let helix_update = HelixUpdateManager::new(
         config.helix_update,
         config.host_control.clone(),
@@ -2529,7 +2529,7 @@ mod tests {
         .unwrap();
         BrokerContext {
             files: FileManager::new(vec![root.clone()]).unwrap(),
-            storage: StorageAnalysisManager::new(vec![root]).unwrap(),
+            storage: StorageAnalysisManager::new(vec![root.clone()]).unwrap(),
             amp: None,
             native: None,
             host: None,

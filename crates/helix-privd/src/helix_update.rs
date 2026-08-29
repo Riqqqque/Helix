@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use std::{
+    fmt::Write as _,
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
@@ -1433,7 +1434,11 @@ fn file_sha256(path: &Path) -> Result<String, String> {
         }
         digest.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    let mut output = String::with_capacity(64);
+    for byte in digest.finalize() {
+        let _ = write!(output, "{byte:02x}");
+    }
+    Ok(output)
 }
 
 fn now_unix_ms() -> u64 {
