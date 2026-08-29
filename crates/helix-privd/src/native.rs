@@ -7448,6 +7448,7 @@ fn fallback_java_version(version: &str) -> u16 {
     }
 }
 
+#[cfg(test)]
 fn port_claimed_error(port: u16, helix: &HashSet<u16>, amp: &HashSet<u16>) -> Option<String> {
     if amp.contains(&port) {
         Some(amp_port_claimed_message(port))
