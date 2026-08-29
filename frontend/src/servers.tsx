@@ -33,7 +33,7 @@ import {
   saveValheimPortPolicy,
   saveTerrariaPortPolicy,
   setNativeStartOnBoot,
-  setServerNetworkExposure,
+  setNativeMemory,
   trashServerBackup,
   trashNativeServer,
   type BrokerJob,
@@ -638,6 +638,54 @@ export function joinErrorOffersPortChange(message: string): boolean {
     || lower.includes("already has a mapping")
     || /port \d+ is already/.test(lower)
   );
+}
+
+export function memoryBoundsForKind(
+  kind: "minecraft" | "vrising" | "valheim" | "terraria",
+): { min: number; max: number } {
+  switch (kind) {
+    case "vrising":
+      return { min: 2_048, max: 24_576 };
+    case "valheim":
+      return { min: 1_024, max: 16_384 };
+    case "terraria":
+      return { min: 512, max: 8_192 };
+    default:
+      return { min: 1_024, max: 24_576 };
+  }
+}
+
+export function allocatedMemoryOptions(
+  kind: "minecraft" | "vrising" | "valheim" | "terraria",
+  current: number,
+): number[] {
+  const { min, max } = memoryBoundsForKind(kind);
+  const options = [512, 1_024, 2_048, 4_096, 6_144, 8_192, 12_288, 16_384, 24_576].filter(
+    (value) => value >= min && value <= max,
+  );
+  if (Number.isFinite(current) && current >= min && current <= max && !options.includes(current)) {
+    options.push(current);
+    options.sort((a, b) => a - b);
+  }
+  return options;
+}
+
+export function publicInternetHint(
+  kind: "minecraft" | "vrising" | "valheim" | "terraria",
+  port: number,
+  queryPort: number | null,
+): string {
+  if (kind === "vrising") {
+    return `Helix does not open this on the internet. Forward UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`} on your router if people should join from outside the LAN.`;
+  }
+  if (kind === "valheim") {
+    return `Helix does not open this on the internet. Forward UDP ${port}–${port + 2} on your router if people should join from outside the LAN.`;
+  }
+  return `Helix does not open this on the internet. Forward TCP ${port} on your router if people should join from outside the LAN.`;
+}
+
+function formatMemoryGiB(memoryMb: number): string {
+  return Number.isInteger(memoryMb / 1024) ? `${memoryMb / 1024} GiB` : `${memoryMb} MiB`;
 }
 
 export function serverActionDescription(
@@ -2758,9 +2806,16 @@ function SettingsPanel({
           (value): value is string => value !== null && value.length > 0,
         );
         if (result.containerRepublished) {
-          notes.unshift(
-            `Published port is now ${result.settings.gamePort}. The container was rebound to that port.`,
-          );
+          if (result.changedFields.includes("memory_mb")) {
+            notes.unshift(
+              `Allocated memory is now ${formatMemoryGiB(result.settings.memoryMb)}. The container was rebound with that limit.`,
+            );
+          }
+          if (result.changedFields.includes("game_port")) {
+            notes.unshift(
+              `Published port is now ${result.settings.gamePort}. The container was rebound to that port.`,
+            );
+          }
         }
         setNotice(notes.length > 0 ? notes.join(" ") : null);
         await onSaved();
@@ -2881,6 +2936,26 @@ function SettingsPanel({
               if (Number.isFinite(value)) update("gamePort", value);
             }}
           />
+        </label>
+        <label class="field">
+          <span>
+            Memory {restartLabel("memory_mb")}{" "}
+            <InfoTip text="Helix rebinds the published container when this changes so Java and Docker both get the new limit." />
+          </span>
+          <select
+            value={settings.memoryMb}
+            disabled={!canManageServers}
+            title={manageTitle}
+            onChange={(event) =>
+              update("memoryMb", Number(event.currentTarget.value))
+            }
+          >
+            {allocatedMemoryOptions("minecraft", settings.memoryMb).map((value) => (
+              <option key={value} value={value}>
+                {formatMemoryGiB(value)}
+              </option>
+            ))}
+          </select>
         </label>
         <label class="field">
           <span>Game mode {restartLabel("game_mode")}</span>
@@ -3067,7 +3142,8 @@ function SettingsPanel({
             busy ||
             settings.motd.trim().length === 0 ||
             !Number.isFinite(settings.gamePort) ||
-            settings.gamePort < 1024
+            settings.gamePort < 1024 ||
+            !Number.isFinite(settings.memoryMb)
           }
           title={manageTitle}
           onClick={() => void save()}
@@ -3076,6 +3152,89 @@ function SettingsPanel({
         </button>
       </div>
     </section>
+  );
+}
+
+function AllocatedMemoryEditor({
+  detail,
+  csrfToken,
+  canManageServers,
+  onSaved,
+  onSessionExpired,
+}: {
+  detail: NativeServerDetail;
+  csrfToken: string;
+  canManageServers: boolean;
+  onSaved: () => Promise<void> | void;
+  onSessionExpired: () => void;
+}) {
+  const [memoryMb, setMemoryMb] = useState(detail.memoryLimitMb);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    setMemoryMb(detail.memoryLimitMb);
+  }, [detail.memoryLimitMb]);
+  const dirty = memoryMb !== detail.memoryLimitMb;
+  const manageTitle = canManageServers
+    ? undefined
+    : "Requires games.manage permission";
+  const save = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await setNativeMemory(detail.id, memoryMb, csrfToken);
+      setMemoryMb(result.memoryMb);
+      if (result.changed) {
+        setNotice(
+          `Allocated memory is now ${formatMemoryGiB(result.memoryMb)}. The container was rebound with that limit.`,
+        );
+        await onSaved();
+      }
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div class="allocated-memory-editor">
+      <label class="field">
+        <span>
+          Allocated memory{" "}
+          <InfoTip text="Helix rebinds the published container when this changes so the new limit is actually used." />
+        </span>
+        <select
+          value={memoryMb}
+          disabled={!canManageServers || busy}
+          title={manageTitle}
+          onChange={(event) => setMemoryMb(Number(event.currentTarget.value))}
+        >
+          {allocatedMemoryOptions(detail.kind, memoryMb).map((value) => (
+            <option key={value} value={value}>
+              {formatMemoryGiB(value)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        class="button button--primary"
+        type="button"
+        disabled={!canManageServers || !dirty || busy}
+        title={manageTitle}
+        onClick={() => void save()}
+      >
+        {busy ? "Saving…" : "Save memory"}
+      </button>
+      <InlineError message={error} />
+      {notice !== null && (
+        <p class="settings-port-note" role="status">
+          {notice}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -3926,7 +4085,6 @@ function NativeServerPage({
   csrfToken,
   canManageServers,
   canManageBackups,
-  canManageNetwork,
   hostInventory,
   onBack,
   onRefresh,
@@ -3951,10 +4109,8 @@ function NativeServerPage({
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [network, setNetwork] = useState<NetworkInventory | null>(null);
-  const [networkError, setNetworkError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [restartSuccessRevision, setRestartSuccessRevision] = useState(0);
-  const [exposureBusy, setExposureBusy] = useState(false);
   const [bootBusy, setBootBusy] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
   const detailLoad = useRef<Promise<void> | null>(null);
@@ -3991,12 +4147,11 @@ function NativeServerPage({
     void getNetworkInventory(csrfToken, controller.signal)
       .then((value) => {
         setNetwork(value);
-        setNetworkError(null);
       })
       .catch((requestError: unknown) => {
         if (controller.signal.aborted) return;
         if (isSessionError(requestError)) onSessionExpired();
-        else setNetworkError(describeError(requestError));
+        else setNetwork(null);
       });
     return () => controller.abort();
   }, [csrfToken, onSessionExpired, server.id, refreshKey]);
@@ -4049,22 +4204,18 @@ function NativeServerPage({
     (network?.addresses.privateIpv4 === null || network?.addresses.privateIpv4 === undefined
       ? "Private address unavailable"
       : formatJoinAddress(network.addresses.privateIpv4, detail.gamePort));
-  const publicEvidence = tcpEvidence?.externalReachability;
-  const publicConfigured = publicEvidence?.state === "router_mapping_confirmed";
-  const publicJoinAddress = publicEvidence?.joinAddress ?? null;
-  const updateExposure = async (enabled: boolean): Promise<void> => {
-    setExposureBusy(true);
-    setNetworkError(null);
-    try {
-      await setServerNetworkExposure(detail.id, enabled, csrfToken);
-      await refresh();
-    } catch (requestError) {
-      if (isSessionError(requestError)) onSessionExpired();
-      else setNetworkError(describeError(requestError));
-    } finally {
-      setExposureBusy(false);
-    }
-  };
+  const publicIp =
+    network?.router.externalIpv4
+    ?? tcpEvidence?.externalReachability.externalIp
+    ?? udpEvidence?.externalReachability.externalIp
+    ?? null;
+  const publicJoinAddress =
+    publicIp === null ? null : formatJoinAddress(publicIp, detail.gamePort);
+  const publicInternetNote = publicInternetHint(
+    detail.kind,
+    detail.gamePort,
+    detail.queryPort,
+  );
   const updateStartOnBoot = async (enabled: boolean): Promise<void> => {
     setBootBusy(true);
     setBootError(null);
@@ -4242,71 +4393,22 @@ function NativeServerPage({
                 </article>
                 <article>
                   <span>PUBLIC INTERNET</span>
-                  {isReadyMarkerGame ? (
-                    <>
-                      <strong>Private only</strong>
-                      <small>
-                        Helix does not offer UPnP for V Rising. Forward UDP {detail.gamePort}
-                        {detail.queryPort === null ? "" : ` and ${detail.queryPort}`} yourself if you need outside access.
-                      </small>
-                    </>
-                  ) : (
-                    <>
                   <strong>
-                    {publicConfigured && publicJoinAddress !== null
-                      ? publicJoinAddress
-                      : publicEvidence?.state === "carrier_grade_nat"
-                        ? "Blocked by CGNAT"
-                        : publicEvidence?.state === "private_or_reserved"
-                          ? "Upstream NAT detected"
-                          : publicEvidence?.state === "setup_available"
-                            ? "Ready to set up"
-                            : "Automatic setup unavailable"}
+                    {publicJoinAddress ?? "Not detected"}
                   </strong>
-                  <small>
-                    {publicEvidence?.note ?? "Refresh Network to check the router and public address."}
-                  </small>
-                  {publicConfigured && publicJoinAddress !== null && (
-                    <button type="button" onClick={() => void navigator.clipboard?.writeText(publicJoinAddress)}>Copy</button>
-                  )}
-                  {publicEvidence?.state === "setup_available" && (
+                  <small>{publicInternetNote}</small>
+                  {publicJoinAddress !== null && (
                     <button
-                      class="button button--small"
                       type="button"
-                      disabled={exposureBusy || !canManageNetwork}
-                      title={canManageNetwork ? undefined : "Requires network.firewall.write permission"}
-                      onClick={() => void updateExposure(true)}
+                      onClick={() =>
+                        void navigator.clipboard?.writeText(publicJoinAddress)
+                      }
                     >
-                      {exposureBusy ? "Setting up…" : "Set up public access"}
+                      Copy
                     </button>
-                  )}
-                  {publicConfigured && (
-                    <button
-                      class="button button--small button--quiet"
-                      type="button"
-                      disabled={exposureBusy || !canManageNetwork}
-                      onClick={() => void updateExposure(false)}
-                    >
-                      {exposureBusy ? "Removing…" : "Remove forwarding"}
-                    </button>
-                  )}
-                  {!publicConfigured && publicEvidence?.state !== "setup_available" && <a href="#network">Review Network</a>}
-                    </>
                   )}
                 </article>
               </div>
-              <InlineError message={networkError} />
-              {networkError !== null &&
-                joinErrorOffersPortChange(networkError) &&
-                detail.settings !== null && (
-                  <button
-                    class="button button--small"
-                    type="button"
-                    onClick={() => setTab("settings")}
-                  >
-                    Change game port
-                  </button>
-                )}
               <div class="join-evidence">
                 {!isReadyMarkerGame && (
                 <span
@@ -4321,10 +4423,9 @@ function NativeServerPage({
                   UDP · {udpDiagnostic.label}
                 </span>
                 <small>
-                  {networkError ??
-                    (usesUdpJoin
-                      ? udpDiagnostic.detail
-                      : `${tcpDiagnostic.detail} ${udpDiagnostic.detail}`)}
+                  {usesUdpJoin
+                    ? udpDiagnostic.detail
+                    : `${tcpDiagnostic.detail} ${udpDiagnostic.detail}`}
                 </small>
               </div>
             </section>
@@ -4442,6 +4543,13 @@ function NativeServerPage({
                   </span>
                 </label>
                 <InlineError message={bootError} />
+                <AllocatedMemoryEditor
+                  detail={detail}
+                  csrfToken={csrfToken}
+                  canManageServers={canManageServers}
+                  onSaved={refresh}
+                  onSessionExpired={onSessionExpired}
+                />
               </section>
             </div>
           </>
@@ -4548,6 +4656,15 @@ function NativeServerPage({
                 </button>
               </div>
             </div>
+            {isReadyMarkerGame && (
+              <AllocatedMemoryEditor
+                detail={detail}
+                csrfToken={csrfToken}
+                canManageServers={canManageServers}
+                onSaved={refresh}
+                onSessionExpired={onSessionExpired}
+              />
+            )}
             <dl class="advanced-facts">
               <div>
                 <dt>Instance</dt>
@@ -4582,6 +4699,10 @@ function NativeServerPage({
                 <dd>
                   <code>{detail.gamePort}/tcp + udp</code>
                 </dd>
+              </div>
+              <div>
+                <dt>Allocated memory</dt>
+                <dd>{formatMemoryGiB(detail.memoryLimitMb)}</dd>
               </div>
               <div>
                 <dt>Console</dt>

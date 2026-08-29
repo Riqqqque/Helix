@@ -230,7 +230,8 @@ export type MinecraftSettingField =
   | 'white_list'
   | 'enforce_white_list'
   | 'spawn_protection'
-  | 'game_port';
+  | 'game_port'
+  | 'memory_mb';
 
 export interface MinecraftRestartBehavior {
   activation: 'server_restart';
@@ -254,6 +255,7 @@ export interface MinecraftSettings {
   enforceWhiteList: boolean;
   spawnProtection: number;
   gamePort: number;
+  memoryMb: number;
   restartBehavior: MinecraftRestartBehavior;
 }
 
@@ -666,7 +668,7 @@ const minecraftSettingFields = new Set<MinecraftSettingField>([
   'motd', 'game_mode', 'difficulty', 'max_players', 'view_distance',
   'simulation_distance', 'player_idle_timeout', 'online_mode', 'pvp',
   'allow_flight', 'white_list', 'enforce_white_list', 'spawn_protection',
-  'game_port',
+  'game_port', 'memory_mb',
 ]);
 
 function parseSettingFields(value: unknown, context: string): MinecraftSettingField[] {
@@ -723,6 +725,7 @@ function parseMinecraftSettings(value: unknown): MinecraftSettings {
     enforceWhiteList: boolean(root, 'enforce_white_list'),
     spawnProtection: number(root, 'spawn_protection'),
     gamePort: number(root, 'game_port'),
+    memoryMb: number(root, 'memory_mb'),
     restartBehavior: parseRestartBehavior(root.restart_behavior),
   };
 }
@@ -1199,6 +1202,21 @@ export function setNativeStartOnBoot(id: string, enabled: boolean, csrfToken: st
   }, { method: 'PUT', body: { enabled }, csrfToken });
 }
 
+export function setNativeMemory(
+  id: string,
+  memoryMb: number,
+  csrfToken: string,
+): Promise<{ memoryMb: number; containerRepublished: boolean; changed: boolean }> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/memory`, (value) => {
+    const root = expectRecord(value, 'native memory');
+    return {
+      memoryMb: number(root, 'memory_mb'),
+      containerRepublished: root.container_republished === true,
+      changed: boolean(root, 'changed'),
+    };
+  }, { method: 'PUT', body: { memory_mb: memoryMb }, csrfToken, timeoutMs: 90_000 });
+}
+
 export function setServerNetworkExposure(
   id: string,
   enabled: boolean,
@@ -1250,6 +1268,7 @@ export function saveServerSettings(id: string, settings: MinecraftSettings, csrf
       enforce_white_list: settings.enforceWhiteList,
       spawn_protection: settings.spawnProtection,
       game_port: settings.gamePort,
+      memory_mb: settings.memoryMb,
     },
     csrfToken,
     timeoutMs: 90_000,

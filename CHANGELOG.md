@@ -40,6 +40,11 @@ binary or package release yet.
 
 ### Added
 
+- Native servers can change allocated memory after create. Helix rebinds the
+  container (and Minecraft `-Xmx`) to the new limit.
+- Overview PUBLIC INTERNET shows the public IP and game port, plus a reminder
+  to port-forward that port. It does not run UPnP setup from that card.
+
 - Homarr shortcuts stay editable after import. Re-import keeps titles, sizes,
   colors, and extra widgets on that Home, and drops only unchecked apps.
 - Copy a Home widget, then paste it on the same layout or another Home. Settings
