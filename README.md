@@ -49,16 +49,17 @@ The current private-alpha build includes:
   final-version, and never-auto-reboot guards;
 - native Docker-backed Minecraft instances for Paper, Purpur, Folia, Leaves, Fabric,
   Forge, NeoForge, Quilt, Pufferfish, Vanilla, and a guarded local custom-JAR import,
-  plus a compatibility-aware Modrinth plugin/mod marketplace and Modrinth/CurseForge
-  “Start with a modpack” (server-safe subset, not a full client copy);
+  plus a compatibility-aware Modrinth and CurseForge plugin/mod/addon marketplace
+  and Modrinth/CurseForge “Start with a modpack” (server-safe subset, not a full
+  client copy);
 - bounded per-game port pools with collision-safe automatic allocation, plus
   exact opt-in Minecraft TCP forwarding on compatible same-LAN UPnP routers;
 - start, stop, restart, confirmed native kill when stop hangs, update, backup,
   settings, files, performance, logs, and console tools for native instances;
 - bounded persistent native console history that survives browser closes and
   spans retained server boots;
-- recoverable native backup deletion and explicit restart-required metadata on
-  settings;
+- recoverable native backup deletion, keep-count/keep-days rules, and delete
+  forever when you want a copy gone;
 - optional AMP discovery/control through a separate loopback integration. AMP
   remains its own manager; Helix does not relabel AMP instances as native;
 - a Hooks page for bounded discovery and verified lifecycle control of AMP,
@@ -206,11 +207,15 @@ hashes the file into a private unprivileged container workspace, pins Java 17,
 21, or 25, and never modifies the source. Helix cannot verify the custom JAR's
 publisher or select a future update for it. Extra import folders can be added
 with `native.custom_artifact_roots`; Helix never promotes `/` into an executable
-import boundary. The Modrinth marketplace filters content by the selected server
-software, loader, and Minecraft version. A missing or negative Modrinth server-side flag is shown as
-a warning instead of hiding the project or blocking its install; Helix still
-prevents plugin/mod mixing and writes only to the matching `plugins/` or `mods/`
-directory. Unsupported server software does not get a fake install path.
+import boundary. The Modrinth and CurseForge marketplace filters content by the selected server
+software, loader, and Minecraft version. Search cards can install a compatible
+JAR into `plugins/` or `mods/` without restarting Minecraft; restart when you
+want the files loaded. Project pages render the catalog’s markdown or HTML
+description and mark already-installed projects. A missing or negative Modrinth
+server-side flag is shown as a warning instead of hiding the project or blocking
+its install; Helix still prevents plugin/mod mixing and writes only to the
+matching directory. Unsupported server software does not get a fake install
+path.
 
 Forge, NeoForge, Quilt, and Pufferfish are default create choices. Forge uses
 the official installer for Minecraft 1.17+. Pufferfish uses the publisher CI

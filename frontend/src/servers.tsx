@@ -26,6 +26,9 @@ import {
   sendConsoleCommand,
   setNativeStartOnBoot,
   setNativeMemory,
+  setServerBackupPolicy,
+  pruneServerBackups,
+  purgeTrashedServerBackup,
   trashServerBackup,
   trashNativeServer,
   type BrokerJob,
@@ -44,6 +47,7 @@ import {
   type ServerBackup,
   type ServerBackupTrash,
   type ServerBackupTrashPolicy,
+  type ServerBackupKeepPolicy,
   type ServerLogSnapshot,
   type TrashedNativeServerCatalog,
 } from "./control-api";
@@ -897,11 +901,9 @@ export function canRunBackupMutation(
   mutation: BackupMutation,
   canManageServers: boolean,
   canManageBackups: boolean,
-  recoverableTrashAvailable: boolean,
 ): boolean {
   if (mutation === "create") return canManageServers;
-  if (mutation === "restore") return canManageBackups;
-  return canManageBackups && recoverableTrashAvailable;
+  return canManageBackups;
 }
 
 function parsePortRanges(input: string): GamePortRange[] {
@@ -2724,7 +2726,7 @@ function ConsolePanel({
           <p>
             {detail.kind !== "minecraft"
               ? "This dedicated server has no RCON command channel. This view follows the container log."
-              : "Commands use a loopback-only channel; output stays available across dashboard sessions."}
+              : "Commands go over RCON on 127.0.0.1 only — that is loopback, the host talking to itself. Players never use this port. Output stays available across dashboard sessions."}
           </p>
         </div>
         {detail.kind === "minecraft" && (
@@ -3699,10 +3701,11 @@ function DeleteBackupDialog({
   backup: ServerBackup;
   csrfToken: string;
   onClose: () => void;
-  onDeleted: (trashId: string, backup: ServerBackup) => Promise<void>;
+  onDeleted: (trashId: string, backup: ServerBackup, purged: boolean) => Promise<void>;
   onSessionExpired: () => void;
 }) {
   const [confirmed, setConfirmed] = useState(false);
+  const [forever, setForever] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const remove = async (): Promise<void> => {
@@ -3710,7 +3713,10 @@ function DeleteBackupDialog({
     setError(null);
     try {
       const result = await trashServerBackup(server.id, backup.id, csrfToken);
-      await onDeleted(result.trashId, backup);
+      if (forever) {
+        await purgeTrashedServerBackup(server.id, result.trashId, csrfToken);
+      }
+      await onDeleted(result.trashId, backup, forever);
       onClose();
     } catch (requestError) {
       if (isSessionError(requestError)) onSessionExpired();
@@ -3720,16 +3726,30 @@ function DeleteBackupDialog({
     }
   };
   return (
-    <Dialog title="Move backup to trash?" onClose={() => !busy && onClose()}>
+    <Dialog title={forever ? "Delete this backup forever?" : "Move backup to trash?"} onClose={() => !busy && onClose()}>
       <div class="dialog-copy">
         <p>
           <strong>{formatTimestamp(backup.createdAtUnixMs)}</strong> ·{" "}
           {formatBytes(backup.sizeBytes)}
         </p>
         <p>
-          Helix moves this backup to protected trash, where Undo can restore it.
+          {forever
+            ? "Helix deletes this copy now. There is no Undo after this."
+            : "Helix moves this backup to protected trash, where Undo can restore it. You can still delete it forever from Deleted backups."}
         </p>
       </div>
+      <label class="check-row">
+        <input
+          type="checkbox"
+          checked={forever}
+          disabled={busy}
+          onChange={(event) => setForever(event.currentTarget.checked)}
+        />
+        <span>
+          <strong>Delete forever</strong>
+          <small>Skip trash. This cannot be undone.</small>
+        </span>
+      </label>
       <label class="check-row">
         <input
           type="checkbox"
@@ -3738,8 +3758,8 @@ function DeleteBackupDialog({
           onChange={(event) => setConfirmed(event.currentTarget.checked)}
         />
         <span>
-          <strong>Remove this active backup</strong>
-          <small>A recoverable copy stays under Deleted backups.</small>
+          <strong>{forever ? "I want this backup gone" : "Remove this active backup"}</strong>
+          <small>{forever ? "The archive is destroyed on this host." : "A recoverable copy stays under Deleted backups."}</small>
         </span>
       </label>
       <InlineError message={error} />
@@ -3758,7 +3778,73 @@ function DeleteBackupDialog({
           disabled={!confirmed || busy}
           onClick={() => void remove()}
         >
-          {busy ? "Moving…" : "Move to trash"}
+          {busy ? (forever ? "Deleting…" : "Moving…") : forever ? "Delete forever" : "Move to trash"}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
+function PurgeBackupDialog({
+  server,
+  item,
+  csrfToken,
+  onClose,
+  onPurged,
+  onSessionExpired,
+}: {
+  server: ManagedServer;
+  item: ServerBackupTrash;
+  csrfToken: string;
+  onClose: () => void;
+  onPurged: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const purge = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      await purgeTrashedServerBackup(server.id, item.trashId, csrfToken);
+      await onPurged();
+      onClose();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog title="Delete this backup forever?" onClose={() => !busy && onClose()}>
+      <div class="dialog-copy">
+        <p>
+          <strong>{formatTimestamp(item.trashedAtUnixMs)}</strong> ·{" "}
+          {formatBytes(item.sizeBytes)}
+        </p>
+        <p>This removes the trashed archive from disk. Undo will no longer work for this copy.</p>
+      </div>
+      <label class="check-row">
+        <input
+          type="checkbox"
+          checked={confirmed}
+          disabled={busy}
+          onChange={(event) => setConfirmed(event.currentTarget.checked)}
+        />
+        <span>
+          <strong>Delete forever</strong>
+          <small>I understand this cannot be undone.</small>
+        </span>
+      </label>
+      <InlineError message={error} />
+      <div class="dialog-actions">
+        <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>
+          Cancel
+        </button>
+        <button class="button button--danger" type="button" disabled={!confirmed || busy} onClick={() => void purge()}>
+          {busy ? "Deleting…" : "Delete forever"}
         </button>
       </div>
     </Dialog>
@@ -3771,7 +3857,6 @@ function BackupsPanel({
   refreshKey,
   canManageServers,
   canManageBackups,
-  canManageTrash,
   onCreate,
   onRefresh,
   onSessionExpired,
@@ -3781,7 +3866,6 @@ function BackupsPanel({
   refreshKey: number;
   canManageServers: boolean;
   canManageBackups: boolean;
-  canManageTrash: boolean;
   onCreate: () => void;
   onRefresh: () => Promise<void>;
   onSessionExpired: () => void;
@@ -3790,8 +3874,15 @@ function BackupsPanel({
   const [trash, setTrash] = useState<ServerBackupTrash[]>([]);
   const [trashPolicy, setTrashPolicy] =
     useState<ServerBackupTrashPolicy | null>(null);
+  const [keepPolicy, setKeepPolicy] = useState<ServerBackupKeepPolicy | null>(
+    null,
+  );
+  const [keepCountDraft, setKeepCountDraft] = useState("0");
+  const [keepDaysDraft, setKeepDaysDraft] = useState("0");
+  const [policyBusy, setPolicyBusy] = useState(false);
   const [restore, setRestore] = useState<ServerBackup | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ServerBackup | null>(null);
+  const [purgeTarget, setPurgeTarget] = useState<ServerBackupTrash | null>(null);
   const [immediateUndo, setImmediateUndo] = useState<{
     trashId: string;
     backup: ServerBackup;
@@ -3803,19 +3894,16 @@ function BackupsPanel({
     "create",
     canManageServers,
     canManageBackups,
-    canManageTrash,
   );
   const canRestore = canRunBackupMutation(
     "restore",
     canManageServers,
     canManageBackups,
-    canManageTrash,
   );
   const canUseTrash = canRunBackupMutation(
     "trash",
     canManageServers,
     canManageBackups,
-    canManageTrash,
   );
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -3823,6 +3911,9 @@ function BackupsPanel({
       setBackups(catalog.backups);
       setTrash(catalog.trash);
       setTrashPolicy(catalog.trashPolicy);
+      setKeepPolicy(catalog.policy);
+      setKeepCountDraft(String(catalog.policy.keepCount));
+      setKeepDaysDraft(String(catalog.policy.keepDays));
       setError(null);
     } catch (requestError) {
       if (isSessionError(requestError)) onSessionExpired();
@@ -3854,7 +3945,7 @@ function BackupsPanel({
         <div>
           <h2>
             Backups{" "}
-            <InfoTip text="Deleted backups stay recoverable in protected trash." />
+            <InfoTip text="Helix stops a running server, archives its data folder, then starts it again. Deleted copies stay in protected trash until you restore them or delete them forever. Count and age limits move the oldest extras to trash after a backup." />
           </h2>
           <p>Local archives with the matching Helix server definition.</p>
         </div>
@@ -3879,14 +3970,99 @@ function BackupsPanel({
           </span>
         </div>
       )}
-      {canManageBackups && !canManageTrash && (
-        <div class="backup-capability-note">
-          <Icon name="info" size={15} />
-          <span>
-            Recoverable deletion is unavailable here. Existing restore controls
-            still work.
-          </span>
-        </div>
+      {canManageBackups && keepPolicy !== null && (
+        <form
+          class="backup-policy"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (policyBusy) return;
+            const keepCount = Number(keepCountDraft);
+            const keepDays = Number(keepDaysDraft);
+            if (
+              !Number.isInteger(keepCount) ||
+              keepCount < 0 ||
+              keepCount > 50 ||
+              !Number.isInteger(keepDays) ||
+              keepDays < 0 ||
+              keepDays > 365
+            ) {
+              setError("Keep count is 0–50. Keep days is 0–365. Zero means no limit.");
+              return;
+            }
+            setPolicyBusy(true);
+            setError(null);
+            void setServerBackupPolicy(server.id, keepCount, keepDays, csrfToken)
+              .then((catalog) => {
+                setBackups(catalog.backups);
+                setTrash(catalog.trash);
+                setTrashPolicy(catalog.trashPolicy);
+                setKeepPolicy(catalog.policy);
+                setKeepCountDraft(String(catalog.policy.keepCount));
+                setKeepDaysDraft(String(catalog.policy.keepDays));
+              })
+              .catch((requestError: unknown) => {
+                if (isSessionError(requestError)) onSessionExpired();
+                else setError(describeError(requestError));
+              })
+              .finally(() => setPolicyBusy(false));
+          }}
+        >
+          <div>
+            <label>
+              Keep this many
+              <InfoTip text="0 means keep every backup. Any extra oldest copies move to trash after the next backup or when you save this rule." />
+              <input
+                type="number"
+                min="0"
+                max="50"
+                value={keepCountDraft}
+                disabled={policyBusy}
+                onInput={(event) => setKeepCountDraft(event.currentTarget.value)}
+              />
+            </label>
+            <label>
+              Keep this many days
+              <InfoTip text="0 means no age limit. Backups older than this move to trash after the next backup or when you save this rule." />
+              <input
+                type="number"
+                min="0"
+                max="365"
+                value={keepDaysDraft}
+                disabled={policyBusy}
+                onInput={(event) => setKeepDaysDraft(event.currentTarget.value)}
+              />
+            </label>
+          </div>
+          <p>{keepPolicy.note}</p>
+          <div class="backup-policy__actions">
+            <button class="button button--quiet" type="submit" disabled={policyBusy}>
+              {policyBusy ? "Saving…" : "Save keep rules"}
+            </button>
+            <button
+              class="button button--quiet"
+              type="button"
+              disabled={policyBusy || (keepPolicy.keepCount === 0 && keepPolicy.keepDays === 0)}
+              onClick={() => {
+                setPolicyBusy(true);
+                setError(null);
+                void pruneServerBackups(server.id, csrfToken)
+                  .then((catalog) => {
+                    setBackups(catalog.backups);
+                    setTrash(catalog.trash);
+                    setTrashPolicy(catalog.trashPolicy);
+                    setKeepPolicy(catalog.policy);
+                  })
+                  .catch((requestError: unknown) => {
+                    if (isSessionError(requestError)) onSessionExpired();
+                    else setError(describeError(requestError));
+                  })
+                  .finally(() => setPolicyBusy(false));
+              }}
+            >
+              Apply rules now
+            </button>
+          </div>
+        </form>
       )}
       {immediateUndo !== null && (
         <div class="backup-undo-notice" role="status">
@@ -3952,9 +4128,7 @@ function BackupsPanel({
                 title={
                   !canManageBackups
                     ? "Requires games.backups.manage permission"
-                    : canManageTrash
-                      ? "Move to recoverable trash"
-                      : "Recoverable deletion is unavailable"
+                    : "Move to recoverable trash"
                 }
               >
                 <Icon name="trash" size={15} />
@@ -4011,6 +4185,16 @@ function BackupsPanel({
                 >
                   {undoing === item.trashId ? "Restoring…" : "Undo"}
                 </button>
+                <button
+                  class="icon-button icon-button--danger"
+                  type="button"
+                  disabled={!canUseTrash || undoing !== null}
+                  aria-label="Delete this backup forever"
+                  title="Delete forever. This cannot be undone."
+                  onClick={() => setPurgeTarget(item)}
+                >
+                  <Icon name="trash" size={15} />
+                </button>
               </div>
             ))}
           </div>
@@ -4046,8 +4230,22 @@ function BackupsPanel({
           backup={deleteTarget}
           csrfToken={csrfToken}
           onClose={() => setDeleteTarget(null)}
-          onDeleted={async (trashIdValue, backup) => {
-            setImmediateUndo({ trashId: trashIdValue, backup });
+          onDeleted={async (trashIdValue, backup, purged) => {
+            if (!purged) setImmediateUndo({ trashId: trashIdValue, backup });
+            else if (immediateUndo?.trashId === trashIdValue) setImmediateUndo(null);
+            await load();
+          }}
+          onSessionExpired={onSessionExpired}
+        />
+      )}
+      {purgeTarget !== null && (
+        <PurgeBackupDialog
+          server={server}
+          item={purgeTarget}
+          csrfToken={csrfToken}
+          onClose={() => setPurgeTarget(null)}
+          onPurged={async () => {
+            if (immediateUndo?.trashId === purgeTarget.trashId) setImmediateUndo(null);
             await load();
           }}
           onSessionExpired={onSessionExpired}
@@ -4085,7 +4283,10 @@ function PerformancePanel({ detail }: { detail: NativeServerDetail }) {
     <section class="server-tool performance-panel">
       <div class="tool-head">
         <div>
-          <h2>Live performance</h2>
+          <h2>
+            Live performance{" "}
+            <InfoTip text="CPU and memory are from this container right now. TPS is ticks per second from a local /tps sample over RCON. 20 is a healthy Minecraft tick rate. An em dash means that software does not answer /tps." />
+          </h2>
           <p>
             Runtime use from the Helix-owned container. Samples build while this
             page is open.
@@ -4796,9 +4997,6 @@ function NativeServerPage({
             refreshKey={refreshKey}
             canManageServers={canManageServers}
             canManageBackups={canManageBackups}
-            canManageTrash={detail.capabilities.includes(
-              "recoverable_backup_trash",
-            )}
             onCreate={() => setPending("backup")}
             onRefresh={refresh}
             onSessionExpired={onSessionExpired}
@@ -4876,55 +5074,85 @@ function NativeServerPage({
             )}
             <dl class="advanced-facts">
               <div>
-                <dt>Instance</dt>
+                <dt>
+                  Instance{" "}
+                  <InfoTip text="Helix’s internal name for this container. It is not the world name players see." />
+                </dt>
                 <dd>
                   <code>{detail.instanceName}</code>
                 </dd>
               </div>
               <div>
-                <dt>Backend</dt>
+                <dt>
+                  Backend{" "}
+                  <InfoTip text="The game runs in a Docker container as a dedicated numeric Linux user, not as root and not as your login account." />
+                </dt>
                 <dd>Docker · isolated numeric user</dd>
               </div>
               <div>
-                <dt>Runtime image</dt>
+                <dt>
+                  Runtime image{" "}
+                  <InfoTip text="The exact container image Helix starts. A digest pin means Helix will not silently float to a different build." />
+                </dt>
                 <dd>
                   <code>{detail.runtimeImage}</code>
                 </dd>
               </div>
               <div>
-                <dt>Server SHA-256</dt>
+                <dt>
+                  Server SHA-256{" "}
+                  <InfoTip text="A fingerprint of the server JAR Helix installed. If this changes, the file on disk is not the same bytes Helix verified." />
+                </dt>
                 <dd>
                   <code>{detail.artifactSha256}</code>
                 </dd>
               </div>
               <div>
-                <dt>Data path</dt>
+                <dt>
+                  Data path{" "}
+                  <InfoTip text="The host folder mounted into the container. Worlds, mods, plugins, and configs live here." />
+                </dt>
                 <dd>
                   <code>{detail.dataPath}</code>
                 </dd>
               </div>
               <div>
-                <dt>Game port</dt>
+                <dt>
+                  Game port{" "}
+                  <InfoTip text="The port players connect to. Helix publishes TCP and UDP for Minecraft. This is not the RCON console port." />
+                </dt>
                 <dd>
                   <code>{detail.gamePort}/tcp + udp</code>
                 </dd>
               </div>
               <div>
-                <dt>Allocated memory</dt>
+                <dt>
+                  Allocated memory{" "}
+                  <InfoTip text="Docker and Java are both capped at this amount. Raising it republishes the container." />
+                </dt>
                 <dd>{formatMemoryGiB(detail.memoryLimitMb)}</dd>
               </div>
               <div>
-                <dt>Console</dt>
+                <dt>
+                  Console{" "}
+                  <InfoTip text="Loopback only means RCON listens on 127.0.0.1 on this host. The dashboard talks to Minecraft locally. That port is not opened to the LAN or internet, and it is not the game port players join." />
+                </dt>
                 <dd>Loopback only</dd>
               </div>
               <div>
-                <dt>OOM killed</dt>
+                <dt>
+                  OOM killed{" "}
+                  <InfoTip text="The Linux kernel killed the process because it ran out of memory. Raise allocated memory or reduce plugins/mods if this is Yes after a crash." />
+                </dt>
                 <dd>
                   {detail.containerState.OOMKilled === true ? "Yes" : "No"}
                 </dd>
               </div>
               <div>
-                <dt>Process ID</dt>
+                <dt>
+                  Process ID{" "}
+                  <InfoTip text="The current Linux PID inside the container while it is running. Blank when the container is stopped." />
+                </dt>
                 <dd>
                   {typeof detail.containerState.Pid === "number"
                     ? detail.containerState.Pid
@@ -4932,7 +5160,10 @@ function NativeServerPage({
                 </dd>
               </div>
               <div>
-                <dt>Exit code</dt>
+                <dt>
+                  Exit code{" "}
+                  <InfoTip text="What the process returned last time it stopped. 0 is a clean exit. Anything else is a crash or an explicit non-zero stop." />
+                </dt>
                 <dd>
                   {typeof detail.containerState.ExitCode === "number"
                     ? detail.containerState.ExitCode
@@ -6051,7 +6282,10 @@ export function ServersPage({
           <span>CPU</span>
           <span>Memory</span>
           <span>Port</span>
-          <span>TPS</span>
+          <span>
+            TPS{" "}
+            <InfoTip text="Ticks per second. 20 is a healthy Minecraft server. Helix asks over the local RCON console. Vanilla and most Fabric/Forge/Quilt servers do not answer, so this stays —." />
+          </span>
           <span>Actions</span>
         </div>
         {visibleServers.map((server) => (

@@ -465,3 +465,31 @@ export function replaceHomarrHome(
   }
   return { templates: [...templates, home], activeHomeId: HOMARR_HOME_ID };
 }
+
+export function importHomarrOntoHome(
+  templates: readonly HomeTemplate[],
+  homeId: string,
+  incoming: readonly HomeWidget[],
+): { templates: HomeTemplate[]; added: number } | { error: string } {
+  const target = templates.find((template) => template.id === homeId);
+  if (target === undefined) return { error: 'That Home is no longer here.' };
+  const existingUrls = homeShortcutUrls(target.widgets);
+  const additions = incoming.filter((widget) => widget.kind === 'shortcut' && widget.url.length > 0 && !existingUrls.has(widget.url));
+  if (additions.length === 0) {
+    return { error: 'Those Homarr apps are already on this Home. Uncheck any you do not want, or pick different apps.' };
+  }
+  const roomOnHome = MAX_WIDGETS_PER_HOME - target.widgets.length;
+  const roomOverall = MAX_TOTAL_WIDGETS - templates.reduce((total, template) => total + template.widgets.length, 0);
+  const room = Math.min(roomOnHome, roomOverall, additions.length);
+  if (room <= 0) {
+    if (roomOnHome <= 0) return { error: `${target.name} already has ${MAX_WIDGETS_PER_HOME} widgets.` };
+    return { error: 'Homes can hold 64 widgets in total. Remove some, then import again.' };
+  }
+  const added = additions.slice(0, room).map((widget) => ({ ...widget }));
+  return {
+    templates: templates.map((template) => (
+      template.id === homeId ? { ...template, widgets: [...template.widgets, ...added] } : template
+    )),
+    added: added.length,
+  };
+}

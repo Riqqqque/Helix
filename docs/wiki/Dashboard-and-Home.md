@@ -49,17 +49,22 @@ Weather, Notes, Shortcut, and Strand. Shortcuts accept only validated HTTP(S)
 URLs and open in a new tab. Strand widgets embed an enabled package that
 declared `helix:ui.widget`. While editing, **Import from Homarr** reads Homarr
 apps that already have an http(s) address. Current Homarr stores those in SQLite; older
-Homarr JSON configs still work. Helix places them on a dedicated **Homarr** Home in
-Homarr's layout order as short tiles, instead of dumping them onto Main.
-Those tiles are normal widgets: rename them, resize them, recolor them, or copy
-them onto Main or any other Home. Re-import keeps those edits for apps that are
-still checked, adds new Homarr apps, and drops unchecked ones. Other widgets you
-added on the Homarr Home stay put. On a plain HTTP dashboard, Paste uses Helix's
+Homarr JSON configs still work. Helix adds the checked shortcuts onto **the Home
+you are already editing**, in Homarr's layout order as short tiles. They do not
+create a separate Homarr Home. Those tiles are normal widgets: rename them,
+resize them, recolor them, or copy them onto any other Home. Re-import skips
+shortcuts that are already on that Home. On a plain HTTP dashboard, Paste uses Helix's
 saved copy when the browser blocks the system clipboard. Long names stay inside
 the picker rows and tiles. Icons come
 from Homarr's http(s) icon URLs, Homarr icon names via the dashboard-icons set, or
 Helix's matcher on the app name and link. Uploaded Homarr media files, notes, and
-Homarr-only apps stay in Homarr. **Full screen**
+Homarr-only apps stay in Homarr.
+
+**Copy all** copies every widget on the current Home. **Paste onto another Home**
+drops that whole set onto the destination in one go, then you can rearrange.
+Ctrl/Cmd+A selects all tiles while editing; Ctrl/Cmd+C copies the selection, or
+all tiles if nothing is selected. Widget settings still has **Copy to another
+Home** for a single tile. **Full screen**
 hides the sidebar and the top bar (Helix, refresh, theme, account). Exit full
 screen from the Home page button to bring them back.
 

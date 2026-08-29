@@ -56,9 +56,9 @@ const MAX_PORT_POLICY_RANGES: usize = 32;
 const MAX_PORT_POLICY_PORTS: usize = 256;
 const MAX_PORT_POLICY_CANDIDATES: usize = 4_096;
 const MAX_MINECRAFT_STATUS_WORKERS: usize = 8;
-const MINECRAFT_TPS_CACHE_HIT: Duration = Duration::from_secs(10);
-const MINECRAFT_TPS_CACHE_MISS: Duration = Duration::from_secs(45);
-const MINECRAFT_TPS_CACHE_ERROR: Duration = Duration::from_secs(8);
+const MINECRAFT_TPS_CACHE_HIT: Duration = Duration::from_secs(60);
+const MINECRAFT_TPS_CACHE_MISS: Duration = Duration::from_secs(120);
+const MINECRAFT_TPS_CACHE_ERROR: Duration = Duration::from_secs(30);
 const MINECRAFT_TPS_CONNECT_TIMEOUT: Duration = Duration::from_millis(350);
 const MINECRAFT_TPS_IO_TIMEOUT: Duration = Duration::from_millis(500);
 const DOCKER_TIMEOUT_SECONDS: u64 = 300;
@@ -135,6 +135,10 @@ struct InstanceManifest {
     created_at_unix_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     unix_args: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    backup_keep_count: u16,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    backup_keep_days: u16,
 }
 
 impl InstanceManifest {
@@ -1412,6 +1416,7 @@ impl NativeManager {
             "files",
             "backups",
             "restore",
+            "recoverable_backup_trash",
             "logs",
             "performance",
             "advanced",
@@ -1830,8 +1835,73 @@ impl NativeManager {
             "trash_policy": {
                 "purge_after_days": self.backup_trash_retention_days,
                 "automatic_purge_enabled": false,
-                "note": "Deleted backups stay recoverable until an explicit purge is requested."
+                "note": "Deleted backups stay in protected trash until you restore them or delete them forever."
+            },
+            "policy": {
+                "keep_count": manifest.backup_keep_count,
+                "keep_days": manifest.backup_keep_days,
+                "keep_count_max": 50,
+                "keep_days_max": 365,
+                "note": backup_retention_note(manifest.backup_keep_count, manifest.backup_keep_days)
             }
+        }))
+    }
+
+    pub fn set_backup_policy(
+        &self,
+        id: &str,
+        keep_count: u16,
+        keep_days: u16,
+    ) -> Result<Value, String> {
+        validate_backup_policy(keep_count, keep_days)?;
+        let mut manifest = self.load_manifest(native_id(id))?;
+        let _operation = self.begin_instance_operation(&manifest.id, "backup policy")?;
+        manifest.backup_keep_count = keep_count;
+        manifest.backup_keep_days = keep_days;
+        write_manifest(&self.manifest_path(&manifest.id)?, &manifest)?;
+        let trashed = self.enforce_backup_retention(&manifest, "")?;
+        let mut catalog = self.list_backups_unlocked(&manifest)?;
+        catalog["retention_trashed"] = json!(trashed);
+        Ok(catalog)
+    }
+
+    pub fn prune_backups(&self, id: &str) -> Result<Value, String> {
+        let manifest = self.load_manifest(native_id(id))?;
+        let _operation = self.begin_instance_operation(&manifest.id, "backup prune")?;
+        let trashed = self.enforce_backup_retention(&manifest, "")?;
+        let mut catalog = self.list_backups_unlocked(&manifest)?;
+        catalog["retention_trashed"] = json!(trashed);
+        Ok(catalog)
+    }
+
+    pub fn purge_backup_trash(&self, id: &str, trash_id: &str) -> Result<Value, String> {
+        validate_trash_id(trash_id)?;
+        let manifest = self.load_manifest(native_id(id))?;
+        let _operation = self.begin_instance_operation(&manifest.id, "backup purge")?;
+        let trash_directory = self.backup_trash_path(&manifest.id)?.join(trash_id);
+        require_real_directory(
+            &trash_directory,
+            "the selected deleted backup is unavailable",
+        )?;
+        let record = read_backup_trash_record(&trash_directory.join("trash.json"))?;
+        if record.schema_version != 1
+            || record.trash_id != trash_id
+            || record.instance_id != manifest.id
+            || !valid_backup_id(&record.backup_id)
+        {
+            return Err("the selected deleted backup record is invalid".to_owned());
+        }
+        remove_known_backup_trash_directory(
+            &trash_directory,
+            &record.backup_id,
+            record.definition_present,
+        )?;
+        Ok(json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "trash_id": trash_id,
+            "backup_id": record.backup_id,
+            "purged": true,
+            "purged_at_unix_ms": now_unix_ms()
         }))
     }
 
@@ -1841,6 +1911,85 @@ impl NativeManager {
         }
         let manifest = self.load_manifest(native_id(id))?;
         let _operation = self.begin_instance_operation(&manifest.id, "backup deletion")?;
+        self.trash_named_backup(&manifest, backup_id)
+    }
+
+    fn list_backups_unlocked(&self, manifest: &InstanceManifest) -> Result<Value, String> {
+        self.list_backups(&format!("helix:{}", manifest.id))
+    }
+
+    fn enforce_backup_retention(
+        &self,
+        manifest: &InstanceManifest,
+        protect_id: &str,
+    ) -> Result<Vec<String>, String> {
+        if manifest.backup_keep_count == 0 && manifest.backup_keep_days == 0 {
+            return Ok(Vec::new());
+        }
+        let catalog = self.list_backups_unlocked(manifest)?;
+        let backups = catalog
+            .get("backups")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let cutoff = if manifest.backup_keep_days == 0 {
+            0
+        } else {
+            now_unix_ms().saturating_sub(
+                u64::from(manifest.backup_keep_days).saturating_mul(24 * 60 * 60 * 1_000),
+            )
+        };
+        let mut keepers = Vec::new();
+        let mut victims = Vec::new();
+        for backup in backups {
+            let id = backup
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if id.is_empty() {
+                continue;
+            }
+            let created = backup
+                .get("created_at_unix_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let over_age = id != protect_id
+                && manifest.backup_keep_days > 0
+                && created > 0
+                && created < cutoff;
+            if over_age {
+                victims.push(id);
+            } else {
+                keepers.push(id);
+            }
+        }
+        if manifest.backup_keep_count > 0 {
+            let limit = usize::from(manifest.backup_keep_count);
+            if keepers.len() > limit {
+                for extra in keepers.split_off(limit) {
+                    if extra != protect_id {
+                        victims.push(extra);
+                    }
+                }
+            }
+        }
+        let mut trashed = Vec::new();
+        for backup_id in victims {
+            self.trash_named_backup(manifest, &backup_id)?;
+            trashed.push(backup_id);
+        }
+        Ok(trashed)
+    }
+
+    fn trash_named_backup(
+        &self,
+        manifest: &InstanceManifest,
+        backup_id: &str,
+    ) -> Result<Value, String> {
+        if !valid_backup_id(backup_id) {
+            return Err("backup ID is invalid".to_owned());
+        }
         let backup_root = self.backup_path(&manifest.id)?;
         let archive = backup_root.join(format!("{backup_id}.tar.gz"));
         let definition = backup_root.join(format!("{backup_id}.json"));
@@ -2314,7 +2463,13 @@ impl NativeManager {
             }
             ServerAction::Backup => {
                 let path = self.backup(manifest)?;
-                json!({"backup_id": backup_id_from_path(&path)})
+                let backup_id = backup_id_from_path(&path);
+                let retention = self.enforce_backup_retention(manifest, &backup_id);
+                json!({
+                    "backup_id": backup_id,
+                    "retention_trashed": retention.as_ref().ok().cloned().unwrap_or_default(),
+                    "retention_error": retention.err()
+                })
             }
             ServerAction::Update => {
                 let changed = self.update(manifest)?;
@@ -2525,6 +2680,8 @@ impl NativeManager {
                 kind: GameKind::Minecraft,
                 query_port: 0,
                 unix_args,
+                backup_keep_count: 0,
+                backup_keep_days: 0,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -2652,6 +2809,8 @@ impl NativeManager {
                 run_uid,
                 created_at_unix_ms: now_unix_ms(),
                 unix_args: None,
+                backup_keep_count: 0,
+                backup_keep_days: 0,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -2773,6 +2932,8 @@ impl NativeManager {
                 run_uid,
                 created_at_unix_ms: now_unix_ms(),
                 unix_args: None,
+                backup_keep_count: 0,
+                backup_keep_days: 0,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -2909,6 +3070,8 @@ impl NativeManager {
                 run_uid,
                 created_at_unix_ms: now_unix_ms(),
                 unix_args: None,
+                backup_keep_count: 0,
+                backup_keep_days: 0,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -4527,7 +4690,13 @@ impl NativeManager {
             Ok(())
         };
         match (archive_result, restart_result) {
-            (Ok(path), Ok(())) => Ok(path),
+            (Ok(path), Ok(())) => {
+                let protect = backup_id_from_path(&path);
+                if let Err(error) = self.enforce_backup_retention(manifest, &protect) {
+                    eprintln!("backup retention failed: {error}");
+                }
+                Ok(path)
+            }
             (Err(error), Ok(())) => Err(error),
             (Ok(_), Err(error)) => Err(format!("backup completed, but restart failed: {error}")),
             (Err(backup), Err(restart)) => Err(format!(
@@ -5859,6 +6028,15 @@ fn console_archiver_loop(config: ConsoleArchiverConfig, archive: Arc<Mutex<Conso
     }
 }
 
+fn is_rcon_session_noise(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("[rcon: tps from last") {
+        return true;
+    }
+    lower.contains("thread rcon client")
+        && (lower.contains(" started") || lower.contains("shutting down"))
+}
+
 fn archive_console_stream(
     input: impl std::io::Read,
     archive: &Arc<Mutex<ConsoleArchiveWriter>>,
@@ -5893,6 +6071,9 @@ fn archive_console_stream(
             })
             .is_some();
         if repeated {
+            continue;
+        }
+        if is_rcon_session_noise(&line) {
             continue;
         }
         if let Ok(mut archive) = archive.lock()
@@ -7491,6 +7672,31 @@ fn is_zero_u16(port: &u16) -> bool {
     *port == 0
 }
 
+fn validate_backup_policy(keep_count: u16, keep_days: u16) -> Result<(), String> {
+    if keep_count > 50 {
+        return Err("keep at most 50 backups, or 0 for no count limit".to_owned());
+    }
+    if keep_days > 365 {
+        return Err("keep backups at most 365 days, or 0 for no age limit".to_owned());
+    }
+    Ok(())
+}
+
+fn backup_retention_note(keep_count: u16, keep_days: u16) -> String {
+    match (keep_count, keep_days) {
+        (0, 0) => "Helix keeps every backup until you delete one.".to_owned(),
+        (count, 0) => format!(
+            "Helix keeps the newest {count} backups. Older ones move to trash after the next backup."
+        ),
+        (0, days) => format!(
+            "Helix keeps backups for {days} days. Older ones move to trash after the next backup."
+        ),
+        (count, days) => format!(
+            "Helix keeps the newest {count} backups and anything newer than {days} days. Extra oldest copies move to trash."
+        ),
+    }
+}
+
 fn software_name(software: MinecraftSoftware) -> &'static str {
     match software {
         MinecraftSoftware::Custom => "Custom JAR",
@@ -8025,6 +8231,8 @@ mod tests {
             run_uid: 20_000,
             created_at_unix_ms: 1,
             unix_args: None,
+            backup_keep_count: 0,
+            backup_keep_days: 0,
         };
         let encoded = serde_json::to_value(&vrising).unwrap();
         assert_eq!(encoded["kind"], "vrising");
@@ -8894,6 +9102,8 @@ mod tests {
             kind: GameKind::Minecraft,
             query_port: 0,
             unix_args: None,
+            backup_keep_count: 0,
+            backup_keep_days: 0,
         };
         write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
         let active = backup_root.join(id);
@@ -8952,5 +9162,124 @@ mod tests {
         assert!(active.join(format!("{backup_id}.tar.gz")).is_file());
         assert!(active.join(format!("{backup_id}.json")).is_file());
         assert!(!backup_root.join(".trash").join(id).join(trash_id).exists());
+    }
+
+    #[test]
+    fn rcon_session_noise_is_dropped_from_persistent_console() {
+        assert!(is_rcon_session_noise(
+            "2026-08-29T08:00:00.000000000Z [12:00:00] [RCON Client /127.0.0.1 #1/INFO]: Thread RCON Client /127.0.0.1 started"
+        ));
+        assert!(is_rcon_session_noise(
+            "[12:00:01] [RCON Client /127.0.0.1 #1/INFO]: Thread RCON Client /127.0.0.1 shutting down"
+        ));
+        assert!(is_rcon_session_noise(
+            "[Not Secure] [RCON Client /127.0.0.1 #1/INFO]: [Rcon: TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0]"
+        ));
+        assert!(!is_rcon_session_noise(
+            "[12:00:02] [Server thread/INFO]: Done (4.2s)! For help, type \"help\""
+        ));
+        assert!(!is_rcon_session_noise(
+            "[12:00:03] [Server thread/INFO]: RCON running on 0.0.0.0:25575"
+        ));
+    }
+
+    #[test]
+    fn backup_retention_moves_oldest_active_copies_to_trash() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state_root = temporary.path().join("state");
+        let instance_root = temporary.path().join("instances");
+        let backup_root = temporary.path().join("backups");
+        fs::create_dir_all(state_root.join("console")).unwrap();
+        fs::create_dir_all(&instance_root).unwrap();
+        fs::create_dir_all(backup_root.join(".trash")).unwrap();
+        let manager = NativeManager {
+            state_root: state_root.clone(),
+            instance_root,
+            backup_root: backup_root.clone(),
+            docker_binary: PathBuf::from("/bin/true"),
+            console_retention: ConsoleRetention {
+                maximum_bytes: default_console_history_max_bytes(),
+                files: default_console_history_files(),
+            },
+            backup_trash_retention_days: 30,
+            custom_artifact_roots: Vec::new(),
+            operations: Mutex::new(HashSet::new()),
+            port_policies: Mutex::new(()),
+            console_archives: Mutex::new(HashMap::new()),
+            console_stops: Mutex::new(HashMap::new()),
+            tps_cache: Mutex::new(HashMap::new()),
+            custom_import_root: state_root.join("imports"),
+            uploads: Mutex::new(HashMap::new()),
+            amp: None,
+        };
+        let id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        let mut manifest = InstanceManifest {
+            schema_version: MANIFEST_VERSION,
+            id: id.to_owned(),
+            name: "Retention".to_owned(),
+            instance_name: "retention".to_owned(),
+            container_name: format!("helix-game-{id}"),
+            software: MinecraftSoftware::Paper,
+            minecraft_version: "1.21.8".to_owned(),
+            build: "1".to_owned(),
+            java_version: 21,
+            runtime_image: "eclipse-temurin@sha256:test".to_owned(),
+            artifact_url: "https://example.invalid/server.jar".to_owned(),
+            artifact_sha256: "a".repeat(64),
+            memory_mb: 4096,
+            max_players: 20,
+            game_port: 25565,
+            rcon_port: 30000,
+            rcon_password: "secret".to_owned(),
+            start_on_boot: true,
+            run_uid: 20_000,
+            created_at_unix_ms: 1,
+            kind: GameKind::Minecraft,
+            query_port: 0,
+            unix_args: None,
+            backup_keep_count: 2,
+            backup_keep_days: 0,
+        };
+        write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
+        let active = backup_root.join(id);
+        fs::create_dir_all(&active).unwrap();
+        for backup_id in ["1000000000001", "1000000000002", "1000000000003"] {
+            fs::write(
+                active.join(format!("{backup_id}.tar.gz")),
+                backup_id.as_bytes(),
+            )
+            .unwrap();
+            write_manifest(&active.join(format!("{backup_id}.json")), &manifest).unwrap();
+        }
+        let pruned = manager.prune_backups(&format!("helix:{id}")).unwrap();
+        assert_eq!(pruned["backups"].as_array().unwrap().len(), 2);
+        assert_eq!(pruned["trash"].as_array().unwrap().len(), 1);
+        assert!(!active.join("1000000000001.tar.gz").exists());
+        assert!(active.join("1000000000003.tar.gz").is_file());
+
+        let trash_id = pruned["trash"][0]["trash_id"].as_str().unwrap().to_owned();
+        manager
+            .purge_backup_trash(&format!("helix:{id}"), &trash_id)
+            .unwrap();
+        let after_purge = manager.list_backups(&format!("helix:{id}")).unwrap();
+        assert!(after_purge["trash"].as_array().unwrap().is_empty());
+
+        fs::write(active.join("1000000000004.tar.gz"), b"4").unwrap();
+        write_manifest(&active.join("1000000000004.json"), &manifest).unwrap();
+        let protected = manager
+            .enforce_backup_retention(&manifest, "1000000000004")
+            .unwrap();
+        assert_eq!(protected, vec!["1000000000002".to_owned()]);
+        assert!(active.join("1000000000004.tar.gz").is_file());
+        assert!(active.join("1000000000003.tar.gz").is_file());
+        assert!(!active.join("1000000000002.tar.gz").exists());
+
+        manifest.backup_keep_count = 0;
+        write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
+        let policy = manager
+            .set_backup_policy(&format!("helix:{id}"), 1, 0)
+            .unwrap();
+        assert_eq!(policy["policy"]["keep_count"], 1);
+        assert_eq!(policy["backups"].as_array().unwrap().len(), 1);
     }
 }

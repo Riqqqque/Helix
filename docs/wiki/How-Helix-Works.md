@@ -6,14 +6,18 @@ adapters; root-required work crosses a typed local socket to `helix-privd`.
 There is no caller-supplied root command endpoint.
 
 The native Minecraft manager creates and controls Docker-backed Paper, Purpur,
-Folia, Leaves, Fabric, and Vanilla instances. V Rising installs the official
-dedicated server into an isolated Helix container; the host never receives Wine
-packages. Console capture and game
-containers do not depend on the dashboard being open. Console history is bounded
-and rotates; it is persistent, not unlimited. Native Stop waits for a clean
-shutdown; Kill is a confirmed SIGKILL for when that stop hangs. AMP instances
-do not get Kill. Native servers can opt into Docker start-on-boot. Owner setup
-can skip the Servers page and Settings can restore it later.
+Folia, Leaves, Fabric, Forge, NeoForge, Quilt, Pufferfish, and Vanilla instances.
+Marketplace install copies a compatible JAR into plugins/ or mods/ and leaves
+restart to you. Console capture and game containers do not depend on the dashboard
+being open. Minecraft RCON is loopback-only (127.0.0.1 on this host, not a player
+port). Console history is bounded and rotates; it is persistent, not unlimited.
+Native Stop waits for a clean shutdown; Kill is a confirmed SIGKILL for when that
+stop hangs. AMP instances do not get Kill. Native servers can opt into Docker
+start-on-boot. Owner setup can skip the Servers page and Settings can restore it
+later.
+
+V Rising installs the official dedicated server into an isolated Helix
+container; the host never receives Wine packages.
 
 AMP integration is a bridge to a separate loopback AMP API. Helix may show and
 invoke the AMP actions it understands, but AMP remains responsible for its own

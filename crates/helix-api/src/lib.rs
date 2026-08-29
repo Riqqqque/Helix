@@ -25,8 +25,8 @@ use helix_core::{DatabaseStatus, HealthReport, HealthStatus, VERSION, unix_times
 use helix_privd::{
     BrokerClient, BrokerClientError, BrokerRequest, DockerContainerActionKind, FileUploadPurpose,
     FileUploadTarget, FirewallRuleSpec, GameKind, GamePortPolicySpec, HookServiceAction,
-    MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware,
-    ModpackProvider, PackageUpdateCandidate, RecurringRebootSpec, ServerAction,
+    MarketplaceCatalog, MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch,
+    MinecraftSoftware, ModpackProvider, PackageUpdateCandidate, RecurringRebootSpec, ServerAction,
     ServerNetworkExposure, StorageAnalysisMode, TerrariaCreateSpec, VRisingCreateSpec,
     ValheimCreateSpec,
 };
@@ -300,7 +300,14 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/docker/homarr", get(homarr_widget_catalog))
         .route("/security", get(security_inventory))
         .route("/security/controls", post(set_security_control))
-        .route("/marketplace/modrinth/image", get(marketplace_image))
+        .route(
+            "/marketplace/modrinth/image",
+            get(marketplace_modrinth_image),
+        )
+        .route(
+            "/marketplace/curseforge/image",
+            get(marketplace_curseforge_image),
+        )
         .route("/files", get(list_directory))
         .route("/files/directory", post(create_directory))
         .route("/files/file", post(create_file))
@@ -398,6 +405,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         )
         .route("/servers/{instance_id}/backups", get(list_server_backups))
         .route(
+            "/servers/{instance_id}/backup-policy",
+            put(set_server_backup_policy).post(prune_server_backups),
+        )
+        .route(
             "/servers/{instance_id}/backups/{backup_id}/restore",
             post(restore_server_backup),
         )
@@ -408,6 +419,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route(
             "/servers/{instance_id}/backups/trash/{trash_id}/restore",
             post(restore_trashed_server_backup),
+        )
+        .route(
+            "/servers/{instance_id}/backups/trash/{trash_id}",
+            delete(purge_trashed_server_backup),
         )
         .route("/servers/{instance_id}/actions", post(server_action))
         .route(
@@ -715,17 +730,46 @@ struct MarketplaceImageQuery {
     path: String,
 }
 
-async fn marketplace_image(
+async fn marketplace_modrinth_image(
     State(state): State<ApiState>,
     headers: HeaderMap,
     query: Result<Query<MarketplaceImageQuery>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    marketplace_image(
+        state,
+        headers,
+        query,
+        marketplace_media::MarketplaceImageOrigin::Modrinth,
+    )
+    .await
+}
+
+async fn marketplace_curseforge_image(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    query: Result<Query<MarketplaceImageQuery>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    marketplace_image(
+        state,
+        headers,
+        query,
+        marketplace_media::MarketplaceImageOrigin::Curseforge,
+    )
+    .await
+}
+
+async fn marketplace_image(
+    state: ApiState,
+    headers: HeaderMap,
+    query: Result<Query<MarketplaceImageQuery>, QueryRejection>,
+    origin: marketplace_media::MarketplaceImageOrigin,
 ) -> Result<Response, ApiError> {
     // Image elements cannot attach Helix's in-memory CSRF proof. This is a
     // read-only, same-origin, allowlisted media proxy, so the authenticated
     // session and exact capability are sufficient here.
     auth::require_capability_without_csrf(&state, &headers, "games.view").await?;
     let Query(query) = query.map_err(|_| ApiError::NotFound)?;
-    marketplace_media::validate_path(&query.path).map_err(|_| ApiError::NotFound)?;
+    marketplace_media::validate_path(origin, &query.path).map_err(|_| ApiError::NotFound)?;
     let permit = Arc::clone(&state.marketplace_media_workers)
         .acquire_owned()
         .await
@@ -734,7 +778,7 @@ async fn marketplace_image(
     let image = tokio::task::spawn_blocking(move || {
         let _guard = guard;
         let _permit = permit;
-        marketplace_media::image(&query.path)
+        marketplace_media::image(origin, &query.path)
     })
     .await
     .map_err(|_| ApiError::ServiceUnavailable)?
@@ -1411,6 +1455,10 @@ struct ServerMarketplaceSearchQuery {
     offset: u32,
     #[serde(default = "default_marketplace_search_limit")]
     limit: u8,
+    #[serde(default)]
+    provider: ModpackProvider,
+    #[serde(default)]
+    catalog: MarketplaceCatalog,
 }
 
 #[derive(Deserialize)]
@@ -1432,9 +1480,27 @@ const fn default_marketplace_search_limit() -> u8 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ServerMarketplaceProjectQuery {
+    #[serde(default)]
+    provider: ModpackProvider,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct InstallServerMarketplaceContentBody {
     project_id: String,
     version_id: Option<String>,
+    #[serde(default)]
+    provider: ModpackProvider,
+    #[serde(default)]
+    restart_server: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BackupPolicyBody {
+    keep_count: u16,
+    keep_days: u16,
 }
 
 #[derive(Deserialize)]
@@ -2647,6 +2713,53 @@ async fn restore_trashed_server_backup(
     .await
 }
 
+async fn purge_trashed_server_backup(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath((instance_id, trash_id)): RoutePath<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.backups.manage").await?;
+    broker_json(
+        &state,
+        BrokerRequest::PurgeBackupTrash {
+            instance_id,
+            trash_id,
+        },
+    )
+    .await
+}
+
+async fn set_server_backup_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<BackupPolicyBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.backups.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetBackupPolicy {
+            instance_id,
+            keep_count: body.keep_count,
+            keep_days: body.keep_days,
+        },
+    )
+    .await
+}
+
+async fn prune_server_backups(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.backups.manage").await?;
+    broker_json(&state, BrokerRequest::PruneBackups { instance_id }).await
+}
+
 async fn server_action(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -2700,6 +2813,8 @@ async fn server_marketplace_search(
             query: query.query,
             offset: query.offset,
             limit: query.limit,
+            provider: query.provider,
+            catalog: query.catalog,
         },
     )
     .await
@@ -2709,6 +2824,7 @@ async fn server_marketplace_project(
     State(state): State<ApiState>,
     headers: HeaderMap,
     RoutePath((instance_id, project_id)): RoutePath<(String, String)>,
+    Query(query): Query<ServerMarketplaceProjectQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     auth::require_capability(&state, &headers, "games.view").await?;
     broker_json(
@@ -2716,6 +2832,7 @@ async fn server_marketplace_project(
         BrokerRequest::ServerMarketplaceProject {
             instance_id,
             project_id,
+            provider: query.provider,
         },
     )
     .await
@@ -2736,6 +2853,8 @@ async fn install_server_marketplace_content(
             instance_id,
             project_id: body.project_id,
             version_id: body.version_id,
+            provider: body.provider,
+            restart_server: body.restart_server,
         },
     )
     .await

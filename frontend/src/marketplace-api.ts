@@ -2,6 +2,9 @@ import { ApiError, expectArray, expectNumber, expectRecord, expectString, reques
 
 export type MarketplaceContentKind = 'plugin' | 'mod';
 export type MarketplaceVersionChannel = 'release' | 'beta' | 'alpha';
+export type MarketplaceProvider = 'modrinth' | 'curseforge';
+export type MarketplaceCatalog = 'content' | 'modpacks';
+export type MarketplaceBodyFormat = 'plain_text' | 'markdown' | 'html';
 
 export interface MarketplaceServerContext {
   id: string;
@@ -33,6 +36,9 @@ export interface MarketplaceSearchHit {
   dateModified: string | null;
   webUrl: string;
   iconUrl: string | null;
+  provider: MarketplaceProvider;
+  installed: boolean;
+  installedVersion: string | null;
 }
 
 export interface MarketplaceSearchPage {
@@ -59,6 +65,7 @@ export interface MarketplaceVersion {
 
 export interface MarketplaceProjectDetail {
   instanceId: string;
+  provider: MarketplaceProvider;
   compatibility: MarketplaceCompatibility;
   project: {
     id: string;
@@ -81,7 +88,9 @@ export interface MarketplaceProjectDetail {
   versions: MarketplaceVersion[];
   versionCountReturned: number;
   versionResultsTruncated: boolean;
-  bodyFormat: 'plain_text';
+  bodyFormat: MarketplaceBodyFormat;
+  installed: boolean;
+  installedVersion: string | null;
   collectedAtUnixMs: number;
 }
 
@@ -138,7 +147,12 @@ const profiles: Record<string, MarketplaceProfile> = {
   paper: { contentKind: 'plugin', acceptedLoaders: ['paper', 'spigot', 'bukkit'], installDirectory: 'plugins' },
   purpur: { contentKind: 'plugin', acceptedLoaders: ['purpur', 'paper', 'spigot', 'bukkit'], installDirectory: 'plugins' },
   folia: { contentKind: 'plugin', acceptedLoaders: ['folia'], installDirectory: 'plugins' },
+  leaves: { contentKind: 'plugin', acceptedLoaders: ['leaves', 'paper', 'spigot', 'bukkit'], installDirectory: 'plugins' },
   fabric: { contentKind: 'mod', acceptedLoaders: ['fabric'], installDirectory: 'mods' },
+  forge: { contentKind: 'mod', acceptedLoaders: ['forge'], installDirectory: 'mods' },
+  neoforge: { contentKind: 'mod', acceptedLoaders: ['neoforge'], installDirectory: 'mods' },
+  quilt: { contentKind: 'mod', acceptedLoaders: ['quilt'], installDirectory: 'mods' },
+  pufferfish: { contentKind: 'plugin', acceptedLoaders: ['paper', 'spigot', 'bukkit', 'pufferfish'], installDirectory: 'plugins' },
 };
 
 export function marketplaceProfileForSoftware(software: string): MarketplaceProfile | null {
@@ -221,14 +235,18 @@ function optionalHttpsUrl(record: Record<string, unknown>, key: string, context:
   return value;
 }
 
-function modrinthUrl(record: Record<string, unknown>, key: string, context: string): string {
+function marketplaceUrl(record: Record<string, unknown>, key: string, context: string): string {
   const value = optionalHttpsUrl(record, key, context);
   if (value === null) throw new ApiError(`${context} returned a missing ${key} value.`);
   const parsed = new URL(value);
-  if (parsed.hostname !== 'modrinth.com' || !/^\/(?:plugin|mod)\//u.test(parsed.pathname)) {
-    throw new ApiError(`${context} returned an invalid Modrinth URL.`);
+  if (parsed.hostname === 'modrinth.com' && /^\/(?:plugin|mod)\//u.test(parsed.pathname)) return value;
+  if (
+    parsed.hostname === 'www.curseforge.com'
+    && /^\/minecraft\/(?:mc-mods|bukkit-plugins|modpacks)\//u.test(parsed.pathname)
+  ) {
+    return value;
   }
-  return value;
+  throw new ApiError(`${context} returned an invalid marketplace URL.`);
 }
 
 function marketplaceImageUrl(record: Record<string, unknown>, key: string, context: string): string | null {
@@ -237,15 +255,22 @@ function marketplaceImageUrl(record: Record<string, unknown>, key: string, conte
   const parsed = new URL(value, 'http://helix.invalid');
   const keys = Array.from(parsed.searchParams.keys());
   const path = parsed.searchParams.get('path');
+  const origin = parsed.pathname === '/api/v1/marketplace/modrinth/image'
+    ? 'modrinth'
+    : parsed.pathname === '/api/v1/marketplace/curseforge/image'
+      ? 'curseforge'
+      : null;
+  const prefix = origin === 'modrinth' ? '/data/' : origin === 'curseforge' ? '/avatars/' : null;
   if (
-    !value.startsWith('/api/v1/marketplace/modrinth/image?')
+    origin === null
+    || prefix === null
+    || !value.startsWith(`/api/v1/marketplace/${origin}/image?`)
     || parsed.origin !== 'http://helix.invalid'
-    || parsed.pathname !== '/api/v1/marketplace/modrinth/image'
     || keys.length !== 1
     || keys[0] !== 'path'
     || path === null
     || path.length > 512
-    || !path.startsWith('/data/')
+    || !path.startsWith(prefix)
     || path.split('/').some((segment) => segment === '.' || segment === '..')
     || !/^\/[A-Za-z0-9._/-]+$/u.test(path)
     || !/\.(?:png|jpe?g|webp|gif)$/iu.test(path)
@@ -285,8 +310,11 @@ function parseSearchHit(value: unknown): MarketplaceSearchHit {
     follows: nonnegative(root, 'follows', 'marketplace search hit'),
     latestVersion: nullableText(root, 'latest_version', 'marketplace search hit', 128),
     dateModified: nullableText(root, 'date_modified', 'marketplace search hit', 64),
-    webUrl: modrinthUrl(root, 'web_url', 'marketplace search hit'),
+    webUrl: marketplaceUrl(root, 'web_url', 'marketplace search hit'),
     iconUrl: marketplaceImageUrl(root, 'icon_url', 'marketplace search hit'),
+    provider: literal(root, 'provider', 'marketplace search hit', ['modrinth', 'curseforge'] as const),
+    installed: boolean(root, 'installed', 'marketplace search hit'),
+    installedVersion: nullableText(root, 'installed_version', 'marketplace search hit', 128),
   };
 }
 
@@ -337,6 +365,7 @@ export function parseMarketplaceProjectDetail(value: unknown): MarketplaceProjec
   if (versionCountReturned !== versions.length) throw new ApiError('Marketplace project returned an inconsistent version count.');
   return {
     instanceId: expectString(root, 'instance_id', 'marketplace project'),
+    provider: literal(root, 'provider', 'marketplace project', ['modrinth', 'curseforge'] as const),
     compatibility,
     project: {
       id: marketplaceId(project, 'id', 'marketplace project details'),
@@ -353,13 +382,15 @@ export function parseMarketplaceProjectDetail(value: unknown): MarketplaceProjec
       sourceUrl: optionalHttpsUrl(project, 'source_url', 'marketplace project details'),
       issuesUrl: optionalHttpsUrl(project, 'issues_url', 'marketplace project details'),
       wikiUrl: optionalHttpsUrl(project, 'wiki_url', 'marketplace project details'),
-      webUrl: modrinthUrl(project, 'web_url', 'marketplace project details'),
+      webUrl: marketplaceUrl(project, 'web_url', 'marketplace project details'),
       iconUrl: marketplaceImageUrl(project, 'icon_url', 'marketplace project details'),
     },
     versions,
     versionCountReturned,
     versionResultsTruncated: boolean(root, 'version_results_truncated', 'marketplace project'),
-    bodyFormat: literal(root, 'body_format', 'marketplace project', ['plain_text'] as const),
+    bodyFormat: literal(root, 'body_format', 'marketplace project', ['plain_text', 'markdown', 'html'] as const),
+    installed: boolean(root, 'installed', 'marketplace project'),
+    installedVersion: nullableText(root, 'installed_version', 'marketplace project', 128),
     collectedAtUnixMs: nonnegative(root, 'collected_at_unix_ms', 'marketplace project'),
   };
 }
@@ -392,15 +423,17 @@ export function parseMarketplaceInstallResult(value: unknown): MarketplaceInstal
   if (installedProjects.length === 0 || dependencyCount !== installedProjects.length - 1) {
     throw new ApiError('Marketplace installation returned an inconsistent dependency count.');
   }
-  const backupId = expectString(root, 'backup_id', 'marketplace installation result');
-  if (!/^\d{1,20}$/u.test(backupId)) throw new ApiError('Marketplace installation returned an invalid backup ID.');
+  const backupRaw = root.backup_id;
+  if (typeof backupRaw !== 'string') throw new ApiError('Marketplace installation returned an invalid backup ID.');
+  const backupId = backupRaw;
+  if (backupId.length > 0 && !/^\d{1,20}$/u.test(backupId)) throw new ApiError('Marketplace installation returned an invalid backup ID.');
   const serverWasRunning = boolean(root, 'server_was_running', 'marketplace installation result');
   const restartRequired = boolean(root, 'restart_required', 'marketplace installation result');
-  if (restartRequired === serverWasRunning) throw new ApiError('Marketplace installation returned inconsistent restart state.');
+  if (restartRequired && !serverWasRunning) throw new ApiError('Marketplace installation returned inconsistent restart state.');
   const runtimeValidationPerformed = boolean(root, 'runtime_validation_performed', 'marketplace installation result');
   const rollbackOnFailedStartup = boolean(root, 'rollback_on_failed_startup', 'marketplace installation result');
-  if (runtimeValidationPerformed !== serverWasRunning || rollbackOnFailedStartup !== runtimeValidationPerformed) {
-    throw new ApiError('Marketplace installation returned inconsistent runtime validation guarantees.');
+  if (runtimeValidationPerformed || rollbackOnFailedStartup) {
+    throw new ApiError('Marketplace installation returned unexpected runtime validation guarantees.');
   }
   return {
     instanceId: expectString(root, 'instance_id', 'marketplace installation result'),
@@ -449,23 +482,50 @@ function validateMarketplaceId(value: string, label: string): void {
   if (!/^[A-Za-z0-9_-]{1,64}$/u.test(value)) throw new ApiError(`The marketplace ${label} ID is invalid.`);
 }
 
-export function searchMarketplace(instanceId: string, query: string, offset: number, limit: number, csrfToken: string, signal?: AbortSignal): Promise<MarketplaceSearchPage> {
+export function searchMarketplace(
+  instanceId: string,
+  query: string,
+  offset: number,
+  limit: number,
+  csrfToken: string,
+  signal?: AbortSignal,
+  provider: MarketplaceProvider = 'modrinth',
+  catalog: MarketplaceCatalog = 'content',
+): Promise<MarketplaceSearchPage> {
   const trimmed = query.trim();
   if (new TextEncoder().encode(trimmed).length > 120 || Array.from(trimmed).some((character) => /\p{Cc}/u.test(character))) throw new ApiError('Marketplace search text is invalid.');
   if (!Number.isInteger(offset) || offset < 0 || offset > 10_000 || !Number.isInteger(limit) || limit < 1 || limit > 50) throw new ApiError('Marketplace pagination is invalid.');
-  const params = new URLSearchParams({ query: trimmed, offset: String(offset), limit: String(limit) });
+  const params = new URLSearchParams({ query: trimmed, offset: String(offset), limit: String(limit), provider, catalog });
   return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/search?${params.toString()}`, parseMarketplaceSearchPage, { csrfToken, signal, timeoutMs: 25_000 });
 }
 
-export function getMarketplaceProject(instanceId: string, projectId: string, csrfToken: string, signal?: AbortSignal): Promise<MarketplaceProjectDetail> {
+export function getMarketplaceProject(
+  instanceId: string,
+  projectId: string,
+  csrfToken: string,
+  signal?: AbortSignal,
+  provider: MarketplaceProvider = 'modrinth',
+): Promise<MarketplaceProjectDetail> {
   validateMarketplaceId(projectId, 'project');
-  return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/projects/${encodeURIComponent(projectId)}`, parseMarketplaceProjectDetail, { csrfToken, signal, timeoutMs: 25_000 });
+  const params = new URLSearchParams({ provider });
+  return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/projects/${encodeURIComponent(projectId)}?${params.toString()}`, parseMarketplaceProjectDetail, { csrfToken, signal, timeoutMs: 25_000 });
 }
 
-export function installMarketplaceProject(instanceId: string, projectId: string, versionId: string | null, csrfToken: string): Promise<MarketplaceInstallDispatch> {
+export function installMarketplaceProject(
+  instanceId: string,
+  projectId: string,
+  versionId: string | null,
+  csrfToken: string,
+  provider: MarketplaceProvider = 'modrinth',
+): Promise<MarketplaceInstallDispatch> {
   validateMarketplaceId(projectId, 'project');
   if (versionId !== null) validateMarketplaceId(versionId, 'version');
-  return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/install`, parseInstallDispatch, { method: 'POST', body: { project_id: projectId, version_id: versionId }, csrfToken, timeoutMs: 25_000 });
+  return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/install`, parseInstallDispatch, {
+    method: 'POST',
+    body: { project_id: projectId, version_id: versionId, provider, restart_server: false },
+    csrfToken,
+    timeoutMs: 25_000,
+  });
 }
 
 export function getMarketplaceInstallJob(jobId: string, csrfToken: string, signal?: AbortSignal): Promise<MarketplaceInstallJob> {

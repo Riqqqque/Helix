@@ -331,6 +331,13 @@ export interface ServerBackupCatalog {
   backups: ServerBackup[];
   trash: ServerBackupTrash[];
   trashPolicy: ServerBackupTrashPolicy;
+  policy: ServerBackupKeepPolicy;
+}
+
+export interface ServerBackupKeepPolicy {
+  keepCount: number;
+  keepDays: number;
+  note: string;
 }
 
 export interface ServerBackupTrash {
@@ -865,6 +872,19 @@ export function parseBackupCatalog(value: unknown): ServerBackupCatalog {
     trashPolicy: {
       note: expectString(policy, 'note', 'backup trash policy'),
     },
+    policy: parseBackupKeepPolicy(root.policy),
+  };
+}
+
+function parseBackupKeepPolicy(value: unknown): ServerBackupKeepPolicy {
+  if (value === undefined || value === null) {
+    return { keepCount: 0, keepDays: 0, note: 'Helix keeps every backup until you delete one.' };
+  }
+  const policy = expectRecord(value, 'backup keep policy');
+  return {
+    keepCount: expectNumber(policy, 'keep_count', 'backup keep policy', { integer: true, minimum: 0, maximum: 50 }),
+    keepDays: expectNumber(policy, 'keep_days', 'backup keep policy', { integer: true, minimum: 0, maximum: 365 }),
+    note: expectString(policy, 'note', 'backup keep policy'),
   };
 }
 
@@ -1198,6 +1218,39 @@ export function restoreTrashedServerBackup(
   return requestJson(
     `/api/v1/servers/${encodeURIComponent(id)}/backups/trash/${encodeURIComponent(trashIdValue)}/restore`,
     parseBackupTrashRestoreResult,
+    { method: 'POST', body: {}, csrfToken, timeoutMs: 20_000 },
+  );
+}
+
+export function purgeTrashedServerBackup(
+  id: string,
+  trashIdValue: string,
+  csrfToken: string,
+): Promise<{ trashId: string }> {
+  return requestJson(
+    `/api/v1/servers/${encodeURIComponent(id)}/backups/trash/${encodeURIComponent(trashIdValue)}`,
+    (value) => ({ trashId: trashId(expectRecord(value, 'backup purge'), 'trash_id', 'backup purge') }),
+    { method: 'DELETE', body: {}, csrfToken, timeoutMs: 20_000 },
+  );
+}
+
+export function setServerBackupPolicy(
+  id: string,
+  keepCount: number,
+  keepDays: number,
+  csrfToken: string,
+): Promise<ServerBackupCatalog> {
+  return requestJson(
+    `/api/v1/servers/${encodeURIComponent(id)}/backup-policy`,
+    parseBackupCatalog,
+    { method: 'PUT', body: { keep_count: keepCount, keep_days: keepDays }, csrfToken, timeoutMs: 20_000 },
+  );
+}
+
+export function pruneServerBackups(id: string, csrfToken: string): Promise<ServerBackupCatalog> {
+  return requestJson(
+    `/api/v1/servers/${encodeURIComponent(id)}/backup-policy`,
+    parseBackupCatalog,
     { method: 'POST', body: {}, csrfToken, timeoutMs: 20_000 },
   );
 }

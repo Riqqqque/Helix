@@ -5,11 +5,34 @@ use std::{
 };
 use thiserror::Error;
 
-const CDN_ORIGIN: &str = "https://cdn.modrinth.com";
+const MODRINTH_ORIGIN: &str = "https://cdn.modrinth.com";
+const CURSEFORGE_ORIGIN: &str = "https://media.forgecdn.net";
 const USER_AGENT: &str = "Helix/0.1 (+https://github.com/Riqqqque/Helix)";
 const MAX_IMAGE_BYTES: u64 = 512 * 1024;
 const MAX_CACHE_ENTRIES: usize = 64;
 const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Clone, Copy)]
+pub(crate) enum MarketplaceImageOrigin {
+    Modrinth,
+    Curseforge,
+}
+
+impl MarketplaceImageOrigin {
+    fn cdn(self) -> &'static str {
+        match self {
+            Self::Modrinth => MODRINTH_ORIGIN,
+            Self::Curseforge => CURSEFORGE_ORIGIN,
+        }
+    }
+
+    fn cache_prefix(self) -> &'static str {
+        match self {
+            Self::Modrinth => "mr",
+            Self::Curseforge => "cf",
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct MarketplaceImage {
@@ -36,13 +59,17 @@ pub(crate) enum MarketplaceMediaError {
 static CACHE: OnceLock<Mutex<HashMap<String, CachedImage>>> = OnceLock::new();
 static HTTP_AGENT: OnceLock<ureq::Agent> = OnceLock::new();
 
-pub(crate) fn image(path: &str) -> Result<MarketplaceImage, MarketplaceMediaError> {
-    validate_path(path)?;
+pub(crate) fn image(
+    origin: MarketplaceImageOrigin,
+    path: &str,
+) -> Result<MarketplaceImage, MarketplaceMediaError> {
+    validate_path(origin, path)?;
+    let cache_key = format!("{}:{path}", origin.cache_prefix());
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(cached) = cache
         .lock()
         .map_err(|_| MarketplaceMediaError::ProviderUnavailable)?
-        .get(path)
+        .get(&cache_key)
         .filter(|entry| entry.inserted_at.elapsed() < CACHE_TTL)
         .cloned()
     {
@@ -59,7 +86,7 @@ pub(crate) fn image(path: &str) -> Result<MarketplaceImage, MarketplaceMediaErro
                 .build(),
         )
     });
-    let url = format!("{CDN_ORIGIN}{path}");
+    let url = format!("{}{path}", origin.cdn());
     let mut response = agent
         .get(&url)
         .call()
@@ -102,7 +129,7 @@ pub(crate) fn image(path: &str) -> Result<MarketplaceImage, MarketplaceMediaErro
         entries.remove(&oldest);
     }
     entries.insert(
-        path.to_owned(),
+        cache_key,
         CachedImage {
             inserted_at: Instant::now(),
             image: image.clone(),
@@ -111,10 +138,17 @@ pub(crate) fn image(path: &str) -> Result<MarketplaceImage, MarketplaceMediaErro
     Ok(image)
 }
 
-pub(crate) fn validate_path(path: &str) -> Result<(), MarketplaceMediaError> {
+pub(crate) fn validate_path(
+    origin: MarketplaceImageOrigin,
+    path: &str,
+) -> Result<(), MarketplaceMediaError> {
+    let prefix = match origin {
+        MarketplaceImageOrigin::Modrinth => "/data/",
+        MarketplaceImageOrigin::Curseforge => "/avatars/",
+    };
     if path.len() < 8
         || path.len() > 512
-        || !path.starts_with("/data/")
+        || !path.starts_with(prefix)
         || path.contains(['?', '#', '\\', '%'])
         || path
             .split('/')
@@ -151,8 +185,14 @@ mod tests {
 
     #[test]
     fn proxy_paths_cannot_escape_the_exact_modrinth_cdn_shape() {
-        assert!(validate_path("/data/AANobbMI/icon.png").is_ok());
-        assert!(validate_path("/data/AANobbMI/images/example_1.webp").is_ok());
+        assert!(validate_path(MarketplaceImageOrigin::Modrinth, "/data/AANobbMI/icon.png").is_ok());
+        assert!(
+            validate_path(
+                MarketplaceImageOrigin::Modrinth,
+                "/data/AANobbMI/images/example_1.webp"
+            )
+            .is_ok()
+        );
         for path in [
             "https://cdn.modrinth.com/data/a/icon.png",
             "/data/../icon.png",
@@ -160,8 +200,25 @@ mod tests {
             "/data/a/icon.png?redirect=https://example.test",
             "/other/a/icon.png",
         ] {
-            assert!(validate_path(path).is_err(), "{path}");
+            assert!(
+                validate_path(MarketplaceImageOrigin::Modrinth, path).is_err(),
+                "{path}"
+            );
         }
+        assert!(
+            validate_path(
+                MarketplaceImageOrigin::Curseforge,
+                "/avatars/12/345/icon.png"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_path(
+                MarketplaceImageOrigin::Curseforge,
+                "/data/AANobbMI/icon.png"
+            )
+            .is_err()
+        );
     }
 
     #[test]

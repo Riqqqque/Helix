@@ -50,12 +50,16 @@ const searchPage = {
     date_modified: '2026-08-20T10:30:00Z',
     web_url: 'https://modrinth.com/plugin/fabric-api',
     icon_url: '/api/v1/marketplace/modrinth/image?path=%2Fdata%2FP7dR8mSH%2Ficon.png',
+    provider: 'modrinth',
+    installed: false,
+    installed_version: null,
   }],
   collected_at_unix_ms: 1_800_000_000_000,
 };
 const projectDetail = {
   schema_version: 1,
   instance_id: server.id,
+  provider: 'modrinth',
   compatibility,
   project: {
     id: 'P7dR8mSH',
@@ -98,7 +102,9 @@ const projectDetail = {
   }],
   version_count_returned: 2,
   version_results_truncated: false,
-  body_format: 'plain_text',
+  body_format: 'markdown',
+  installed: false,
+  installed_version: null,
   collected_at_unix_ms: 1_800_000_000_100,
 };
 const installResult = {
@@ -126,11 +132,11 @@ const installResult = {
   }],
   dependency_count: 1,
   optional_dependencies_not_installed: ['Optional map integration', 'Optional map integration'],
-  backup_id: '1800000000200',
+  backup_id: '',
   server_was_running: true,
-  restart_required: false,
-  runtime_validation_performed: true,
-  rollback_on_failed_startup: true,
+  restart_required: true,
+  runtime_validation_performed: false,
+  rollback_on_failed_startup: false,
 };
 
 afterEach(() => vi.unstubAllGlobals());
@@ -142,7 +148,7 @@ describe('marketplace contracts', () => {
 
     expect(page.hits[0]).toMatchObject({ projectId: 'P7dR8mSH', author: 'EngineHub', downloads: 42_000_000, iconUrl: expect.stringContaining('/marketplace/modrinth/image?') });
     expect(detail.versions.map((version) => version.versionType)).toEqual(['release', 'beta']);
-    expect(detail.bodyFormat).toBe('plain_text');
+    expect(detail.bodyFormat).toBe('markdown');
     expect(marketplaceResponseMatchesServer(page.instanceId, page.compatibility, server)).toBe(true);
 
     const incompatible = structuredClone(projectDetail);
@@ -163,7 +169,7 @@ describe('marketplace contracts', () => {
     expect(() => parseMarketplaceSearchPage({
       ...searchPage,
       hits: [{ ...searchPage.hits[0], web_url: 'https://example.com/plugin/fabric-api' }],
-    })).toThrow(/Modrinth URL/i);
+    })).toThrow(/marketplace URL/i);
     expect(() => parseMarketplaceInstallResult({
       ...installResult,
       installed_projects: [{ ...installResult.installed_projects[0], filename: '../server.properties.jar' }],
@@ -195,7 +201,7 @@ describe('marketplace contracts', () => {
       error: 'The new server failed its startup health check; the backup was restored.',
     });
 
-    expect(completed.result).toMatchObject({ dependencyCount: 1, backupId: '1800000000200', restartRequired: false, runtimeValidationPerformed: true, rollbackOnFailedStartup: true });
+    expect(completed.result).toMatchObject({ dependencyCount: 1, backupId: '', restartRequired: true, runtimeValidationPerformed: false, rollbackOnFailedStartup: false });
     expect(completed.result?.optionalDependenciesNotInstalled).toHaveLength(2);
     expect(failed.error).toContain('backup was restored');
   });
@@ -204,23 +210,23 @@ describe('marketplace contracts', () => {
     const stopped = parseMarketplaceInstallResult({
       ...installResult,
       server_was_running: false,
-      restart_required: true,
+      restart_required: false,
       runtime_validation_performed: false,
       rollback_on_failed_startup: false,
     });
     expect(stopped).toMatchObject({
       serverWasRunning: false,
-      restartRequired: true,
+      restartRequired: false,
       runtimeValidationPerformed: false,
       rollbackOnFailedStartup: false,
     });
     expect(() => parseMarketplaceInstallResult({
       ...installResult,
-      server_was_running: false,
+      server_was_running: true,
       restart_required: true,
       runtime_validation_performed: false,
       rollback_on_failed_startup: true,
-    })).toThrow(/inconsistent runtime validation guarantees/i);
+    })).toThrow(/unexpected runtime validation guarantees/i);
   });
 
   it('only enables the native server families supported by the broker', () => {
@@ -229,7 +235,7 @@ describe('marketplace contracts', () => {
     expect(marketplaceProfileForSoftware('Folia')?.acceptedLoaders).toEqual(['folia']);
     expect(marketplaceProfileForSoftware('Fabric')?.contentKind).toBe('mod');
     expect(marketplaceProfileForSoftware('Vanilla')).toBeNull();
-    expect(marketplaceProfileForSoftware('NeoForge')).toBeNull();
+    expect(marketplaceProfileForSoftware('NeoForge')?.contentKind).toBe('mod');
     expect(marketplaceResponseMatchesServer(server.id, { ...parseMarketplaceSearchPage(searchPage).compatibility, minecraftVersion: '1.20.6' }, server)).toBe(false);
   });
 
@@ -262,14 +268,14 @@ describe('marketplace contracts', () => {
     await getMarketplaceInstallJob(jobId, csrf);
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-      `/api/v1/servers/${server.id}/marketplace/search?query=world+edit&offset=0&limit=20`,
-      `/api/v1/servers/${server.id}/marketplace/projects/P7dR8mSH`,
+      `/api/v1/servers/${server.id}/marketplace/search?query=world+edit&offset=0&limit=20&provider=modrinth&catalog=content`,
+      `/api/v1/servers/${server.id}/marketplace/projects/P7dR8mSH?provider=modrinth`,
       `/api/v1/servers/${server.id}/marketplace/install`,
       `/api/v1/jobs/${jobId}`,
     ]);
     const post = fetchMock.mock.calls[2]?.[1] as RequestInit;
     expect(post.method).toBe('POST');
     expect(post.headers).toMatchObject({ 'Content-Type': 'application/json', 'X-Helix-CSRF': csrf });
-    expect(JSON.parse(String(post.body))).toEqual({ project_id: 'P7dR8mSH', version_id: 'paper-release-2131' });
+    expect(JSON.parse(String(post.body))).toEqual({ project_id: 'P7dR8mSH', version_id: 'paper-release-2131', provider: 'modrinth', restart_server: false });
   });
 });
