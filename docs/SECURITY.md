@@ -281,8 +281,10 @@ to the literal private/link-local IPv4 sender; redirects, DNS names,
 credentials, fragments, cross-origin control URLs, oversized HTTP/XML bodies,
 and XML document types are rejected. Helix checks for any existing TCP mapping
 before creation, verifies its exact internal address, port, enabled flag, and
-description afterward, and journals ownership. Removal re-verifies that exact
-body and refuses drifted/unowned state. Only TCP is requested for Minecraft.
+description afterward, and journals ownership. If AMP already has that port
+claimed, Helix says so and does not overwrite the mapping. Removal re-verifies
+that exact body and refuses drifted/unowned state. Only TCP is requested for
+Minecraft.
 UFW is supplemented only if already active. A CGNAT/private/reserved WAN address
 is reported as blocked rather than public. Live router/UFW mutation testing is
 still a release gate and must use disposable rules and a controlled router.

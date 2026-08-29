@@ -158,8 +158,9 @@ dashboard.
 
 Each native detail view shows a LAN address, a separately detected Tailscale
 address when present, and the public-internet state. Minecraft **Set up public
-access** uses UPnP only on the same private IPv4 gateway, refuses to overwrite
-an existing router rule, requests one TCP mapping, verifies the exact internal
+access** uses UPnP only on the same private IPv4 gateway and refuses to
+overwrite an existing router rule. If AMP already has that port claimed, the
+error says so. It requests one TCP mapping, verifies the exact internal
 IP/port/description returned by the router, and journals ownership before
 presenting a public join address. If UFW is already active, Helix also adds one
 exact owned TCP rule; it never turns UFW on as a side effect. V Rising stays
@@ -176,7 +177,8 @@ explanation instead of a fabricated public address.
 Open **Port pools** on the Servers page to set Minecraft or V Rising ranges and
 optional individual priority ports. Automatic allocation tries the individual
 list first, then each range in order, skipping duplicates, ports assigned to
-another Helix server, and ports currently bound on the host. Up to 32 ranges,
+another Helix server, ports AMP already has claimed, and ports currently bound
+on the host. Up to 32 ranges,
 256 individual entries, and 4,096 unique ports are accepted. The summary shows
 total capacity, assigned ports, and the next available candidate.
 

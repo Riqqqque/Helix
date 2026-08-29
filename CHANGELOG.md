@@ -9,6 +9,9 @@ binary or package release yet.
 
 - Homarr import keeps Homarr's board order and tile width, places shortcuts on
   a dedicated Homarr Home, and no longer alphabetizes the catalog.
+- Helix no longer assigns or public-maps ports AMP already has claimed, even
+  when that AMP instance is stopped and only the router mapping is left. The
+  error is `AMP already has port <n> claimed`.
 - Homarr import names stay inside the picker and shortcut tiles instead of
   spilling across neighboring cells.
 - Homarr import picker rows keep their height and scroll instead of stacking
