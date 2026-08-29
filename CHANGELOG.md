@@ -33,6 +33,11 @@ binary or package release yet.
 
 ### Added
 
+- Homarr shortcuts stay editable after import. Re-import keeps titles, sizes,
+  colors, and extra widgets on that Home, and drops only unchecked apps.
+- Copy a Home widget, then paste it on the same layout or another Home. Settings
+  can send a copy to a different Home without leaving the current one.
+
 - `scripts/install-from-source.sh --port` / `--listen` for a loopback bind
   other than 8080 on a fresh config. `--yes` skips prompts. `install-local.sh
   --listen` matches that for new `/etc/helix/helix.toml` files only.

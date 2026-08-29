@@ -4509,13 +4509,21 @@ textarea:focus {
   color: var(--quiet);
   font-size: 8px;
 }
-.home-editing-hint {
+.home-editing-hint,
+.home-layout-notice {
   display: flex;
   align-items: center;
   gap: 7px;
   margin-bottom: 8px;
   color: var(--quiet);
   font-size: 8px;
+}
+.home-layout-notice {
+  color: var(--home-accent, var(--accent));
+}
+.home-grid.is-editing .home-widget.is-selected {
+  border-color: var(--home-accent, var(--accent));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--home-accent, var(--accent)) 35%, transparent);
 }
 .home-widget-catalog {
   display: grid;
@@ -4775,6 +4783,7 @@ textarea:focus {
 .home-widget__controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 5px;
 }
 .home-widget__controls button {
