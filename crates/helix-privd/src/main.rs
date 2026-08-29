@@ -49,7 +49,7 @@ use host::{HostControl, HostControlConfig};
 #[cfg(target_os = "linux")]
 use native::{NativeConfig, NativeManager};
 #[cfg(target_os = "linux")]
-use network::{exposure_ports, GamePortMapping, NetworkConfig, NetworkManager};
+use network::{GamePortMapping, NetworkConfig, NetworkManager, exposure_ports};
 #[cfg(target_os = "linux")]
 use packages::{PackageConfig, PackageManager};
 #[cfg(target_os = "linux")]
@@ -494,6 +494,10 @@ impl BrokerContext {
                 .as_deref()
                 .ok_or_else(|| "the Helix server manager is not configured".to_owned())
                 .and_then(|native| native.restore_trashed_server(&trash_id)),
+            BrokerRequest::PurgeTrashedServer {
+                trash_id,
+                confirmation_name,
+            } => self.purge_trashed_native_server(&trash_id, &confirmation_name),
             BrokerRequest::ServerInventoryHealth {} => self.server_inventory_health(),
             BrokerRequest::ServerManagerReadiness {} => self.server_manager_readiness(),
             BrokerRequest::ServerDetail { instance_id } => self
@@ -636,9 +640,9 @@ impl BrokerContext {
             BrokerRequest::SetNativeBrowserListing {
                 instance_id,
                 list_on_browser,
-            } => self
-                .native_manager(&instance_id)
-                .and_then(|native| native.set_vrising_browser_listing(&instance_id, list_on_browser)),
+            } => self.native_manager(&instance_id).and_then(|native| {
+                native.set_vrising_browser_listing(&instance_id, list_on_browser)
+            }),
             BrokerRequest::ListMinecraftVersions { software } => self
                 .native
                 .as_deref()
@@ -827,6 +831,35 @@ impl BrokerContext {
             .ok_or_else(|| "the Helix-owned server does not exist".to_owned())?;
         self.network
             .drop_server_exposure_if_present(&game_port_mapping_from_server(&server, port))
+    }
+
+    fn purge_trashed_native_server(
+        &self,
+        trash_id: &str,
+        confirmation_name: &str,
+    ) -> Result<Value, String> {
+        let native = self
+            .native
+            .as_deref()
+            .ok_or_else(|| "the Helix server manager is not configured".to_owned())?;
+        let mut result = native.purge_trashed_server(trash_id, confirmation_name)?;
+        let Some(instance_id) = result
+            .get("instance_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            return Ok(result);
+        };
+        match self.network.drop_exposure_for_instance(&instance_id) {
+            Ok(true) => {
+                result["public_access_cleared"] = json!(true);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                result["exposure_warning"] = json!(error);
+            }
+        }
+        Ok(result)
     }
 
     fn apply_creation_exposure(
@@ -1694,15 +1727,16 @@ impl BrokerContext {
                     job.stage = "Preparing".to_owned();
                     job.progress_percent = 2;
                 });
-                let result = native.create_vrising(&spec, |stage, progress| {
-                    context.update_job(&worker_job_id, |job| {
-                        job.stage = stage.to_owned();
-                        job.progress_percent = progress;
+                let result = native
+                    .create_vrising(&spec, |stage, progress| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = progress;
+                        });
+                    })
+                    .map(|value| {
+                        context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                     });
-                })
-                .map(|value| {
-                    context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
-                });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
                         job.status = JobState::Complete;
@@ -1748,15 +1782,16 @@ impl BrokerContext {
                     job.stage = "Preparing".to_owned();
                     job.progress_percent = 2;
                 });
-                let result = native.create_valheim(&spec, |stage, progress| {
-                    context.update_job(&worker_job_id, |job| {
-                        job.stage = stage.to_owned();
-                        job.progress_percent = progress;
+                let result = native
+                    .create_valheim(&spec, |stage, progress| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = progress;
+                        });
+                    })
+                    .map(|value| {
+                        context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                     });
-                })
-                .map(|value| {
-                    context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
-                });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
                         job.status = JobState::Complete;
@@ -1802,15 +1837,16 @@ impl BrokerContext {
                     job.stage = "Preparing".to_owned();
                     job.progress_percent = 2;
                 });
-                let result = native.create_terraria(&spec, |stage, progress| {
-                    context.update_job(&worker_job_id, |job| {
-                        job.stage = stage.to_owned();
-                        job.progress_percent = progress;
+                let result = native
+                    .create_terraria(&spec, |stage, progress| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = progress;
+                        });
+                    })
+                    .map(|value| {
+                        context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                     });
-                })
-                .map(|value| {
-                    context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
-                });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
                         job.status = JobState::Complete;

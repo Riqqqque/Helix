@@ -212,8 +212,10 @@ boots, not unlimited retention.
 
 Native backup deletion creates an opaque trash record and moves only the exact
 known archive/metadata pair. Undo restores only the matching protected record
-within policy. This does not replace off-host backups or prove restore after
-disk loss.
+within policy. Removed native servers use the same kind of recovery storage.
+Permanent deletion from Removed and hidden requires the exact server name and
+then deletes world files, backups, and console history. This does not replace
+off-host backups or prove restore after disk loss.
 
 AMP credentials must be root-owned/private, and the AMP endpoint must remain on
 loopback. AMP responses are bounded and strictly interpreted. An unavailable or

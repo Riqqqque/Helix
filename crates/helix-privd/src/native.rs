@@ -994,7 +994,7 @@ impl NativeManager {
             "policy": {
                 "recoverable": true,
                 "automatic_purge": false,
-                "note": "Removed native servers stay in protected recovery storage until the owner explicitly purges them outside this release. Backups and console history are preserved."
+                "note": "Removed native servers stay in protected recovery storage until you delete them forever from Removed and hidden or Settings → Helix data. That wipe includes world files, backups, and console history. Helix never auto-purges."
             }
         }))
     }
@@ -1176,6 +1176,95 @@ impl NativeManager {
         }))
     }
 
+    pub fn purge_trashed_server(
+        &self,
+        trash_id: &str,
+        confirmation_name: &str,
+    ) -> Result<Value, String> {
+        validate_trash_id(trash_id)?;
+        let record_root = self.server_trash_record_path(trash_id)?;
+        require_real_directory(
+            &record_root,
+            "the removed server recovery record is unavailable",
+        )?;
+        let record = read_server_trash_record(&record_root.join("record.json"))?;
+        let manifest = read_manifest(&record_root.join("manifest.json"))?;
+        if record.schema_version != 1
+            || record.trash_id != trash_id
+            || record.instance_id != manifest.id
+            || record.name != manifest.name
+        {
+            return Err("the removed server recovery record is inconsistent".to_owned());
+        }
+        if confirmation_name != record.name {
+            return Err("type the exact server name to confirm permanent deletion".to_owned());
+        }
+        let _operation =
+            self.begin_instance_operation(&manifest.id, "permanent server deletion")?;
+        let instance_path = self.instance_path(&manifest.id)?;
+        let manifest_path = self.manifest_path(&manifest.id)?;
+        if instance_path.exists() || manifest_path.exists() {
+            return Err(
+                "an active server still uses this identity; restore or remove it from Servers first"
+                    .to_owned(),
+            );
+        }
+        if let Some((managed, instance_id)) =
+            self.exact_container_identity(&manifest.container_name)?
+        {
+            if managed != "true" || instance_id != manifest.id {
+                return Err(
+                    "the workload name belongs to a container Helix cannot prove it owns"
+                        .to_owned(),
+                );
+            }
+            self.docker(["rm", "--force", manifest.container_name.as_str()], 60)?;
+            if self
+                .exact_container_identity(&manifest.container_name)?
+                .is_some()
+            {
+                return Err(
+                    "the leftover Helix container still exists; nothing was permanently deleted"
+                        .to_owned(),
+                );
+            }
+        }
+
+        self.stop_console_archiver(&manifest.id);
+        remove_managed_directory(
+            &self.server_trash_data_path(trash_id)?,
+            "the removed server data",
+        )?;
+        remove_managed_directory(
+            &self.backup_path(&manifest.id)?,
+            "the removed server backups",
+        )?;
+        remove_managed_directory(
+            &self.backup_trash_path(&manifest.id)?,
+            "the removed server backup trash",
+        )?;
+        remove_managed_directory(
+            &self.console_archive_path(&manifest.id)?,
+            "the removed server console history",
+        )?;
+        remove_managed_directory(&record_root, "the removed server recovery record")?;
+        self.reclaim_unused_runtime(manifest.kind);
+
+        let mut result = json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "trash_id": trash_id,
+            "name": manifest.name,
+            "kind": manifest.kind_slug(),
+            "game_port": manifest.game_port,
+            "purged": true,
+            "purged_at_unix_ms": now_unix_ms()
+        });
+        if manifest.query_port != 0 {
+            result["query_port"] = json!(manifest.query_port);
+        }
+        Ok(result)
+    }
+
     pub fn readiness(&self) -> Result<Value, String> {
         let docker_version = self
             .docker(["version", "--format", "{{.Server.Version}}"], 20)?
@@ -1209,6 +1298,8 @@ impl NativeManager {
             "files",
             "backups",
             "recoverable_backup_trash",
+            "recoverable_server_trash",
+            "server_trash_purge",
             "restore",
             "logs",
             "performance",
@@ -7360,6 +7451,24 @@ fn require_real_directory(path: &Path, message: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn remove_managed_directory(path: &Path, label: &str) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(format!("could not inspect {label}")),
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(format!(
+            "{label} is not a real directory; Helix stopped before deleting more"
+        ));
+    }
+    fs::remove_dir_all(path).map_err(|_| format!("could not delete {label}"))?;
+    if let Some(parent) = path.parent() {
+        let _ = sync_directory(parent);
+    }
+    Ok(())
+}
+
 fn write_backup_trash_record(path: &Path, record: &BackupTrashRecord) -> Result<(), String> {
     let content = serde_json::to_string_pretty(record)
         .map_err(|_| "could not encode the deleted backup record".to_owned())?;
@@ -9462,5 +9571,116 @@ mod tests {
             .unwrap();
         assert_eq!(policy["policy"]["keep_count"], 1);
         assert_eq!(policy["backups"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn purge_trashed_server_wipes_recovery_data_after_typed_confirmation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state_root = temporary.path().join("state");
+        let instance_root = temporary.path().join("instances");
+        let backup_root = temporary.path().join("backups");
+        fs::create_dir_all(state_root.join("console")).unwrap();
+        fs::create_dir_all(state_root.join("server-trash")).unwrap();
+        fs::create_dir_all(instance_root.join(".trash")).unwrap();
+        fs::create_dir_all(backup_root.join(".trash")).unwrap();
+        let manager = NativeManager {
+            state_root: state_root.clone(),
+            instance_root: instance_root.clone(),
+            backup_root: backup_root.clone(),
+            docker_binary: PathBuf::from("/bin/true"),
+            console_retention: ConsoleRetention {
+                maximum_bytes: default_console_history_max_bytes(),
+                files: default_console_history_files(),
+            },
+            backup_trash_retention_days: 30,
+            custom_artifact_roots: Vec::new(),
+            operations: Mutex::new(HashSet::new()),
+            port_policies: Mutex::new(()),
+            console_archives: Mutex::new(HashMap::new()),
+            console_stops: Mutex::new(HashMap::new()),
+            tps_cache: Mutex::new(HashMap::new()),
+            custom_import_root: state_root.join("imports"),
+            uploads: Mutex::new(HashMap::new()),
+            amp: None,
+        };
+        let id = "6f55caa9-1264-4baf-8335-d3f31a704614";
+        let trash_id = "8953dc16-3891-42bf-802f-711b3ba2965a";
+        let manifest = InstanceManifest {
+            schema_version: MANIFEST_VERSION,
+            id: id.to_owned(),
+            name: "Survival".to_owned(),
+            instance_name: "survival".to_owned(),
+            container_name: format!("helix-game-{id}"),
+            software: MinecraftSoftware::Paper,
+            minecraft_version: "1.21.8".to_owned(),
+            build: "1".to_owned(),
+            java_version: 21,
+            runtime_image: "eclipse-temurin@sha256:test".to_owned(),
+            artifact_url: "https://example.invalid/server.jar".to_owned(),
+            artifact_sha256: "a".repeat(64),
+            memory_mb: 4096,
+            cpu_millis: 0,
+            max_players: 20,
+            game_port: 25565,
+            rcon_port: 30000,
+            rcon_password: "secret".to_owned(),
+            start_on_boot: true,
+            run_uid: 20_000,
+            created_at_unix_ms: 1,
+            kind: GameKind::Minecraft,
+            query_port: 0,
+            unix_args: None,
+            backup_keep_count: 0,
+            backup_keep_days: 0,
+        };
+        let record_root = state_root.join("server-trash").join(trash_id);
+        let data_root = instance_root.join(".trash").join(trash_id);
+        fs::create_dir_all(&record_root).unwrap();
+        fs::create_dir_all(&data_root).unwrap();
+        write_manifest(&record_root.join("manifest.json"), &manifest).unwrap();
+        write_server_trash_record(
+            &record_root.join("record.json"),
+            &ServerTrashRecord {
+                schema_version: 1,
+                trash_id: trash_id.to_owned(),
+                instance_id: id.to_owned(),
+                name: "Survival".to_owned(),
+                trashed_at_unix_ms: 1,
+                was_running: false,
+            },
+        )
+        .unwrap();
+        fs::write(data_root.join("world.dat"), b"world").unwrap();
+        let backups = backup_root.join(id);
+        fs::create_dir_all(&backups).unwrap();
+        fs::write(backups.join("1787799939239.tar.gz"), b"archive").unwrap();
+        let backup_trash = backup_root.join(".trash").join(id);
+        fs::create_dir_all(&backup_trash).unwrap();
+        fs::write(backup_trash.join("stale"), b"old").unwrap();
+        let console = state_root.join("console").join(id);
+        fs::create_dir_all(&console).unwrap();
+        fs::write(console.join("current.log"), b"log").unwrap();
+
+        let rejected = manager.purge_trashed_server(trash_id, "Wrong").unwrap_err();
+        assert!(rejected.contains("exact server name"));
+        assert!(data_root.join("world.dat").is_file());
+
+        let purged = manager.purge_trashed_server(trash_id, "Survival").unwrap();
+        assert_eq!(purged["purged"], true);
+        assert_eq!(purged["instance_id"], format!("helix:{id}"));
+        assert_eq!(purged["trash_id"], trash_id);
+        assert!(purged.get("path").is_none());
+        assert!(!record_root.exists());
+        assert!(!data_root.exists());
+        assert!(!backups.exists());
+        assert!(!backup_trash.exists());
+        assert!(!console.exists());
+        assert_eq!(
+            manager.list_trashed_servers().unwrap()["servers"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 }

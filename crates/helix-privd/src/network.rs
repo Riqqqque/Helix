@@ -681,8 +681,13 @@ impl NetworkManager {
             for port in record_mapped_ports(&record) {
                 let description = exposure_mapping_description(id, record.protocol, port);
                 gateway.delete_mapping(port, soap)?;
-                if gateway.verify_mapping(port, soap, &description).unwrap_or(false) {
-                    return Err("the router still reports the Helix mapping after deletion".to_owned());
+                if gateway
+                    .verify_mapping(port, soap, &description)
+                    .unwrap_or(false)
+                {
+                    return Err(
+                        "the router still reports the Helix mapping after deletion".to_owned()
+                    );
                 }
             }
             let mut firewall_warning = None;
@@ -900,6 +905,27 @@ impl NetworkManager {
         }
         self.set_server_exposure(mapping, false, &HashSet::new())?;
         Ok(true)
+    }
+
+    pub fn drop_exposure_for_instance(&self, instance_id: &str) -> Result<bool, String> {
+        let id = instance_id.strip_prefix("helix:").ok_or_else(|| {
+            "automatic public access is available only for Helix-owned servers".to_owned()
+        })?;
+        validate_rule_id(id)?;
+        if !self.exposure_record_path(id)?.exists() {
+            return Ok(false);
+        }
+        let record = read_exposure_record(&self.exposure_record_path(id)?, instance_id)?;
+        self.drop_server_exposure_if_present(&GamePortMapping {
+            instance_id: instance_id.to_owned(),
+            name: "removed server".to_owned(),
+            manager: "helix".to_owned(),
+            port: record.port,
+            running: false,
+            extra_ports: record.extra_ports,
+            protocol: record.protocol,
+            kind: "minecraft".to_owned(),
+        })
     }
 
     pub fn release_stale_amp_router_forward(

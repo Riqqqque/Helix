@@ -118,7 +118,9 @@ unchanged. **Settings → Helix data → Show them again** brings the banners ba
 ## Helix data
 
 Settings → Helix data lists native servers Helix owns, imported connections it
-can see, and recoverable trash. Each native server has **Start after the host
+can see, recoverable trash, and AMP connections this browser has forgotten.
+Recoverable trash can restore a removed native server or delete it forever.
+Each native server has **Start after the host
 boots**: on means the game comes back after Linux or Docker restarts; off means
 it stays stopped until you press Start. That same checkbox is on by default
 when you create a server. It does not start or stop the server right now. This
