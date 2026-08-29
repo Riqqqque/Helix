@@ -131,7 +131,7 @@ async function packIpv4(csvPath, outPath) {
   }
 
   const header = Buffer.alloc(16);
-  header.writeUInt32LE(0x58454c48, 0); // HELX
+  header.write("HELX", 0, 4, "ascii");
   header.writeUInt16LE(1, 4);
   header.writeUInt16LE(countries.length, 6);
   header.writeUInt32LE(ranges.length, 8);
