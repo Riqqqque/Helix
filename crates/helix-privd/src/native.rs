@@ -1696,13 +1696,23 @@ impl NativeManager {
                     .to_owned(),
             );
         }
-        let changed_fields = changed_setting_fields(&parse_properties(&original), settings);
+        let changed_fields = {
+            let mut fields = changed_setting_fields(&parse_properties(&original), settings);
+            if settings.memory_mb != manifest.memory_mb {
+                fields.push("memory_mb");
+            }
+            fields
+        };
         let updated = update_properties(&original, settings);
         let port_changed = settings.game_port != manifest.game_port;
+        let memory_changed = settings.memory_mb != manifest.memory_mb;
         if port_changed {
             self.ensure_replacement_game_port(&manifest, settings.game_port)?;
         }
-        if updated == original && !port_changed {
+        if memory_changed {
+            validate_allocated_memory(manifest.kind, settings.memory_mb)?;
+        }
+        if updated == original && !port_changed && !memory_changed {
             return Ok(json!({
                 "instance_id": format!("helix:{}", manifest.id),
                 "changed": false,
@@ -1721,6 +1731,7 @@ impl NativeManager {
         }
         manifest.max_players = settings.max_players;
         manifest.game_port = settings.game_port;
+        manifest.memory_mb = settings.memory_mb;
         if let Err(error) = write_manifest(&self.manifest_path(&manifest.id)?, &manifest) {
             if updated != original {
                 let _ = write_managed_file(&path, original.as_bytes(), 0o660, 0, manifest.run_uid);
@@ -1728,7 +1739,8 @@ impl NativeManager {
             return Err(error);
         }
         let running = self.container_running(&manifest.container_name);
-        if port_changed
+        let needs_republish = port_changed || memory_changed;
+        if needs_republish
             && let Err(error) = self.republish_minecraft_container(&manifest, &data_path, running)
         {
             if updated != original {
@@ -1741,8 +1753,8 @@ impl NativeManager {
         Ok(json!({
             "instance_id": format!("helix:{}", manifest.id),
             "changed": true,
-            "restart_required": running && !port_changed,
-            "container_republished": port_changed,
+            "restart_required": running && !needs_republish,
+            "container_republished": needs_republish,
             "previous_game_port": if port_changed { json!(previous.game_port) } else { Value::Null },
             "changed_fields": changed_fields,
             "settings": self.server_settings_for(&manifest)?,
@@ -2224,6 +2236,7 @@ impl NativeManager {
             "enforce_white_list": property_bool(&properties, "enforce-whitelist", false),
             "spawn_protection": property_u64(&properties, "spawn-protection", 16, 0, 65_535),
             "game_port": property_u64(&properties, "server-port", u64::from(manifest.game_port), 1_024, 65_535),
+            "memory_mb": manifest.memory_mb,
             "restart_behavior": {
                 "activation": "server_restart",
                 "restart_required_fields": [
@@ -2232,7 +2245,7 @@ impl NativeManager {
                     "allow_flight", "white_list", "enforce_white_list", "spawn_protection",
                     "game_port"
                 ],
-                "message": "Most changes take effect the next time Minecraft starts. Changing the game port rebinds the published container immediately."
+                "message": "Most changes take effect the next time Minecraft starts. Changing the game port or memory rebinds the published container immediately."
             }
         }))
     }
@@ -2991,6 +3004,37 @@ impl NativeManager {
             "container_updated": container_present,
             "current_runtime_changed": false,
             "persisted": true
+        }))
+    }
+
+    pub fn set_memory_mb(&self, id: &str, memory_mb: u32) -> Result<Value, String> {
+        let mut manifest = self.load_manifest(native_id(id))?;
+        validate_allocated_memory(manifest.kind, memory_mb)?;
+        if manifest.memory_mb == memory_mb {
+            return Ok(json!({
+                "instance_id": format!("helix:{}", manifest.id),
+                "changed": false,
+                "memory_mb": memory_mb,
+                "container_republished": false
+            }));
+        }
+        let _operation = self.begin_instance_operation(&manifest.id, "memory update")?;
+        let previous = manifest.clone();
+        let data_path = self.instance_path(&manifest.id)?;
+        let running = self.container_running(&manifest.container_name);
+        manifest.memory_mb = memory_mb;
+        write_manifest(&self.manifest_path(&manifest.id)?, &manifest)?;
+        if let Err(error) = self.republish_minecraft_container(&manifest, &data_path, running) {
+            let _ = write_manifest(&self.manifest_path(&previous.id)?, &previous);
+            let _ = self.republish_minecraft_container(&previous, &data_path, running);
+            return Err(error);
+        }
+        Ok(json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "changed": true,
+            "memory_mb": memory_mb,
+            "container_republished": true,
+            "was_running": running
         }))
     }
 
@@ -5971,6 +6015,28 @@ fn validate_create_spec(spec: &MinecraftCreateSpec) -> Result<(), String> {
     Ok(())
 }
 
+fn allocated_memory_bounds(kind: GameKind) -> (u32, u32) {
+    match kind {
+        GameKind::Minecraft => (1_024, 24_576),
+        GameKind::VRising => (2_048, 24_576),
+        GameKind::Valheim => (1_024, 16_384),
+        GameKind::Terraria => (512, 8_192),
+    }
+}
+
+fn validate_allocated_memory(kind: GameKind, memory_mb: u32) -> Result<(), String> {
+    let (minimum, maximum) = allocated_memory_bounds(kind);
+    if (minimum..=maximum).contains(&memory_mb) {
+        return Ok(());
+    }
+    Err(match kind {
+        GameKind::Minecraft => "memory must be between 1 and 24 GiB".to_owned(),
+        GameKind::VRising => "V Rising memory must be between 2 and 24 GiB".to_owned(),
+        GameKind::Valheim => "Valheim memory must be between 1 and 16 GiB".to_owned(),
+        GameKind::Terraria => "Terraria memory must be between 512 MiB and 8 GiB".to_owned(),
+    })
+}
+
 fn default_game_port_policy(game: GameKind) -> GamePortPolicySpec {
     match game {
         GameKind::Minecraft => GamePortPolicySpec {
@@ -7087,6 +7153,7 @@ fn validate_settings(settings: &MinecraftSettingsPatch) -> Result<(), String> {
     if settings.game_port < 1_024 {
         return Err("game port must be at least 1024".to_owned());
     }
+    validate_allocated_memory(GameKind::Minecraft, settings.memory_mb)?;
     if !(2..=32).contains(&settings.view_distance)
         || !(2..=32).contains(&settings.simulation_distance)
     {
@@ -8329,6 +8396,7 @@ mod tests {
             enforce_white_list: true,
             spawn_protection: 8,
             game_port: 25_565,
+            memory_mb: 4_096,
         };
         assert!(validate_settings(&settings).is_ok());
         let updated = update_properties(original, &settings);
@@ -8376,6 +8444,7 @@ mod tests {
             enforce_white_list: false,
             spawn_protection: 0,
             game_port: 25_565,
+            memory_mb: 4_096,
         };
         assert!(validate_settings(&settings).is_ok());
         settings.view_distance = 33;
@@ -8383,6 +8452,24 @@ mod tests {
         settings.view_distance = 2;
         settings.game_port = 80;
         assert!(validate_settings(&settings).is_err());
+        settings.game_port = 25_565;
+        settings.memory_mb = 512;
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn allocated_memory_bounds_match_create_limits() {
+        assert_eq!(
+            allocated_memory_bounds(GameKind::Minecraft),
+            (1_024, 24_576)
+        );
+        assert_eq!(allocated_memory_bounds(GameKind::VRising), (2_048, 24_576));
+        assert_eq!(allocated_memory_bounds(GameKind::Valheim), (1_024, 16_384));
+        assert_eq!(allocated_memory_bounds(GameKind::Terraria), (512, 8_192));
+        assert!(validate_allocated_memory(GameKind::Minecraft, 512).is_err());
+        assert!(validate_allocated_memory(GameKind::Terraria, 512).is_ok());
+        assert!(validate_allocated_memory(GameKind::VRising, 1_024).is_err());
+        assert!(validate_allocated_memory(GameKind::Valheim, 24_576).is_err());
     }
 
     #[test]

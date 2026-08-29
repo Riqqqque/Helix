@@ -3521,6 +3521,25 @@ textarea:focus {
   padding: 12px 16px 16px;
   border-top: 1px solid var(--line);
 }
+.allocated-memory-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 12px;
+  align-items: end;
+  margin: 0;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--line);
+}
+.allocated-memory-editor .field {
+  margin: 0;
+}
+.allocated-memory-editor .inline-error,
+.allocated-memory-editor .settings-port-note {
+  grid-column: 1 / -1;
+}
+.advanced-panel .allocated-memory-editor {
+  padding: 4px 20px 16px;
+}
 .server-health-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -6980,6 +6999,9 @@ textarea:focus {
   .join-address-grid article:last-child { border-bottom: 0; }
   .join-evidence { align-items: flex-start; flex-wrap: wrap; }
   .join-evidence > small { width: 100%; margin-left: 0; text-align: left; }
+  .allocated-memory-editor {
+    grid-template-columns: 1fr;
+  }
   .settings-grid,
   .toggle-grid {
     grid-template-columns: 1fr;

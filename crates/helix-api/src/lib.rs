@@ -414,6 +414,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             "/servers/{instance_id}/start-on-boot",
             put(set_native_start_on_boot),
         )
+        .route("/servers/{instance_id}/memory", put(set_native_memory))
         .route("/servers/{instance_id}/remove", post(trash_native_server))
         .route("/jobs/{job_id}", get(job_status))
         .layer(DefaultBodyLimit::max(FILE_API_BODY_LIMIT_BYTES));
@@ -1429,6 +1430,12 @@ struct InstallServerMarketplaceContentBody {
 #[serde(deny_unknown_fields)]
 struct StartOnBootBody {
     enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeMemoryBody {
+    memory_mb: u32,
 }
 
 #[derive(Deserialize)]
@@ -2772,6 +2779,25 @@ async fn set_native_start_on_boot(
         BrokerRequest::SetNativeStartOnBoot {
             instance_id,
             enabled: body.enabled,
+        },
+    )
+    .await
+}
+
+async fn set_native_memory(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<NativeMemoryBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetNativeMemory {
+            instance_id,
+            memory_mb: body.memory_mb,
         },
     )
     .await

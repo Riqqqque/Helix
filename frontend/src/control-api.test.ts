@@ -11,6 +11,7 @@ import {
   runServerAction,
   saveMinecraftPortPolicy,
   saveVRisingPortPolicy,
+  setNativeMemory,
   setNativeStartOnBoot,
   setServerNetworkExposure,
   saveServerSettings,
@@ -127,6 +128,7 @@ const settings: MinecraftSettings = {
   enforceWhiteList: true,
   spawnProtection: 8,
   gamePort: 25565,
+  memoryMb: 4096,
   restartBehavior: {
     activation: 'server_restart',
     restartRequiredFields: [
@@ -156,6 +158,7 @@ function wireSettings(value = settings): Record<string, unknown> {
     enforce_white_list: value.enforceWhiteList,
     spawn_protection: value.spawnProtection,
     game_port: value.gamePort,
+    memory_mb: value.memoryMb,
     restart_behavior: {
       activation: value.restartBehavior.activation,
       restart_required_fields: value.restartBehavior.restartRequiredFields,
@@ -255,6 +258,27 @@ describe('native server API', () => {
     expect(JSON.parse(String(request.body))).toEqual({ enabled: false });
   });
 
+  it('updates native allocated memory without inventing a restart', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        changed: true,
+        memory_mb: 8192,
+        container_republished: true,
+      }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(setNativeMemory('helix:server-id', 8192, 'csrf')).resolves.toEqual({
+      changed: true,
+      memoryMb: 8192,
+      containerRepublished: true,
+    });
+    const [path, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toContain('helix%3Aserver-id/memory');
+    expect(request.method).toBe('PUT');
+    expect(JSON.parse(String(request.body))).toEqual({ memory_mb: 8192 });
+  });
+
   it('parses a background action job without waiting for the work', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ job_id: 'ccf645d5-7896-4659-bc71-6f177efb589d' }), { status: 200 }),
@@ -304,6 +328,7 @@ describe('native server API', () => {
       max_players: 20,
       enforce_white_list: true,
       game_port: 25565,
+      memory_mb: 4096,
     });
   });
 

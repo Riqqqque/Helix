@@ -301,6 +301,7 @@ or output. Disconnect ends the PTY.
 | `POST` | `/api/v1/servers/removed/{trash_id}/restore` | `games.manage` | Restore an exact removed native server before expiry |
 | `POST` | `/api/v1/servers/{instance_id}/actions` | `games.manage` | Typed start/stop/restart/kill/update/backup action |
 | `PUT` | `/api/v1/servers/{instance_id}/start-on-boot` | `games.manage` | Set Docker restart policy on one native game container without starting or stopping it now |
+| `PUT` | `/api/v1/servers/{instance_id}/memory` | `games.manage` | Set allocated memory on one native game container; recreates the published container with the new limit |
 | `PUT` | `/api/v1/servers/{instance_id}/network` | `games.manage` + `network.firewall.write` | Create or remove the exact verified Helix-owned TCP router/UFW exposure for a native server |
 | `POST` | `/api/v1/servers/{instance_id}/remove` | `games.manage` | Stop/remove exact native workload and move data to recoverable trash |
 | `GET` | `/api/v1/jobs/{job_id}` | `games.view` | Read current bounded job state/log |
@@ -328,6 +329,11 @@ Native start-on-boot writes Docker `--restart unless-stopped` or `no` on the
 exact instance container and persists the same flag on the instance manifest.
 It does not start or stop the server at toggle time. After a host reboot,
 Docker brings back servers that opted in.
+
+Native allocated memory writes the instance manifest and recreates the published
+container with the new Docker memory limit. Minecraft also updates `-Xmx`. The
+container is started again only if it was running. Bounds match create: Minecraft
+1–24 GiB, V Rising 2–24 GiB, Valheim 1–16 GiB, Terraria 512 MiB–8 GiB.
 
 Accepted work is not completed work. Creation, install, update, and backup jobs
 return bounded broker-lifetime status that the frontend polls. Job state is not
@@ -386,7 +392,10 @@ sample from that command, not the unauthenticated status ping.
 Settings identify restart-required fields and report pending restart state.
 Minecraft `game_port` is included: a change rewrites `server-port` and
 `query.port`, recreates the published container, and removes Helix public access
-on the previous port. AMP-claimed ports are refused.
+on the previous port. AMP-claimed ports are refused. Minecraft `memory_mb` is
+saved on the same settings POST and also has `PUT /api/v1/servers/{instance_id}/memory`
+for every native game. Overview PUBLIC INTERNET is the detected public IP and
+game port plus a port-forward reminder; it does not call the public-access route.
 Marketplace profiles prevent plugin/mod loader mixing and require a matching
 game version and supported loader. A missing or negative Modrinth server-side
 flag is advisory: the API returns it for the UI warning, but does not block an

@@ -416,6 +416,12 @@ impl BrokerContext {
             } => self
                 .native_manager(&instance_id)
                 .and_then(|native| native.set_start_on_boot(&instance_id, enabled)),
+            BrokerRequest::SetNativeMemory {
+                instance_id,
+                memory_mb,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.set_memory_mb(&instance_id, memory_mb)),
             BrokerRequest::ListMinecraftVersions { software } => self
                 .native
                 .as_deref()
@@ -556,9 +562,8 @@ impl BrokerContext {
             match self.drop_owned_server_exposure(instance_id, old_port) {
                 Ok(true) => {
                     result["public_access_cleared"] = json!(true);
-                    result["exposure_note"] = json!(
-                        "Public access on the old port was removed. Set it up again from Join if you still want it."
-                    );
+                    result["exposure_note"] =
+                        json!("Public access Helix had on the old port was removed.");
                 }
                 Ok(false) => {}
                 Err(error) => {

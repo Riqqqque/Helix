@@ -23,7 +23,8 @@ files, saves, and the isolated runtime live in that instance’s data directory.
 The host never receives Wine packages.
 
 Create is one click after you pick a name, memory, and UDP ports. Public UPnP
-is not offered. Player counts are not queried. There is no RCON command console
+is not offered. Allocated memory can be changed later from Overview. Player
+counts are not queried. There is no RCON command console
 and no Modrinth marketplace. Backups, start-on-boot, files, and logs work the
 same way as Minecraft. Host settings live in `save/Settings/ServerHostSettings.json`
 under Files. Update restarts the container so SteamCMD runs again.
@@ -37,7 +38,7 @@ This path is implemented and unvalidated. It is not publisher-supported.
 
 Helix builds `helix-valheim-runtime:1` and installs Steam dedicated app 896660.
 Create is private-LAN UDP: the game port plus the next two. Public UPnP is not
-offered. There is no RCON console. For mods, drop a BepInEx pack zip at
+offered. Allocated memory can be changed later from Overview. There is no RCON console. For mods, drop a BepInEx pack zip at
 `/data/bepinex-pack.zip` and plugin files in `/data/plugins`, then restart.
 Uninstalling the last Valheim server removes that runtime image. Implemented and
 unvalidated.
@@ -46,8 +47,9 @@ unvalidated.
 
 Helix builds `helix-terraria-runtime:1`. Vanilla downloads the publisher
 dedicated zip. tModLoader uses Steam app 1281930. Edit `serverconfig.txt` in
-Files. Drop `.tmod` files in `/data/mods` and restart. Public UPnP is not the
-default port-pool behavior. Implemented and unvalidated.
+Files. Drop `.tmod` files in `/data/mods` and restart. Allocated memory can be
+changed later from Overview. Public UPnP is not the default port-pool behavior.
+Implemented and unvalidated.
 
 ## Start on boot
 
@@ -106,8 +108,9 @@ Vanilla and most Fabric/Forge/Quilt servers stay as an em dash. Imported AMP
 servers still use AMP’s TPS metric. Settings mark fields that
 need a restart and keep a pending-restart state after save. The game port can
 be changed there; Helix rebinds the published container immediately, skips
-ports AMP already has claimed, and removes public access on the old port. Join
-offers **Change game port** when public setup hits that kind of conflict.
+ports AMP already has claimed, and removes public access on the old port.
+Allocated memory can be changed from Settings or Overview; Helix rebinds the
+container so Docker and Minecraft `-Xmx` both pick up the new limit.
 
 Removing a native server stops and removes its exact container, then moves its
 managed data into recoverable trash. The Removed section can restore it before
@@ -163,17 +166,23 @@ dashboard.
 
 ## Join addresses
 
-Each native detail view shows a LAN address, a separately detected Tailscale
-address when present, and the public-internet state. Minecraft **Set up public
-access** uses UPnP only on the same private IPv4 gateway and refuses to
-overwrite an existing router rule. If AMP already has that port claimed, or the
-router mapping description starts with `AMP`, the error says so. Change the
-Helix game port in Settings instead of overwriting AMP. Public setup requests
-one TCP mapping, verifies the exact internal
-IP/port/description returned by the router, and journals ownership before
-presenting a public join address. If UFW is already active, Helix also adds one
-exact owned TCP rule; it never turns UFW on as a side effect. V Rising stays
-private; Helix does not offer UPnP for its UDP game and query ports.
+Each native detail Overview shows a LAN address, a separately detected Tailscale
+address when present, and the public IP plus the game port when Helix can see a
+WAN address. That public row is the address people would use from the internet.
+Helix does not set up router forwarding from Overview. If players should join
+from outside the LAN, port-forward the game port on the router: TCP for
+Minecraft and Terraria, UDP game plus query for V Rising, and UDP
+`game` through `game+2` for Valheim.
+
+Minecraft create can still request UPnP public access on the same private IPv4
+gateway and refuses to overwrite an existing router rule. If AMP already has
+that port claimed, or the router mapping description starts with `AMP`, the
+error says so. Change the Helix game port in Settings instead of overwriting
+AMP. Public setup requests one TCP mapping, verifies the exact internal
+IP/port/description returned by the router, and journals ownership. If UFW is
+already active, Helix also adds one exact owned TCP rule; it never turns UFW on
+as a side effect. V Rising stays private at create; Helix does not offer UPnP
+for its UDP game and query ports.
 
 A router-confirmed mapping is not the same as an outside test. Helix labels it
 that way and recommends testing from cellular or another network. A CGNAT or

@@ -260,6 +260,10 @@ pub enum BrokerRequest {
         instance_id: String,
         enabled: bool,
     },
+    SetNativeMemory {
+        instance_id: String,
+        memory_mb: u32,
+    },
     ListMinecraftVersions {
         software: MinecraftSoftware,
     },
@@ -398,6 +402,7 @@ pub struct MinecraftSettingsPatch {
     pub enforce_white_list: bool,
     pub spawn_protection: u16,
     pub game_port: u16,
+    pub memory_mb: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -870,6 +875,14 @@ mod tests {
         .expect("serialize start-on-boot request");
         assert_eq!(boot["operation"], "set_native_start_on_boot");
         assert_eq!(boot["enabled"], false);
+
+        let memory = serde_json::to_value(BrokerRequest::SetNativeMemory {
+            instance_id: "helix:test".to_owned(),
+            memory_mb: 8_192,
+        })
+        .expect("serialize memory request");
+        assert_eq!(memory["operation"], "set_native_memory");
+        assert_eq!(memory["memory_mb"], 8_192);
 
         let custom = serde_json::to_value(BrokerRequest::CreateMinecraft {
             spec: MinecraftCreateSpec {

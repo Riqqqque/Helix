@@ -3,11 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ManagedServer } from './control-api';
 import type { DashboardData } from './dashboard-model';
 import {
+  allocatedMemoryOptions,
   canRunBackupMutation,
   importedServerPanelUrl,
   joinErrorOffersPortChange,
   minecraftCreateSoftwareOptions,
   NewServerChooser,
+  publicInternetHint,
   serverActionDescription,
   serverWorkloadIsRunning,
   ServersPage,
@@ -217,6 +219,23 @@ describe('Servers route', () => {
     expect(importedServerPanelUrl({ ...ampServer, managerPanelPort: 0 }, '192.0.2.10')).toBeNull();
     expect(importedServerPanelUrl({ ...ampServer, id: 'amp:../../admin' }, '192.0.2.10')).toBeNull();
     expect(importedServerPanelUrl(ampServer, 'host.example/path')).toBeNull();
+  });
+
+  it('lists allocated memory steps inside each game bound', () => {
+    expect(allocatedMemoryOptions('minecraft', 4096)).toEqual([
+      1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576,
+    ]);
+    expect(allocatedMemoryOptions('vrising', 4096)[0]).toBe(2048);
+    expect(allocatedMemoryOptions('valheim', 4096)).not.toContain(24576);
+    expect(allocatedMemoryOptions('terraria', 512)[0]).toBe(512);
+    expect(allocatedMemoryOptions('minecraft', 3072)).toContain(3072);
+  });
+
+  it('tells operators to forward the public game port themselves', () => {
+    expect(publicInternetHint('minecraft', 25565, null)).toContain('Forward TCP 25565');
+    expect(publicInternetHint('terraria', 7777, null)).toContain('Forward TCP 7777');
+    expect(publicInternetHint('vrising', 9876, 9877)).toContain('UDP 9876 and 9877');
+    expect(publicInternetHint('valheim', 2456, null)).toContain('UDP 2456–2458');
   });
 
   it('points Join port conflicts at Settings and names AMP mappings', () => {
