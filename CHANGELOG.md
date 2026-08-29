@@ -8,6 +8,9 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Settings → Catalogs stores an owner CurseForge API key on the host so marketplace
+  search and “Start with a modpack” can use `api.curseforge.com`. Helix never
+  ships a CurseForge secret and never shows the saved key again.
 - Removed native servers can be permanently deleted from **Removed and hidden**
   or Settings → Helix data after typing the exact name. That wipe includes world
   files, Helix backups, and console history. Hidden AMP connections can be
@@ -33,6 +36,9 @@ release, not a public-internet support promise.
   it says when Linux needs a host reboot. Helix still never reboots for you.
 - Overlay windows keep a real inset so titles, copy, forms, and actions no
   longer sit on the border.
+- Marketplace search retries a failed catalog call and keeps the last good
+  results on screen. CurseForge now uses the official API with the key from
+  Settings → Catalogs instead of scraping the public website.
 - Copy on join addresses, Terminal, and Home tiles flips to Copied so you can
   tell it landed.
 - HTTPS calls Helix makes as itself now send `Helix/1.0.0` in the User-Agent.

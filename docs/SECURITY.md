@@ -391,8 +391,11 @@ failure removes the exact incomplete container, manifest, and instance.
 
 Server-optional and client-only files are excluded and counted. The result is a
 server-safe subset, not byte-for-byte full-pack parity. Unknown loaders and
-every upstream pack matrix remain unclaimed. CurseForge uses the public website
-catalog and CDN, not a stored owner API key.
+every upstream pack matrix remain unclaimed. CurseForge marketplace and modpack
+downloads use the official `api.curseforge.com` catalog with an owner-supplied
+API key stored only in helix-privd (`{state_root}/curseforge-api-key`, mode
+0600). The key is never returned to the browser or stored in helixd SQLite.
+Helix does not ship a CurseForge secret.
 
 TLS and declared hashes protect specific transport/integrity properties; they
 do not prove an artifact is safe. Download size, provenance evidence,
@@ -433,7 +436,8 @@ root. Broader operator actions, export, holds, hash chaining, off-host
 forwarding, and a reviewed support-bundle generator remain future work.
 
 Helix has no required cloud account and no advertised telemetry pipeline. Local
-weather, Modrinth, Minecraft/runtime, and optional AMP requests still disclose
+weather, Modrinth, official CurseForge (when the owner saved an API key),
+Minecraft/runtime, and optional AMP requests still disclose
 the information necessary to those configured services.
 
 ## Private network and Tailscale

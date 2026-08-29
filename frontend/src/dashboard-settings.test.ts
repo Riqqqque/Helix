@@ -67,6 +67,7 @@ describe('whole-host reboot confirmation', () => {
     expect(markup).toContain('Helix data');
     expect(markup).toContain('Save account changes');
     expect(markup).toContain('Current password');
+    expect(markup).not.toContain('>Catalogs<');
   });
 });
 
@@ -146,6 +147,9 @@ describe('Helix data', () => {
       servers: [nativeServer],
     }));
     expect(markup).toContain('Helix data');
+    expect(markup).toContain('Catalogs');
+    expect(markup).toContain('Save key');
+    expect(markup).toContain('console.curseforge.com');
     expect(markup).toContain('Start after the host boots');
     expect(markup).toContain('does not start or stop the server right now');
     expect(markup).toContain('this browser only');

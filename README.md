@@ -147,7 +147,8 @@ Helix does not currently:
   eligible Debian/Ubuntu host, Hooks can install the exact `tailscale` package
   from Tailscale's signed repository and verify `tailscaled`; the owner still
   runs `tailscale up` and approves the machine;
-- claim a full client modpack copy, unsigned CurseForge API access, or every
+- claim a full client modpack copy, unsigned CurseForge access without the
+  owner’s own API key, or every
   historical Minecraft build;
 - provide MFA, a public-network security review, or a signed release channel;
 - run portable Wasm Strands or native Strand sidecars;
@@ -219,10 +220,11 @@ path.
 
 Forge, NeoForge, Quilt, and Pufferfish are default create choices. Forge uses
 the official installer for Minecraft 1.17+. Pufferfish uses the publisher CI
-over HTTPS without a checksum pin. “Start with a modpack” can search Modrinth
-or the public CurseForge website catalog without an owner API key. Modrinth
+over HTTPS without a checksum pin. “Start with a modpack” can search Modrinth,
+or CurseForge after saving an API key in Settings → Catalogs. Modrinth
 packs verify declared hashes. CurseForge packs use `manifest.json` plus
-forgecdn files. Both pin a matching loader and start an isolated server. The
+forgecdn files through the official API. Both pin a matching loader and start
+an isolated server. The
 result is a server-safe subset, not byte-for-byte pack parity. The
 archive/parser/API/frontend paths have portable tests; the complete Linux
 extraction/resolver/Docker lifecycle, upstream, and real-pack matrix remains a

@@ -315,6 +315,28 @@ pub enum BrokerRequest {
     JobStatus {
         job_id: String,
     },
+    CurseforgeKeyStatus {},
+    SetCurseforgeApiKey {
+        key: String,
+    },
+    ClearCurseforgeApiKey {},
+}
+
+pub const CURSEFORGE_API_KEY_REQUIRED: &str = "CurseForge needs an API key. Open Settings → Catalogs, paste a key from console.curseforge.com, then search again.";
+
+pub fn validate_curseforge_api_key(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.len() < 24 || trimmed.len() > 256 {
+        return Err("CurseForge API keys are 24–256 characters".to_owned());
+    }
+    if trimmed.contains(['"', '\\', '\'', ' ', '\t', '\r', '\n'])
+        || !trimmed
+            .chars()
+            .all(|character| character.is_ascii_graphic())
+    {
+        return Err("that CurseForge API key contains characters Helix will not store".to_owned());
+    }
+    Ok(trimmed.to_owned())
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -883,6 +905,11 @@ fn broker_read_timeout(request: &BrokerRequest) -> std::time::Duration {
         BrokerRequest::TrashNativeServer { .. }
         | BrokerRequest::RestoreTrashedServer { .. }
         | BrokerRequest::PurgeTrashedServer { .. } => std::time::Duration::from_secs(300),
+        BrokerRequest::ServerMarketplaceSearch { .. }
+        | BrokerRequest::ServerMarketplaceProject { .. }
+        | BrokerRequest::MinecraftModpackSearch { .. }
+        | BrokerRequest::MinecraftModpackProject { .. }
+        | BrokerRequest::SetCurseforgeApiKey { .. } => std::time::Duration::from_secs(45),
         _ => std::time::Duration::from_secs(30),
     }
 }
@@ -1293,6 +1320,17 @@ mod tests {
         assert_eq!(search["query"], "world edit");
         assert!(search.get("url").is_none());
         assert!(search.get("path").is_none());
+        assert_eq!(
+            broker_read_timeout(&BrokerRequest::ServerMarketplaceSearch {
+                instance_id: "helix:6f55caa9-1264-4baf-8335-d3f31a704614".to_owned(),
+                query: "world edit".to_owned(),
+                offset: 0,
+                limit: 20,
+                provider: ModpackProvider::Curseforge,
+                catalog: MarketplaceCatalog::Content,
+            }),
+            std::time::Duration::from_secs(45)
+        );
 
         let install = serde_json::to_value(BrokerRequest::InstallServerMarketplaceContent {
             instance_id: "helix:6f55caa9-1264-4baf-8335-d3f31a704614".to_owned(),
@@ -1526,6 +1564,32 @@ mod tests {
         assert_eq!(toggle["operation"], "set_security_control");
         assert_eq!(toggle["id"], "helix_start_on_boot");
         assert!(toggle.get("command").is_none());
+    }
+
+    #[test]
+    fn curseforge_api_key_is_bounded_printable_ascii() {
+        assert!(validate_curseforge_api_key("short").is_err());
+        assert!(validate_curseforge_api_key("has a space in the middle of this keyvalue").is_err());
+        let key = "$2a$10$abcdefghijklmnopqrstuvwx";
+        assert_eq!(
+            validate_curseforge_api_key(&format!("  {key}  ")).unwrap(),
+            key
+        );
+        let status = serde_json::to_value(BrokerRequest::CurseforgeKeyStatus {})
+            .expect("serialize curseforge status");
+        assert_eq!(status["operation"], "curseforge_key_status");
+        assert!(status.get("key").is_none());
+        let set = serde_json::to_value(BrokerRequest::SetCurseforgeApiKey {
+            key: key.to_owned(),
+        })
+        .expect("serialize curseforge key");
+        assert_eq!(set["operation"], "set_curseforge_api_key");
+        assert_eq!(set["key"], key);
+        assert!(set.get("url").is_none());
+        let clear = serde_json::to_value(BrokerRequest::ClearCurseforgeApiKey {})
+            .expect("serialize curseforge clear");
+        assert_eq!(clear["operation"], "clear_curseforge_api_key");
+        assert!(clear.get("key").is_none());
     }
 
     #[test]

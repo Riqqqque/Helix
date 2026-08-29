@@ -46,6 +46,13 @@ import {
 } from './control-api';
 import { purgeTrashedNativeServer } from './native-server-trash-api';
 import {
+  CURSEFORGE_CONSOLE_URL,
+  clearCurseforgeApiKey,
+  getCurseforgeKeyStatus,
+  setCurseforgeApiKey,
+} from './curseforge-key-api';
+import './catalogs-settings.css';
+import {
   readForgottenImportedServers,
   rememberImportedServer,
   readHiddenImportedServers,
@@ -179,6 +186,115 @@ function AccountSettings({
         {error !== null && <div class="settings-form-error" role="alert"><Icon name="warning" size={15} />{error}</div>}
         <div class="settings-form-actions"><span>Email is not part of Helix’s local owner authentication.</span><button class="button button--primary" type="submit" disabled={busy || !changed || currentPassword.length === 0}>{busy ? 'Saving…' : 'Save account changes'}</button></div>
       </form>
+    </section>
+  );
+}
+
+function CatalogsSettings({
+  user,
+  csrfToken,
+}: {
+  user: AuthenticatedUser;
+  csrfToken: string;
+}) {
+  const canView = user.capabilities.includes('games.view');
+  const canManage = user.capabilities.includes('games.manage');
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [key, setKey] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!canView) return;
+    const controller = new AbortController();
+    void getCurseforgeKeyStatus(csrfToken, controller.signal)
+      .then((status) => {
+        setConfigured(status.configured);
+        setError(null);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        setConfigured(null);
+        setError(requestError instanceof Error ? requestError.message : 'Helix could not read the CurseForge catalog setting.');
+      });
+    return () => controller.abort();
+  }, [canView, csrfToken]);
+
+  if (!canView && !canManage) return null;
+
+  const save = async (event: Event): Promise<void> => {
+    event.preventDefault();
+    if (!canManage || busy) return;
+    const trimmed = key.trim();
+    if (trimmed.length < 24 || trimmed.length > 256) {
+      setError('CurseForge API keys are 24–256 characters.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await setCurseforgeApiKey(trimmed, csrfToken);
+      setKey('');
+      setConfigured(status.configured);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Helix could not save the CurseForge API key.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (): Promise<void> => {
+    if (!canManage || busy || configured !== true) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await clearCurseforgeApiKey(csrfToken);
+      setKey('');
+      setConfigured(status.configured);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Helix could not remove the CurseForge API key.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section class="settings-card">
+      <div class="settings-card__head"><div><Icon name="search" /><span><h2>Catalogs</h2><p>CurseForge downloads need your own API key. Modrinth stays public.</p></span></div><InfoTip text="Helix stores the key only on this host, never in the browser or the dashboard database, and never shows it again. Saving asks CurseForge if the key works before it is kept." /></div>
+      <div class="host-boot-control">
+        <div>
+          <span>CurseForge API key</span>
+          <strong>{error !== null && configured === null ? 'Unavailable' : configured === true ? 'Saved on this host' : configured === false ? 'Not saved' : canView ? 'Checking…' : 'Unknown'}</strong>
+          <small>Get a key from the CurseForge console, then marketplace search and “Start with a modpack” can download from api.curseforge.com.</small>
+        </div>
+        <a class="button button--quiet" href={CURSEFORGE_CONSOLE_URL} target="_blank" rel="noreferrer">Open CurseForge console <Icon name="external" size={14} /></a>
+      </div>
+      {canManage && (
+        <form class="account-settings-form" onSubmit={(event) => void save(event)}>
+          <label class="account-current-password catalogs-key-field">
+            <span>API key</span>
+            <input
+              type="password"
+              value={key}
+              minLength={24}
+              maxLength={256}
+              autoComplete="off"
+              spellcheck={false}
+              placeholder={configured === true ? 'Paste a replacement key' : 'Paste the key from console.curseforge.com'}
+              onInput={(event) => setKey(event.currentTarget.value)}
+            />
+            <small>Helix checks the key against CurseForge, then keeps it in a private file on this host. It is never returned to this page.</small>
+          </label>
+          {error !== null && <div class="settings-form-error" role="alert"><Icon name="warning" size={15} />{error}</div>}
+          <div class="settings-form-actions">
+            <span>Removing the key stops new CurseForge downloads until another is saved.</span>
+            <span class="catalogs-key-actions">
+              {configured === true && <button class="button button--quiet" type="button" disabled={busy} onClick={() => void remove()}>{busy ? 'Working…' : 'Remove'}</button>}
+              <button class="button button--primary" type="submit" disabled={busy || key.trim().length === 0}>{busy ? 'Working…' : 'Save key'}</button>
+            </span>
+          </div>
+        </form>
+      )}
     </section>
   );
 }
@@ -906,6 +1022,7 @@ export function DashboardSettingsPage({
             </button>
           </div>
         </section>
+        <CatalogsSettings user={user} csrfToken={csrfToken} />
         <section class="settings-card">
           <div class="settings-card__head"><div><Icon name="moon" /><span><h2>Appearance</h2><p>Choose the contrast that works best on this screen.</p></span></div></div>
           <div class="theme-choice-grid">{(['system', 'midnight', 'oled', 'light'] as const).map((option) => <button key={option} class={theme === option ? 'is-active' : ''} type="button" aria-pressed={theme === option} onClick={() => onThemeChange(option)}><span class={`theme-preview theme-preview--${option}`}><i /><i /><i /></span><strong>{themeLabels[option]}</strong><small>{option === 'system' ? 'Follow this device' : option === 'oled' ? 'True black surfaces' : `${themeLabels[option]} palette`}</small>{theme === option && <Icon name="check" size={14} />}</button>)}</div>

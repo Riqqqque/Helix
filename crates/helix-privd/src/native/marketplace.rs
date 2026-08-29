@@ -1,6 +1,6 @@
 use super::{
-    InstanceManifest, MinecraftSoftware, NativeManager, native_id, now_unix_ms, require_https_host,
-    run_program, software_name, valid_hex,
+    FORGECDN_DOWNLOAD_HOSTS, InstanceManifest, MinecraftSoftware, NativeManager, native_id,
+    now_unix_ms, require_https_host, run_program, software_name, valid_hex,
 };
 use helix_privd::{MarketplaceCatalog, ModpackProvider};
 use serde::{Deserialize, Serialize};
@@ -514,6 +514,7 @@ impl NativeManager {
                     "cdn.modrinth.com",
                     "edge.forgecdn.net",
                     "mediafilez.forgecdn.net",
+                    "media.forgecdn.net",
                 ],
             )?;
             let path = staging.join(format!("{index:03}.jar"));
@@ -667,18 +668,15 @@ impl NativeManager {
         catalog: MarketplaceCatalog,
     ) -> Result<Value, String> {
         let class_id = curseforge_class_id(profile, catalog)?;
-        let mut url = format!(
-            "https://www.curseforge.com/api/v1/mods/search?gameId=432&classId={class_id}&index={offset}&pageSize={limit}&sortField=2&sortOrder=desc&gameVersion={}&searchFilter={}",
+        let mut path = format!(
+            "mods/search?gameId=432&classId={class_id}&index={offset}&pageSize={limit}&sortField=2&sortOrder=desc&gameVersion={}&searchFilter={}",
             percent_encode(&manifest.minecraft_version),
             percent_encode(query.trim())
         );
         if let Some(loader) = curseforge_loader_type(manifest.software) {
-            url.push_str(&format!("&modLoaderType={loader}"));
+            path.push_str(&format!("&modLoaderType={loader}"));
         }
-        let response = self.fetch_json(&url, &["www.curseforge.com"]).map_err(|_| {
-            "CurseForge's public catalog was unreachable; Helix did not use an API key. Try again or use Modrinth."
-                .to_owned()
-        })?;
+        let response = self.curseforge_v1(&path)?;
         let hits = response
             .get("data")
             .and_then(Value::as_array)
@@ -720,20 +718,14 @@ impl NativeManager {
         profile: &ContentProfile,
         project_id: &str,
     ) -> Result<Value, String> {
-        let project = self.fetch_json(
-            &format!("https://www.curseforge.com/api/v1/mods/{project_id}"),
-            &["www.curseforge.com"],
-        )?;
+        let project = self.curseforge_v1(&format!("mods/{project_id}"))?;
         let project = project.get("data").cloned().unwrap_or(project);
         let slug = required_text(&project, "slug", 128)
             .or_else(|_| required_text(&project, "name", 128))?;
         let title = optional_text(&project, "name", 256).unwrap_or_else(|| slug.clone());
         let class_id = project.get("classId").and_then(Value::as_u64).unwrap_or(0);
         let project_type = curseforge_project_type(class_id, profile.kind);
-        let files = self.fetch_json(
-            &format!("https://www.curseforge.com/api/v1/mods/{project_id}/files?pageSize=50"),
-            &["www.curseforge.com"],
-        )?;
+        let files = self.curseforge_v1(&format!("mods/{project_id}/files?pageSize=50"))?;
         let files = files
             .get("data")
             .and_then(Value::as_array)
@@ -800,10 +792,7 @@ impl NativeManager {
 
     fn curseforge_description(&self, project_id: &str) -> Option<String> {
         let response = self
-            .fetch_json(
-                &format!("https://www.curseforge.com/api/v1/mods/{project_id}/description"),
-                &["www.curseforge.com"],
-            )
+            .curseforge_v1(&format!("mods/{project_id}/description"))
             .ok()?;
         let html = response.get("data").and_then(Value::as_str)?;
         let cleaned = clean_text_chars(html, MAX_PROJECT_BODY_CHARS);
@@ -839,20 +828,12 @@ impl NativeManager {
             }
             let file = if let Some(file_id) = version_hint.as_deref() {
                 validate_modrinth_id(file_id, "version")?;
-                self.fetch_json(
-                    &format!("https://www.curseforge.com/api/v1/mods/{project_id}/files/{file_id}"),
-                    &["www.curseforge.com"],
-                )?
-                .get("data")
-                .cloned()
-                .ok_or_else(|| "CurseForge returned a file without data".to_owned())?
+                self.curseforge_v1(&format!("mods/{project_id}/files/{file_id}"))?
+                    .get("data")
+                    .cloned()
+                    .ok_or_else(|| "CurseForge returned a file without data".to_owned())?
             } else {
-                let files = self.fetch_json(
-                    &format!(
-                        "https://www.curseforge.com/api/v1/mods/{project_id}/files?pageSize=50"
-                    ),
-                    &["www.curseforge.com"],
-                )?;
+                let files = self.curseforge_v1(&format!("mods/{project_id}/files?pageSize=50"))?;
                 let files = files
                     .get("data")
                     .and_then(Value::as_array)
@@ -865,15 +846,13 @@ impl NativeManager {
                 .and_then(Value::as_u64)
                 .map(|id| id.to_string())
                 .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
-            let project = self.fetch_json(
-                &format!("https://www.curseforge.com/api/v1/mods/{project_id}"),
-                &["www.curseforge.com"],
-            )?;
+            let project = self.curseforge_v1(&format!("mods/{project_id}"))?;
             let project = project.get("data").cloned().unwrap_or(project);
             let slug = required_text(&project, "slug", 128)
                 .or_else(|_| required_text(&project, "name", 128))?;
             let title = optional_text(&project, "name", 256).unwrap_or_else(|| slug.clone());
-            let resolved_file = select_curseforge_jar(&file)?;
+            let url = self.resolve_curseforge_download_url(&project_id, &file)?;
+            let resolved_file = select_curseforge_jar(&file, url)?;
             let mut optional_dependencies = Vec::new();
             if let Some(dependencies) = file.get("dependencies").and_then(Value::as_array) {
                 for dependency in dependencies.iter().take(128) {
@@ -1563,26 +1542,10 @@ fn select_curseforge_release<'a>(
         })
 }
 
-fn select_curseforge_jar(file: &Value) -> Result<ResolvedFile, String> {
+fn select_curseforge_jar(file: &Value, url: String) -> Result<ResolvedFile, String> {
     let filename = required_text(file, "fileName", 180)?;
     validate_content_filename(&filename)?;
-    let file_id = file
-        .get("id")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
-    let url = match optional_text(file, "downloadUrl", 4_096) {
-        Some(candidate)
-            if require_https_host(
-                &candidate,
-                &["edge.forgecdn.net", "mediafilez.forgecdn.net"],
-            )
-            .is_ok() =>
-        {
-            candidate
-        }
-        _ => forgecdn_file_url(file_id, &filename)?,
-    };
-    require_https_host(&url, &["edge.forgecdn.net", "mediafilez.forgecdn.net"])?;
+    require_https_host(&url, FORGECDN_DOWNLOAD_HOSTS)?;
     let size = file
         .get("fileLength")
         .and_then(Value::as_u64)
@@ -1608,7 +1571,7 @@ fn select_curseforge_jar(file: &Value) -> Result<ResolvedFile, String> {
     })
 }
 
-fn forgecdn_file_url(file_id: u64, file_name: &str) -> Result<String, String> {
+pub(super) fn forgecdn_file_url(file_id: u64, file_name: &str) -> Result<String, String> {
     if file_id == 0
         || file_name.is_empty()
         || file_name.contains(['/', '\\', ':'])

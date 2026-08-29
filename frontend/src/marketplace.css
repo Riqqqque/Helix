@@ -617,6 +617,10 @@
 }
 
 .marketplace-note--warning svg { color: var(--warning); }
+.marketplace-note button {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
 
 .marketplace-install-button {
   width: 100%;

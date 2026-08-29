@@ -23,6 +23,10 @@ function isSessionError(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 401 || error.code === 'csrf_rejected');
 }
 
+function isCurseforgeKeyRequired(message: string): boolean {
+  return message.includes('Settings → Catalogs') || message.includes('console.curseforge.com');
+}
+
 function compactNumber(value: number): string {
   return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
@@ -65,17 +69,29 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
     setLoading(true);
     setError(null);
     const timer = window.setTimeout(() => {
-      void searchModpacks(query.trim(), offset, PAGE_SIZE, csrfToken, controller.signal, provider)
-        .then((result) => setPage(result))
-        .catch((requestError: unknown) => {
-          if (controller.signal.aborted) return;
-          setPage(null);
-          if (isSessionError(requestError)) onSessionExpired();
-          else setError(errorMessage(requestError));
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false);
-        });
+      const run = async (): Promise<void> => {
+        let lastError: unknown;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const result = await searchModpacks(query.trim(), offset, PAGE_SIZE, csrfToken, controller.signal, provider);
+            if (controller.signal.aborted) return;
+            setPage(result);
+            setError(null);
+            return;
+          } catch (requestError: unknown) {
+            lastError = requestError;
+            if (controller.signal.aborted) return;
+            if (isSessionError(requestError) || isCurseforgeKeyRequired(errorMessage(requestError))) break;
+            if (attempt === 0) await new Promise((resolve) => window.setTimeout(resolve, 500));
+          }
+        }
+        if (controller.signal.aborted) return;
+        if (isSessionError(lastError)) onSessionExpired();
+        else setError(errorMessage(lastError));
+      };
+      void run().finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
     }, 350);
     return () => {
       window.clearTimeout(timer);
@@ -176,7 +192,7 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
   return (
     <section class="modpack-browser">
       <div class="modpack-browser__intro">
-        <div><strong>Start with a modpack</strong><span>Browse server-capable packs without leaving Helix. Switch catalogs without giving Helix an API key.</span></div>
+        <div><strong>Start with a modpack</strong><span>Browse server-capable packs without leaving Helix. CurseForge needs an API key in Settings → Catalogs.</span></div>
         <a href={provider === 'curseforge' ? 'https://www.curseforge.com/minecraft/modpacks' : 'https://modrinth.com/modpacks'} target="_blank" rel="noreferrer">{provider === 'curseforge' ? 'CurseForge catalog' : 'Modrinth catalog'} <Icon name="external" size={12} /></a>
       </div>
       <div class="modpack-provider-tabs" role="tablist" aria-label="Modpack catalog">
@@ -185,11 +201,18 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
       </div>
       {selection !== null && <div class="modpack-selection"><Icon name="check" size={16} /><span><strong>{selection.projectTitle}</strong>{selection.versionNumber} · {selection.minecraftVersions.join(', ')}</span><button type="button" onClick={() => onSelectionChange(null)}>Clear</button></div>}
       <label class="modpack-search"><span>Search packs</span><div><Icon name="search" size={16} /><input value={query} onInput={(event) => { setQuery(event.currentTarget.value); setOffset(0); }} maxlength={120} placeholder="All the Mods, Cobblemon, adventure…" /></div></label>
-      {error !== null && <div class="modpack-state is-error" role="alert"><Icon name="warning" /><span>{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>Try again</button></div>}
-      {loading && <div class="modpack-state" role="status"><span class="modpack-spinner" /><span>Searching the {provider === 'curseforge' ? 'CurseForge' : 'Modrinth'} catalog…</span></div>}
+      {error !== null && isCurseforgeKeyRequired(error) && (
+        <div class="modpack-state" role="status">
+          <Icon name="search" />
+          <span>CurseForge needs an API key. Paste one in Settings → Catalogs, then search again.</span>
+          <a class="button button--primary" href="#settings">Open Settings</a>
+        </div>
+      )}
+      {error !== null && !isCurseforgeKeyRequired(error) && <div class="modpack-state is-error" role="alert"><Icon name="warning" /><span>{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>Try again</button></div>}
+      {loading && page === null && <div class="modpack-state" role="status"><span class="modpack-spinner" /><span>Searching the {provider === 'curseforge' ? 'CurseForge' : 'Modrinth'} catalog…</span></div>}
       {!loading && error === null && page?.results.length === 0 && <div class="modpack-state"><Icon name="search" /><span>No modpacks match this search.</span></div>}
       <div class="modpack-grid" aria-live="polite">
-        {!loading && page?.results.map((project) => (
+        {page?.results.map((project) => (
           <article class={project.compatibilityStatus === 'incompatible' ? 'is-incompatible' : ''} key={project.projectId}>
             <header><ModpackMark iconUrl={project.iconUrl} /><span class={`modpack-status is-${project.compatibilityStatus}`}>{candidateLabel(project.compatibilityStatus)}</span></header>
             <div><h3>{project.title}</h3><span>by {project.author ?? (provider === 'curseforge' ? 'CurseForge creator' : 'Modrinth creator')}</span></div>
