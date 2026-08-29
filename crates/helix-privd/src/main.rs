@@ -1406,11 +1406,15 @@ impl BrokerContext {
             .spawn(move || {
                 context.update_job(&worker_job_id, |job| {
                     job.status = JobState::Running;
-                    job.stage = "Refreshing signed APT package lists".to_owned();
+                    job.stage = "Checking signed Linux package sources".to_owned();
                     job.progress_percent = 10;
                 });
                 let result = context.packages.refresh_lists();
-                context.finish_job(&worker_job_id, result, "Package lists refreshed");
+                context.finish_job(
+                    &worker_job_id,
+                    result,
+                    "Package lists updated. Nothing was installed.",
+                );
             })
             .is_err()
         {
@@ -1438,7 +1442,7 @@ impl BrokerContext {
             .spawn(move || {
                 context.update_job(&worker_job_id, |job| {
                     job.status = JobState::Running;
-                    job.stage = "Revalidating exact package candidates and disk space".to_owned();
+                    job.stage = "Checking the selected versions and disk space".to_owned();
                     job.progress_percent = 5;
                 });
                 let result = context.packages.apply_updates(
@@ -1446,7 +1450,11 @@ impl BrokerContext {
                     &confirmation,
                     disruption_acknowledged,
                 );
-                context.finish_job(&worker_job_id, result, "Selected updates verified");
+                context.finish_job(
+                    &worker_job_id,
+                    result,
+                    "Selected packages installed and verified",
+                );
             })
             .is_err()
         {

@@ -45,7 +45,7 @@ The current 1.0 private-LAN build includes:
 - narrowly scoped, named UFW allow rules with exact Helix ownership metadata,
   verified deletion, and bounded Undo when UFW is available and active;
 - APT/dpkg inventory, explicit package-list refresh, and an exact selected-
-  candidate update job with held-package, disk, no-removal simulation, conffile,
+  candidate update job with held-package, disk, no-removal preview, conffile,
   final-version, and never-auto-reboot guards;
 - native Docker-backed Minecraft instances for Paper, Purpur, Folia, Leaves, Fabric,
   Forge, NeoForge, Quilt, Pufferfish, Vanilla, and a guarded local custom-JAR import,

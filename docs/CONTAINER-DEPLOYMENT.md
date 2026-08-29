@@ -242,7 +242,7 @@ Confirm on the host that:
   expected identities;
 - unrelated Docker containers, UFW rules, services, and storage were unchanged;
 - the Network page labels outside reachability `unverified`; and
-- Helix Update on System updates can check GitHub, and Apply stays disabled
+- Helix Update on Host → Linux updates can check GitHub, and Apply stays disabled
   until a newer digest-pinned tag exists and Compose is detected.
 
 The Start on boot setting changes only the exact configured dashboard/gateway

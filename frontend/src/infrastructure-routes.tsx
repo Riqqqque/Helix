@@ -67,9 +67,9 @@ export function HostUpdatesRoute(props: HostUpdatesRouteProps) {
   useEffect(() => {
     if (request === null) return;
     let mounted = true;
-    void request.then((component) => { if (mounted) setPanel(() => component); }).catch(() => { if (mounted) setError('System updates could not be loaded.'); });
+    void request.then((component) => { if (mounted) setPanel(() => component); }).catch(() => { if (mounted) setError('Linux updates could not be loaded.'); });
     return () => { mounted = false; };
   }, [request]);
   if (Panel !== null) return <Panel {...props} />;
-  return <section class="infrastructure-panel infrastructure-lazy" aria-busy={error === null}><InlineError message={error} /><div class="detail-loading"><Icon name={error === null ? 'update' : 'warning'} size={26} /><span>{error === null ? 'Loading package inventory…' : 'Host services and processes remain available above.'}</span>{error !== null && <button class="button button--primary" type="button" onClick={() => setError(null)}>Try again</button>}</div></section>;
+  return <section class="infrastructure-panel infrastructure-lazy" aria-busy={error === null}><InlineError message={error} /><div class="detail-loading"><Icon name={error === null ? 'update' : 'warning'} size={26} /><span>{error === null ? 'Loading Linux updates…' : 'Host details stay available on this page.'}</span>{error !== null && <button class="button button--primary" type="button" onClick={() => setError(null)}>Try again</button>}</div></section>;
 }

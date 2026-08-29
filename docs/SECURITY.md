@@ -301,18 +301,22 @@ still a release gate and must use disposable rules and a controlled router.
 
 ## Packages and Helix updates
 
-Opening the package page reads dpkg/APT inventory and a simulation without
-refreshing lists or mutating dpkg. A separate explicit refresh job can run
-`apt-get update`. A separate selected-candidate job accepts bounded exact
-name/installed/candidate tuples, rejects holds and changed candidates, requires
-download headroom and disruption acknowledgement, re-runs a no-removal/no-new-
-package simulation, preserves existing conffiles, serializes APT work, and
-verifies every final installed version. Bounded job logs are retained.
+Opening the package page reads dpkg/APT inventory and a no-change preview
+without refreshing lists or mutating dpkg. A separate explicit refresh job can
+run `apt-get update`. helix-privd passes `APT::Sandbox::User=root` so APT's
+HTTPS helper does not seteuid to `_apt`; systemd `NoNewPrivileges` would
+otherwise kill that download. A separate selected-candidate job accepts bounded
+exact name/installed/candidate tuples, rejects holds and changed candidates,
+requires download headroom and disruption acknowledgement, re-runs a
+no-removal/no-new-package preview, preserves existing conffiles, serializes APT
+work, and verifies every final installed version. Bounded job logs are retained.
 
 This is not transactional package rollback. Power loss, maintainer-script
 failure, dpkg partial configuration, service disruption, and unusual conffile
 states still require the distribution's recovery tools and a disposable test
-matrix. Helix never auto-reboots after package work.
+matrix. Helix never auto-reboots after package work. Kernel, libc, systemd, and
+similar packages are labeled as often needing a host reboot; `/var/run/reboot-required`
+is the OS truth after apply. Reboot remains a separate `system.power` action.
 
 ## Optional host terminal
 
@@ -490,7 +494,7 @@ mocked, covered only by one host, or waived without an explicit narrow reason.
 - systemd transient units: <https://www.freedesktop.org/software/systemd/man/latest/systemd-run.html>
 - Linux constrained path resolution: <https://man7.org/linux/man-pages/man2/openat2.2.html>
 - UFW behavior: <https://manpages.ubuntu.com/manpages/jammy/man8/ufw.8.html>
-- APT simulation: <https://manpages.ubuntu.com/manpages/jammy/man8/apt-get.8.html>
+- APT preview (`apt-get --simulate`): <https://manpages.ubuntu.com/manpages/jammy/man8/apt-get.8.html>
 - SQLite durability/WAL: <https://www.sqlite.org/pragma.html> and <https://www.sqlite.org/wal.html>
 
 Minimum supported versions and effective target-host behavior must be tested;
