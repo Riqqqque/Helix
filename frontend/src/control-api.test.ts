@@ -16,6 +16,8 @@ import {
   restoreTrashedServerBackup,
   runServerAction,
   setNativeMemory,
+  setNativeCpu,
+  setNativeBrowserListing,
   setNativeStartOnBoot,
   setServerNetworkExposure,
   saveServerSettings,
@@ -284,6 +286,36 @@ describe('native server API', () => {
     expect(path).toContain('helix%3Aserver-id/memory');
     expect(request.method).toBe('PUT');
     expect(JSON.parse(String(request.body))).toEqual({ memory_mb: 8192 });
+  });
+
+  it('updates native CPU cap and V Rising listing', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        changed: true,
+        cpu_millis: 2000,
+        container_republished: true,
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        list_on_browser: true,
+        restart_required: true,
+      }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(setNativeCpu('helix:server-id', 2000, 'csrf')).resolves.toEqual({
+      changed: true,
+      cpuMillis: 2000,
+      containerRepublished: true,
+    });
+    await expect(setNativeBrowserListing('helix:server-id', true, 'csrf')).resolves.toEqual({
+      listOnBrowser: true,
+      restartRequired: true,
+    });
+    const [cpuPath, cpuRequest] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(cpuPath).toContain('helix%3Aserver-id/cpu');
+    expect(JSON.parse(String(cpuRequest.body))).toEqual({ cpu_millis: 2000 });
+    const [listingPath, listingRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(listingPath).toContain('helix%3Aserver-id/browser-listing');
+    expect(JSON.parse(String(listingRequest.body))).toEqual({ list_on_browser: true });
   });
 
   it('parses a background action job without waiting for the work', async () => {

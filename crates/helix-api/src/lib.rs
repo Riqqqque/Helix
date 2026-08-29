@@ -437,6 +437,11 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             put(set_native_start_on_boot),
         )
         .route("/servers/{instance_id}/memory", put(set_native_memory))
+        .route("/servers/{instance_id}/cpu", put(set_native_cpu))
+        .route(
+            "/servers/{instance_id}/browser-listing",
+            put(set_native_browser_listing),
+        )
         .route("/servers/{instance_id}/remove", post(trash_native_server))
         .route("/jobs/{job_id}", get(job_status))
         .layer(DefaultBodyLimit::max(FILE_API_BODY_LIMIT_BYTES));
@@ -1574,6 +1579,18 @@ struct StartOnBootBody {
 #[serde(deny_unknown_fields)]
 struct NativeMemoryBody {
     memory_mb: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeCpuBody {
+    cpu_millis: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeBrowserListingBody {
+    list_on_browser: bool,
 }
 
 #[derive(Deserialize)]
@@ -2983,6 +3000,9 @@ async fn create_vrising(
     let Json(mut spec) = body.map_err(auth::map_json_rejection)?;
     spec.wine_runtime_acknowledged = true;
     spec.validate().map_err(ApiError::BrokerRejected)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
     broker_json(&state, BrokerRequest::CreateVRising { spec }).await
 }
 
@@ -2995,6 +3015,9 @@ async fn create_valheim(
     auth::require_capability(&state, &headers, "games.manage").await?;
     let Json(spec) = body.map_err(auth::map_json_rejection)?;
     spec.validate().map_err(ApiError::BrokerRejected)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
     broker_json(&state, BrokerRequest::CreateValheim { spec }).await
 }
 
@@ -3046,6 +3069,45 @@ async fn set_native_memory(
         BrokerRequest::SetNativeMemory {
             instance_id,
             memory_mb: body.memory_mb,
+        },
+    )
+    .await
+}
+
+async fn set_native_cpu(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<NativeCpuBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    helix_privd::validate_cpu_millis(body.cpu_millis).map_err(ApiError::BrokerRejected)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetNativeCpu {
+            instance_id,
+            cpu_millis: body.cpu_millis,
+        },
+    )
+    .await
+}
+
+async fn set_native_browser_listing(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<NativeBrowserListingBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetNativeBrowserListing {
+            instance_id,
+            list_on_browser: body.list_on_browser,
         },
     )
     .await

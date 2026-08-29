@@ -121,19 +121,30 @@ impl UpnpGateway {
     }
 
     pub fn add_tcp_mapping(&self, port: u16, description: &str) -> Result<(), String> {
+        self.add_mapping(port, "TCP", description)
+    }
+
+    pub fn add_mapping(&self, port: u16, protocol: &str, description: &str) -> Result<(), String> {
         if port < 1_024 || description.is_empty() || description.len() > 64 {
             return Err("the requested router mapping is invalid".to_owned());
         }
+        if protocol != "TCP" && protocol != "UDP" {
+            return Err("the requested router mapping protocol is invalid".to_owned());
+        }
         let body = format!(
-            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>TCP</NewProtocol><NewInternalPort>{port}</NewInternalPort><NewInternalClient>{}</NewInternalClient><NewEnabled>1</NewEnabled><NewPortMappingDescription>{description}</NewPortMappingDescription><NewLeaseDuration>0</NewLeaseDuration>",
+            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>{protocol}</NewProtocol><NewInternalPort>{port}</NewInternalPort><NewInternalClient>{}</NewInternalClient><NewEnabled>1</NewEnabled><NewPortMappingDescription>{description}</NewPortMappingDescription><NewLeaseDuration>0</NewLeaseDuration>",
             self.local_ip
         );
         self.soap("AddPortMapping", &body).map(|_| ())
     }
 
     pub fn tcp_mapping_description(&self, port: u16) -> Result<Option<String>, String> {
+        self.mapping_description(port, "TCP")
+    }
+
+    pub fn mapping_description(&self, port: u16, protocol: &str) -> Result<Option<String>, String> {
         let body = format!(
-            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>TCP</NewProtocol>"
+            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>{protocol}</NewProtocol>"
         );
         match self.soap("GetSpecificPortMappingEntry", &body) {
             Ok(response) => Ok(Some(
@@ -145,8 +156,17 @@ impl UpnpGateway {
     }
 
     pub fn verify_tcp_mapping(&self, port: u16, description: &str) -> Result<bool, String> {
+        self.verify_mapping(port, "TCP", description)
+    }
+
+    pub fn verify_mapping(
+        &self,
+        port: u16,
+        protocol: &str,
+        description: &str,
+    ) -> Result<bool, String> {
         let body = format!(
-            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>TCP</NewProtocol>"
+            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>{protocol}</NewProtocol>"
         );
         let response = self.soap("GetSpecificPortMappingEntry", &body)?;
         Ok(
@@ -162,8 +182,12 @@ impl UpnpGateway {
     }
 
     pub fn delete_tcp_mapping(&self, port: u16) -> Result<(), String> {
+        self.delete_mapping(port, "TCP")
+    }
+
+    pub fn delete_mapping(&self, port: u16, protocol: &str) -> Result<(), String> {
         let body = format!(
-            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>TCP</NewProtocol>"
+            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>{protocol}</NewProtocol>"
         );
         self.soap("DeletePortMapping", &body).map(|_| ())
     }

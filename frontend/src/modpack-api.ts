@@ -89,6 +89,7 @@ export interface ModpackSelection {
 export interface MinecraftModpackCreateInput {
   name: string;
   memory_mb: number;
+  cpu_millis?: number;
   max_players: number;
   game_port?: number;
   network_exposure: 'private' | 'public';

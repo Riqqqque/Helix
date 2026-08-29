@@ -49,7 +49,7 @@ use host::{HostControl, HostControlConfig};
 #[cfg(target_os = "linux")]
 use native::{NativeConfig, NativeManager};
 #[cfg(target_os = "linux")]
-use network::{GamePortMapping, NetworkConfig, NetworkManager};
+use network::{exposure_ports, GamePortMapping, NetworkConfig, NetworkManager};
 #[cfg(target_os = "linux")]
 use packages::{PackageConfig, PackageManager};
 #[cfg(target_os = "linux")]
@@ -627,6 +627,18 @@ impl BrokerContext {
             } => self
                 .native_manager(&instance_id)
                 .and_then(|native| native.set_memory_mb(&instance_id, memory_mb)),
+            BrokerRequest::SetNativeCpu {
+                instance_id,
+                cpu_millis,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.set_cpu_millis(&instance_id, cpu_millis)),
+            BrokerRequest::SetNativeBrowserListing {
+                instance_id,
+                list_on_browser,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.set_vrising_browser_listing(&instance_id, list_on_browser)),
             BrokerRequest::ListMinecraftVersions { software } => self
                 .native
                 .as_deref()
@@ -769,13 +781,7 @@ impl BrokerContext {
             return Err(error);
         }
         self.network.set_server_exposure(
-            &GamePortMapping {
-                instance_id: server.id,
-                name: server.name,
-                manager: server.manager.to_owned(),
-                port,
-                running: server.panel_running,
-            },
+            &game_port_mapping_from_server(&server, port),
             enabled,
             &self.amp_occupied_ports(),
         )
@@ -820,13 +826,7 @@ impl BrokerContext {
             .find(|server| server.id == instance_id)
             .ok_or_else(|| "the Helix-owned server does not exist".to_owned())?;
         self.network
-            .drop_server_exposure_if_present(&GamePortMapping {
-                instance_id: server.id,
-                name: server.name,
-                manager: server.manager.to_owned(),
-                port,
-                running: server.panel_running,
-            })
+            .drop_server_exposure_if_present(&game_port_mapping_from_server(&server, port))
     }
 
     fn apply_creation_exposure(
@@ -861,13 +861,7 @@ impl BrokerContext {
             } else {
                 self.network
                     .set_server_exposure(
-                        &GamePortMapping {
-                            instance_id,
-                            name: server_name.to_owned(),
-                            manager: "helix".to_owned(),
-                            port,
-                            running: true,
-                        },
+                        &game_port_mapping_from_create(instance_id, server_name, port, &value),
                         true,
                         &self.amp_occupied_ports(),
                     )
@@ -1705,6 +1699,9 @@ impl BrokerContext {
                         job.stage = stage.to_owned();
                         job.progress_percent = progress;
                     });
+                })
+                .map(|value| {
+                    context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                 });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
@@ -1756,6 +1753,9 @@ impl BrokerContext {
                         job.stage = stage.to_owned();
                         job.progress_percent = progress;
                     });
+                })
+                .map(|value| {
+                    context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                 });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
@@ -1807,6 +1807,9 @@ impl BrokerContext {
                         job.stage = stage.to_owned();
                         job.progress_percent = progress;
                     });
+                })
+                .map(|value| {
+                    context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                 });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
@@ -2254,14 +2257,50 @@ fn amp_inventory_health(result: Option<Result<AmpInventory, String>>) -> Value {
 #[cfg(target_os = "linux")]
 fn append_game_port_mappings(mappings: &mut Vec<GamePortMapping>, servers: Vec<AmpServer>) {
     mappings.extend(servers.into_iter().filter_map(|server| {
-        server.game_port.map(|port| GamePortMapping {
-            instance_id: server.id,
-            name: server.name,
-            manager: server.manager.to_owned(),
-            port,
-            running: server.panel_running,
-        })
+        let port = server.game_port?;
+        Some(game_port_mapping_from_server(&server, port))
     }));
+}
+
+fn game_port_mapping_from_server(server: &AmpServer, port: u16) -> GamePortMapping {
+    let (protocol, extra_ports) = exposure_ports(server.kind, port, server.query_port);
+    GamePortMapping {
+        instance_id: server.id.clone(),
+        name: server.name.clone(),
+        manager: server.manager.to_owned(),
+        port,
+        running: server.panel_running,
+        extra_ports,
+        protocol,
+        kind: server.kind.to_owned(),
+    }
+}
+
+fn game_port_mapping_from_create(
+    instance_id: String,
+    server_name: &str,
+    port: u16,
+    value: &Value,
+) -> GamePortMapping {
+    let kind = value
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("minecraft");
+    let query_port = value
+        .get("query_port")
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok());
+    let (protocol, extra_ports) = exposure_ports(kind, port, query_port);
+    GamePortMapping {
+        instance_id,
+        name: server_name.to_owned(),
+        manager: "helix".to_owned(),
+        port,
+        running: true,
+        extra_ports,
+        protocol,
+        kind: kind.to_owned(),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -2783,6 +2822,7 @@ mod tests {
             manager_panel_port: 0,
             panel_port: 0,
             game_port: Some(25_565),
+            query_port: None,
             path: "/srv/test".to_owned(),
             warnings: Vec::new(),
             manager: "helix",

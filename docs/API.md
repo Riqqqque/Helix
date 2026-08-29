@@ -200,9 +200,11 @@ confirmation `ENABLE UFW`, proves the supplied TCP SSH port is listening, stages
 an exact durable allow rule, verifies both the active state and rule, and
 attempts to return to inactive state if verification fails. Helix never resets
 UFW or changes its defaults. The server-specific public-access route can create
-one exact TCP UPnP mapping on a same-origin private IPv4 gateway, refuses to
+exact TCP or UDP UPnP mappings on a same-origin private IPv4 gateway (TCP for
+Minecraft/Terraria, UDP game+query for V Rising, UDP game through game+2 for
+Valheim), refuses to
 overwrite any existing mapping including ports AMP already has claimed, and
-creates a matching owned UFW rule only when UFW is already active. It cannot
+creates matching owned UFW rules only when UFW is already active. It cannot
 bypass CGNAT or an ISP block. Live AMP claims name the instance and the AMP
 clicks to change the port. Leftover AMP-described UPnP mappings (no instance
 file still listing that port) can be removed with
@@ -295,11 +297,11 @@ or output. Disconnect ends the PTY.
 | `GET` | `/api/v1/servers/port-policies/minecraft` | `games.view` | Read the normalized Minecraft ranges, priority ports, capacity, assignments, AMP-claimed numbers in the pool, and next free port |
 | `PUT` | `/api/v1/servers/port-policies/minecraft` | `games.manage` | Persist bounded ranges, individual priority ports, and the public-setup default |
 | `GET` | `/api/v1/servers/port-policies/vrising` | `games.view` | Read the V Rising UDP pool (game + query pairs) |
-| `PUT` | `/api/v1/servers/port-policies/vrising` | `games.manage` | Persist the V Rising UDP pool; public auto-forward stays off |
+| `PUT` | `/api/v1/servers/port-policies/vrising` | `games.manage` | Persist the V Rising UDP pool and optional public-setup default |
 | `GET` | `/api/v1/servers/port-policies/valheim` | `games.view` | Read the Valheim UDP pool (game + next two) |
-| `PUT` | `/api/v1/servers/port-policies/valheim` | `games.manage` | Persist the Valheim UDP pool; public auto-forward stays off |
+| `PUT` | `/api/v1/servers/port-policies/valheim` | `games.manage` | Persist the Valheim UDP pool and optional public-setup default |
 | `GET` | `/api/v1/servers/port-policies/terraria` | `games.view` | Read the Terraria TCP pool |
-| `PUT` | `/api/v1/servers/port-policies/terraria` | `games.manage` | Persist the Terraria TCP pool |
+| `PUT` | `/api/v1/servers/port-policies/terraria` | `games.manage` | Persist the Terraria TCP pool and optional public-setup default |
 | `GET` | `/api/v1/games/readiness` | `games.view` | Compatibility alias for manager readiness |
 | `POST` | `/api/v1/servers/minecraft` | `games.manage` | Start a native Minecraft creation job |
 | `POST` | `/api/v1/servers/vrising` | `games.manage` | Start a native V Rising creation job |
@@ -314,7 +316,9 @@ or output. Disconnect ends the PTY.
 | `POST` | `/api/v1/servers/{instance_id}/actions` | `games.manage` | Typed start/stop/restart/kill/update/backup action |
 | `PUT` | `/api/v1/servers/{instance_id}/start-on-boot` | `games.manage` | Set Docker restart policy on one native game container without starting or stopping it now |
 | `PUT` | `/api/v1/servers/{instance_id}/memory` | `games.manage` | Set allocated memory on one native game container; recreates the published container with the new limit |
-| `PUT` | `/api/v1/servers/{instance_id}/network` | `games.manage` + `network.firewall.write` | Create or remove the exact verified Helix-owned TCP router/UFW exposure for a native server |
+| `PUT` | `/api/v1/servers/{instance_id}/cpu` | `games.manage` | Set Docker `--cpus` on one native game container (`cpu_millis`: `0` = no extra cap, else 250–128000); recreates the published container |
+| `PUT` | `/api/v1/servers/{instance_id}/browser-listing` | `games.manage` | Set V Rising `ListOnEOS` / `ListOnSteam` / `HideIPAddress`; `restart_required` when the container is running |
+| `PUT` | `/api/v1/servers/{instance_id}/network` | `games.manage` + `network.firewall.write` | Create or remove the exact verified Helix-owned TCP or UDP router/UFW exposure for a native server |
 | `POST` | `/api/v1/servers/{instance_id}/remove` | `games.manage` | Stop/remove exact native workload and move data to recoverable trash |
 | `GET` | `/api/v1/jobs/{job_id}` | `games.view` | Read current bounded job state/log |
 
@@ -331,9 +335,11 @@ installs. Paper-family and Fabric/Vanilla catalogs accept `latest`; custom JAR
 catalogs return Mojang releases and reject `latest` at create time.
 
 V Rising creation installs the dedicated server into an isolated container,
-allocates a UDP game/query pair from the V Rising pool, and stays private. The
-first create may build `helix-vrising-runtime:1` and download Steam app
-`1829350`. Removing the last active V Rising instance deletes that image.
+allocates a UDP game/query pair from the V Rising pool, lists on EOS/Steam by
+default (`list_on_browser`, with `HideIPAddress` when listed), and may request
+public UDP UPnP when `network_exposure` is `public`. The first create may build
+`helix-vrising-runtime:1` and download Steam app `1829350`. Removing the last
+active V Rising instance deletes that image.
 Restore rebuilds it if needed. This path is implemented and unvalidated on a
 live host; it is not publisher-supported.
 
@@ -343,9 +349,11 @@ It does not start or stop the server at toggle time. After a host reboot,
 Docker brings back servers that opted in.
 
 Native allocated memory writes the instance manifest and recreates the published
-container with the new Docker memory limit. Minecraft also updates `-Xmx`. The
-container is started again only if it was running. Bounds match create: Minecraft
-1–24 GiB, V Rising 2–24 GiB, Valheim 1–16 GiB, Terraria 512 MiB–8 GiB.
+container with the new Docker memory limit. Minecraft also updates `-Xmx`. Native
+CPU writes `cpu_millis` and recreates the container with Docker `--cpus`. `0`
+means no extra cap. The container is started again only if it was running. Memory
+bounds match create: Minecraft 1–24 GiB, V Rising 2–24 GiB, Valheim 1–16 GiB,
+Terraria 512 MiB–8 GiB. CPU bounds are off, or 0.25–128 cores.
 
 Accepted work is not completed work. Creation, install, update, and backup jobs
 return bounded broker-lifetime status that the frontend polls. Job state is not
@@ -361,7 +369,8 @@ the first genuinely free candidate from the stored Minecraft policy while the
 creation lock is held. Priority ports are tried before ordered ranges; the
 policy is bounded to 4,096 unique candidates. Modpack creation accepts opaque
 project/version IDs, optional `provider` (`modrinth` default, or `curseforge`),
-and the ordinary server name, RAM, player, optional port, network-exposure,
+and the ordinary server name, RAM, optional CPU cap (`cpu_millis`, `0` omitted),
+player, optional port, network-exposure,
 start-on-boot, and EULA fields. Modrinth `.mrpack` downloads use exact API/CDN
 hosts without redirects and verify declared hashes. CurseForge uses the public
 website catalog and forgecdn files plus `manifest.json`. Fabric, Forge,

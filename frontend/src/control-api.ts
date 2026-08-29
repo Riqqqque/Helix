@@ -266,6 +266,7 @@ export interface MinecraftCreateInput {
   software: MinecraftSoftware;
   version: string;
   memory_mb: number;
+  cpu_millis?: number;
   max_players: number;
   game_port?: number;
   network_exposure: 'private' | 'public';
@@ -373,6 +374,7 @@ export interface NativeServerDetail {
   runtimeImage: string;
   artifactSha256: string;
   memoryLimitMb: number;
+  cpuLimitMillis: number;
   gamePort: number;
   queryPort: number | null;
   startOnBoot: boolean;
@@ -394,6 +396,14 @@ export interface NativeServerDetail {
     scope: 'per_server';
   };
   capabilities: string[];
+  browserListing: NativeBrowserListing | null;
+}
+
+export interface NativeBrowserListing {
+  listOnBrowser: boolean;
+  listOnEos: boolean;
+  listOnSteam: boolean;
+  hideIpAddress: boolean;
 }
 
 export interface ServerLogSnapshot {
@@ -871,6 +881,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     runtimeImage: expectString(root, 'runtime_image', 'server detail'),
     artifactSha256: expectString(root, 'artifact_sha256', 'server detail'),
     memoryLimitMb: number(root, 'memory_limit_mb'),
+    cpuLimitMillis: root.cpu_limit_millis == null ? 0 : number(root, 'cpu_limit_millis'),
     gamePort: number(root, 'game_port'),
     queryPort,
     startOnBoot: boolean(root, 'start_on_boot'),
@@ -897,6 +908,18 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
       if (typeof entry !== 'string') throw new Error('Invalid server capability');
       return entry;
     }),
+    browserListing: parseBrowserListing(root.browser_listing),
+  };
+}
+
+function parseBrowserListing(value: unknown): NativeBrowserListing | null {
+  if (value === null || value === undefined) return null;
+  const root = expectRecord(value, 'browser listing');
+  return {
+    listOnBrowser: boolean(root, 'list_on_browser'),
+    listOnEos: boolean(root, 'list_on_eos'),
+    listOnSteam: boolean(root, 'list_on_steam'),
+    hideIpAddress: boolean(root, 'hide_ip_address'),
   };
 }
 
@@ -1159,35 +1182,41 @@ export function createMinecraftServer(input: MinecraftCreateInput, csrfToken: st
 export function createVRisingServer(input: {
   name: string;
   memory_mb: number;
+  cpu_millis?: number;
   max_players: number;
   game_port?: number;
   query_port?: number;
   start_on_boot: boolean;
   wine_runtime_acknowledged: boolean;
+  network_exposure: 'private' | 'public';
+  list_on_browser: boolean;
 }, csrfToken: string): Promise<{ jobId: string }> {
   return requestJson('/api/v1/servers/vrising', (value) => {
     const root = expectRecord(value, 'V Rising job');
     return { jobId: expectString(root, 'job_id', 'V Rising job') };
-  }, { method: 'POST', body: { ...input, network_exposure: 'private' }, csrfToken, timeoutMs: 20_000 });
+  }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
 }
 
 export function createValheimServer(input: {
   name: string;
   memory_mb: number;
+  cpu_millis?: number;
   max_players: number;
   game_port?: number;
   start_on_boot: boolean;
+  network_exposure: 'private' | 'public';
 }, csrfToken: string): Promise<{ jobId: string }> {
   return requestJson('/api/v1/servers/valheim', (value) => {
     const root = expectRecord(value, 'Valheim job');
     return { jobId: expectString(root, 'job_id', 'Valheim job') };
-  }, { method: 'POST', body: { ...input, network_exposure: 'private' }, csrfToken, timeoutMs: 20_000 });
+  }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
 }
 
 export function createTerrariaServer(input: {
   name: string;
   software: 'vanilla' | 'tmodloader';
   memory_mb: number;
+  cpu_millis?: number;
   max_players: number;
   game_port?: number;
   start_on_boot: boolean;
@@ -1219,6 +1248,35 @@ export function setNativeMemory(
       changed: boolean(root, 'changed'),
     };
   }, { method: 'PUT', body: { memory_mb: memoryMb }, csrfToken, timeoutMs: 90_000 });
+}
+
+export function setNativeCpu(
+  id: string,
+  cpuMillis: number,
+  csrfToken: string,
+): Promise<{ cpuMillis: number; containerRepublished: boolean; changed: boolean }> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/cpu`, (value) => {
+    const root = expectRecord(value, 'native CPU');
+    return {
+      cpuMillis: number(root, 'cpu_millis'),
+      containerRepublished: root.container_republished === true,
+      changed: boolean(root, 'changed'),
+    };
+  }, { method: 'PUT', body: { cpu_millis: cpuMillis }, csrfToken, timeoutMs: 90_000 });
+}
+
+export function setNativeBrowserListing(
+  id: string,
+  listOnBrowser: boolean,
+  csrfToken: string,
+): Promise<{ listOnBrowser: boolean; restartRequired: boolean }> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/browser-listing`, (value) => {
+    const root = expectRecord(value, 'native browser listing');
+    return {
+      listOnBrowser: boolean(root, 'list_on_browser'),
+      restartRequired: boolean(root, 'restart_required'),
+    };
+  }, { method: 'PUT', body: { list_on_browser: listOnBrowser }, csrfToken });
 }
 
 export function setServerNetworkExposure(

@@ -128,6 +128,8 @@ struct InstanceManifest {
     artifact_url: String,
     artifact_sha256: String,
     memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    cpu_millis: u32,
     max_players: u16,
     game_port: u16,
     #[serde(default, skip_serializing_if = "is_zero_u16")]
@@ -714,6 +716,11 @@ impl NativeManager {
                 manager_panel_port: 0,
                 panel_port: 0,
                 game_port: Some(manifest.game_port),
+                query_port: if manifest.query_port == 0 {
+                    None
+                } else {
+                    Some(manifest.query_port)
+                },
                 path: data_path.to_string_lossy().into_owned(),
                 warnings,
                 manager: "helix",
@@ -1461,6 +1468,7 @@ impl NativeManager {
             "runtime_image": manifest.runtime_image,
             "artifact_sha256": manifest.artifact_sha256,
             "memory_limit_mb": manifest.memory_mb,
+            "cpu_limit_millis": manifest.cpu_millis,
             "game_port": manifest.game_port,
             "query_port": if manifest.query_port == 0 { Value::Null } else { json!(manifest.query_port) },
             "console_endpoint": "local_only",
@@ -1482,7 +1490,12 @@ impl NativeManager {
                 "retention_files": self.console_retention.files,
                 "scope": "per_server"
             },
-            "capabilities": capabilities
+            "capabilities": capabilities,
+            "browser_listing": if manifest.is_vrising() {
+                read_vrising_browser_listing(&data_path)
+            } else {
+                Value::Null
+            }
         }))
     }
 
@@ -2681,6 +2694,7 @@ impl NativeManager {
                 artifact_url: artifact.url,
                 artifact_sha256,
                 memory_mb: spec.memory_mb,
+                cpu_millis: spec.cpu_millis,
                 max_players: spec.max_players,
                 game_port,
                 rcon_port,
@@ -2792,6 +2806,7 @@ impl NativeManager {
                 game_port,
                 query_port,
                 spec.max_players,
+                spec.list_on_browser,
             ))
             .map_err(|_| "could not encode V Rising host settings".to_owned())?;
             write_new_file(&settings_path, &settings, 0o660)?;
@@ -2811,6 +2826,7 @@ impl NativeManager {
                 artifact_url: vrising::ARTIFACT_URL.to_owned(),
                 artifact_sha256: vrising::empty_artifact_sha256().to_owned(),
                 memory_mb: spec.memory_mb,
+                cpu_millis: spec.cpu_millis,
                 max_players: spec.max_players,
                 game_port,
                 query_port,
@@ -2934,6 +2950,7 @@ impl NativeManager {
                 artifact_url: valheim::ARTIFACT_URL.to_owned(),
                 artifact_sha256: valheim::empty_artifact_sha256().to_owned(),
                 memory_mb: spec.memory_mb,
+                cpu_millis: spec.cpu_millis,
                 max_players: spec.max_players,
                 game_port,
                 query_port,
@@ -3072,6 +3089,7 @@ impl NativeManager {
                 artifact_url: artifact_url.to_owned(),
                 artifact_sha256: terraria::empty_artifact_sha256().to_owned(),
                 memory_mb: spec.memory_mb,
+                cpu_millis: spec.cpu_millis,
                 max_players: spec.max_players,
                 game_port,
                 query_port: 0,
@@ -3226,6 +3244,83 @@ impl NativeManager {
             "memory_mb": memory_mb,
             "container_republished": true,
             "was_running": running
+        }))
+    }
+
+    pub fn set_cpu_millis(&self, id: &str, cpu_millis: u32) -> Result<Value, String> {
+        helix_privd::validate_cpu_millis(cpu_millis)?;
+        let mut manifest = self.load_manifest(native_id(id))?;
+        if manifest.cpu_millis == cpu_millis {
+            return Ok(json!({
+                "instance_id": format!("helix:{}", manifest.id),
+                "changed": false,
+                "cpu_millis": cpu_millis,
+                "container_republished": false
+            }));
+        }
+        let _operation = self.begin_instance_operation(&manifest.id, "cpu update")?;
+        let previous = manifest.clone();
+        let data_path = self.instance_path(&manifest.id)?;
+        let running = self.container_running(&manifest.container_name);
+        manifest.cpu_millis = cpu_millis;
+        write_manifest(&self.manifest_path(&manifest.id)?, &manifest)?;
+        if let Err(error) = self.republish_minecraft_container(&manifest, &data_path, running) {
+            let _ = write_manifest(&self.manifest_path(&previous.id)?, &previous);
+            let _ = self.republish_minecraft_container(&previous, &data_path, running);
+            return Err(error);
+        }
+        Ok(json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "changed": true,
+            "cpu_millis": cpu_millis,
+            "container_republished": true,
+            "was_running": running
+        }))
+    }
+
+    pub fn set_vrising_browser_listing(
+        &self,
+        id: &str,
+        list_on_browser: bool,
+    ) -> Result<Value, String> {
+        let manifest = self.load_manifest(native_id(id))?;
+        if !manifest.is_vrising() {
+            return Err("only V Rising servers have an in-game server list".to_owned());
+        }
+        let _operation = self.begin_instance_operation(&manifest.id, "listing update")?;
+        let data_path = self.instance_path(&manifest.id)?;
+        let path = vrising_host_settings_path(&data_path);
+        let mut settings = if path.is_file() {
+            serde_json::from_slice::<Value>(
+                &fs::read(&path).map_err(|_| "could not read V Rising host settings".to_owned())?,
+            )
+            .map_err(|_| "V Rising host settings are invalid".to_owned())?
+        } else {
+            vrising::host_settings_json(
+                &manifest.name,
+                manifest.game_port,
+                manifest.query_port,
+                manifest.max_players,
+                list_on_browser,
+            )
+        };
+        let Some(object) = settings.as_object_mut() else {
+            return Err("V Rising host settings are invalid".to_owned());
+        };
+        object.insert("ListOnSteam".to_owned(), json!(list_on_browser));
+        object.insert("ListOnEOS".to_owned(), json!(list_on_browser));
+        object.insert("HideIPAddress".to_owned(), json!(list_on_browser));
+        let encoded = serde_json::to_string_pretty(&settings)
+            .map_err(|_| "could not encode V Rising host settings".to_owned())?;
+        write_private_text(&path, &format!("{encoded}\n"))?;
+        let running = self.container_running(&manifest.container_name);
+        Ok(json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "list_on_browser": list_on_browser,
+            "list_on_eos": list_on_browser,
+            "list_on_steam": list_on_browser,
+            "hide_ip_address": list_on_browser,
+            "restart_required": running
         }))
     }
 
@@ -4344,6 +4439,7 @@ impl NativeManager {
             args.push("server.jar".to_owned());
             args.push("--nogui".to_owned());
         }
+        insert_cpu_limit(&mut args, manifest.cpu_millis);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -4365,7 +4461,7 @@ impl NativeManager {
         let user = format!("{}:{}", manifest.run_uid, manifest.run_uid);
         let memory = format!("{memory_limit}m");
         let instance_label = format!("io.helix.instance={}", manifest.id);
-        let args = vec![
+        let mut args = vec![
             "create".to_owned(),
             "--name".to_owned(),
             manifest.container_name.clone(),
@@ -4413,6 +4509,7 @@ impl NativeManager {
             "max-file=5".to_owned(),
             manifest.runtime_image.clone(),
         ];
+        insert_cpu_limit(&mut args, manifest.cpu_millis);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -4435,7 +4532,7 @@ impl NativeManager {
         let user = format!("{}:{}", manifest.run_uid, manifest.run_uid);
         let memory = format!("{memory_limit}m");
         let instance_label = format!("io.helix.instance={}", manifest.id);
-        let args = vec![
+        let mut args = vec![
             "create".to_owned(),
             "--name".to_owned(),
             manifest.container_name.clone(),
@@ -4487,6 +4584,7 @@ impl NativeManager {
             "max-file=5".to_owned(),
             manifest.runtime_image.clone(),
         ];
+        insert_cpu_limit(&mut args, manifest.cpu_millis);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -4512,7 +4610,7 @@ impl NativeManager {
         } else {
             "vanilla"
         };
-        let args = vec![
+        let mut args = vec![
             "create".to_owned(),
             "--name".to_owned(),
             manifest.container_name.clone(),
@@ -4564,6 +4662,7 @@ impl NativeManager {
             "max-file=5".to_owned(),
             manifest.runtime_image.clone(),
         ];
+        insert_cpu_limit(&mut args, manifest.cpu_millis);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -6251,6 +6350,7 @@ fn validate_create_spec(spec: &MinecraftCreateSpec) -> Result<(), String> {
     if !(1_024..=24_576).contains(&spec.memory_mb) {
         return Err("memory must be between 1 and 24 GiB".to_owned());
     }
+    helix_privd::validate_cpu_millis(spec.cpu_millis)?;
     if !(1..=10_000).contains(&spec.max_players) {
         return Err("player limit must be between 1 and 10,000".to_owned());
     }
@@ -6327,9 +6427,6 @@ fn normalize_game_port_policy(
     policy.ranges.dedup();
     policy.ports.sort_unstable();
     policy.ports.dedup();
-    if matches!(policy.game, GameKind::VRising | GameKind::Valheim) {
-        policy.auto_forward_on_create = false;
-    }
     if policy.ranges.is_empty() && policy.ports.is_empty() {
         return Err("add at least one port or port range".to_owned());
     }
@@ -7675,12 +7772,72 @@ fn display_software(manifest: &InstanceManifest) -> &'static str {
     }
 }
 
+fn insert_cpu_limit(args: &mut Vec<String>, cpu_millis: u32) {
+    if cpu_millis == 0 {
+        return;
+    }
+    let Some(index) = args.iter().position(|argument| argument == "--memory-swap") else {
+        return;
+    };
+    let insert_at = index.saturating_add(2);
+    args.splice(
+        insert_at..insert_at,
+        ["--cpus".to_owned(), format_docker_cpus(cpu_millis)],
+    );
+}
+
+fn format_docker_cpus(cpu_millis: u32) -> String {
+    let formatted = format!("{:.3}", f64::from(cpu_millis) / 1000.0);
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
+}
+
+fn vrising_host_settings_path(data_path: &Path) -> PathBuf {
+    data_path
+        .join("save")
+        .join("Settings")
+        .join("ServerHostSettings.json")
+}
+
+fn read_vrising_browser_listing(data_path: &Path) -> Value {
+    let path = vrising_host_settings_path(data_path);
+    let parsed = fs::read(&path)
+        .ok()
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok());
+    let list_on_eos = parsed
+        .as_ref()
+        .and_then(|value| value.get("ListOnEOS"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let list_on_steam = parsed
+        .as_ref()
+        .and_then(|value| value.get("ListOnSteam"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    json!({
+        "list_on_browser": list_on_eos || list_on_steam,
+        "list_on_eos": list_on_eos,
+        "list_on_steam": list_on_steam,
+        "hide_ip_address": parsed
+            .as_ref()
+            .and_then(|value| value.get("HideIPAddress"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    })
+}
+
 fn is_minecraft_kind(kind: &GameKind) -> bool {
     matches!(kind, GameKind::Minecraft)
 }
 
 fn is_zero_u16(port: &u16) -> bool {
     *port == 0
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 fn validate_backup_policy(keep_count: u16, keep_days: u16) -> Result<(), String> {
@@ -8137,7 +8294,7 @@ mod tests {
     }
 
     #[test]
-    fn vrising_port_policy_cannot_enable_public_auto_forward() {
+    fn vrising_port_policy_can_enable_public_auto_forward() {
         let normalized = normalize_game_port_policy(GamePortPolicySpec {
             game: GameKind::VRising,
             ranges: vec![GamePortRangeSpec {
@@ -8148,7 +8305,14 @@ mod tests {
             auto_forward_on_create: true,
         })
         .unwrap();
-        assert!(!normalized.auto_forward_on_create);
+        assert!(normalized.auto_forward_on_create);
+    }
+
+    #[test]
+    fn docker_cpus_formats_fractional_cores() {
+        assert_eq!(format_docker_cpus(250), "0.25");
+        assert_eq!(format_docker_cpus(1_000), "1");
+        assert_eq!(format_docker_cpus(2_000), "2");
     }
 
     #[test]
@@ -8177,6 +8341,7 @@ mod tests {
             software: MinecraftSoftware::Paper,
             version: "latest".to_owned(),
             memory_mb: 4_096,
+            cpu_millis: 0,
             max_players: 20,
             game_port: None,
             network_exposure: helix_privd::ServerNetworkExposure::Private,
@@ -8217,6 +8382,7 @@ mod tests {
         let encoded = serde_json::to_value(&manifest).unwrap();
         assert!(encoded.get("kind").is_none());
         assert!(encoded.get("query_port").is_none());
+        assert!(encoded.get("cpu_millis").is_none());
 
         let vrising = InstanceManifest {
             schema_version: MANIFEST_VERSION,
@@ -8233,6 +8399,7 @@ mod tests {
             artifact_url: vrising::ARTIFACT_URL.to_owned(),
             artifact_sha256: vrising::empty_artifact_sha256().to_owned(),
             memory_mb: 4096,
+            cpu_millis: 0,
             max_players: 40,
             game_port: 9876,
             query_port: 9877,
@@ -8381,6 +8548,7 @@ mod tests {
             software: MinecraftSoftware::Custom,
             version: "1.21.8".to_owned(),
             memory_mb: 4096,
+            cpu_millis: 0,
             max_players: 20,
             game_port: Some(25566),
             network_exposure: helix_privd::ServerNetworkExposure::Private,
@@ -9103,6 +9271,7 @@ mod tests {
             artifact_url: "https://example.invalid/server.jar".to_owned(),
             artifact_sha256: "a".repeat(64),
             memory_mb: 4096,
+            cpu_millis: 0,
             max_players: 20,
             game_port: 25565,
             rcon_port: 30000,
@@ -9238,6 +9407,7 @@ mod tests {
             artifact_url: "https://example.invalid/server.jar".to_owned(),
             artifact_sha256: "a".repeat(64),
             memory_mb: 4096,
+            cpu_millis: 0,
             max_players: 20,
             game_port: 25565,
             rcon_port: 30000,
