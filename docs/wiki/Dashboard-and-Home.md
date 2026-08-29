@@ -16,7 +16,9 @@ or Settings. An empty URL fragment opens Home so a pinned tab lands on the
 dashboard. Settings stays at the bottom of the sidebar. Choose **Arrange**
 beside Pages to move, hide, or add primary pages; the set and order follow the
 owner account. Hidden pages keep their slot, so Add puts them back where they
-were.
+were. A refresh does not snap pages back to the factory order. Helix saves the
+layout to this host, and if you reload before that save lands, this browser
+keeps the change and retries.
 
 Host metrics refresh every five seconds by default. Change that interval in
 **Settings → Dashboard behavior**. The top-right refresh button requests a
@@ -92,8 +94,8 @@ public NRO whois country table (CC0); land outlines are Natural Earth 110m.
 
 A Notes widget can hold up to eight named pages. Its settings control whether
 the active page can be edited without entering layout mode. Changes use the same
-debounced, revision-aware preference save as the rest of Home, with a browser
-fallback that retries if the server is temporarily unavailable.
+preference save as the rest of Home. If you reload before Helix accepts the save,
+this browser keeps the notes and retries.
 
 Notes are application preferences, not an encrypted secret vault. Addresses and
 ordinary reminders are reasonable; passwords, private keys, access tokens, and

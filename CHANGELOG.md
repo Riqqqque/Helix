@@ -32,6 +32,9 @@ release, not a public-internet support promise.
 
 - Open in Settings → Helix data now jumps to that server, not just the Servers
   list. Show them again also refreshes the bell menu in the same tab.
+- Arranging pages, hiding pages, Home layouts, colors, and the refresh interval
+  no longer snap back to factory defaults if you reload before Helix finishes
+  saving. This browser keeps the unsaved change and retries.
 
 ## 1.0.0 - 2026-08-29
 
