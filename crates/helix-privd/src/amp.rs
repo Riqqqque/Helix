@@ -20,9 +20,14 @@ use std::{
 const MAX_CONFIG_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_HTTP_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_LOCAL_INSTANCES: usize = 4_096;
+const MAX_KVP_FILES_PER_INSTANCE: usize = 32;
 const MAX_INVENTORY_ISSUE_DETAILS: usize = 64;
 const API_TIMEOUT: Duration = Duration::from_secs(20);
 const AMP_KILL_UNSUPPORTED: &str = "Helix cannot force-kill AMP instances; they remain under AMP. Use Stop, or kill from the AMP panel.";
+
+pub(crate) fn amp_port_claimed_message(port: u16) -> String {
+    format!("AMP already has port {port} claimed")
+}
 
 pub struct AmpClient {
     endpoint: SocketAddr,
@@ -174,6 +179,69 @@ impl AmpClient {
     pub fn list_servers(&self) -> Result<AmpInventory, String> {
         let instances = self.call_ads("ADSModule", "GetLocalInstances", json!({}))?;
         self.parse_inventory(&instances)
+    }
+
+    pub fn occupied_ports(&self) -> HashSet<u16> {
+        let mut ports = HashSet::new();
+        insert_nonzero_port(&mut ports, self.public_panel_port);
+        insert_nonzero_port(&mut ports, self.endpoint.port());
+        ports.extend(self.scan_instance_root_ports());
+        if let Ok(instances) = self.local_instances() {
+            for instance in instances.into_iter().take(MAX_LOCAL_INSTANCES) {
+                if let Ok(port) = required_u16(&instance, "Port") {
+                    insert_nonzero_port(&mut ports, port);
+                }
+                if let Some(name) = text(&instance, "InstanceName") {
+                    ports.extend(self.instance_config_ports(&name));
+                }
+            }
+        }
+        ports
+    }
+
+    fn scan_instance_root_ports(&self) -> HashSet<u16> {
+        let mut ports = HashSet::new();
+        let Ok(entries) = fs::read_dir(&self.instance_root) else {
+            return ports;
+        };
+        let mut seen = 0usize;
+        for entry in entries {
+            if seen >= MAX_LOCAL_INSTANCES {
+                break;
+            }
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if validate_instance_name(&name).is_err() {
+                continue;
+            }
+            seen += 1;
+            ports.extend(self.instance_config_ports(&name));
+        }
+        ports
+    }
+
+    fn instance_config_ports(&self, instance_name: &str) -> HashSet<u16> {
+        let mut ports = HashSet::new();
+        let names = match list_instance_kvp_names(&self.instance_root, instance_name) {
+            Ok(names) if !names.is_empty() => names,
+            _ => vec!["MinecraftModule.kvp".to_owned()],
+        };
+        for name in names {
+            if let Ok(config) = read_instance_kvp_file(&self.instance_root, instance_name, &name) {
+                collect_ports_from_kvp(&config, &mut ports);
+            }
+        }
+        ports
     }
 
     fn parse_inventory(&self, instances: &Value) -> Result<AmpInventory, String> {
@@ -682,18 +750,57 @@ fn read_instance_kvp(
     instance_root: &Path,
     instance_name: &str,
 ) -> Result<HashMap<String, String>, ConfigReadError> {
+    read_instance_kvp_file(instance_root, instance_name, "MinecraftModule.kvp")
+}
+
+fn list_instance_kvp_names(
+    instance_root: &Path,
+    instance_name: &str,
+) -> Result<Vec<String>, ConfigReadError> {
     validate_instance_name(instance_name).map_err(|_| ConfigReadError::UnsafePath)?;
     reject_symlink(instance_root)?;
     let instance_path = instance_root.join(instance_name);
     reject_symlink(&instance_path)?;
-    let config_path = instance_path.join("MinecraftModule.kvp");
-    reject_symlink(&config_path)?;
+    let mut names = Vec::new();
+    let entries = fs::read_dir(&instance_path).map_err(|_| ConfigReadError::Unavailable)?;
+    for entry in entries {
+        if names.len() >= MAX_KVP_FILES_PER_INSTANCE {
+            break;
+        }
+        let entry = entry.map_err(|_| ConfigReadError::Unavailable)?;
+        let metadata =
+            fs::symlink_metadata(entry.path()).map_err(|_| ConfigReadError::Unavailable)?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if validate_kvp_file_name(&name).is_ok() {
+            names.push(name);
+        }
+    }
+    Ok(names)
+}
+
+fn read_instance_kvp_file(
+    instance_root: &Path,
+    instance_name: &str,
+    file_name: &str,
+) -> Result<HashMap<String, String>, ConfigReadError> {
+    validate_instance_name(instance_name).map_err(|_| ConfigReadError::UnsafePath)?;
+    validate_kvp_file_name(file_name).map_err(|_| ConfigReadError::UnsafePath)?;
+    reject_symlink(instance_root)?;
+    let instance_path = instance_root.join(instance_name);
+    reject_symlink(&instance_path)?;
+    reject_symlink(&instance_path.join(file_name))?;
 
     let root = open_absolute_directory_without_symlinks(instance_root)?;
     let instance_name =
         CString::new(instance_name.as_bytes()).map_err(|_| ConfigReadError::UnsafePath)?;
     let instance = open_directory_at(&root, instance_name.as_c_str())?;
-    let config_name = CString::new("MinecraftModule.kvp").expect("static path has no NUL");
+    let config_name =
+        CString::new(file_name.as_bytes()).map_err(|_| ConfigReadError::UnsafePath)?;
     let descriptor = rustix::fs::openat(
         &instance,
         config_name.as_c_str(),
@@ -724,6 +831,81 @@ fn read_instance_kvp(
         .filter(|(key, _)| !key.is_empty() && key.len() <= 256)
         .map(|(key, value)| (key.to_owned(), value.trim().to_owned()))
         .collect())
+}
+
+fn validate_kvp_file_name(file_name: &str) -> Result<(), ()> {
+    if file_name.len() < 5
+        || file_name.len() > 255
+        || !file_name.ends_with(".kvp")
+        || file_name
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\'))
+    {
+        return Err(());
+    }
+    let mut components = Path::new(file_name).components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn insert_nonzero_port(ports: &mut HashSet<u16>, port: u16) {
+    if port != 0 {
+        ports.insert(port);
+    }
+}
+
+fn collect_ports_from_kvp(config: &HashMap<String, String>, ports: &mut HashSet<u16>) {
+    for (key, value) in config {
+        if key.to_ascii_lowercase().contains("port") {
+            collect_ports_from_amp_value(value, ports);
+        }
+    }
+}
+
+fn collect_ports_from_amp_value(value: &str, ports: &mut HashSet<u16>) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if let Ok(port) = trimmed.parse::<u16>() {
+        insert_nonzero_port(ports, port);
+        return;
+    }
+    if (trimmed.starts_with('[') || trimmed.starts_with('{'))
+        && let Ok(json) = serde_json::from_str::<Value>(trimmed)
+    {
+        collect_ports_from_amp_json(&json, ports, true);
+        return;
+    }
+    for part in trimmed.split(|character: char| matches!(character, ',' | ';' | ' ' | '\t' | '/')) {
+        if let Ok(port) = part.trim().parse::<u16>() {
+            insert_nonzero_port(ports, port);
+        }
+    }
+}
+
+fn collect_ports_from_amp_json(value: &Value, ports: &mut HashSet<u16>, port_context: bool) {
+    match value {
+        Value::Number(number) if port_context => {
+            if let Some(port) = number.as_u64().and_then(|value| u16::try_from(value).ok()) {
+                insert_nonzero_port(ports, port);
+            }
+        }
+        Value::String(text) if port_context => collect_ports_from_amp_value(text, ports),
+        Value::Array(items) => {
+            for item in items {
+                collect_ports_from_amp_json(item, ports, port_context);
+            }
+        }
+        Value::Object(map) => {
+            for (key, item) in map {
+                collect_ports_from_amp_json(item, ports, key.to_ascii_lowercase().contains("port"));
+            }
+        }
+        _ => {}
+    }
 }
 
 fn validate_instance_name(instance_name: &str) -> Result<(), ()> {
@@ -1115,5 +1297,49 @@ mod tests {
             .unwrap();
         assert!(inventory.servers.is_empty());
         assert_eq!(inventory.issues[0].code, "invalid_instance_path");
+    }
+
+    #[test]
+    fn kvp_port_collection_keeps_amp_ports_and_ignores_unrelated_numbers() {
+        let mut config = HashMap::new();
+        config.insert("Minecraft.PortNumber".to_owned(), "25566".to_owned());
+        config.insert("Minecraft.QueryPort".to_owned(), "25567".to_owned());
+        config.insert("Limits.MaxPlayers".to_owned(), "20".to_owned());
+        config.insert("Java.MaxHeapSizeMB".to_owned(), "4096".to_owned());
+        config.insert(
+            "Minecraft.ApplicationPortBindings".to_owned(),
+            r#"[{"Protocol":"TCP","Port":25575,"MaxPlayers":40}]"#.to_owned(),
+        );
+        let mut ports = HashSet::new();
+        collect_ports_from_kvp(&config, &mut ports);
+        assert_eq!(ports, HashSet::from([25566, 25567, 25575]));
+    }
+
+    #[test]
+    fn occupied_ports_include_every_amp_instance_port_from_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let instance = root.path().join("Survival01");
+        fs::create_dir(&instance).unwrap();
+        fs::write(
+            instance.join("MinecraftModule.kvp"),
+            "Minecraft.ServerType=Paper\nMinecraft.PortNumber=25566\nMinecraft.QueryPort=25567\nLimits.MaxPlayers=20\n",
+        )
+        .unwrap();
+        fs::write(
+            instance.join("FileManagerPlugin.kvp"),
+            "FileManager.Port=8082\n",
+        )
+        .unwrap();
+        let client = test_client(root.path());
+        let ports = client.occupied_ports();
+        assert!(ports.contains(&8080), "{ports:?}");
+        assert!(ports.contains(&25566), "{ports:?}");
+        assert!(ports.contains(&25567), "{ports:?}");
+        assert!(ports.contains(&8082), "{ports:?}");
+        assert!(!ports.contains(&20), "{ports:?}");
+        assert_eq!(
+            amp_port_claimed_message(25566),
+            "AMP already has port 25566 claimed"
+        );
     }
 }

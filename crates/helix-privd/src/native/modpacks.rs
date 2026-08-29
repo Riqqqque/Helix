@@ -337,7 +337,7 @@ impl NativeManager {
         )?;
         let mut base_spec = base_spec;
         base_spec.game_port = Some(game_port);
-        let rcon_port = allocate_rcon_port(&manifests)?;
+        let rcon_port = allocate_rcon_port(&manifests, &self.amp_occupied_ports())?;
         let id = Uuid::new_v4().to_string();
         let instance_name = instance_name(request.name.trim(), &id);
         let container_name = modpack_container_name(&id);
@@ -629,7 +629,7 @@ impl NativeManager {
         )?;
         let mut base_spec = base_spec;
         base_spec.game_port = Some(game_port);
-        let rcon_port = allocate_rcon_port(&manifests)?;
+        let rcon_port = allocate_rcon_port(&manifests, &self.amp_occupied_ports())?;
         let id = Uuid::new_v4().to_string();
         let instance_name = instance_name(request.name.trim(), &id);
         let container_name = modpack_container_name(&id);

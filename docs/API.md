@@ -197,8 +197,9 @@ an exact durable allow rule, verifies both the active state and rule, and
 attempts to return to inactive state if verification fails. Helix never resets
 UFW or changes its defaults. The server-specific public-access route can create
 one exact TCP UPnP mapping on a same-origin private IPv4 gateway, refuses to
-overwrite any existing mapping, and creates a matching owned UFW rule only when
-UFW is already active. It cannot bypass CGNAT or an ISP block.
+overwrite any existing mapping including ports AMP already has claimed, and
+creates a matching owned UFW rule only when UFW is already active. It cannot
+bypass CGNAT or an ISP block.
 
 ### System packages
 

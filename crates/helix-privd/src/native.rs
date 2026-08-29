@@ -1,4 +1,4 @@
-use crate::amp::AmpServer;
+use crate::amp::{AmpClient, AmpServer, amp_port_claimed_message};
 use crate::files::{
     FileUploadProgress, FileUploadStart, StreamingUpload, commit_upload, decode_upload_chunk,
     prune_uploads, upload_lock_error, validate_name,
@@ -91,6 +91,7 @@ pub struct NativeManager {
     port_policies: Mutex<()>,
     console_archives: Mutex<HashMap<String, Arc<Mutex<ConsoleArchiveWriter>>>>,
     console_stops: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    amp: Option<Arc<AmpClient>>,
 }
 
 #[derive(Clone, Copy)]
@@ -469,6 +470,7 @@ impl NativeManager {
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
+            amp: None,
         };
         for manifest in manager.load_manifests()? {
             let path = manager.instance_path(&manifest.id)?;
@@ -478,6 +480,24 @@ impl NativeManager {
             manager.ensure_console_archiver(&manifest)?;
         }
         Ok(manager)
+    }
+
+    pub fn with_amp(mut self, amp: Arc<AmpClient>) -> Self {
+        self.amp = Some(amp);
+        self
+    }
+
+    fn amp_occupied_ports(&self) -> HashSet<u16> {
+        self.amp
+            .as_ref()
+            .map(|amp| amp.occupied_ports())
+            .unwrap_or_default()
+    }
+
+    fn used_game_ports(&self, manifests: &[InstanceManifest]) -> HashSet<u16> {
+        let mut used = assigned_game_ports(manifests);
+        used.extend(self.amp_occupied_ports());
+        used
     }
 
     pub fn list_servers(&self) -> Result<Vec<AmpServer>, String> {
@@ -596,14 +616,14 @@ impl NativeManager {
     }
 
     pub fn game_port_policy(&self, game: GameKind) -> Result<Value, String> {
+        let manifests = self.load_manifests()?;
+        let used = self.used_game_ports(&manifests);
         let _policy = self
             .port_policies
             .lock()
             .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
         let policy = self.read_game_port_policy(game)?;
-        let manifests = self.load_manifests()?;
         let candidates = policy_candidates(&policy)?;
-        let used = assigned_game_ports(&manifests);
         let next_available = candidates
             .iter()
             .copied()
@@ -646,20 +666,20 @@ impl NativeManager {
             if port < 1_024 {
                 return Err("game port must be at least 1024".to_owned());
             }
-            if assigned_game_ports(manifests).contains(&port) {
-                return Err(format!(
-                    "game port {port} is already assigned to another Helix server"
-                ));
+            let helix = assigned_game_ports(manifests);
+            let amp = self.amp_occupied_ports();
+            if let Some(error) = port_claimed_error(port, &helix, &amp) {
+                return Err(error);
             }
             ensure_port_available(port, true)?;
             return Ok((port, false));
         }
+        let used = self.used_game_ports(manifests);
         let _policy = self
             .port_policies
             .lock()
             .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
         let policy = self.read_game_port_policy(game)?;
-        let used = assigned_game_ports(manifests);
         for port in policy_candidates(&policy)? {
             if !used.contains(&port) && ensure_port_available(port, true).is_ok() {
                 return Ok((port, true));
@@ -682,7 +702,8 @@ impl NativeManager {
         requested_query: Option<u16>,
         manifests: &[InstanceManifest],
     ) -> Result<(u16, u16, bool), String> {
-        let used = assigned_game_ports(manifests);
+        let helix = assigned_game_ports(manifests);
+        let amp = self.amp_occupied_ports();
         if let Some(game_port) = requested_game {
             let query_port = requested_query.unwrap_or(game_port.saturating_add(1));
             if query_port < 1_024 || query_port == game_port {
@@ -691,10 +712,11 @@ impl NativeManager {
                         .to_owned(),
                 );
             }
-            if used.contains(&game_port) || used.contains(&query_port) {
-                return Err(
-                    "those V Rising ports are already assigned to another Helix server".to_owned(),
-                );
+            if let Some(error) = port_claimed_error(game_port, &helix, &amp) {
+                return Err(error);
+            }
+            if let Some(error) = port_claimed_error(query_port, &helix, &amp) {
+                return Err(error);
             }
             ensure_port_available(game_port, true)?;
             ensure_port_available(query_port, true)?;
@@ -706,6 +728,8 @@ impl NativeManager {
             .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
         let policy = self.read_game_port_policy(GameKind::VRising)?;
         let candidates = policy_candidates(&policy)?;
+        let mut used = helix;
+        used.extend(&amp);
         let available = candidates
             .iter()
             .copied()
@@ -727,7 +751,8 @@ impl NativeManager {
         requested_game_port: Option<u16>,
         manifests: &[InstanceManifest],
     ) -> Result<(u16, u16, bool), String> {
-        let used = assigned_game_ports(manifests);
+        let helix = assigned_game_ports(manifests);
+        let amp = self.amp_occupied_ports();
         if let Some(game_port) = requested_game_port {
             let query_port = game_port.saturating_add(1);
             let steam_port = game_port.saturating_add(2);
@@ -738,11 +763,8 @@ impl NativeManager {
                 );
             }
             for port in [game_port, query_port, steam_port] {
-                if used.contains(&port) {
-                    return Err(
-                        "those Valheim ports are already assigned to another Helix server"
-                            .to_owned(),
-                    );
+                if let Some(error) = port_claimed_error(port, &helix, &amp) {
+                    return Err(error);
                 }
                 ensure_port_available(port, true)?;
             }
@@ -754,6 +776,8 @@ impl NativeManager {
             .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
         let policy = self.read_game_port_policy(GameKind::Valheim)?;
         let candidates = policy_candidates(&policy)?;
+        let mut used = helix;
+        used.extend(&amp);
         let available = candidates
             .iter()
             .copied()
@@ -2216,7 +2240,7 @@ impl NativeManager {
             self.resolve_game_port(GameKind::Minecraft, spec.game_port, &manifests)?;
         let mut resolved_spec = spec.clone();
         resolved_spec.game_port = Some(game_port);
-        let rcon_port = allocate_rcon_port(&manifests)?;
+        let rcon_port = allocate_rcon_port(&manifests, &self.amp_occupied_ports())?;
         let id = Uuid::new_v4().to_string();
         let instance_name = instance_name(spec.name.trim(), &id);
         let container_name = format!("helix-game-{id}");
@@ -5712,7 +5736,7 @@ fn game_port_policy_response(
         "available_count": available_count,
         "next_available_port": next_available,
         "allocation_order": "individual_ports_then_ranges",
-        "note": "Automatic allocation skips ports already assigned to Helix servers and ports currently bound on the host."
+        "note": "Automatic allocation skips ports already assigned to Helix servers, ports AMP already has claimed, and ports currently bound on the host."
     })
 }
 
@@ -6888,11 +6912,12 @@ fn instance_name(name: &str, id: &str) -> String {
     format!("{slug}-{}", &id[..8])
 }
 
-fn allocate_rcon_port(manifests: &[InstanceManifest]) -> Result<u16, String> {
-    let used = manifests
+fn allocate_rcon_port(manifests: &[InstanceManifest], extra: &HashSet<u16>) -> Result<u16, String> {
+    let mut used = manifests
         .iter()
         .map(|manifest| manifest.rcon_port)
         .collect::<HashSet<_>>();
+    used.extend(extra.iter().copied());
     (30_000..=31_999)
         .find(|port| !used.contains(port) && ensure_port_available(*port, false).is_ok())
         .ok_or_else(|| "no local console port is available".to_owned())
@@ -6945,6 +6970,18 @@ fn fallback_java_version(version: &str) -> u16 {
         [1, 16, 5, ..] => 16,
         [1, minor, ..] if *minor >= 12 => 11,
         _ => 8,
+    }
+}
+
+fn port_claimed_error(port: u16, helix: &HashSet<u16>, amp: &HashSet<u16>) -> Option<String> {
+    if amp.contains(&port) {
+        Some(amp_port_claimed_message(port))
+    } else if helix.contains(&port) {
+        Some(format!(
+            "game port {port} is already assigned to another Helix server"
+        ))
+    } else {
+        None
     }
 }
 
@@ -7389,6 +7426,25 @@ mod tests {
     }
 
     #[test]
+    fn requested_ports_name_amp_claims_ahead_of_helix_servers() {
+        let helix = HashSet::from([25_565_u16]);
+        let amp = HashSet::from([25_566_u16, 8_081_u16]);
+        assert_eq!(
+            port_claimed_error(25_566, &helix, &amp).as_deref(),
+            Some("AMP already has port 25566 claimed")
+        );
+        assert_eq!(
+            port_claimed_error(8_081, &helix, &amp).as_deref(),
+            Some("AMP already has port 8081 claimed")
+        );
+        assert_eq!(
+            port_claimed_error(25_565, &helix, &amp).as_deref(),
+            Some("game port 25565 is already assigned to another Helix server")
+        );
+        assert_eq!(port_claimed_error(25_570, &helix, &amp), None);
+    }
+
+    #[test]
     fn automatic_create_specs_are_valid_before_a_port_is_resolved() {
         let spec = MinecraftCreateSpec {
             name: "Automatic".to_owned(),
@@ -7524,6 +7580,7 @@ mod tests {
             console_stops: Mutex::new(HashMap::new()),
             custom_import_root: managed.clone(),
             uploads: Mutex::new(HashMap::new()),
+            amp: None,
         };
         let mut spec = MinecraftCreateSpec {
             name: "Private build".to_owned(),
@@ -8126,6 +8183,7 @@ mod tests {
             console_stops: Mutex::new(HashMap::new()),
             custom_import_root: state_root.join("imports"),
             uploads: Mutex::new(HashMap::new()),
+            amp: None,
         };
         let id = "6f8303a9-ab56-4724-8580-b769dafefd22";
         let container_name = format!("helix-game-{id}");
@@ -8185,6 +8243,7 @@ mod tests {
             console_stops: Mutex::new(HashMap::new()),
             custom_import_root: state_root.join("imports"),
             uploads: Mutex::new(HashMap::new()),
+            amp: None,
         };
         let id = "f2210f81-6b2d-4f4f-badc-c9cf2f80b7ca";
         let backup_id = "1787799939239";

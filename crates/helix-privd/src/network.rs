@@ -492,6 +492,7 @@ impl NetworkManager {
         &self,
         mapping: &GamePortMapping,
         enabled: bool,
+        amp_claimed_ports: &HashSet<u16>,
     ) -> Result<Value, String> {
         let id = mapping.instance_id.strip_prefix("helix:").ok_or_else(|| {
             "automatic public access is available only for Helix-owned servers".to_owned()
@@ -564,6 +565,10 @@ impl NetworkManager {
             return Err("a protected public-access record exists, but the router mapping has drifted; Helix did not overwrite it".to_owned());
         }
 
+        if amp_claimed_ports.contains(&mapping.port) {
+            return Err(crate::amp::amp_port_claimed_message(mapping.port));
+        }
+
         let gateway = self.router_snapshot(true)?;
         let address_kind = classify_external_address(gateway.external_ip);
         if address_kind != ExternalAddressKind::Public {
@@ -581,9 +586,9 @@ impl NetworkManager {
         }
         let description = format!("Helix Minecraft {}", &id[..8]);
         if gateway.tcp_mapping_exists(mapping.port)? {
-            return Err(format!(
-                "router TCP port {} already has a mapping; Helix will not overwrite an unowned router rule",
-                mapping.port
+            return Err(unowned_router_mapping_message(
+                mapping.port,
+                amp_claimed_ports.contains(&mapping.port),
             ));
         }
         gateway.add_tcp_mapping(mapping.port, &description)?;
@@ -1892,6 +1897,16 @@ fn exposure_result(
     })
 }
 
+fn unowned_router_mapping_message(port: u16, amp_claimed: bool) -> String {
+    if amp_claimed {
+        crate::amp::amp_port_claimed_message(port)
+    } else {
+        format!(
+            "router TCP port {port} already has a mapping; Helix will not overwrite an unowned router rule"
+        )
+    }
+}
+
 fn write_exposure_record(path: &Path, record: &ServerExposureRecord) -> Result<(), String> {
     if record.schema_version != 1
         || record.port < 1_024
@@ -2523,5 +2538,17 @@ mod tests {
                 .contains("inactive")
         );
         assert_eq!(runner.calls().len(), 1);
+    }
+
+    #[test]
+    fn router_mapping_conflict_names_amp_when_amp_already_claimed_the_port() {
+        assert_eq!(
+            unowned_router_mapping_message(25_566, true),
+            "AMP already has port 25566 claimed"
+        );
+        assert_eq!(
+            unowned_router_mapping_message(25_566, false),
+            "router TCP port 25566 already has a mapping; Helix will not overwrite an unowned router rule"
+        );
     }
 }

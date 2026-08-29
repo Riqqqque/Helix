@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 #[cfg(target_os = "linux")]
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     error::Error,
     fs, io,
     os::unix::{fs::PermissionsExt as _, net::UnixListener},
@@ -502,6 +502,13 @@ impl BrokerContext {
         Ok(inventory)
     }
 
+    fn amp_occupied_ports(&self) -> HashSet<u16> {
+        self.amp
+            .as_ref()
+            .map(|amp| amp.occupied_ports())
+            .unwrap_or_default()
+    }
+
     fn set_server_network_exposure(
         &self,
         instance_id: &str,
@@ -528,6 +535,7 @@ impl BrokerContext {
                 running: server.panel_running,
             },
             enabled,
+            &self.amp_occupied_ports(),
         )
     }
 
@@ -562,6 +570,7 @@ impl BrokerContext {
                         running: true,
                     },
                     true,
+                    &self.amp_occupied_ports(),
                 )
                 .unwrap_or_else(|error| {
                     json!({
@@ -2086,7 +2095,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             apply_custom_artifact_root_defaults(&mut native, &managed_roots);
             native
         })
-        .map(NativeManager::new)
+        .map(|native| {
+            NativeManager::new(native).map(|manager| match &amp {
+                Some(amp) => manager.with_amp(Arc::clone(amp)),
+                None => manager,
+            })
+        })
         .transpose()
         .map_err(io::Error::other)?
         .map(Arc::new);

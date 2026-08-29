@@ -832,7 +832,7 @@ function PortPoolDialog({
         <div><strong>{policy?.nextAvailablePort ?? "—"}</strong><span>next port</span></div>
       </div>
       <p class="dialog-intro">
-        Automatic server creation takes individual ports first, then walks each range in order. It also skips ports already assigned to Helix or currently bound on the host.
+        Automatic server creation takes individual ports first, then walks each range in order. It also skips ports already assigned to Helix, ports AMP already has claimed, and ports currently bound on the host.
       </p>
       <div class="form-grid">
         <label class="field field--wide">
@@ -1622,7 +1622,7 @@ function CreateServerDialog({
                 />
                 <span>
                   <strong>Choose a specific port</strong>
-                  <small>Helix will reject a port already assigned or bound on the host.</small>
+                  <small>Helix will reject a port already assigned to Helix, claimed by AMP, or bound on the host.</small>
                 </span>
                 <input
                   aria-label="Specific game port"
