@@ -1,4 +1,4 @@
-export type HomeWidgetKind = 'clock' | 'host' | 'servers' | 'storage' | 'weather' | 'note' | 'shortcut' | 'graphs' | 'docker' | 'strand';
+export type HomeWidgetKind = 'clock' | 'host' | 'servers' | 'storage' | 'weather' | 'note' | 'shortcut' | 'graphs' | 'docker' | 'strand' | 'globe';
 export type HomeWidgetSize = 'compact' | 'wide' | 'full';
 export type HomeWidgetHeight = 'short' | 'medium' | 'tall';
 
@@ -37,7 +37,7 @@ export interface NoteWidgetConfiguration {
 const STORAGE_KEY = 'helix.home.widgets';
 const TEMPLATES_STORAGE_KEY = 'helix.home.templates';
 const ACTIVE_HOME_STORAGE_KEY = 'helix.home.active-template';
-const kinds = new Set<HomeWidgetKind>(['clock', 'host', 'servers', 'storage', 'weather', 'note', 'shortcut', 'graphs', 'docker', 'strand']);
+const kinds = new Set<HomeWidgetKind>(['clock', 'host', 'servers', 'storage', 'weather', 'note', 'shortcut', 'graphs', 'docker', 'strand', 'globe']);
 const sizes = new Set<HomeWidgetSize>(['compact', 'wide', 'full']);
 const heights = new Set<HomeWidgetHeight>(['short', 'medium', 'tall']);
 const MAX_HOME_TEMPLATES = 8;
@@ -95,6 +95,27 @@ export function parseWeatherWidgetConfiguration(value: unknown): WeatherWidgetCo
 
 export function serializeWeatherWidgetConfiguration(configuration: WeatherWidgetConfiguration): string {
   return JSON.stringify(parseWeatherWidgetConfiguration(configuration));
+}
+
+export interface GlobeWidgetConfiguration {
+  version: 1;
+  flow: boolean;
+}
+
+export function parseGlobeWidgetConfiguration(value: unknown): GlobeWidgetConfiguration {
+  try {
+    const record = typeof value === 'string' ? JSON.parse(value) as unknown : value;
+    if (typeof record !== 'object' || record === null || Array.isArray(record)) throw new Error();
+    const candidate = record as Record<string, unknown>;
+    if (candidate.version !== 1) throw new Error();
+    return { version: 1, flow: candidate.flow === true };
+  } catch {
+    return { version: 1, flow: false };
+  }
+}
+
+export function serializeGlobeWidgetConfiguration(configuration: GlobeWidgetConfiguration): string {
+  return JSON.stringify(parseGlobeWidgetConfiguration(configuration));
 }
 
 function cleanText(value: unknown, maximum: number): string {

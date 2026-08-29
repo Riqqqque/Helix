@@ -2,11 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { ApiError } from './api';
 import {
   defaultDashboardColors,
+  defaultHiddenPages,
   primaryDashboardSections,
   readDashboardColors,
+  readHiddenPages,
   readNavigationOrder,
   readRefreshInterval,
   saveDashboardColors,
+  saveHiddenPages,
   saveNavigationOrder,
   saveRefreshInterval,
   saveServersEnabled,
@@ -46,6 +49,7 @@ interface DashboardPreferenceState extends DashboardPreferences {
   setHomeState: (templates: HomeTemplate[], activeHomeId: string) => void;
   setColors: (value: DashboardColors) => void;
   setServersEnabled: (value: boolean) => void;
+  setHiddenPages: (value: PrimaryDashboardSectionId[]) => void;
 }
 
 const SAVE_DEBOUNCE_MS = 700;
@@ -67,7 +71,8 @@ export function shouldMigrateLocalPreferences(
     !sameValue(preferences.homeTemplates, defaultHomeTemplates) ||
     preferences.activeHomeId !== defaultHomeTemplates[0]?.id ||
     !sameValue(preferences.colors, defaultDashboardColors) ||
-    preferences.serversEnabled !== true
+    preferences.serversEnabled !== true ||
+    !sameValue(preferences.hiddenPages, defaultHiddenPages)
   );
 }
 
@@ -79,6 +84,7 @@ function cachePreferences(preferences: DashboardPreferences): void {
   saveActiveHomeId(preferences.activeHomeId, preferences.homeTemplates);
   saveDashboardColors(preferences.colors);
   saveServersEnabled(preferences.serversEnabled);
+  saveHiddenPages(preferences.hiddenPages);
 }
 
 export function mergePreferenceChanges(
@@ -95,6 +101,7 @@ export function mergePreferenceChanges(
     activeHomeId: homeDirty ? local.activeHomeId : remote.activeHomeId,
     colors: dirty.has('colors') ? local.colors : remote.colors,
     serversEnabled: dirty.has('serversEnabled') ? local.serversEnabled : remote.serversEnabled,
+    hiddenPages: dirty.has('hiddenPages') ? local.hiddenPages : remote.hiddenPages,
   };
 }
 
@@ -112,6 +119,7 @@ export function useDashboardPreferences(
     homeWidgets: localTemplates.current.find((template) => template.id === localActiveHomeId.current)?.widgets ?? [],
     colors: readDashboardColors(),
     serversEnabled: readServersEnabled(),
+    hiddenPages: readHiddenPages(),
   });
   const [preferences, setPreferences] = useState<DashboardPreferences>(localInitial.current);
   const [syncStatus, setSyncStatus] = useState<PreferenceSyncStatus>('loading');
@@ -131,6 +139,7 @@ export function useDashboardPreferences(
     activeHomeId: 0,
     colors: 0,
     serversEnabled: 0,
+    hiddenPages: 0,
   });
   const retryTimerRef = useRef<number | null>(null);
 
@@ -188,6 +197,7 @@ export function useDashboardPreferences(
           dirtyRef.current.add('activeHomeId');
           dirtyRef.current.add('colors');
           dirtyRef.current.add('serversEnabled');
+          dirtyRef.current.add('hiddenPages');
           setSyncStatus('saving');
           setSyncTick((current) => current + 1);
           return;
@@ -292,6 +302,22 @@ export function useDashboardPreferences(
     setActiveHomeId: (value) => changeHome(preferences.homeTemplates, value),
     setHomeState: changeHome,
     setColors: (value) => change('colors', value),
-    setServersEnabled: (value: boolean) => change('serversEnabled', value),
+    setServersEnabled: (value: boolean) => {
+      const currentHidden = stateRef.current.hiddenPages;
+      const nextHidden: PrimaryDashboardSectionId[] = value
+        ? currentHidden.filter((id) => id !== 'servers')
+        : currentHidden.includes('servers') ? currentHidden : [...currentHidden, 'servers'];
+      const next = { ...stateRef.current, serversEnabled: value, hiddenPages: nextHidden };
+      dirtyRef.current.add('serversEnabled');
+      generationsRef.current.serversEnabled += 1;
+      if (!sameValue(nextHidden, stateRef.current.hiddenPages)) {
+        dirtyRef.current.add('hiddenPages');
+        generationsRef.current.hiddenPages += 1;
+      }
+      commitLocal(next);
+      setSyncStatus(revisionRef.current === null ? 'local' : 'saving');
+      setSyncTick((current) => current + 1);
+    },
+    setHiddenPages: (value) => change('hiddenPages', value),
   };
 }

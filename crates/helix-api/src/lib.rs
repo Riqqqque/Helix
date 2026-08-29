@@ -259,6 +259,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/host/reboot", post(schedule_host_reboot))
         .route("/host/reboot/{operation_id}", delete(cancel_host_reboot))
         .route("/network/inventory", get(network_inventory))
+        .route("/network/globe", get(network_globe))
         .route(
             "/network/amp-router-forwards/release",
             post(release_amp_router_forward),
@@ -812,6 +813,7 @@ enum PrimaryDashboardSection {
     Servers,
     Hooks,
     Strands,
+    Globe,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -827,6 +829,7 @@ enum HomeWidgetKind {
     Graphs,
     Docker,
     Strand,
+    Globe,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -862,6 +865,8 @@ struct HomeWidgetPreference {
     url: String,
     #[serde(default)]
     color: String,
+    #[serde(default)]
+    icon: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -895,10 +900,16 @@ struct DashboardPreferences {
     colors: DashboardColorPreferences,
     #[serde(default = "default_true")]
     servers_enabled: bool,
+    #[serde(default = "default_hidden_pages")]
+    hidden_pages: Vec<PrimaryDashboardSection>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_hidden_pages() -> Vec<PrimaryDashboardSection> {
+    vec![PrimaryDashboardSection::Globe]
 }
 
 impl Default for DashboardPreferences {
@@ -953,6 +964,7 @@ impl Default for DashboardPreferences {
                 PrimaryDashboardSection::Servers,
                 PrimaryDashboardSection::Hooks,
                 PrimaryDashboardSection::Strands,
+                PrimaryDashboardSection::Globe,
             ],
             metrics_refresh_ms: 1_000,
             home_widgets: home_widgets.clone(),
@@ -965,6 +977,7 @@ impl Default for DashboardPreferences {
             active_home_id: "home-main".to_owned(),
             colors: DashboardColorPreferences::default(),
             servers_enabled: true,
+            hidden_pages: default_hidden_pages(),
         }
     }
 }
@@ -984,6 +997,7 @@ fn home_widget(
         content: String::new(),
         url: String::new(),
         color: String::new(),
+        icon: String::new(),
     }
 }
 
@@ -1154,6 +1168,14 @@ fn reconcile_legacy_home_preferences(preferences: &mut DashboardPreferences) {
             .navigation_order
             .push(PrimaryDashboardSection::Strands);
     }
+    if !preferences
+        .navigation_order
+        .contains(&PrimaryDashboardSection::Globe)
+    {
+        preferences
+            .navigation_order
+            .push(PrimaryDashboardSection::Globe);
+    }
     if preferences.home_templates.is_empty() {
         preferences.home_templates.push(HomeTemplatePreference {
             id: "home-main".to_owned(),
@@ -1187,7 +1209,7 @@ fn validate_dashboard_preferences(preferences: &DashboardPreferences) -> Result<
     if !matches!(
         preferences.metrics_refresh_ms,
         1_000 | 2_000 | 5_000 | 10_000 | 30_000
-    ) || preferences.navigation_order.len() != 10
+    ) || preferences.navigation_order.len() != 11
         || preferences.home_widgets.len() > 32
         || preferences.home_templates.is_empty()
         || preferences.home_templates.len() > 8
@@ -1207,14 +1229,38 @@ fn validate_dashboard_preferences(preferences: &DashboardPreferences) -> Result<
             PrimaryDashboardSection::Servers => 1 << 7,
             PrimaryDashboardSection::Hooks => 1 << 8,
             PrimaryDashboardSection::Strands => 1 << 9,
+            PrimaryDashboardSection::Globe => 1 << 10,
         };
         if section_mask & bit != 0 {
             return Err(());
         }
         section_mask |= bit;
     }
-    if section_mask != 0b11_1111_1111 {
+    if section_mask != 0b111_1111_1111 {
         return Err(());
+    }
+    let mut hidden_mask = 0_u16;
+    if preferences.hidden_pages.len() > 11 {
+        return Err(());
+    }
+    for section in &preferences.hidden_pages {
+        let bit = match section {
+            PrimaryDashboardSection::Overview => 1 << 0,
+            PrimaryDashboardSection::Home => 1 << 1,
+            PrimaryDashboardSection::Storage => 1 << 2,
+            PrimaryDashboardSection::Network => 1 << 3,
+            PrimaryDashboardSection::Host => 1 << 4,
+            PrimaryDashboardSection::Security => 1 << 5,
+            PrimaryDashboardSection::Terminal => 1 << 6,
+            PrimaryDashboardSection::Servers => 1 << 7,
+            PrimaryDashboardSection::Hooks => 1 << 8,
+            PrimaryDashboardSection::Strands => 1 << 9,
+            PrimaryDashboardSection::Globe => 1 << 10,
+        };
+        if hidden_mask & bit != 0 {
+            return Err(());
+        }
+        hidden_mask |= bit;
     }
 
     validate_home_widgets(&preferences.home_widgets)?;
@@ -1295,6 +1341,11 @@ fn validate_home_widgets(widgets: &[HomeWidgetPreference]) -> Result<(), ()> {
                         .bytes()
                         .any(|byte| !byte.is_ascii_hexdigit() && byte != b'-')
                 {
+                    return Err(());
+                }
+            }
+            HomeWidgetKind::Globe => {
+                if !widget.url.is_empty() {
                     return Err(());
                 }
             }
@@ -1668,6 +1719,14 @@ async fn network_inventory(
 ) -> Result<impl IntoResponse, ApiError> {
     auth::require_capability(&state, &headers, "network.firewall.read").await?;
     broker_json(&state, BrokerRequest::NetworkInventory {}).await
+}
+
+async fn network_globe(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "system.view").await?;
+    broker_json(&state, BrokerRequest::GlobeSnapshot {}).await
 }
 
 async fn release_amp_router_forward(
@@ -3767,9 +3826,10 @@ mod tests {
                 size: HomeWidgetSize::Full,
                 height: HomeWidgetHeight::Tall,
                 title: format!("Note {index}"),
-                content: "x".repeat(8_000),
+                content: "x".repeat(7_200),
                 url: String::new(),
                 color: String::new(),
+                icon: String::new(),
             })
             .collect();
         let mut preferences = DashboardPreferences {
@@ -3784,6 +3844,7 @@ mod tests {
                 PrimaryDashboardSection::Servers,
                 PrimaryDashboardSection::Hooks,
                 PrimaryDashboardSection::Strands,
+                PrimaryDashboardSection::Globe,
             ],
             metrics_refresh_ms: 1_000,
             home_widgets: home_widgets.clone(),
@@ -3796,6 +3857,7 @@ mod tests {
             active_home_id: "home-main".to_owned(),
             colors: DashboardColorPreferences::default(),
             servers_enabled: true,
+            hidden_pages: default_hidden_pages(),
         };
         let initial = serde_json::to_string(&preferences).expect("serialize preferences");
         let excess = initial
@@ -3847,6 +3909,41 @@ mod tests {
             Some(&PrimaryDashboardSection::Hooks)
         );
         assert!(validate_dashboard_preferences(&preferences).is_ok());
+    }
+
+    #[test]
+    fn legacy_dashboard_navigation_adds_globe_without_reordering_existing_pages() {
+        let mut preferences = DashboardPreferences::default();
+        preferences
+            .navigation_order
+            .retain(|section| *section != PrimaryDashboardSection::Globe);
+        let original = preferences.navigation_order.clone();
+
+        reconcile_legacy_home_preferences(&mut preferences);
+
+        assert_eq!(
+            &preferences.navigation_order[..original.len()],
+            original.as_slice()
+        );
+        assert_eq!(
+            preferences.navigation_order.last(),
+            Some(&PrimaryDashboardSection::Globe)
+        );
+        assert!(
+            preferences
+                .hidden_pages
+                .contains(&PrimaryDashboardSection::Globe)
+        );
+        assert!(validate_dashboard_preferences(&preferences).is_ok());
+    }
+
+    #[test]
+    fn missing_hidden_pages_defaults_to_globe_only() {
+        let mut value = serde_json::to_value(DashboardPreferences::default()).expect("value");
+        value.as_object_mut().expect("object").remove("hiddenPages");
+        let parsed: DashboardPreferences =
+            serde_json::from_value(value).expect("hidden_pages default");
+        assert_eq!(parsed.hidden_pages, vec![PrimaryDashboardSection::Globe]);
     }
 
     #[test]
@@ -5220,7 +5317,11 @@ mod tests {
         let bootstrap = install_bootstrap(&context);
         let client = claim_owner(&context, &bootstrap).await;
 
-        for uri in ["/api/v1/network/inventory", "/api/v1/system/packages"] {
+        for uri in [
+            "/api/v1/network/inventory",
+            "/api/v1/network/globe",
+            "/api/v1/system/packages",
+        ] {
             let response = context
                 .app
                 .clone()

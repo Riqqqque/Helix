@@ -69,7 +69,7 @@ malformed, stale, or wrong proof returns `403` with code `csrf_rejected`.
 | `GET` | `/api/v1/host/inventory` | `system.view` | Disks, mounts, interfaces, routes, services, processes, process count, CPU model, and listeners |
 | `GET` | `/api/v1/weather` | `dashboard.customize` | Bounded weather data for one validated location |
 | `GET` | `/api/v1/settings/preferences` | `dashboard.customize` | Revisioned dashboard preferences |
-| `PUT` | `/api/v1/settings/preferences` | `dashboard.customize` | Save navigation, metric cadence, Home widgets, and whether the Servers page is enabled, with an expected revision |
+| `PUT` | `/api/v1/settings/preferences` | `dashboard.customize` | Save navigation, hidden pages, metric cadence, Home widgets, and whether the Servers page is enabled, with an expected revision |
 
 Preferences are bounded, strictly validated, and conflict rather than silently
 overwriting another session's newer revision.
@@ -170,6 +170,7 @@ response retains logical byte lengths for comparison.
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/network/inventory` | `network.firewall.read` | Private IPv4, bounded UPnP router state, local listeners, Docker publications, game ports, owned mappings, and UFW state |
+| `GET` | `/api/v1/network/globe` | `system.view` | Country-level origin and aggregated public TCP destinations. No remote addresses. |
 | `POST` | `/api/v1/network/amp-router-forwards/release` | `games.manage` + `network.firewall.write` | Delete a leftover AMP-described UPnP mapping after typing `REMOVE AMP FORWARD {port}`. Refused when AMP instance files still list the port or Helix owns public access on it. AMP files are not changed |
 | `POST` | `/api/v1/network/firewall/rules` | `network.firewall.write` | Create a named TCP/UDP single-port or bounded-range UFW allow rule |
 | `DELETE` | `/api/v1/network/firewall/rules/{rule_id}` | `network.firewall.write` | Delete the exact Helix-owned rule into bounded Undo state |

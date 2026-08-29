@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import render from 'preact-render-to-string';
-import { Dashboard, DiskMap } from './app';
+import { Dashboard } from './app';
+import { DiskMap } from './workspace-pages';
 import type { HostInventory } from './control-api';
 
 const dashboardProps = {
@@ -39,6 +40,7 @@ describe('dashboard shell', () => {
 
     expect(links).toEqual(['#overview', '#home', '#storage', '#network', '#host', '#security', '#terminal', '#servers', '#hooks', '#strands', '#settings']);
     expect(sidebar).toContain('>Arrange<');
+    expect(sidebar).not.toContain('#globe');
     expect(sidebar).toMatch(/nav-item nav-item--settings/u);
     expect(markup).not.toContain('Control plane');
     expect(markup).not.toContain('Your server clearly in view');
@@ -73,12 +75,13 @@ describe('dashboard shell', () => {
       ['#servers', 'Servers'],
       ['#hooks', 'Hooks'],
       ['#strands', 'Strands'],
+      ['#globe', 'Globe'],
       ['#settings', 'Settings'],
     ] as const) {
       vi.stubGlobal('window', { location: { hash } });
       const markup = render(<Dashboard {...dashboardProps} />);
-      if (hash === '#home' || hash === '#hooks' || hash === '#terminal' || hash === '#overview' || hash === '#strands') {
-        expect(markup).toContain(hash === '#home' ? 'Loading Home…' : hash === '#hooks' ? 'Loading Hooks…' : hash === '#overview' ? 'Loading Overview…' : hash === '#strands' ? 'Loading Strands…' : 'Loading terminal…');
+      if (hash === '#home' || hash === '#hooks' || hash === '#terminal' || hash === '#overview' || hash === '#strands' || hash === '#globe' || hash === '#storage' || hash === '#network' || hash === '#host') {
+        expect(markup).toContain(hash === '#home' ? 'Loading Home…' : hash === '#hooks' ? 'Loading Hooks…' : hash === '#overview' ? 'Loading Overview…' : hash === '#strands' ? 'Loading Strands…' : hash === '#globe' ? 'Loading Globe…' : hash === '#storage' ? 'Loading Storage…' : hash === '#network' ? 'Loading Network…' : hash === '#host' ? 'Loading Host…' : 'Loading terminal…');
       } else {
         expect(markup).toContain(`<h1>${title}</h1>`);
       }

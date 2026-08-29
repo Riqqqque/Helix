@@ -20,7 +20,7 @@ not imply production support or a completed security review.
 Helix brings the common jobs for one server into one place:
 
 - multiple exportable Home layouts with drag-and-drop/resizable status, clock,
-  weather, graphs, Docker, paged-note, shortcut, and Strand widgets plus color controls;
+  weather, graphs, Docker, paged-note, shortcut, Strand, and Globe widgets plus color controls;
   pin the site to open Home, or use full-screen Home;
 - live host, storage, network, service, process, Docker, and Helix resource views;
 - a Security center for explained, confirmed host and Helix protections;

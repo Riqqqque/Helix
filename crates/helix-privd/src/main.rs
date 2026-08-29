@@ -7,6 +7,8 @@ mod docker;
 #[cfg(target_os = "linux")]
 mod files;
 #[cfg(target_os = "linux")]
+mod geo;
+#[cfg(target_os = "linux")]
 mod hook_install;
 #[cfg(target_os = "linux")]
 mod host;
@@ -154,6 +156,7 @@ impl BrokerContext {
         let result = match request {
             BrokerRequest::HostInventory {} => inventory::collect().and_then(to_value),
             BrokerRequest::NetworkInventory {} => self.network_inventory(),
+            BrokerRequest::GlobeSnapshot {} => self.globe_snapshot(),
             BrokerRequest::GamePortPolicy { game } => self
                 .native
                 .as_deref()
@@ -534,6 +537,21 @@ impl BrokerContext {
                 Value::Array(errors),
             );
         Ok(inventory)
+    }
+
+    fn globe_snapshot(&self) -> Result<Value, String> {
+        let mut mappings = Vec::new();
+        if let Some(native) = &self.native
+            && let Ok(servers) = native.list_servers()
+        {
+            append_game_port_mappings(&mut mappings, servers);
+        }
+        if let Some(amp) = &self.amp
+            && let Ok(inventory) = amp.list_servers()
+        {
+            append_game_port_mappings(&mut mappings, inventory.servers);
+        }
+        self.network.globe_snapshot(&mappings)
     }
 
     fn amp_occupied_ports(&self) -> HashSet<u16> {

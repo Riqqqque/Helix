@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { addableDashboardSections, hideDashboardPage, moveVisibleNavigationItem, showDashboardPage } from './dashboard-page-catalog';
 import {
   moveNavigationItem,
+  normalizeHiddenPages,
   normalizeNavigationOrder,
   normalizeRefreshInterval,
   readNavigationOrder,
   readRefreshInterval,
   saveNavigationOrder,
   saveRefreshInterval,
+  visibleDashboardSections,
 } from './dashboard-preferences';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -24,7 +27,18 @@ describe('dashboard preferences', () => {
       'terminal',
       'hooks',
       'strands',
+      'globe',
     ]);
+  });
+
+  it('keeps Globe hidden by default and restores it from the add catalog', () => {
+    expect(normalizeHiddenPages(null)).toEqual(['globe']);
+    expect(normalizeHiddenPages([])).toEqual([]);
+    expect(visibleDashboardSections(normalizeNavigationOrder(null), ['globe'], true)).not.toContain('globe');
+    expect(addableDashboardSections(normalizeNavigationOrder(null), ['globe'], true)).toEqual(['globe']);
+    expect(hideDashboardPage(['globe'], 'hooks')).toEqual(['globe', 'hooks']);
+    expect(showDashboardPage(['globe', 'hooks'], 'hooks')).toEqual(['globe']);
+    expect(moveVisibleNavigationItem(normalizeNavigationOrder(null), ['globe'], true, 'overview', 1)[0]).toBe('home');
   });
 
   it('moves navigation without dropping sections or crossing an edge', () => {

@@ -27,6 +27,7 @@ pub enum StorageAnalysisMode {
 pub enum BrokerRequest {
     HostInventory {},
     NetworkInventory {},
+    GlobeSnapshot {},
     GamePortPolicy {
         game: GameKind,
     },
@@ -1298,6 +1299,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(BrokerRequest::NetworkInventory {}).unwrap()["operation"],
             "network_inventory"
+        );
+        assert_eq!(
+            serde_json::to_value(BrokerRequest::GlobeSnapshot {}).unwrap()["operation"],
+            "globe_snapshot"
         );
         assert_eq!(
             serde_json::to_value(BrokerRequest::SystemPackageInventory {}).unwrap()["operation"],

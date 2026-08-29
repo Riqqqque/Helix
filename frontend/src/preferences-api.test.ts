@@ -9,13 +9,14 @@ import {
 const validRecord: DashboardPreferencesRecord = {
   revision: 4,
   preferences: {
-    navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands'],
+    navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands', 'globe'],
     metricsRefreshMs: 1_000,
     homeWidgets: [{ id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Right now', content: '', url: '', color: '', icon: '' }],
     homeTemplates: [{ id: 'home-main', name: 'Main', accent: '#d7f64d', widgets: [{ id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Right now', content: '', url: '', color: '', icon: '' }] }],
     activeHomeId: 'home-main',
     colors: { accent: '', text: '', surface: '' },
     serversEnabled: true,
+    hiddenPages: ['globe'],
   },
   updatedAtUnixMs: 1_800_000_000_000,
 };
@@ -33,6 +34,15 @@ describe('dashboard preferences API', () => {
       revision: 0,
       updatedAtUnixMs: null,
     })).toMatchObject({ revision: 0, updatedAtUnixMs: null });
+  });
+
+  it('defaults a missing hiddenPages list to Globe only', () => {
+    const preferences = { ...validRecord.preferences };
+    Reflect.deleteProperty(preferences, 'hiddenPages');
+    expect(parseDashboardPreferencesRecord({
+      ...validRecord,
+      preferences,
+    }).preferences.hiddenPages).toEqual(['globe']);
   });
 
   it('defaults a missing serversEnabled flag to enabled', () => {

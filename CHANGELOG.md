@@ -47,6 +47,14 @@ binary or package release yet.
 
 ### Added
 
+- Globe is an optional world map of this host and country-level connections.
+  It stays off the sidebar until you add it from Arrange or Settings. A Home
+  widget is available too. Lines stay solid unless you turn on data motion.
+  Pins are countries, not streets, and remote addresses never leave the host.
+- Arrange (and Settings → Navigation) can hide or add the built-in pages, not
+  just reorder them. Settings stays pinned. Reset pages restores the factory
+  set, with Globe hidden.
+
 - Native servers can change allocated memory after create. Helix rebinds the
   container (and Minecraft `-Xmx`) to the new limit.
 - Overview PUBLIC INTERNET shows the public IP and game port, plus a reminder

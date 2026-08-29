@@ -11,6 +11,7 @@ describe('dashboard section navigation', () => {
     expect(dashboardSectionForHash('#security')).toBe('security');
     expect(dashboardSectionForHash('#strands')).toBe('strands');
     expect(dashboardSectionForHash('#strands/b893d568-327d-4b6e-b0b6-0b7a58e0c852')).toBe('strands');
+    expect(dashboardSectionForHash('#globe')).toBe('globe');
   });
 
   it('keeps server detail routes inside the Servers workspace', () => {

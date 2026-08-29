@@ -19,6 +19,15 @@ disposable host for first validation; this remains a host-wide firewall change.
 
 Helix cannot open a router, bypass CGNAT, or prove internet reachability.
 
+## Globe
+
+The Globe page (and matching Home widget) maps established public TCP sockets to
+country centroids. Player pins are sockets whose local port is a published game
+port. Outbound pins are the rest. Helix does not geolocate private, loopback,
+link-local, multicast, or CGNAT (`100.64/10`) addresses, and it does not send
+those remote IPs to the browser. If the WAN address is missing or not globally
+routable, destination countries still plot without a host pin.
+
 ## Host services and processes
 
 Host displays bounded service and process tables with pagination rather than a
