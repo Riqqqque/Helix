@@ -118,7 +118,9 @@ Start-on-boot changes only the exact configured Helix dashboard and gateway
 container restart policies. Immediate host reboot requires exact hostname
 confirmation, acknowledgement, workload preflight, a 10–300 second delay, and
 a cancellable systemd timer. Recurring daily/weekday schedules use the verified
-host timezone and the same safety checks.
+host timezone and the same safety checks. Native game containers cannot be
+started, stopped, or restarted from the Docker inventory page; Servers uses a
+45-second stop and a health check.
 
 Opening the package page is read-only. Package-list refresh and exact selected-
 candidate Apply are separate confirmed jobs. Apply revalidates versions, holds,

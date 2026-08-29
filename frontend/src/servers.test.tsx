@@ -28,6 +28,7 @@ const nativeServer: ManagedServer = {
   panelRunning: true,
   startOnBoot: true,
   playersOnline: 3,
+  playerCountVerified: true,
   maxPlayers: 20,
   cpuPercent: 12,
   memoryUsedMb: 2_048,
@@ -94,6 +95,9 @@ describe('Servers route', () => {
       version: 'dedicated',
       kind: 'vrising',
       gamePort: 9_876,
+      playersOnline: 0,
+      playerCountVerified: false,
+      tps: null,
     };
     const markup = render(
       <ServersPage
@@ -109,6 +113,8 @@ describe('Servers route', () => {
     expect(markup).toContain('Survival');
     expect(markup).toContain('Castle');
     expect(markup).toContain('V Rising');
+    expect(markup).toContain('3 / 20');
+    expect(markup).not.toContain('0 / 20');
   });
 
   it('offers every currently installable native Minecraft software', () => {
@@ -158,6 +164,10 @@ describe('Servers route', () => {
     expect(serverActionDescription(nativeServer, 'kill')).toContain('SIGKILL');
     expect(serverActionDescription(nativeServer, 'kill')).toContain('when Stop is stuck');
     expect(serverActionDescription(ampServer, 'kill')).toContain('cannot force-kill AMP');
+    const vrising: ManagedServer = { ...nativeServer, kind: 'vrising' };
+    expect(serverActionDescription(vrising, 'restart')).toContain('ready marker');
+    expect(serverActionDescription(vrising, 'restart')).not.toContain('Minecraft health check');
+    expect(serverActionDescription(vrising, 'start')).toContain('ready marker');
   });
 
   it('treats AMP idle as asleep, with Start instead of Restart', () => {

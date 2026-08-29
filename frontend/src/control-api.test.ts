@@ -10,6 +10,7 @@ import {
   getServerBackups,
   getServerDetail,
   parseDirectoryListing,
+  parseHostInventory,
   parseMinecraftSettingsSaveResult,
   parseServers,
   restoreTrashedServerBackup,
@@ -435,6 +436,7 @@ describe('server list API', () => {
     panel_running: true,
     start_on_boot: true,
     players_online: 0,
+    player_count_verified: true,
     max_players: 10,
     cpu_percent: 0,
     memory_used_mb: 0,
@@ -459,11 +461,51 @@ describe('server list API', () => {
       panelRunning: true,
       memoryUsedMb: 0,
       memoryLimitMb: 10_240,
+      playerCountVerified: true,
     });
+    expect(() => {
+      const rest: Record<string, unknown> = { ...server };
+      delete rest.player_count_verified;
+      parseServers([rest]);
+    }).toThrow(/player_count_verified/i);
     const starting = parseServers([{ ...server, status: 'starting' }]);
     expect(starting[0]?.status).toBe('starting');
     const failed = parseServers([{ ...server, status: 'failed' }]);
     expect(failed[0]?.status).toBe('failed');
     expect(() => parseServers([{ ...server, status: 'mystery' }])).toThrow(/status/i);
+  });
+});
+
+describe('host inventory', () => {
+  it('reads process count separately from kernel thread count', () => {
+    const parsed = parseHostInventory({
+      disks: [],
+      mounts: [],
+      interfaces: [],
+      routes: [],
+      listeners: [],
+      services: [],
+      processes: [],
+      load_average: [0.4, 0.7, 0.6],
+      process_count: 490,
+      thread_count: 2261,
+      cpu_model: 'AMD Ryzen',
+      collected_at_unix_ms: 1,
+    });
+    expect(parsed.processCount).toBe(490);
+    expect(parsed.threadCount).toBe(2261);
+    expect(() => parseHostInventory({
+      disks: [],
+      mounts: [],
+      interfaces: [],
+      routes: [],
+      listeners: [],
+      services: [],
+      processes: [],
+      load_average: [0.4, 0.7, 0.6],
+      process_count: 2261,
+      cpu_model: 'AMD Ryzen',
+      collected_at_unix_ms: 1,
+    })).toThrow(/thread_count/i);
   });
 });

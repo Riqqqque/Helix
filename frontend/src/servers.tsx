@@ -51,7 +51,9 @@ import {
   type ServerLogSnapshot,
   type TrashedNativeServerCatalog,
   serverIsLive,
+  serverPlayerHeadline,
   serverPrimaryLifecycleAction,
+  serverReportsTps,
   serverShowsRuntimeStats,
   serverStatusLabel,
   serverStatusTone,
@@ -876,7 +878,7 @@ export function serverActionDescription(
   if (action === "kill") {
     return server.manager === "amp_import"
       ? "Helix cannot force-kill AMP instances; they remain under AMP. Use Stop, or kill from the AMP panel."
-      : "Stop waits up to 45 seconds for a clean Minecraft shutdown. Kill sends SIGKILL to the container now. Unsaved chunks can be lost. Use this when Stop is stuck.";
+      : "Stop waits up to 45 seconds for a clean shutdown. Kill sends SIGKILL to the container now. Unsaved data can be lost. Use this when Stop is stuck.";
   }
   if (server.manager === "amp_import") {
     if (action === "start")
@@ -889,11 +891,15 @@ export function serverActionDescription(
       return `Helix will ask AMP to stop ${server.name}. Connected players will be disconnected.`;
   }
   if (action === "start")
-    return "Helix will start Minecraft and wait until it answers a health check.";
+    return server.kind === "minecraft"
+      ? "Helix will start Minecraft and wait until it answers a health check."
+      : "Helix will start this dedicated server and wait until its ready marker is present.";
   if (action === "stop")
     return "Players will be disconnected after a clean shutdown.";
   if (action === "restart")
-    return "The server will stop, start, and pass a Minecraft health check before this finishes.";
+    return server.kind === "minecraft"
+      ? "The server will stop, start, and pass a Minecraft health check before this finishes."
+      : "The server will stop, start, and wait for its ready marker before this finishes.";
   if (action === "update") {
     return server.status === "online"
       ? "Helix will stop the server, back it up, stage and verify the new build, then restart and health-check Minecraft. If validation fails, Helix puts the old build back."
@@ -2354,7 +2360,7 @@ function ServerRow({
       <div class="server-stat">
         <span>Players</span>
         <strong>
-          {live ? `${server.playersOnline} / ${server.maxPlayers}` : "—"}
+          {serverPlayerHeadline(server)}
         </strong>
       </div>
       <div class="server-stat">
@@ -2381,7 +2387,7 @@ function ServerRow({
       </div>
       <div class="server-stat">
         <span>TPS</span>
-        <strong>{!live || server.tps === null ? "—" : server.tps.toFixed(1)}</strong>
+        <strong>{!serverReportsTps(server) || !live || server.tps === null ? "—" : server.tps.toFixed(1)}</strong>
       </div>
       <div class="server-actions">
         {primaryAction === "restart" ? (
@@ -5449,7 +5455,7 @@ function ImportedServerPage({
             <div>
               <span>Players</span>
               <strong>
-                {live ? `${server.playersOnline} / ${server.maxPlayers}` : "—"}
+                {serverPlayerHeadline(server)}
               </strong>
             </div>
             <div>
@@ -6242,7 +6248,7 @@ export function ServersPage({
         </div>
         <div>
           <strong>
-            {servers.reduce((total, server) => total + server.playersOnline, 0)}
+            {servers.reduce((total, server) => total + (server.playerCountVerified ? server.playersOnline : 0), 0)}
           </strong>
           <span>players</span>
         </div>

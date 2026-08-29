@@ -113,7 +113,7 @@ export function DockerInventoryPanel({
       </div>
       {pending !== null && (
         <Dialog title={`${pending.action[0]?.toUpperCase()}${pending.action.slice(1)} ${pending.container.name}?`} onClose={() => setPending(null)}>
-          <p class="docker-confirm">Helix will run a typed Docker {pending.action} for <code>{pending.container.name}</code> and then re-read container state. Game servers and media stacks can drop users. Helix dashboard and gateway containers stay protected.</p>
+          <p class="docker-confirm">Helix will run a typed Docker {pending.action} for <code>{pending.container.name}</code> and then re-read container state. AMP, Plex, and other host containers can drop users. Helix dashboard, gateway, and native game containers stay protected. Use Servers to restart a Helix game.</p>
           <div class="dialog-actions">
             <button class="button button--quiet" type="button" disabled={busy} onClick={() => setPending(null)}>Cancel</button>
             <button class={`button ${pending.action === 'stop' ? 'button--danger' : 'button--primary'}`} type="button" disabled={busy} onClick={() => void run()}>{busy ? 'Working…' : `${pending.action[0]?.toUpperCase()}${pending.action.slice(1)}`}</button>

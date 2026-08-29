@@ -24,7 +24,7 @@ describe('dashboard shell', () => {
     const inventory: HostInventory = {
       disks: [{ name: 'sda', path: '/dev/sda', parent: null, deviceType: 'disk', sizeBytes: 1_000_000_000_000, fileSystem: null, label: null, mountPoints: ['/'], model: 'WD Boot', serial: null, transport: 'sata', rotational: false, readOnly: false, hotplug: false }],
       mounts: [{ target: '/', source: '/dev/sda2', fileSystem: 'ext4', sizeBytes: 900_000_000_000, usedBytes: 810_000_000_000, availableBytes: 90_000_000_000, usePercent: 90, readOnly: false }],
-      interfaces: [], routes: [], listeners: [], services: [], processes: [], loadAverage: [0, 0, 0], processCount: 128, cpuModel: 'AMD Ryzen', collectedAtUnixMs: 1,
+      interfaces: [], routes: [], listeners: [], services: [], processes: [], loadAverage: [0, 0, 0], processCount: 128, threadCount: 512, cpuModel: 'AMD Ryzen', collectedAtUnixMs: 1,
     };
     const markup = render(<DiskMap inventory={inventory} onBrowse={() => undefined} onAnalyze={() => undefined} />);
 

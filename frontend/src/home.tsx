@@ -286,7 +286,7 @@ function HostWidget({ overview, inventory }: Pick<HomePageProps, 'overview' | 'i
       <div><span>CPU</span><strong>{overview?.cpu.usagePercent === null || overview === null ? '—' : formatPercent(overview.cpu.usagePercent)}</strong><small>{inventory?.cpuModel ?? `${overview?.cpu.logicalCores ?? '—'} cores`}</small></div>
       <div><span>Memory</span><strong>{memory === null ? '—' : formatPercent(memory)}</strong><small>{overview === null ? 'Waiting for host' : `${formatBytes(overview.memory.availableBytes)} available`}</small></div>
       <div><span>Uptime</span><strong>{overview === null ? '—' : formatDuration(overview.uptimeSeconds)}</strong><small>{overview?.hostname ?? 'Host not reported'}</small></div>
-      <div><span>Load</span><strong>{inventory?.loadAverage[0].toFixed(2) ?? '—'}</strong><small>{inventory === null ? '1 minute average' : `${inventory.processCount.toLocaleString()} processes`}</small></div>
+      <div><span>Load</span><strong>{inventory?.loadAverage[0].toFixed(2) ?? '—'}</strong><small>{inventory === null ? '1 minute average' : `${inventory.processCount.toLocaleString()} processes · ${inventory.threadCount.toLocaleString()} threads`}</small></div>
     </div>
   );
 }
@@ -320,7 +320,7 @@ function ServersWidget({ servers }: Pick<HomePageProps, 'servers'>) {
         <a href="#servers" key={server.id}>
           <span class={`status-dot status-dot--${serverStatusTone(server.status)}`} />
           <strong>{server.name}</strong>
-          <small>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers)}</small>
+          <small>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers, server.playerCountVerified)}</small>
           <span>{server.manager === 'helix' ? 'Helix' : 'AMP'}</span>
         </a>
       ))}

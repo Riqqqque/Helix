@@ -6,6 +6,25 @@ release, not a public-internet support promise.
 
 ## Unreleased
 
+### Fixed
+
+- Overview and Host process count is Linux processes (thread groups), not
+  kernel threads. `/proc/loadavg` still supplies the thread total, shown as a
+  subtitle. On this class of host that is typically a few hundred processes and
+  a couple thousand threads.
+- Storage use percent accepts findmnt's number or `"12%"` form, and falls back
+  to used/size when the percent field is missing, so full-disk warnings still
+  fire.
+- Server list player totals stay blank when Helix could not verify a player
+  query, instead of showing `0`.
+- The Docker page will not start, stop, or restart native `helix-game-*`
+  containers. Those go through Servers so the stop is 45 seconds and
+  health-checked.
+
+### Changed
+
+- HTTPS calls Helix makes as itself now send `Helix/1.0.0` in the User-Agent.
+
 ## 1.0.0 - 2026-08-29
 
 ### Added
