@@ -66,6 +66,14 @@ browser then opens one exact WebSocket protocol. The host service uses a group
 separate from the privileged broker and Linux peer credentials restrict socket
 clients to the pinned dashboard UID.
 
+The PTY is an interactive login bash, so profile, `~`, and Tab completion work
+like a normal SSH session. Helix forwards Tab into the shell instead of moving
+browser focus. Copy/paste use Ctrl/Cmd+Shift+C and Ctrl/Cmd+Shift+V (plain
+Ctrl+C still interrupts). Ctrl+F searches the local scrollback. Ctrl+/− and
+Ctrl+wheel change font size. http(s) links in output open in a new tab. Mouse
+reporting is forwarded so programs like `htop` can use it. Helix does not add
+scp, extra SSH hops, or a second file completer of its own.
+
 Helix audits password rejection and session opened/closed/failed lifecycle. It
 does not store commands, keystrokes, output, or environment values. The browser
 keeps 10,000 lines of local scrollback only for that page. Disconnecting or

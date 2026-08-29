@@ -47,6 +47,11 @@ binary or package release yet.
 
 ### Added
 
+- Host Terminal keeps Tab in the shell so bash can complete paths and commands,
+  starts an interactive login shell with the account's real HOME/locale, and
+  behaves closer to SSH in the browser: copy/paste, find in scrollback,
+  clickable http(s) links, font zoom, and mouse reports for tools like htop.
+
 - Globe is an optional world map of this host and country-level connections.
   It stays off the sidebar until you add it from Arrange or Settings. A Home
   widget is available too. Lines stay solid unless you turn on data motion.

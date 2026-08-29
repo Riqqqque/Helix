@@ -58,6 +58,21 @@
   gap: 8px;
 }
 
+.terminal-toolbar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.terminal-hint {
+  max-width: min(36vw, 280px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .terminal-toolbar strong {
   max-width: min(52vw, 620px);
   overflow: hidden;
@@ -127,11 +142,59 @@
   font-size: 9px;
 }
 
+.terminal-find {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 13px 7px 17px;
+  border-bottom: 1px solid var(--line);
+  color: var(--quiet);
+  background: color-mix(in srgb, var(--surface-raised) 94%, #000 6%);
+}
+
+.terminal-find > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.terminal-find input {
+  min-width: 0;
+  flex: 1 1 180px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+}
+
+.terminal-find input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.terminal-find-status {
+  flex: 0 0 auto;
+  min-width: 4.5rem;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.terminal-find-status.is-miss {
+  color: var(--danger);
+}
+
 .terminal-host {
   position: absolute;
   inset: 0;
   padding: 13px 12px 10px;
   background: var(--terminal-background);
+}
+
+.terminal-host.is-bell {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 80%, transparent);
 }
 
 .terminal-host .xterm,
@@ -156,8 +219,12 @@
   text-align: center;
   color: var(--terminal-foreground);
   background:
-    linear-gradient(180deg, rgba(9, 11, 14, .88), rgba(9, 11, 14, .96)),
-    repeating-linear-gradient(0deg, transparent 0 23px, rgba(255, 255, 255, .025) 24px);
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--terminal-background) 88%, transparent),
+      color-mix(in srgb, var(--terminal-background) 96%, #000 4%)
+    ),
+    repeating-linear-gradient(0deg, transparent 0 23px, color-mix(in srgb, var(--terminal-foreground) 4%, transparent) 24px);
   backdrop-filter: blur(3px);
 }
 
@@ -172,7 +239,7 @@
 .terminal-lock > p {
   max-width: 520px;
   margin: -4px 0 2px;
-  color: #aeb5aa;
+  color: color-mix(in srgb, var(--terminal-foreground) 72%, transparent);
   line-height: 1.55;
 }
 
@@ -184,18 +251,18 @@
 }
 
 .terminal-lock label span {
-  color: #c9cdc5;
+  color: color-mix(in srgb, var(--terminal-foreground) 86%, transparent);
   font-size: 12px;
   font-weight: 700;
 }
 
 .terminal-lock input {
   width: 100%;
-  border: 1px solid #394047;
+  border: 1px solid color-mix(in srgb, var(--terminal-foreground) 18%, transparent);
   border-radius: 9px;
   padding: 11px 12px;
-  color: #f4f6ef;
-  background: #12161a;
+  color: var(--terminal-foreground);
+  background: color-mix(in srgb, var(--terminal-background) 70%, #000 30%);
   outline: none;
 }
 
@@ -228,9 +295,18 @@
     flex-direction: column;
   }
 
-  .terminal-toolbar > div:last-child {
+  .terminal-toolbar > div:last-child,
+  .terminal-toolbar-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .terminal-find {
+    flex-wrap: wrap;
+  }
+
+  .terminal-find input {
+    flex: 1 1 100%;
   }
 
   .terminal-shortcuts {

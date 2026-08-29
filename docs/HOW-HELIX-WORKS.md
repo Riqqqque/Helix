@@ -49,7 +49,8 @@ check, the browser receives a one-use 30-second HttpOnly ticket and opens one
 exact WebSocket protocol. `helixd` bridges it to a separate service running as
 the configured Linux user. The socket group is distinct from the broker group,
 Linux peer credentials must match the pinned dashboard UID, and disconnect kills
-the PTY. Helix records lifecycle events, not commands or output.
+the PTY. Helix records lifecycle events, not commands or output. Tab stays in
+the shell so bash can complete the way it does over SSH.
 
 The private gateway is optional for a loopback development preview and required
 by the checked container layout for private-LAN access. It validates an exact

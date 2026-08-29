@@ -325,12 +325,15 @@ cookie; the ticket is never returned in a URL or JSON body. WebSocket setup
 requires an exact same Origin and one exact `helix-terminal-v1` subprotocol.
 
 The daemon caps concurrent sessions and frame/input sizes, clears the inherited
-environment to a minimal allowlist, and kills the PTY when transport ends. Helix
-audits password rejection plus session opened/closed/failed events, but does not
-store terminal commands, keystrokes, output, or environment values. Normal host
-policy still applies inside the shell: `sudo` may prompt and can increase
-authority if that Linux user is allowed to use it. Long-running work belongs in
-`tmux` or a supervised service because a browser disconnect ends the PTY.
+environment to a minimal allowlist (HOME, USER, locale, TERM, and a conventional
+runtime dir when it exists), starts an interactive login shell, and kills the
+PTY when transport ends. Helix audits password rejection plus session
+opened/closed/failed events, but does not store terminal commands, keystrokes,
+output, or environment values. Copy and paste stay in the browser clipboard;
+Helix still does not log that content. Normal host policy still applies inside
+the shell: `sudo` may prompt and can increase authority if that Linux user is
+allowed to use it. Long-running work belongs in `tmux` or a supervised service
+because a browser disconnect ends the PTY.
 
 Helix self-update stays unavailable until releases are signed and digest-pinned
 and the updater has staging, compatibility checks, configuration/data backup,

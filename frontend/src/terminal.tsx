@@ -1,8 +1,11 @@
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ApiError } from './api';
+import { DASHBOARD_PREFERENCES_EVENT } from './dashboard-preferences';
 import { InlineError, PageHead } from './dashboard-ui';
 import { Icon } from './icons';
 import { InfoTip } from './info-tip';
@@ -12,6 +15,17 @@ import {
   terminalWebSocketUrl,
   type TerminalStatus,
 } from './terminal-api';
+import {
+  TERMINAL_FONT_SIZE_DEFAULT,
+  encodeBinaryPtyPayload,
+  openSafeHttpUrl,
+  readClipboardText,
+  readStoredTerminalFontSize,
+  saveTerminalFontSize,
+  safeTerminalTitle,
+  terminalKeyAction,
+  writeClipboardText,
+} from './terminal-keys';
 import './terminal.css';
 
 export interface TerminalPageProps {
@@ -32,12 +46,24 @@ type TerminalPhase =
 interface TerminalRuntime {
   terminal: Terminal;
   fit: FitAddon;
+  search: SearchAddon;
   socket: WebSocket | null;
   resizeObserver: ResizeObserver | null;
   dataDisposable: { dispose: () => void } | null;
+  binaryDisposable: { dispose: () => void } | null;
   resizeDisposable: { dispose: () => void } | null;
   keepalive: number | null;
   pendingOutputBytes: number;
+}
+
+interface TerminalChrome {
+  copy: () => void;
+  paste: () => void;
+  openFind: () => void;
+  runFind: (direction: 'next' | 'previous', incremental?: boolean) => void;
+  closeFind: () => void;
+  findOpen: boolean;
+  adjustFont: (delta: 1 | -1 | 0) => void;
 }
 
 const MAX_PENDING_TERMINAL_OUTPUT_BYTES = 4 * 1024 * 1024;
@@ -121,6 +147,10 @@ function terminalTheme(host: HTMLElement): ITheme {
     cursor: accent,
     cursorAccent: background,
     selectionBackground: `${accent}40`,
+    selectionInactiveBackground: `${accent}28`,
+    scrollbarSliderBackground: `${foreground}33`,
+    scrollbarSliderHoverBackground: `${foreground}55`,
+    scrollbarSliderActiveBackground: `${accent}66`,
     black: '#111318',
     red: '#ff7168',
     green: '#b7df65',
@@ -140,14 +170,20 @@ function terminalTheme(host: HTMLElement): ITheme {
   };
 }
 
-function stopSocket(runtime: TerminalRuntime): void {
+function detachIo(runtime: TerminalRuntime): void {
   runtime.dataDisposable?.dispose();
+  runtime.binaryDisposable?.dispose();
   runtime.resizeDisposable?.dispose();
   runtime.dataDisposable = null;
+  runtime.binaryDisposable = null;
   runtime.resizeDisposable = null;
   if (runtime.keepalive !== null) globalThis.clearInterval(runtime.keepalive);
   runtime.keepalive = null;
   runtime.pendingOutputBytes = 0;
+}
+
+function stopSocket(runtime: TerminalRuntime): void {
+  detachIo(runtime);
   const socket = runtime.socket;
   runtime.socket = null;
   if (socket !== null && socket.readyState === WebSocket.OPEN) {
@@ -162,11 +198,106 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
   const hostRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<TerminalRuntime | null>(null);
   const generationRef = useRef(0);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
+  const findTermRef = useRef('');
+  const hintTimerRef = useRef<number | null>(null);
+  const chromeRef = useRef<TerminalChrome>({
+    copy() {},
+    paste() {},
+    openFind() {},
+    runFind() {},
+    closeFind() {},
+    findOpen: false,
+    adjustFont() {},
+  });
   const [status, setStatus] = useState<TerminalStatus | null>(null);
   const [phase, setPhase] = useState<TerminalPhase>('loading');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [sessionLabel, setSessionLabel] = useState<string | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findTerm, setFindTerm] = useState('');
+  const [findHit, setFindHit] = useState<boolean | null>(null);
+  const [fontSize, setFontSize] = useState(readStoredTerminalFontSize);
+  const [bellFlash, setBellFlash] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
+  const [terminalReady, setTerminalReady] = useState(false);
+
+  const showHint = (message: string): void => {
+    setHint(message);
+    if (hintTimerRef.current !== null) globalThis.clearTimeout(hintTimerRef.current);
+    hintTimerRef.current = globalThis.setTimeout(() => {
+      setHint(null);
+      hintTimerRef.current = null;
+    }, 4_000);
+  };
+
+  chromeRef.current = {
+    findOpen,
+    copy: () => {
+      const runtime = runtimeRef.current;
+      if (runtime === null) return;
+      const text = runtime.terminal.getSelection();
+      if (text.length === 0) {
+        showHint('Select text in the terminal first.');
+        return;
+      }
+      void writeClipboardText(text).then((copied) => {
+        showHint(copied ? 'Copied.' : 'Copy failed. Select the text and use your browser copy command.');
+      });
+    },
+    paste: () => {
+      const runtime = runtimeRef.current;
+      if (runtime === null || runtime.socket?.readyState !== WebSocket.OPEN) return;
+      void readClipboardText().then((text) => {
+        if (text !== null && text.length > 0) {
+          runtime.terminal.paste(text);
+          runtime.terminal.focus();
+          return;
+        }
+        showHint('Press Ctrl+V while the terminal is focused to paste.');
+        runtime.terminal.focus();
+      });
+    },
+    openFind: () => {
+      setFindOpen(true);
+      requestAnimationFrame(() => findInputRef.current?.focus());
+    },
+    runFind: (direction, incremental = false) => {
+      const runtime = runtimeRef.current;
+      const term = findTermRef.current;
+      if (runtime === null || term.length === 0) {
+        setFindHit(null);
+        return;
+      }
+      const hit = direction === 'previous'
+        ? runtime.search.findPrevious(term, { caseSensitive: false })
+        : runtime.search.findNext(term, { caseSensitive: false, incremental });
+      setFindHit(hit);
+    },
+    closeFind: () => {
+      runtimeRef.current?.search.clearDecorations();
+      setFindOpen(false);
+      setFindHit(null);
+      runtimeRef.current?.terminal.focus();
+    },
+    adjustFont: (delta) => {
+      const runtime = runtimeRef.current;
+      if (runtime === null) return;
+      const current = Number(runtime.terminal.options.fontSize) || TERMINAL_FONT_SIZE_DEFAULT;
+      const next = delta === 0 ? TERMINAL_FONT_SIZE_DEFAULT : current + delta;
+      const size = saveTerminalFontSize(next);
+      runtime.terminal.options.fontSize = size;
+      try { runtime.fit.fit(); } catch { /* The next visible resize retries. */ }
+      setFontSize(size);
+    },
+  };
+
+  useEffect(() => {
+    return () => {
+      if (hintTimerRef.current !== null) globalThis.clearTimeout(hintTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!canOpen) {
@@ -194,34 +325,114 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
   useEffect(() => {
     const host = hostRef.current;
     if (host === null || status?.availability !== 'available' || runtimeRef.current !== null) return;
+    const initialFontSize = readStoredTerminalFontSize();
     const terminal = new Terminal({
       allowProposedApi: false,
       convertEol: false,
       cursorBlink: true,
       cursorStyle: 'block',
+      cursorInactiveStyle: 'outline',
       drawBoldTextInBrightColors: true,
       fontFamily: '"Cascadia Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace',
-      fontSize: 14,
+      fontSize: initialFontSize,
       lineHeight: 1.25,
+      logLevel: 'error',
+      macOptionIsMeta: true,
+      macOptionClickForcesSelection: true,
       minimumContrastRatio: 4.5,
       scrollback: 10_000,
-      tabStopWidth: 4,
+      scrollOnEraseInDisplay: true,
+      tabStopWidth: 8,
+      wordSeparator: ' ()[]{}\'"`<>|;&=',
       theme: terminalTheme(host),
+      linkHandler: {
+        activate(event, text) {
+          event.preventDefault();
+          openSafeHttpUrl(text);
+        },
+        allowNonHttpProtocols: false,
+      },
     });
     const fit = new FitAddon();
+    const search = new SearchAddon();
     terminal.loadAddon(fit);
+    terminal.loadAddon(search);
+    terminal.loadAddon(new WebLinksAddon((event, uri) => {
+      event.preventDefault();
+      openSafeHttpUrl(uri);
+    }));
     terminal.open(host);
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && event.key === 'Escape' && chromeRef.current.findOpen) {
+        event.preventDefault();
+        chromeRef.current.closeFind();
+        return false;
+      }
+      const action = terminalKeyAction(event);
+      if (action === 'pass') return true;
+      if (action === 'find-next' || action === 'find-previous') {
+        if (!chromeRef.current.findOpen) return true;
+        event.preventDefault();
+        if (event.type === 'keydown') chromeRef.current.runFind(action === 'find-previous' ? 'previous' : 'next');
+        return false;
+      }
+      if (action === 'tab') {
+        event.preventDefault();
+        return true;
+      }
+      event.preventDefault();
+      if (event.type !== 'keydown') return false;
+      if (action === 'copy') chromeRef.current.copy();
+      else if (action === 'paste') chromeRef.current.paste();
+      else if (action === 'find') chromeRef.current.openFind();
+      else if (action === 'font-up') chromeRef.current.adjustFont(1);
+      else if (action === 'font-down') chromeRef.current.adjustFont(-1);
+      else if (action === 'font-reset') chromeRef.current.adjustFont(0);
+      return false;
+    });
+    terminal.attachCustomWheelEventHandler((event) => {
+      if (!event.ctrlKey && !event.metaKey) return true;
+      event.preventDefault();
+      if (event.deltaY === 0) return false;
+      chromeRef.current.adjustFont(event.deltaY < 0 ? 1 : -1);
+      return false;
+    });
+    const applyTheme = (): void => {
+      terminal.options.theme = { ...terminalTheme(host) };
+    };
+    const themeObserver = typeof MutationObserver === 'undefined'
+      ? null
+      : new MutationObserver(applyTheme);
+    themeObserver?.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    globalThis.addEventListener(DASHBOARD_PREFERENCES_EVENT, applyTheme);
+    let bellTimer: number | null = null;
+    const bellDisposable = terminal.onBell(() => {
+      setBellFlash(true);
+      if (bellTimer !== null) globalThis.clearTimeout(bellTimer);
+      bellTimer = globalThis.setTimeout(() => {
+        setBellFlash(false);
+        bellTimer = null;
+      }, 180);
+    });
+    const titleDisposable = terminal.onTitleChange((title) => {
+      const safe = safeTerminalTitle(title);
+      if (safe !== null) setSessionLabel(safe);
+    });
     const runtime: TerminalRuntime = {
       terminal,
       fit,
+      search,
       socket: null,
       resizeObserver: null,
       dataDisposable: null,
+      binaryDisposable: null,
       resizeDisposable: null,
       keepalive: null,
       pendingOutputBytes: 0,
     };
     runtimeRef.current = runtime;
+    setFontSize(initialFontSize);
+    setTerminalReady(true);
     const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
       try { fit.fit(); } catch { /* The next visible resize retries. */ }
     });
@@ -234,10 +445,20 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
       generationRef.current += 1;
       stopSocket(runtime);
       resizeObserver?.disconnect();
+      themeObserver?.disconnect();
+      globalThis.removeEventListener(DASHBOARD_PREFERENCES_EVENT, applyTheme);
+      if (bellTimer !== null) globalThis.clearTimeout(bellTimer);
+      bellDisposable.dispose();
+      titleDisposable.dispose();
       terminal.dispose();
       runtimeRef.current = null;
+      setTerminalReady(false);
     };
   }, [status]);
+
+  useEffect(() => {
+    findTermRef.current = findTerm;
+  }, [findTerm]);
 
   const disconnect = (): void => {
     const runtime = runtimeRef.current;
@@ -276,6 +497,9 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
       runtime.socket = socket;
       runtime.dataDisposable = runtime.terminal.onData((data) => {
         if (socket.readyState === WebSocket.OPEN) socket.send(new TextEncoder().encode(data));
+      });
+      runtime.binaryDisposable = runtime.terminal.onBinary((data) => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(encodeBinaryPtyPayload(data));
       });
       runtime.resizeDisposable = runtime.terminal.onResize(({ cols, rows }) => {
         if (socket.readyState === WebSocket.OPEN) {
@@ -340,12 +564,7 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
       });
       socket.addEventListener('close', () => {
         if (generationRef.current !== generation) return;
-        runtime.dataDisposable?.dispose();
-        runtime.resizeDisposable?.dispose();
-        runtime.dataDisposable = null;
-        runtime.resizeDisposable = null;
-        if (runtime.keepalive !== null) globalThis.clearInterval(runtime.keepalive);
-        runtime.keepalive = null;
+        detachIo(runtime);
         runtime.socket = null;
         setPhase((current) => current === 'connected' || current === 'connecting' ? 'ended' : current);
       });
@@ -375,15 +594,20 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
       />
       <InlineError message={error} />
       <section class="terminal-safety surface">
-        <div><Icon name="terminal" size={20} /><span><strong>Runs as the configured Linux user</strong><p>This is a real shell, not a command simulator. <code>sudo</code> still follows the host’s normal policy and may ask for the Linux account password.</p></span></div>
+        <div><Icon name="terminal" size={20} /><span><strong>Runs as the configured Linux user</strong><p>This is a real shell, not a command simulator. Tab completes paths and commands the same way bash would over SSH. <code>sudo</code> still follows the host’s normal policy and may ask for the Linux account password.</p></span></div>
         <InfoTip text="Helix audits only terminal authorization and connection lifecycle. It does not store commands, keystrokes, output, or environment values. Closing this page ends the PTY, so use tmux or a system service for long-running work." />
       </section>
 
       <section class="terminal-frame surface" aria-busy={busy}>
         <header class="terminal-toolbar">
-          <div><span class="terminal-led" aria-hidden="true" /><strong>{sessionLabel ?? 'Host shell'}</strong></div>
-          <div>
-            <button class="button button--quiet" type="button" disabled={runtimeRef.current === null} onClick={() => runtimeRef.current?.terminal.clear()}><Icon name="trash" size={14} />Clear view</button>
+          <div><span class="terminal-led" aria-hidden="true" /><strong>{sessionLabel ?? 'Host shell'}</strong>{hint !== null && <span class="terminal-hint" role="status">{hint}</span>}</div>
+          <div class="terminal-toolbar-actions">
+            <button class="button button--quiet" type="button" disabled={!terminalReady} onClick={() => chromeRef.current.openFind()}><Icon name="search" size={14} />Find</button>
+            <button class="button button--quiet" type="button" disabled={!connected} onClick={() => chromeRef.current.copy()}>Copy</button>
+            <button class="button button--quiet" type="button" disabled={!connected} onClick={() => chromeRef.current.paste()}>Paste</button>
+            <button class="button button--quiet" type="button" disabled={!terminalReady} onClick={() => chromeRef.current.adjustFont(-1)} aria-label="Smaller terminal text">A−</button>
+            <button class="button button--quiet" type="button" disabled={!terminalReady} onClick={() => chromeRef.current.adjustFont(1)} aria-label="Larger terminal text">A+</button>
+            <button class="button button--quiet" type="button" disabled={!terminalReady} onClick={() => runtimeRef.current?.terminal.clear()}><Icon name="trash" size={14} />Clear view</button>
             <button class="button button--danger" type="button" disabled={!connected && phase !== 'connecting'} onClick={disconnect}><Icon name="close" size={14} />Disconnect</button>
           </div>
         </header>
@@ -396,8 +620,45 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
             <small>Output stays terminal-native so columns, colors, prompts, and interactive tools render correctly.</small>
           </div>
         )}
+        {findOpen && (
+          <form
+            class="terminal-find"
+            onSubmit={(event) => {
+              event.preventDefault();
+              chromeRef.current.runFind('next');
+            }}
+          >
+            <Icon name="search" size={14} />
+            <input
+              ref={findInputRef}
+              type="search"
+              value={findTerm}
+              placeholder="Find in scrollback"
+              aria-label="Find in terminal scrollback"
+              onInput={(event) => {
+                const next = event.currentTarget.value;
+                setFindTerm(next);
+                findTermRef.current = next;
+                chromeRef.current.runFind('next', true);
+              }}
+            />
+            <span class={`terminal-find-status${findHit === false ? ' is-miss' : ''}`}>
+              {findTerm.length === 0 ? '' : findHit === false ? 'No match' : findHit === true ? 'Match' : ''}
+            </span>
+            <button type="button" class="button button--quiet" onClick={() => chromeRef.current.runFind('previous')}>Prev</button>
+            <button type="submit" class="button button--quiet">Next</button>
+            <button type="button" class="button button--quiet" onClick={() => chromeRef.current.closeFind()}>Close</button>
+          </form>
+        )}
         <div class="terminal-stage">
-          <div ref={hostRef} class="terminal-host" aria-label="Linux host terminal" />
+          <div
+            ref={hostRef}
+            class={`terminal-host${bellFlash ? ' is-bell' : ''}`}
+            aria-label="Linux host terminal"
+            onMouseDown={() => {
+              if (connected) runtimeRef.current?.terminal.focus();
+            }}
+          />
           {phase === 'loading' && <div class="terminal-lock"><Icon name="terminal" size={28} /><strong>Checking the host terminal…</strong></div>}
           {phase === 'unavailable' && <div class="terminal-lock"><Icon name="warning" size={28} /><strong>Terminal service unavailable</strong><p>{status?.detail ?? 'Helix could not verify the optional host terminal service.'}</p></div>}
           {locked && !connected && (
@@ -410,7 +671,13 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
             </form>
           )}
         </div>
-        <footer><span>10,000-line local scrollback</span><span>Session ends when this page disconnects</span><span>Input and output are not logged by Helix</span></footer>
+        <footer>
+          <span>10,000-line local scrollback · {fontSize}px</span>
+          <span>Tab completes in the shell</span>
+          <span>Ctrl+Shift+C/V copy/paste · Ctrl+F find · Ctrl+/− font</span>
+          <span>Session ends when this page disconnects</span>
+          <span>Input and output are not logged by Helix</span>
+        </footer>
       </section>
     </div>
   );

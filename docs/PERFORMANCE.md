@@ -60,6 +60,9 @@ The 2026-08-27 production frontend build recorded:
 
 These are transfer sizes from one locked production build, not browser-memory
 or interaction-latency measurements. Both enforced initial budgets passed.
+A later Terminal client build measured about 100 KiB gzip for that lazy
+chunk after search and link addons. It still does not count toward the
+initial JavaScript budget.
 
 An early Windows development snapshot on 2026-08-26 recorded:
 
