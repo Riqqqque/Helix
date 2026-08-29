@@ -107,7 +107,16 @@ Helix validates contrast-sensitive values rather than accepting arbitrary CSS.
 
 ## Dismissed notices
 
-Capacity notices on Overview can be dismissed from the card or from the
-notifications bell in the top bar. Dismissal is this browser’s local list; it
-does not change the disk, remove files, or hide the same evidence inside
-Storage. Settings can show those notices again.
+If you close a full-disk warning on Overview, a notice in the bell menu, or the
+Storage space-analyzer intro, Helix remembers that in this browser only. Other
+browsers and other people on this dashboard still see those banners. The disk is
+unchanged. **Settings → Helix data → Show them again** brings the banners back.
+
+## Helix data
+
+Settings → Helix data lists native servers Helix owns, imported connections it
+can see, and recoverable trash. Each native server has **Start after the host
+boots**: on means the game comes back after Linux or Docker restarts; off means
+it stays stopped until you press Start. That same checkbox is on by default
+when you create a server. It does not start or stop the server right now. This
+is not the Host integration toggle for the Helix dashboard containers.

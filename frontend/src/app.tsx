@@ -26,7 +26,7 @@ import { StrandsRoute, preloadStrandsRoute } from './strands-route';
 import { GlobeRoute, preloadGlobeRoute } from './globe-route';
 import { SecurityRoute, preloadSecurityRoute } from './security-route';
 import { Icon, type IconName } from './icons';
-import { dismissNotice, isDismissed } from './dismissals';
+import { DISMISSALS_CHANGED_EVENT, dismissNotice, isDismissed } from './dismissals';
 import {
   preloadHostUpdatesRoute,
   preloadNetworkOperationsRoute,
@@ -445,6 +445,11 @@ function NotificationsMenu({
   const [tick, setTick] = useState(0);
   const visible = items.filter((item) => !isDismissed(item.id));
   void tick;
+  useEffect(() => {
+    const refresh = (): void => setTick((value) => value + 1);
+    window.addEventListener(DISMISSALS_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(DISMISSALS_CHANGED_EVENT, refresh);
+  }, []);
   return (
     <div class="notifications-wrap">
       <button

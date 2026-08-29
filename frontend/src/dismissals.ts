@@ -16,12 +16,23 @@ function readMap(): Record<string, number> {
   }
 }
 
+export const DISMISSALS_CHANGED_EVENT = 'helix:dismissals-changed';
+
+function emitDismissalsChanged(): void {
+  try {
+    globalThis.dispatchEvent(new Event(DISMISSALS_CHANGED_EVENT));
+  } catch {
+    // EventTarget is optional in non-browser tests.
+  }
+}
+
 function writeMap(map: Record<string, number>): void {
   try {
     globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(map));
   } catch {
     // Preference persistence is optional.
   }
+  emitDismissalsChanged();
 }
 
 export function isDismissed(id: string): boolean {
@@ -40,8 +51,12 @@ export function restoreNotice(id: string): void {
   writeMap(map);
 }
 
+export function listDismissedIds(): string[] {
+  return Object.keys(readMap());
+}
+
 export function dismissedCount(): number {
-  return Object.keys(readMap()).length;
+  return listDismissedIds().length;
 }
 
 export function clearDismissals(): void {

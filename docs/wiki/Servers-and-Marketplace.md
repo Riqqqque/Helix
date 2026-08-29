@@ -56,11 +56,12 @@ Implemented and unvalidated.
 ## Start on boot
 
 Native Helix servers persist a start-on-boot flag in the instance manifest and
-set Docker `--restart unless-stopped` or `no`. Creation still starts the first
-time so the runtime can install. The later Overview toggle changes policy only;
-it does not start or stop the server now. After a host reboot, Docker brings
-back servers that opted in. This is separate from the Settings control that
-only covers the Helix dashboard and gateway containers.
+tell Docker to start that container again after Linux or Docker restarts. The
+checkbox is on by default when you create a server. You can change it later on
+the server page or in **Settings → Helix data**. Turning it on or off does not
+start or stop the server right now. After a host reboot, Docker brings back
+servers that opted in. This is separate from **Settings → Host integration**,
+which only covers the Helix dashboard and gateway containers.
 
 ## Native Minecraft
 
