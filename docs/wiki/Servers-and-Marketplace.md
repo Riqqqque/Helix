@@ -137,8 +137,10 @@ rebinds the container so Docker, and Minecraft `-Xmx` for RAM, pick up the new
 limits.
 
 Removing a native server stops and removes its exact container, then moves its
-managed data into recoverable trash. The Removed section can restore it before
-expiry.
+managed data into recoverable trash. **Removed and hidden** can restore it in
+the stopped state, or **Delete forever** after you type the exact server name.
+That wipe includes world files, Helix backups, and console history. Helix never
+auto-purges. This is not an off-host backup.
 
 ## Backups
 
@@ -216,9 +218,12 @@ are shown as themselves. Helix does not force-kill AMP instances; use Stop here
 or kill from the AMP panel. **Open AMP** uses the configured public panel port,
 not the private loopback API port. AMP-only settings stay in AMP.
 
-Hide removes an import from this browser's list without touching AMP. Deleting
-the upstream AMP instance must happen in AMP; Helix will not reinterpret a Hide
-button as destructive upstream deletion. If AMP disappears, inventory becomes
+Hide removes an import from this browser's list without touching AMP. From
+**Removed and hidden**, **Forget here** also stays in this browser: the AMP
+instance is unchanged, and the connection leaves both the Servers list and that
+section. **Settings → Helix data** can put it back on Servers. Deleting
+the upstream AMP instance must happen in AMP; Helix will not reinterpret Hide or
+Forget as destructive upstream deletion. If AMP disappears, inventory becomes
 unavailable/degraded and stale imports can be cleared instead of crashing the
 dashboard.
 

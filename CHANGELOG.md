@@ -8,6 +8,10 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Removed native servers can be permanently deleted from **Removed and hidden**
+  or Settings → Helix data after typing the exact name. That wipe includes world
+  files, Helix backups, and console history. Hidden AMP connections can be
+  forgotten in this browser from the same list without touching AMP.
 - Native create can cap container CPU as well as RAM. Overview can change either
   later. `0` means no extra CPU cap.
 - V Rising can list on the in-game server browser (EOS and Steam, on by default)

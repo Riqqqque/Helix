@@ -22,8 +22,10 @@ import {
   setServerNetworkExposure,
   saveServerSettings,
   trashServerBackup,
+  getTrashedNativeServers,
   type MinecraftSettings,
 } from './control-api';
+import { purgeTrashedNativeServer } from './native-server-trash-api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -444,6 +446,52 @@ describe('native server API', () => {
     const [undoPath, undoRequest] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(undoPath).toContain(`/trash/${trashId}/restore`);
     expect(undoRequest.method).toBe('POST');
+  });
+
+  it('lists removed native servers and permanently deletes with a typed name', async () => {
+    const trashId = '8953dc16-3891-42bf-802f-711b3ba2965a';
+    const catalog = {
+      schema_version: 1,
+      servers: [{
+        trash_id: trashId,
+        instance_id: 'helix:6f55caa9-1264-4baf-8335-d3f31a704614',
+        name: 'Survival',
+        software: 'Paper',
+        minecraft_version: '1.21.8',
+        game_port: 25565,
+        trashed_at_unix_ms: 1787800020000,
+        data_present: true,
+        backups_preserved: true,
+      }],
+      policy: {
+        recoverable: true,
+        automatic_purge: false,
+        note: 'Removed native servers stay in protected recovery storage until you delete them forever.',
+      },
+    };
+    const purged = {
+      instance_id: 'helix:6f55caa9-1264-4baf-8335-d3f31a704614',
+      trash_id: trashId,
+      purged: true,
+      purged_at_unix_ms: 1787800030000,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(catalog), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(purged), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const parsed = await getTrashedNativeServers('csrf');
+    expect(parsed.servers[0]?.trashId).toBe(trashId);
+    expect(parsed.policy.automaticPurge).toBe(false);
+    await purgeTrashedNativeServer(trashId, 'Survival', 'csrf');
+
+    const [purgePath, purgeRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(purgePath).toBe(`/api/v1/servers/removed/${trashId}`);
+    expect(purgeRequest.method).toBe('DELETE');
+    expect(purgeRequest.body).toBe(JSON.stringify({ confirmation_name: 'Survival' }));
+    const purgeHeaders = new Headers(purgeRequest.headers);
+    expect(purgeHeaders.get('Content-Type')).toBe('application/json');
+    expect(purgeHeaders.get('X-Helix-CSRF')).toBe('csrf');
   });
 
   it('rejects malformed detail status instead of rendering invented state', async () => {

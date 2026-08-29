@@ -252,6 +252,18 @@ impl StateDatabase {
         transaction.commit()?;
         Ok(ServerAppearanceUpdateOutcome::Updated(None))
     }
+
+    pub fn purge_server_appearance(&self, server_id: &str) -> Result<bool, StateError> {
+        require_server_id(server_id)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let deleted = transaction.execute(
+            "DELETE FROM server_appearances WHERE server_id = ?1",
+            [server_id],
+        )?;
+        transaction.commit()?;
+        Ok(deleted > 0)
+    }
 }
 
 fn require_server_id(server_id: &str) -> Result<(), StateError> {
@@ -460,6 +472,35 @@ mod tests {
                 .expect("clear icon"),
             ServerAppearanceUpdateOutcome::Updated(None)
         ));
+
+        let restored = state
+            .update_server_appearance(
+                server_id,
+                0,
+                ServerAppearanceUpdate::Preset(ServerIconPreset::Grass),
+                1_800_000_000_002,
+            )
+            .expect("restore preset after clear");
+        assert!(matches!(
+            restored,
+            ServerAppearanceUpdateOutcome::Updated(Some(_))
+        ));
+        assert!(
+            state
+                .purge_server_appearance(server_id)
+                .expect("purge icon")
+        );
+        assert!(
+            state
+                .server_appearance(server_id)
+                .expect("read purged icon")
+                .is_none()
+        );
+        assert!(
+            !state
+                .purge_server_appearance(server_id)
+                .expect("purge missing icon")
+        );
     }
 
     #[test]

@@ -52,6 +52,7 @@ import {
   type ServerBackupTrashPolicy,
   type ServerBackupKeepPolicy,
   type ServerLogSnapshot,
+  type TrashedNativeServer,
   type TrashedNativeServerCatalog,
   serverIsLive,
   serverPlayerHeadline,
@@ -86,6 +87,12 @@ import { CreateJobProgress, steamCreateJobCopy } from "./create-job-progress";
 import { GameMark } from "./game-marks";
 import { Icon, type IconName } from "./icons";
 import { InfoTip } from "./info-tip";
+import {
+  forgetImportedServer,
+  readForgottenImportedServers,
+  readHiddenImportedServers,
+  saveHiddenImportedServers,
+} from "./imported-server-visibility";
 import { serverDetailHash, serverIdFromHash } from "./server-hash";
 import {
   START_WITH_HOST_CREATE_DETAIL,
@@ -119,6 +126,7 @@ import {
   saveVRisingPortPolicy,
 } from "./port-policy-api";
 import { Dialog } from "./modal";
+import { purgeTrashedNativeServer } from "./native-server-trash-api";
 import { CopyButton } from "./copy-button";
 import {
   cpuLimitOptions,
@@ -4620,6 +4628,138 @@ function RemoveNativeServerDialog({
   );
 }
 
+function PurgeRemovedServerDialog({
+  server,
+  csrfToken,
+  onClose,
+  onPurged,
+  onSessionExpired,
+}: {
+  server: TrashedNativeServer;
+  csrfToken: string;
+  onClose: () => void;
+  onPurged: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [confirmation, setConfirmation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const purge = async (): Promise<void> => {
+    if (confirmation !== server.name || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await purgeTrashedNativeServer(server.trashId, confirmation, csrfToken);
+      await onPurged();
+      onClose();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      title={`Delete ${server.name} forever?`}
+      onClose={() => !busy && onClose()}
+    >
+      <div class="dialog-copy">
+        <p>
+          This permanently erases the recovered world files, Helix backups, and
+          console history for this native server. Restore will no longer work.
+        </p>
+        <p>
+          <strong>This cannot be undone.</strong> Helix does not keep an
+          off-host copy.
+        </p>
+      </div>
+      <label class="field">
+        <span>
+          Type <strong>{server.name}</strong> to confirm
+        </span>
+        <input
+          autofocus
+          autocomplete="off"
+          value={confirmation}
+          disabled={busy}
+          onInput={(event) => setConfirmation(event.currentTarget.value)}
+        />
+      </label>
+      <InlineError message={error} />
+      <div class="dialog-actions">
+        <button
+          class="button button--quiet"
+          type="button"
+          disabled={busy}
+          onClick={onClose}
+        >
+          Cancel
+        </button>
+        <button
+          class="button button--danger"
+          type="button"
+          disabled={busy || confirmation !== server.name}
+          onClick={() => void purge()}
+        >
+          {busy ? "Deleting forever…" : "Delete forever"}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
+function ForgetImportedServerDialog({
+  server,
+  onClose,
+  onForget,
+}: {
+  server: ManagedServer;
+  onClose: () => void;
+  onForget: () => void;
+}) {
+  const [confirmed, setConfirmed] = useState(false);
+  return (
+    <Dialog title={`Forget ${server.name} here?`} onClose={onClose}>
+      <div class="dialog-copy">
+        <p>
+          Helix will not stop or delete the AMP instance. This only forgets the
+          connection in this browser, so it leaves Removed and hidden and does
+          not come back on Servers.
+        </p>
+        <p>
+          Show it again later from Settings → Helix data. Other browsers are
+          unchanged.
+        </p>
+      </div>
+      <label class="check-row">
+        <input
+          type="checkbox"
+          checked={confirmed}
+          onChange={(event) => setConfirmed(event.currentTarget.checked)}
+        />
+        <span>
+          <strong>Forget in this browser</strong>
+          <small>The AMP server itself stays as it is.</small>
+        </span>
+      </label>
+      <div class="dialog-actions">
+        <button class="button button--quiet" type="button" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          class="button button--danger"
+          type="button"
+          disabled={!confirmed}
+          onClick={onForget}
+        >
+          Forget here
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 function formatJoinAddress(host: string, port: number): string {
   return `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`;
 }
@@ -5499,38 +5639,6 @@ export function importedServerPanelUrl(
       ? `[${hostname}]`
       : hostname;
   return `http://${address}:${server.managerPanelPort}/instances/${match[1]?.toLowerCase()}`;
-}
-
-const HIDDEN_IMPORTED_SERVERS_KEY = "helix.servers.hidden-imports";
-
-function readHiddenImportedServers(): string[] {
-  try {
-    const value = JSON.parse(
-      globalThis.localStorage?.getItem(HIDDEN_IMPORTED_SERVERS_KEY) ?? "[]",
-    ) as unknown;
-    if (!Array.isArray(value)) return [];
-    return [
-      ...new Set(
-        value.filter(
-          (item): item is string =>
-            typeof item === "string" && /^amp:[0-9a-f-]{8,128}$/iu.test(item),
-        ),
-      ),
-    ].slice(0, 512);
-  } catch {
-    return [];
-  }
-}
-
-function saveHiddenImportedServers(value: readonly string[]): void {
-  try {
-    globalThis.localStorage?.setItem(
-      HIDDEN_IMPORTED_SERVERS_KEY,
-      JSON.stringify([...new Set(value)].slice(0, 512)),
-    );
-  } catch {
-    // This is a display preference; an unavailable browser store must not affect AMP.
-  }
 }
 
 function ImportedServerPage({
@@ -6505,11 +6613,18 @@ export function ServersPage({
   const [hiddenImported, setHiddenImported] = useState<string[]>(
     readHiddenImportedServers,
   );
+  const [forgottenImported, setForgottenImported] = useState<string[]>(
+    readForgottenImportedServers,
+  );
   const [removed, setRemoved] = useState<TrashedNativeServerCatalog | null>(
     null,
   );
   const [removedError, setRemovedError] = useState<string | null>(null);
-  const [restoring, setRestoring] = useState<string | null>(null);
+  const [busyTrash, setBusyTrash] = useState<string | null>(null);
+  const [purgeTarget, setPurgeTarget] = useState<TrashedNativeServer | null>(
+    null,
+  );
+  const [forgetTarget, setForgetTarget] = useState<ManagedServer | null>(null);
   useEffect(() => {
     const apply = (): void => {
       setSelectedId(serverIdFromHash(window.location.hash));
@@ -6519,10 +6634,14 @@ export function ServersPage({
   }, []);
   const allServers = data.servers.data ?? [];
   const servers = allServers.filter(
-    (server) => !hiddenImported.includes(server.id),
+    (server) =>
+      !hiddenImported.includes(server.id) &&
+      !forgottenImported.includes(server.id),
   );
-  const hiddenServers = allServers.filter((server) =>
-    hiddenImported.includes(server.id),
+  const hiddenServers = allServers.filter(
+    (server) =>
+      hiddenImported.includes(server.id) &&
+      !forgottenImported.includes(server.id),
   );
   const selected =
     selectedId === null
@@ -6554,8 +6673,8 @@ export function ServersPage({
     saveHiddenImportedServers(next);
   };
   const restoreRemoved = async (trashId: string): Promise<void> => {
-    if (restoring !== null) return;
-    setRestoring(trashId);
+    if (busyTrash !== null) return;
+    setBusyTrash(trashId);
     setRemovedError(null);
     try {
       await restoreTrashedNativeServer(trashId, csrfToken);
@@ -6564,8 +6683,15 @@ export function ServersPage({
       if (isSessionError(requestError)) onSessionExpired();
       else setRemovedError(describeError(requestError));
     } finally {
-      setRestoring(null);
+      setBusyTrash(null);
     }
+  };
+  const forgetHiddenImported = (id: string): void => {
+    const next = forgetImportedServer(id, hiddenImported, forgottenImported);
+    setHiddenImported(next.hidden);
+    setForgottenImported(next.forgotten);
+    setForgetTarget(null);
+    if (selectedId === id) window.location.hash = "#servers";
   };
 
   if (selected !== null) {
@@ -6798,18 +6924,35 @@ export function ServersPage({
                     backups {item.backupsPreserved ? "preserved" : "none found"}
                   </small>
                 </div>
-                <button
-                  class="button button--quiet"
-                  type="button"
-                  disabled={
-                    !canManageServers || restoring !== null || !item.dataPresent
-                  }
-                  onClick={() => void restoreRemoved(item.trashId)}
-                >
-                  {restoring === item.trashId
-                    ? "Restoring…"
-                    : "Restore stopped"}
-                </button>
+                <div class="removed-server-actions">
+                  <button
+                    class="button button--quiet"
+                    type="button"
+                    disabled={
+                      !canManageServers ||
+                      busyTrash !== null ||
+                      !item.dataPresent
+                    }
+                    onClick={() => void restoreRemoved(item.trashId)}
+                  >
+                    {busyTrash === item.trashId
+                      ? "Restoring…"
+                      : "Restore stopped"}
+                  </button>
+                  <button
+                    class="button button--danger"
+                    type="button"
+                    disabled={!canManageServers || busyTrash !== null}
+                    title={
+                      canManageServers
+                        ? undefined
+                        : "Requires games.manage permission"
+                    }
+                    onClick={() => setPurgeTarget(item)}
+                  >
+                    Delete forever
+                  </button>
+                </div>
               </article>
             ))}
             {hiddenServers.map((item) => (
@@ -6819,13 +6962,22 @@ export function ServersPage({
                   <span>Hidden AMP connection</span>
                   <small>The upstream server was never changed.</small>
                 </div>
-                <button
-                  class="button button--quiet"
-                  type="button"
-                  onClick={() => showImportedServer(item.id)}
-                >
-                  Show again
-                </button>
+                <div class="removed-server-actions">
+                  <button
+                    class="button button--quiet"
+                    type="button"
+                    onClick={() => showImportedServer(item.id)}
+                  >
+                    Show again
+                  </button>
+                  <button
+                    class="button button--danger"
+                    type="button"
+                    onClick={() => setForgetTarget(item)}
+                  >
+                    Forget here
+                  </button>
+                </div>
               </article>
             ))}
           </div>
@@ -6915,6 +7067,24 @@ export function ServersPage({
           canManageNetwork={canManageNetwork}
           onClose={() => setPortPoolOpen(false)}
           onSessionExpired={onSessionExpired}
+        />
+      )}
+      {purgeTarget !== null && (
+        <PurgeRemovedServerDialog
+          server={purgeTarget}
+          csrfToken={csrfToken}
+          onClose={() => setPurgeTarget(null)}
+          onPurged={async () => {
+            await Promise.all([loadRemoved(), data.refresh()]);
+          }}
+          onSessionExpired={onSessionExpired}
+        />
+      )}
+      {forgetTarget !== null && (
+        <ForgetImportedServerDialog
+          server={forgetTarget}
+          onClose={() => setForgetTarget(null)}
+          onForget={() => forgetHiddenImported(forgetTarget.id)}
         />
       )}
     </div>

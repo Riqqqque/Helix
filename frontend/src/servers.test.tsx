@@ -358,4 +358,39 @@ describe('Servers route', () => {
     expect(missingMarkup).toContain('TPS');
     expect(missingMarkup).not.toContain('20.0');
   });
+
+  it('offers Forget here for a hidden AMP connection without claiming AMP deletion', () => {
+    const ampId = 'amp:71b629b7-5861-47b8-907b-acde40dadc9e';
+    const store = new Map<string, string>([
+      ['helix.servers.hidden-imports', JSON.stringify([ampId])],
+    ]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+    });
+    const ampServer: ManagedServer = {
+      ...nativeServer,
+      id: ampId,
+      name: 'AllTheMons',
+      manager: 'amp_import',
+      executionBackend: 'external',
+    };
+    const markup = render(
+      <ServersPage
+        data={{ ...data, servers: { data: [ampServer], phase: 'ready', error: null } }}
+        csrfToken="csrf"
+        canManageServers
+        canManageBackups
+        canManageNetwork
+        onSessionExpired={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Removed and hidden');
+    expect(markup).toContain('Hidden AMP connection');
+    expect(markup).toContain('Forget here');
+    expect(markup).toContain('Show again');
+    expect(markup).not.toContain('Delete forever');
+  });
 });

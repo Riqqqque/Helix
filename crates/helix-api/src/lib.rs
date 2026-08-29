@@ -464,11 +464,20 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .merge(terminal_api)
         .merge(settings_api)
         .merge(strand_api)
-        .fallback(api_not_found)
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(50),
-        ));
+        ))
+        .merge(
+            Router::new()
+                .route("/servers/removed/{trash_id}", delete(purge_trashed_server))
+                .layer(DefaultBodyLimit::max(FILE_API_BODY_LIMIT_BYTES))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::REQUEST_TIMEOUT,
+                    Duration::from_secs(300),
+                )),
+        )
+        .fallback(api_not_found);
 
     let index = web_root.join("index.html");
     let index_file = ServeFile::new(index)
@@ -2513,6 +2522,44 @@ async fn restore_trashed_server(
     auth::validate_post_headers(&headers)?;
     auth::require_capability(&state, &headers, "games.manage").await?;
     broker_json(&state, BrokerRequest::RestoreTrashedServer { trash_id }).await
+}
+
+async fn purge_trashed_server(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(trash_id): RoutePath<String>,
+    body: Result<Json<RemoveNativeServerBody>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    let mut value = broker_value(
+        &state,
+        BrokerRequest::PurgeTrashedServer {
+            trash_id,
+            confirmation_name: body.confirmation_name,
+        },
+    )
+    .await?;
+    if let Some(instance_id) = value
+        .get("instance_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+    {
+        let databases = Arc::clone(&state.databases);
+        let tracker = state.blocking_tasks.clone();
+        let appearance_cleared = tokio::task::spawn_blocking(move || {
+            let _guard = tracker.start();
+            databases
+                .state()
+                .purge_server_appearance(&instance_id)
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false);
+        value["appearance_cleared"] = serde_json::json!(appearance_cleared);
+    }
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response())
 }
 
 async fn server_appearance(

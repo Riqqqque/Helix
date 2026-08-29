@@ -36,7 +36,7 @@ import { Dialog } from './modal';
 import { formatTimestamp } from './format';
 import type { ThemePreference } from './theme';
 import type { AuthenticatedUser } from './types';
-import type { ManagedServer, TrashedNativeServerCatalog } from './control-api';
+import type { ManagedServer, TrashedNativeServer, TrashedNativeServerCatalog } from './control-api';
 import {
   getTrashedNativeServers,
   restoreTrashedNativeServer,
@@ -44,6 +44,12 @@ import {
   serverStatusLabel,
   trashNativeServer,
 } from './control-api';
+import { purgeTrashedNativeServer } from './native-server-trash-api';
+import {
+  readForgottenImportedServers,
+  rememberImportedServer,
+  readHiddenImportedServers,
+} from './imported-server-visibility';
 import {
   clearDismissals,
   DISMISSALS_CHANGED_EVENT,
@@ -528,8 +534,12 @@ function HelixDataSettings({
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pendingTrash, setPendingTrash] = useState<ManagedServer | null>(null);
+  const [pendingPurge, setPendingPurge] = useState<TrashedNativeServer | null>(null);
   const [confirmName, setConfirmName] = useState('');
   const [dismissedIds, setDismissedIds] = useState(listDismissedIds);
+  const [forgottenImported, setForgottenImported] = useState(readForgottenImportedServers);
+  const [removedEpoch, setRemovedEpoch] = useState(0);
+  const forgottenServers = imported.filter((server) => forgottenImported.includes(server.id));
 
   useEffect(() => {
     const refreshNotices = (): void => setDismissedIds(listDismissedIds());
@@ -548,7 +558,7 @@ function HelixDataSettings({
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Helix could not list recoverable servers.');
       });
     return () => controller.abort();
-  }, [csrfToken, servers]);
+  }, [csrfToken, servers, removedEpoch]);
 
   const toggleBoot = async (server: ManagedServer): Promise<void> => {
     if (!canManage || busyId !== null) return;
@@ -594,6 +604,28 @@ function HelixDataSettings({
     }
   };
 
+  const purge = async (): Promise<void> => {
+    if (pendingPurge === null || confirmName !== pendingPurge.name || !canManage) return;
+    setBusyId(pendingPurge.trashId);
+    setError(null);
+    try {
+      await purgeTrashedNativeServer(pendingPurge.trashId, confirmName, csrfToken);
+      setPendingPurge(null);
+      setConfirmName('');
+      setRemovedEpoch((epoch) => epoch + 1);
+      await onRefresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Helix could not permanently delete that server.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const showForgottenImported = (id: string): void => {
+    const next = rememberImportedServer(id, readHiddenImportedServers(), forgottenImported);
+    setForgottenImported(next.forgotten);
+  };
+
   const showNoticesAgain = (): void => {
     clearDismissals();
     setDismissedIds([]);
@@ -606,10 +638,10 @@ function HelixDataSettings({
           <Icon name="folder" />
           <span>
             <h2>Helix data</h2>
-            <p>Native servers Helix owns, recoverable trash, and notices this browser has hidden.</p>
+            <p>Native servers Helix owns, recoverable trash, forgotten AMP connections in this browser, and notices this browser has hidden.</p>
           </span>
         </div>
-        <InfoTip text="Imported AMP or other connections stay owned by those managers. Removing a native server moves its files into recoverable trash; it is not an off-host backup. Start after the host boots is also on the Servers page when you create a server." />
+        <InfoTip text="Imported AMP or other connections stay owned by those managers. Removing a native server moves its files into recoverable trash; Delete forever from that list erases them. Start after the host boots is also on the Servers page when you create a server." />
       </div>
       <div class="helix-data-body">
         <div class="helix-data-summary">
@@ -626,7 +658,7 @@ function HelixDataSettings({
           <div>
             <strong>{removed?.servers.length ?? '—'}</strong>
             <span>Recoverable trash</span>
-            <small>Removed native servers you can still restore</small>
+            <small>Removed native servers you can restore or delete forever</small>
           </div>
         </div>
 
@@ -697,7 +729,7 @@ function HelixDataSettings({
         {(removed?.servers.length ?? 0) > 0 && (
           <div class="helix-data-section helix-data-trash">
             <h3>Recoverable trash</h3>
-            <p>These native servers were removed from Helix. Restore brings the files back onto the Servers page. This is not an off-host backup.</p>
+            <p>These native servers were removed from Helix. Restore brings the files back onto the Servers page. Delete forever erases the world files, Helix backups, and console history. This is not an off-host backup.</p>
             <ul>
               {removed?.servers.map((item) => (
                 <li key={item.trashId}>
@@ -705,13 +737,46 @@ function HelixDataSettings({
                     {item.name}
                     <small>{item.software} · {formatTimestamp(item.trashedAtUnixMs)}</small>
                   </span>
-                  <button class="button button--quiet" type="button" disabled={!canManage || busyId !== null} onClick={() => void restore(item.trashId)}>
-                    Restore
-                  </button>
+                  <div class="helix-data-trash-actions">
+                    <button class="button button--quiet" type="button" disabled={!canManage || busyId !== null} onClick={() => void restore(item.trashId)}>
+                      Restore
+                    </button>
+                    <button
+                      class="button button--danger"
+                      type="button"
+                      disabled={!canManage || busyId !== null}
+                      onClick={() => {
+                        setPendingPurge(item);
+                        setConfirmName('');
+                      }}
+                    >
+                      Delete forever
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
             {removed?.policy.note !== undefined && removed.policy.note.length > 0 && <p>{removed.policy.note}</p>}
+          </div>
+        )}
+
+        {forgottenServers.length > 0 && (
+          <div class="helix-data-section helix-data-trash">
+            <h3>Forgotten AMP connections</h3>
+            <p>Forgotten in this browser only. Helix did not stop or delete the AMP instance. Show on Servers puts it back on the Servers list here.</p>
+            <ul>
+              {forgottenServers.map((server) => (
+                <li key={server.id}>
+                  <span>
+                    {server.name}
+                    <small>{server.software} · AMP connection</small>
+                  </span>
+                  <button class="button button--quiet" type="button" onClick={() => showForgottenImported(server.id)}>
+                    Show on Servers
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -743,7 +808,7 @@ function HelixDataSettings({
         {!canManage && (
           <div class="host-integration-notice">
             <Icon name="info" size={14} />
-            This account can view Helix data but cannot remove or restore servers.
+            This account can view Helix data but cannot remove, restore, or permanently delete servers.
           </div>
         )}
       </div>
@@ -754,6 +819,16 @@ function HelixDataSettings({
           <div class="dialog-actions">
             <button class="button button--quiet" type="button" onClick={() => setPendingTrash(null)}>Cancel</button>
             <button class="button button--danger" type="button" disabled={confirmName !== pendingTrash.name || busyId !== null} onClick={() => void trash()}>{busyId !== null ? 'Removing…' : 'Move to trash'}</button>
+          </div>
+        </Dialog>
+      )}
+      {pendingPurge !== null && (
+        <Dialog title={`Delete ${pendingPurge.name} forever?`} onClose={() => busyId === null && setPendingPurge(null)}>
+          <p class="dialog-intro">This permanently erases the recovered world files, Helix backups, and console history. Type the exact server name to confirm.</p>
+          <label class="field field--wide"><span>Server name</span><input value={confirmName} onInput={(event) => setConfirmName(event.currentTarget.value)} autocomplete="off" disabled={busyId !== null} /></label>
+          <div class="dialog-actions">
+            <button class="button button--quiet" type="button" disabled={busyId !== null} onClick={() => setPendingPurge(null)}>Cancel</button>
+            <button class="button button--danger" type="button" disabled={confirmName !== pendingPurge.name || busyId !== null} onClick={() => void purge()}>{busyId !== null ? 'Deleting…' : 'Delete forever'}</button>
           </div>
         </Dialog>
       )}

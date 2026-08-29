@@ -163,8 +163,10 @@ broker-managed roots rather than trusting display names as paths.
 
 Critical-state snapshots and integrity checks exist. Native backups can be
 created and restored; deleting a known backup moves it into protected
-recoverable trash with an opaque identity and Undo metadata. This is not a
-substitute for an independent off-host copy or a clean-machine restore drill.
+recoverable trash with an opaque identity and Undo metadata. Removed native
+servers work the same way until you delete them forever from Removed and hidden.
+This is not a substitute for an independent off-host copy or a clean-machine
+restore drill.
 
 ## Why this design is appealing
 

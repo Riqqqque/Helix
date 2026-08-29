@@ -2379,6 +2379,12 @@ main {
   flex-direction: column;
   gap: 3px;
 }
+.removed-server-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .removed-server-list strong {
   font-size: 10px;
 }
@@ -5872,6 +5878,12 @@ textarea:focus {
 .helix-data-server-actions {
   display: flex;
   flex-wrap: wrap;
+  gap: 8px;
+}
+.helix-data-trash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 .helix-data-trash li {

@@ -182,6 +182,10 @@ pub enum BrokerRequest {
     RestoreTrashedServer {
         trash_id: String,
     },
+    PurgeTrashedServer {
+        trash_id: String,
+        confirmation_name: String,
+    },
     ServerInventoryHealth {},
     ServerManagerReadiness {},
     ServerDetail {
@@ -838,7 +842,7 @@ fn request_over_socket(
     let mut stream =
         UnixStream::connect(socket_path).map_err(|_| BrokerClientError::Unavailable)?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
+        .set_read_timeout(Some(broker_read_timeout(request)))
         .map_err(|_| BrokerClientError::Unavailable)?;
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
@@ -870,6 +874,16 @@ fn request_over_socket(
             || "request rejected".to_owned(),
             |problem| problem.message,
         )))
+    }
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn broker_read_timeout(request: &BrokerRequest) -> std::time::Duration {
+    match request {
+        BrokerRequest::TrashNativeServer { .. }
+        | BrokerRequest::RestoreTrashedServer { .. }
+        | BrokerRequest::PurgeTrashedServer { .. } => std::time::Duration::from_secs(300),
+        _ => std::time::Duration::from_secs(30),
     }
 }
 
@@ -1082,6 +1096,27 @@ mod tests {
         assert_eq!(encoded["operation"], "restore_trashed_backup");
         assert_eq!(encoded["trash_id"], "8953dc16-3891-42bf-802f-711b3ba2965a");
         assert!(encoded.get("path").is_none());
+
+        let purge = BrokerRequest::PurgeTrashedServer {
+            trash_id: "8953dc16-3891-42bf-802f-711b3ba2965a".to_owned(),
+            confirmation_name: "Survival".to_owned(),
+        };
+        let encoded = serde_json::to_value(purge).expect("serialize purge request");
+        assert_eq!(encoded["operation"], "purge_trashed_server");
+        assert_eq!(encoded["trash_id"], "8953dc16-3891-42bf-802f-711b3ba2965a");
+        assert_eq!(encoded["confirmation_name"], "Survival");
+        assert!(encoded.get("path").is_none());
+        assert_eq!(
+            broker_read_timeout(&BrokerRequest::PurgeTrashedServer {
+                trash_id: "8953dc16-3891-42bf-802f-711b3ba2965a".to_owned(),
+                confirmation_name: "Survival".to_owned(),
+            }),
+            std::time::Duration::from_secs(300)
+        );
+        assert_eq!(
+            broker_read_timeout(&BrokerRequest::ListTrashedServers {}),
+            std::time::Duration::from_secs(30)
+        );
     }
 
     #[test]
