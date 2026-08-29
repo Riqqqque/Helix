@@ -8,7 +8,11 @@ use thiserror::Error;
 
 const GEOCODING_URL: &str = "https://geocoding-api.open-meteo.com/v1/search";
 const FORECAST_URL: &str = "https://api.open-meteo.com/v1/forecast";
-const USER_AGENT: &str = "Helix/0.1 (+https://github.com/Riqqqque/Helix)";
+const USER_AGENT: &str = concat!(
+    "Helix/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/Riqqqque/Helix)"
+);
 const RESPONSE_LIMIT_BYTES: u64 = 128 * 1024;
 const CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_CACHE_ENTRIES: usize = 32;

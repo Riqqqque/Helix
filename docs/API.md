@@ -66,7 +66,7 @@ malformed, stale, or wrong proof returns `403` with code `csrf_rejected`.
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/health` | `system.view` | Protected dependency health |
 | `GET` | `/api/v1/system/overview` | `system.view` | Bounded CPU, memory, storage, and network snapshot |
-| `GET` | `/api/v1/host/inventory` | `system.view` | Disks, mounts, interfaces, routes, services, processes, process count, CPU model, and listeners |
+| `GET` | `/api/v1/host/inventory` | `system.view` | Disks, mounts, interfaces, routes, services, processes, process count, thread count, CPU model, and listeners |
 | `GET` | `/api/v1/weather` | `dashboard.customize` | Bounded weather data for one validated location |
 | `GET` | `/api/v1/settings/preferences` | `dashboard.customize` | Revisioned dashboard preferences |
 | `PUT` | `/api/v1/settings/preferences` | `dashboard.customize` | Save navigation, hidden pages, metric cadence, Home widgets, and whether the Servers page is enabled, with an expected revision |

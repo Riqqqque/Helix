@@ -18,6 +18,7 @@ export interface HostInventory {
   processes: ProcessInfo[];
   loadAverage: [number, number, number];
   processCount: number;
+  threadCount: number;
   cpuModel: string | null;
   collectedAtUnixMs: number;
 }
@@ -206,9 +207,26 @@ export function serverPrimaryLifecycleAction(server: ManagedServer): 'start' | '
   return 'start';
 }
 
-export function serverStatusSummary(status: ServerStatus, playersOnline: number, maxPlayers: number): string {
-  if (status === 'online') return `${playersOnline}/${maxPlayers} players`;
+export function serverStatusSummary(
+  status: ServerStatus,
+  playersOnline: number,
+  maxPlayers: number,
+  playerCountVerified = true,
+): string {
+  if (status === 'online') {
+    if (!playerCountVerified) return 'Online';
+    return `${playersOnline}/${maxPlayers} players`;
+  }
   return serverStatusLabel(status);
+}
+
+export function serverPlayerHeadline(server: Pick<ManagedServer, 'status' | 'playersOnline' | 'maxPlayers' | 'playerCountVerified'>): string {
+  if (!serverIsLive(server.status) || !server.playerCountVerified) return '—';
+  return `${server.playersOnline} / ${server.maxPlayers}`;
+}
+
+export function serverReportsTps(server: Pick<ManagedServer, 'kind'>): boolean {
+  return server.kind === 'minecraft' || server.kind === 'imported';
 }
 
 export type ServerKind = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'imported';
@@ -224,6 +242,7 @@ export interface ManagedServer {
   panelRunning: boolean;
   startOnBoot: boolean;
   playersOnline: number;
+  playerCountVerified: boolean;
   maxPlayers: number;
   cpuPercent: number;
   memoryUsedMb: number;
@@ -604,6 +623,7 @@ export function parseHostInventory(value: unknown): HostInventory {
     }),
     loadAverage: load as [number, number, number],
     processCount: number(root, 'process_count'),
+    threadCount: number(root, 'thread_count'),
     cpuModel: optionalString(root, 'cpu_model'),
     collectedAtUnixMs: number(root, 'collected_at_unix_ms'),
   };
@@ -707,6 +727,7 @@ export function parseServers(value: unknown): ManagedServer[] {
       panelRunning: boolean(item, 'panel_running'),
       startOnBoot: boolean(item, 'start_on_boot'),
       playersOnline: number(item, 'players_online'),
+      playerCountVerified: boolean(item, 'player_count_verified'),
       maxPlayers: number(item, 'max_players'),
       cpuPercent: number(item, 'cpu_percent'),
       memoryUsedMb: number(item, 'memory_used_mb'),

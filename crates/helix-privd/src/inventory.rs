@@ -24,6 +24,7 @@ pub struct HostInventory {
     pub processes: Vec<Process>,
     pub load_average: [f64; 3],
     pub process_count: u64,
+    pub thread_count: u64,
     pub cpu_model: Option<String>,
     pub collected_at_unix_ms: u64,
 }
@@ -160,7 +161,8 @@ pub fn collect() -> Result<HostInventory, String> {
         services: parse_services(&services),
         processes: collect_processes().unwrap_or_default(),
         load_average: read_load_average().unwrap_or([0.0; 3]),
-        process_count: read_process_count().unwrap_or(0),
+        process_count: count_processes().unwrap_or(0),
+        thread_count: read_thread_count().unwrap_or(0),
         cpu_model: read_cpu_model(),
         collected_at_unix_ms: now_unix_ms(),
     })
@@ -265,16 +267,24 @@ fn append_mount(value: &Value, output: &mut Vec<Mount>) {
         text(value, "fstype"),
     ) {
         let options = text(value, "options").unwrap_or_default();
+        let size_bytes = json_u64(value, "size");
+        let used_bytes = json_u64(value, "used");
         output.push(Mount {
             target,
             source,
             file_system,
-            size_bytes: number(value, "size"),
-            used_bytes: number(value, "used"),
-            available_bytes: number(value, "avail"),
-            use_percent: text(value, "use%")
-                .and_then(|value| value.trim_end_matches('%').parse().ok())
-                .unwrap_or(0),
+            size_bytes,
+            used_bytes,
+            available_bytes: json_u64(value, "avail"),
+            use_percent: json_percent(value, "use%").unwrap_or_else(|| {
+                if size_bytes == 0 {
+                    0
+                } else {
+                    ((used_bytes as f64 / size_bytes as f64) * 100.0)
+                        .round()
+                        .clamp(0.0, 100.0) as u8
+                }
+            }),
             read_only: options.split(',').any(|option| option == "ro"),
         });
     }
@@ -459,20 +469,81 @@ fn read_load_average() -> Result<[f64; 3], String> {
     ])
 }
 
-fn read_process_count() -> Result<u64, String> {
+fn read_thread_count() -> Result<u64, String> {
     let text = fs::read_to_string("/proc/loadavg")
-        .map_err(|_| "process count is unavailable".to_owned())?;
-    let token = text
+        .map_err(|_| "thread count is unavailable".to_owned())?;
+    parse_thread_count(&text)
+}
+
+fn parse_thread_count(loadavg: &str) -> Result<u64, String> {
+    let token = loadavg
         .split_whitespace()
         .nth(3)
-        .ok_or_else(|| "process count is unavailable".to_owned())?;
+        .ok_or_else(|| "thread count is unavailable".to_owned())?;
     let count = token
         .split('/')
         .nth(1)
-        .ok_or_else(|| "process count is unavailable".to_owned())?;
+        .ok_or_else(|| "thread count is unavailable".to_owned())?;
     count
         .parse()
-        .map_err(|_| "process count is unavailable".to_owned())
+        .map_err(|_| "thread count is unavailable".to_owned())
+}
+
+fn count_processes() -> Result<u64, String> {
+    let mut count = 0_u64;
+    let entries = fs::read_dir("/proc").map_err(|_| "process list is unavailable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "process list is unavailable".to_owned())?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.is_empty() || !name.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        if !file_type.is_dir() && !file_type.is_symlink() {
+            continue;
+        }
+        count = count.saturating_add(1);
+        if count >= 1_000_000 {
+            break;
+        }
+    }
+    Ok(count)
+}
+
+fn json_u64(value: &Value, key: &str) -> u64 {
+    match value.get(key) {
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .or_else(|| {
+                number.as_f64().and_then(|value| {
+                    if value.is_finite() && value >= 0.0 {
+                        Some(value.round() as u64)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(0),
+        Some(Value::String(text)) => text.trim().parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn json_percent(value: &Value, key: &str) -> Option<u8> {
+    let parsed = match value.get(key) {
+        Some(Value::Number(number)) => number.as_f64(),
+        Some(Value::String(text)) => text.trim().trim_end_matches('%').trim().parse::<f64>().ok(),
+        _ => None,
+    };
+    parsed
+        .filter(|value| value.is_finite())
+        .map(|value| value.round().clamp(0.0, 100.0) as u8)
 }
 
 fn read_cpu_model() -> Option<String> {
@@ -517,4 +588,67 @@ fn now_unix_ms() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{json_percent, json_u64, parse_mounts, parse_thread_count};
+    use serde_json::json;
+
+    #[test]
+    fn loadavg_fourth_field_is_kernel_threads_not_processes() {
+        assert_eq!(
+            parse_thread_count("0.44 0.72 0.61 1/2261 4190839").unwrap(),
+            2261
+        );
+        assert!(parse_thread_count("0.00 0.00 0.00").is_err());
+        assert!(parse_thread_count("0.00 0.00 0.00 1 12").is_err());
+    }
+
+    #[test]
+    fn mount_use_percent_accepts_string_or_number_and_falls_back_to_bytes() {
+        let mounts = parse_mounts(&json!({
+            "filesystems": [
+                {
+                    "target": "/",
+                    "source": "/dev/sda2",
+                    "fstype": "ext4",
+                    "options": "rw",
+                    "size": 1000,
+                    "used": 250,
+                    "avail": 750,
+                    "use%": "25%"
+                },
+                {
+                    "target": "/nvme",
+                    "source": "/dev/nvme0n1p1",
+                    "fstype": "ext4",
+                    "options": "rw",
+                    "size": 8000,
+                    "used": 7200,
+                    "avail": 800,
+                    "use%": 90.4
+                },
+                {
+                    "target": "/hdd",
+                    "source": "/dev/sdb1",
+                    "fstype": "ext4",
+                    "options": "rw",
+                    "size": "2000",
+                    "used": "1500",
+                    "avail": "500"
+                }
+            ]
+        }));
+        assert_eq!(mounts[0].target, "/");
+        assert_eq!(mounts[0].use_percent, 25);
+        assert_eq!(mounts[1].target, "/hdd");
+        assert_eq!(mounts[1].size_bytes, 2000);
+        assert_eq!(mounts[1].used_bytes, 1500);
+        assert_eq!(mounts[1].use_percent, 75);
+        assert_eq!(mounts[2].target, "/nvme");
+        assert_eq!(mounts[2].use_percent, 90);
+        assert_eq!(json_u64(&json!({"size": 12.4}), "size"), 12);
+        assert_eq!(json_percent(&json!({"use%": "0%"}), "use%"), Some(0));
+    }
 }

@@ -39,8 +39,8 @@ are shown separately so their memory is not misrepresented as dashboard cost.
 
 Host also lists every Docker container on the machine, with CPU and memory when
 Docker reports them. Empty published ports are normal. Start, stop, and restart
-require the exact container name. Helix dashboard and gateway containers stay
-protected.
+require the exact container name. Helix dashboard, gateway, and native game
+containers stay protected. Use Servers to restart a Helix game.
 
 ## System packages
 

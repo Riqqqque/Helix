@@ -7,7 +7,11 @@ use thiserror::Error;
 
 const MODRINTH_ORIGIN: &str = "https://cdn.modrinth.com";
 const CURSEFORGE_ORIGIN: &str = "https://media.forgecdn.net";
-const USER_AGENT: &str = "Helix/0.1 (+https://github.com/Riqqqque/Helix)";
+const USER_AGENT: &str = concat!(
+    "Helix/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/Riqqqque/Helix)"
+);
 const MAX_IMAGE_BYTES: u64 = 512 * 1024;
 const MAX_CACHE_ENTRIES: usize = 64;
 const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
