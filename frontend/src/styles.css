@@ -3661,14 +3661,25 @@ textarea:focus {
 }
 .join-address-grid small { flex: 1; line-height: 1.45; }
 .join-address-grid button, .join-address-grid a {
+  min-width: 5.2em;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--accent);
   font-size: 8px;
   font-weight: 700;
+  text-align: left;
   text-decoration: none;
   cursor: pointer;
+}
+.copy-button.is-copied,
+.button.is-copied,
+.home-widget__controls button.is-copied {
+  color: var(--good);
+}
+.copy-button.is-failed,
+.button.is-failed {
+  color: var(--danger);
 }
 .join-card > .button--small {
   margin: 0 13px 10px;

@@ -15,6 +15,7 @@ import {
   terminalWebSocketUrl,
   type TerminalStatus,
 } from './terminal-api';
+import { copyFlashLabel, useCopyFlash } from './copy-button';
 import {
   TERMINAL_FONT_SIZE_DEFAULT,
   encodeBinaryPtyPayload,
@@ -222,6 +223,7 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
   const [bellFlash, setBellFlash] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
+  const copyFlash = useCopyFlash();
 
   const showHint = (message: string): void => {
     setHint(message);
@@ -243,6 +245,7 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
         return;
       }
       void writeClipboardText(text).then((copied) => {
+        copyFlash.show(copied ? 'copied' : 'failed');
         showHint(copied ? 'Copied.' : 'Copy failed. Select the text and use your browser copy command.');
       });
     },
@@ -603,7 +606,7 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
           <div><span class="terminal-led" aria-hidden="true" /><strong>{sessionLabel ?? 'Host shell'}</strong>{hint !== null && <span class="terminal-hint" role="status">{hint}</span>}</div>
           <div class="terminal-toolbar-actions">
             <button class="button button--quiet" type="button" disabled={!terminalReady} onClick={() => chromeRef.current.openFind()}><Icon name="search" size={14} />Find</button>
-            <button class="button button--quiet" type="button" disabled={!connected} onClick={() => chromeRef.current.copy()}>Copy</button>
+            <button class={`button button--quiet${copyFlash.flash === 'copied' ? ' is-copied' : ''}${copyFlash.flash === 'failed' ? ' is-failed' : ''}`} type="button" disabled={!connected} onClick={() => chromeRef.current.copy()}>{copyFlashLabel(copyFlash.flash)}</button>
             <button class="button button--quiet" type="button" disabled={!connected} onClick={() => chromeRef.current.paste()}>Paste</button>
             <button class="button button--quiet" type="button" disabled={!terminalReady} onClick={() => chromeRef.current.adjustFont(-1)} aria-label="Smaller terminal text">A−</button>
             <button class="button button--quiet" type="button" disabled={!terminalReady} onClick={() => chromeRef.current.adjustFont(1)} aria-label="Larger terminal text">A+</button>
