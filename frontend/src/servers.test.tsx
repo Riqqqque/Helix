@@ -224,4 +224,21 @@ describe('Servers route', () => {
     expect(joinErrorOffersPortChange('router TCP port 25566 already has a mapping; Helix will not overwrite an unowned router rule')).toBe(true);
     expect(joinErrorOffersPortChange('the router reports CGNAT address 100.64.1.1')).toBe(false);
   });
+
+  it('shows a native TPS sample on the list and an em dash when it is missing', () => {
+    const onlineData: DashboardData = {
+      ...data,
+      servers: { data: [nativeServer], phase: 'ready', error: null },
+    };
+    const missingData: DashboardData = {
+      ...data,
+      servers: { data: [{ ...nativeServer, tps: null }], phase: 'ready', error: null },
+    };
+    const onlineMarkup = render(<ServersPage data={onlineData} csrfToken="csrf" canManageServers canManageBackups canManageNetwork onSessionExpired={() => undefined} />);
+    const missingMarkup = render(<ServersPage data={missingData} csrfToken="csrf" canManageServers canManageBackups canManageNetwork onSessionExpired={() => undefined} />);
+
+    expect(onlineMarkup).toContain('20.0');
+    expect(missingMarkup).toContain('TPS');
+    expect(missingMarkup).not.toContain('20.0');
+  });
 });

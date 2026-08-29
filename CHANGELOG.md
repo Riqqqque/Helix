@@ -9,6 +9,8 @@ binary or package release yet.
 
 - Homarr import keeps Homarr's board order and tile width, places shortcuts on
   a dedicated Homarr Home, and no longer alphabetizes the catalog.
+- Server-list Restart and Open sit in their own actions column instead of
+  crowding the TPS value.
 - Helix no longer assigns or public-maps ports AMP already has claimed, even
   when that AMP instance is stopped and only the router mapping is left. The
   error is `AMP already has port <n> claimed`. Router rules whose UPnP
@@ -45,6 +47,9 @@ binary or package release yet.
 - Minecraft Settings can change the published game port. Helix rewrites
   `server.properties`, rebinds the container, and drops public access on the
   old port instead of leaving a stale router mapping.
+- Native Minecraft list and detail TPS come from a short local `/tps` console
+  sample. Paper-family software and some plugins report a number; Vanilla and
+  most Fabric/Forge/Quilt servers still show —.
 - Server cards put Open next to Restart or Start. Imported AMP servers put
   Open AMP in that same row.
 

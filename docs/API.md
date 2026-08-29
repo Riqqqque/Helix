@@ -378,6 +378,11 @@ archive capture. Retention is
 bounded by configured bytes and segment count, so “persistent” does not mean
 unlimited or permanent.
 
+`GET /api/v1/servers` and native `GET /api/v1/servers/{instance_id}` include
+`tps` when AMP reports it, or when a running native Minecraft server answers
+local RCON `/tps`. Otherwise `tps` is null. The value is the first 1-minute
+sample from that command, not the unauthenticated status ping.
+
 Settings identify restart-required fields and report pending restart state.
 Minecraft `game_port` is included: a change rewrites `server-port` and
 `query.port`, recreates the published container, and removes Helix public access

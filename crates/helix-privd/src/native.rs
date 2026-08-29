@@ -56,6 +56,11 @@ const MAX_PORT_POLICY_RANGES: usize = 32;
 const MAX_PORT_POLICY_PORTS: usize = 256;
 const MAX_PORT_POLICY_CANDIDATES: usize = 4_096;
 const MAX_MINECRAFT_STATUS_WORKERS: usize = 8;
+const MINECRAFT_TPS_CACHE_HIT: Duration = Duration::from_secs(10);
+const MINECRAFT_TPS_CACHE_MISS: Duration = Duration::from_secs(45);
+const MINECRAFT_TPS_CACHE_ERROR: Duration = Duration::from_secs(8);
+const MINECRAFT_TPS_CONNECT_TIMEOUT: Duration = Duration::from_millis(350);
+const MINECRAFT_TPS_IO_TIMEOUT: Duration = Duration::from_millis(500);
 const DOCKER_TIMEOUT_SECONDS: u64 = 300;
 const USER_AGENT: &str = "Helix/0.1 (+https://github.com/Riqqqque/Helix)";
 
@@ -91,6 +96,7 @@ pub struct NativeManager {
     port_policies: Mutex<()>,
     console_archives: Mutex<HashMap<String, Arc<Mutex<ConsoleArchiveWriter>>>>,
     console_stops: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    tps_cache: Mutex<HashMap<String, CachedTps>>,
     amp: Option<Arc<AmpClient>>,
 }
 
@@ -213,6 +219,17 @@ struct MinecraftStatus {
     players_online: u64,
     max_players: u64,
     version: Option<String>,
+}
+
+struct CachedTps {
+    expires_at: Instant,
+    tps: Option<f64>,
+}
+
+#[derive(Clone, Copy)]
+struct TpsProbeResult {
+    tps: Option<f64>,
+    ttl: Duration,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -470,6 +487,7 @@ impl NativeManager {
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
+            tps_cache: Mutex::new(HashMap::new()),
             amp: None,
         };
         for manifest in manager.load_manifests()? {
@@ -485,6 +503,64 @@ impl NativeManager {
     pub fn with_amp(mut self, amp: Arc<AmpClient>) -> Self {
         self.amp = Some(amp);
         self
+    }
+
+    fn load_tps_map(&self, targets: &[(String, u16, String)]) -> HashMap<String, Option<f64>> {
+        let now = Instant::now();
+        let mut ready = HashMap::with_capacity(targets.len());
+        let mut pending = Vec::new();
+        {
+            let cache = self
+                .tps_cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for (id, port, password) in targets {
+                if *port == 0 || password.is_empty() {
+                    ready.insert(id.clone(), None);
+                    continue;
+                }
+                if let Some(sample) = cache.get(id)
+                    && sample.expires_at > now
+                {
+                    ready.insert(id.clone(), sample.tps);
+                    continue;
+                }
+                pending.push((id.clone(), *port, password.clone()));
+            }
+        }
+        if pending.is_empty() {
+            return ready;
+        }
+        let probed = collect_minecraft_tps(&pending, probe_minecraft_tps);
+        let now = Instant::now();
+        {
+            let mut cache = self
+                .tps_cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for (id, sample) in &probed {
+                cache.insert(
+                    id.clone(),
+                    CachedTps {
+                        expires_at: now + sample.ttl,
+                        tps: sample.tps,
+                    },
+                );
+            }
+        }
+        for (id, sample) in probed {
+            ready.insert(id, sample.tps);
+        }
+        ready
+    }
+
+    fn prune_tps_cache(&self, live_ids: &HashSet<String>) {
+        let now = Instant::now();
+        let mut cache = self
+            .tps_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.retain(|id, sample| live_ids.contains(id) && sample.expires_at > now);
     }
 
     fn amp_occupied_ports(&self) -> HashSet<u16> {
@@ -516,6 +592,12 @@ impl NativeManager {
         let mut statuses = collect_minecraft_statuses(&status_targets, |port| {
             minecraft_status(port, Duration::from_millis(450)).ok()
         });
+        let live_ids = manifests
+            .iter()
+            .map(|manifest| manifest.id.clone())
+            .collect();
+        let tps_by_id = self.load_tps_map(&minecraft_rcon_targets(&manifests, &states));
+        self.prune_tps_cache(&live_ids);
         let mut servers = Vec::with_capacity(manifests.len());
         for manifest in manifests {
             let state = states
@@ -601,7 +683,7 @@ impl NativeManager {
                 cpu_percent: state.cpu_percent,
                 memory_used_mb: state.memory_used_mb,
                 memory_limit_mb: u64::from(manifest.memory_mb),
-                tps: None,
+                tps: tps_by_id.get(&manifest.id).copied().flatten(),
                 manager_panel_port: 0,
                 panel_port: 0,
                 game_port: Some(manifest.game_port),
@@ -1320,6 +1402,18 @@ impl NativeManager {
         if manifest.is_minecraft() {
             capabilities.insert(1, "settings");
         }
+        let tps = if state.running && manifest.is_minecraft() {
+            self.load_tps_map(&[(
+                manifest.id.clone(),
+                manifest.rcon_port,
+                manifest.rcon_password.clone(),
+            )])
+            .get(&manifest.id)
+            .copied()
+            .flatten()
+        } else {
+            None
+        };
         Ok(json!({
             "id": format!("helix:{}", manifest.id),
             "name": manifest.name,
@@ -1346,6 +1440,7 @@ impl NativeManager {
             "max_players": status.as_ref().map_or(u64::from(manifest.max_players), |value| value.max_players),
             "cpu_percent": state.cpu_percent,
             "memory_used_mb": state.memory_used_mb,
+            "tps": tps,
             "container_state": inspect,
             "settings": settings,
             "console_history": {
@@ -5046,6 +5141,169 @@ where
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn minecraft_rcon_targets(
+    manifests: &[InstanceManifest],
+    states: &HashMap<String, RuntimeState>,
+) -> Vec<(String, u16, String)> {
+    manifests
+        .iter()
+        .filter(|manifest| {
+            manifest.is_minecraft()
+                && manifest.rcon_port != 0
+                && !manifest.rcon_password.is_empty()
+                && states
+                    .get(&manifest.container_name)
+                    .is_some_and(|state| state.running)
+        })
+        .map(|manifest| {
+            (
+                manifest.id.clone(),
+                manifest.rcon_port,
+                manifest.rcon_password.clone(),
+            )
+        })
+        .collect()
+}
+
+fn collect_minecraft_tps<Probe>(
+    targets: &[(String, u16, String)],
+    probe: Probe,
+) -> HashMap<String, TpsProbeResult>
+where
+    Probe: Fn(u16, &str) -> TpsProbeResult + Sync,
+{
+    if targets.is_empty() {
+        return HashMap::new();
+    }
+    let next = AtomicUsize::new(0);
+    let results = Mutex::new(HashMap::with_capacity(targets.len()));
+    let workers = targets.len().min(MAX_MINECRAFT_STATUS_WORKERS);
+    thread::scope(|scope| {
+        for _ in 0..workers {
+            let probe = &probe;
+            let next = &next;
+            let results = &results;
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((id, port, password)) = targets.get(index) else {
+                        break;
+                    };
+                    let sample = probe(*port, password);
+                    if let Ok(mut results) = results.lock() {
+                        results.insert(id.clone(), sample);
+                    }
+                }
+            });
+        }
+    });
+    results
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn probe_minecraft_tps(port: u16, password: &str) -> TpsProbeResult {
+    match rcon_command_timed(
+        port,
+        password,
+        "tps",
+        MINECRAFT_TPS_CONNECT_TIMEOUT,
+        MINECRAFT_TPS_IO_TIMEOUT,
+    ) {
+        Ok(response) => {
+            let tps = parse_tps_response(&response);
+            TpsProbeResult {
+                tps,
+                ttl: if tps.is_some() {
+                    MINECRAFT_TPS_CACHE_HIT
+                } else {
+                    MINECRAFT_TPS_CACHE_MISS
+                },
+            }
+        }
+        Err(_) => TpsProbeResult {
+            tps: None,
+            ttl: MINECRAFT_TPS_CACHE_ERROR,
+        },
+    }
+}
+
+fn strip_minecraft_formatting(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '§' && index + 1 < chars.len() {
+            if chars[index + 1] == 'x' || chars[index + 1] == 'X' {
+                index += 2;
+                for _ in 0..6 {
+                    if index + 1 < chars.len() && chars[index] == '§' {
+                        index += 2;
+                    } else {
+                        break;
+                    }
+                }
+                continue;
+            }
+            index += 2;
+            continue;
+        }
+        out.push(chars[index]);
+        index += 1;
+    }
+    out
+}
+
+fn first_tps_number(text: &str) -> Option<f64> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'*' {
+            index += 1;
+            continue;
+        }
+        if bytes[index].is_ascii_digit() {
+            let start = index;
+            while index < bytes.len() && bytes[index].is_ascii_digit() {
+                index += 1;
+            }
+            let mut has_fraction = false;
+            if index < bytes.len() && bytes[index] == b'.' {
+                let fraction = index + 1;
+                if fraction < bytes.len() && bytes[fraction].is_ascii_digit() {
+                    has_fraction = true;
+                    index = fraction;
+                    while index < bytes.len() && bytes[index].is_ascii_digit() {
+                        index += 1;
+                    }
+                }
+            }
+            if has_fraction
+                && let Ok(value) = text[start..index].parse::<f64>()
+                && (0.0..=40.0).contains(&value)
+            {
+                return Some(value);
+            }
+            continue;
+        }
+        index += 1;
+    }
+    None
+}
+
+fn parse_tps_response(text: &str) -> Option<f64> {
+    let stripped = strip_minecraft_formatting(text);
+    let lower = stripped.to_ascii_lowercase();
+    if lower.contains("unknown command")
+        || lower.contains("unknown or incomplete command")
+        || lower.contains("incorrect argument")
+    {
+        return None;
+    }
+    let offset = lower.find("tps")?;
+    first_tps_number(&lower[offset..])
+}
+
 impl Clone for RuntimeState {
     fn clone(&self) -> Self {
         Self {
@@ -7118,12 +7376,28 @@ fn software_name(software: MinecraftSoftware) -> &'static str {
 }
 
 fn rcon_command(port: u16, password: &str, command: &str) -> Result<String, String> {
+    rcon_command_timed(
+        port,
+        password,
+        command,
+        Duration::from_secs(3),
+        Duration::from_secs(4),
+    )
+}
+
+fn rcon_command_timed(
+    port: u16,
+    password: &str,
+    command: &str,
+    connect_timeout: Duration,
+    io_timeout: Duration,
+) -> Result<String, String> {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3))
+    let mut stream = TcpStream::connect_timeout(&address, connect_timeout)
         .map_err(|_| "could not connect to the local Minecraft console".to_owned())?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(4)))
-        .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(4))))
+        .set_read_timeout(Some(io_timeout))
+        .and_then(|()| stream.set_write_timeout(Some(io_timeout)))
         .map_err(|_| "could not configure the Minecraft console connection".to_owned())?;
     write_rcon_packet(&mut stream, 1, 3, password)?;
     let (auth_id, _, _) = read_rcon_packet(&mut stream)?;
@@ -7639,6 +7913,71 @@ mod tests {
     }
 
     #[test]
+    fn parse_tps_response_reads_paper_spark_and_rejects_unknown() {
+        assert_eq!(
+            parse_tps_response("TPS from last 1m, 5m, 15m: 20.0, 20.0, 19.87"),
+            Some(20.0)
+        );
+        assert_eq!(
+            parse_tps_response("§6TPS from last 1m, 5m, 15m: §a*20.0, §a*20.0, §a*20.0"),
+            Some(20.0)
+        );
+        assert_eq!(
+            parse_tps_response("TPS from last 1m, 5m, 15m: 20.0*, 20.0*, 20.0*"),
+            Some(20.0)
+        );
+        assert_eq!(
+            parse_tps_response(
+                "TPS from last 5 seconds, 10 seconds, 1 minute, 5 minutes, 15 minutes:\n19.98, 20.0, 20.0, 20.0, 20.0"
+            ),
+            Some(19.98)
+        );
+        assert_eq!(
+            parse_tps_response("TPS from last 1m, 5m, 15m: §x§E§E§F§F§0§020.01, 20.0, 20.0"),
+            Some(20.01)
+        );
+        assert_eq!(
+            parse_tps_response("Unknown or incomplete command, see below for error"),
+            None
+        );
+        assert_eq!(
+            parse_tps_response("Unknown command. Type \"/help\" for help."),
+            None
+        );
+        assert_eq!(parse_tps_response(""), None);
+    }
+
+    #[test]
+    fn minecraft_tps_checks_are_parallel_and_worker_bounded() {
+        let targets = (0..24_u16)
+            .map(|index| {
+                (
+                    format!("server-{index}"),
+                    30_000 + index,
+                    "secret".to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let samples = collect_minecraft_tps(&targets, |port, password| {
+            assert_eq!(password, "secret");
+            let current = active.fetch_add(1, Ordering::AcqRel) + 1;
+            peak.fetch_max(current, Ordering::AcqRel);
+            thread::sleep(Duration::from_millis(10));
+            active.fetch_sub(1, Ordering::AcqRel);
+            TpsProbeResult {
+                tps: Some(f64::from(port % 21)),
+                ttl: MINECRAFT_TPS_CACHE_HIT,
+            }
+        });
+
+        assert_eq!(samples.len(), targets.len());
+        assert!(peak.load(Ordering::Acquire) > 1);
+        assert!(peak.load(Ordering::Acquire) <= MAX_MINECRAFT_STATUS_WORKERS);
+    }
+
+    #[test]
     fn custom_server_import_accepts_only_managed_regular_jars_and_explicit_versions() {
         let temporary = tempfile::tempdir().unwrap();
         let managed = temporary.path().join("storage");
@@ -7664,6 +8003,7 @@ mod tests {
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
+            tps_cache: Mutex::new(HashMap::new()),
             custom_import_root: managed.clone(),
             uploads: Mutex::new(HashMap::new()),
             amp: None,
@@ -8282,6 +8622,7 @@ mod tests {
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
+            tps_cache: Mutex::new(HashMap::new()),
             custom_import_root: state_root.join("imports"),
             uploads: Mutex::new(HashMap::new()),
             amp: None,
@@ -8342,6 +8683,7 @@ mod tests {
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
+            tps_cache: Mutex::new(HashMap::new()),
             custom_import_root: state_root.join("imports"),
             uploads: Mutex::new(HashMap::new()),
             amp: None,

@@ -290,6 +290,7 @@ export interface NativeServerDetail {
   maxPlayers: number;
   cpuPercent: number;
   memoryUsedMb: number;
+  tps: number | null;
   containerState: Record<string, unknown>;
   settings: MinecraftSettings | null;
   consoleHistory: {
@@ -777,6 +778,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     maxPlayers: number(root, 'max_players'),
     cpuPercent: number(root, 'cpu_percent'),
     memoryUsedMb: number(root, 'memory_used_mb'),
+    tps: nullableNumber(root, 'tps'),
     containerState,
     settings: kind !== 'minecraft' && (root.settings === null || root.settings === undefined)
       ? null
