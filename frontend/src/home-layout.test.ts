@@ -19,6 +19,11 @@ import {
   reorderHomeWidgets,
   saveHomeWidgets,
   HOMARR_HOME_ID,
+  cloneHomeWidgets,
+  exportHomeWidgetsClipboard,
+  mergeHomarrShortcuts,
+  parseHomeWidgetsClipboard,
+  pasteHomeWidgets,
   type HomeWidget,
 } from './home-layout';
 
@@ -121,5 +126,61 @@ describe('home layout', () => {
     expect(homarrShortcutSize(1)).toBe('compact');
     expect(homarrShortcutSize(4)).toBe('wide');
     expect(homarrShortcutSize(8)).toBe('full');
+  });
+
+  it('keeps edited Homarr shortcuts when the same apps are imported again', () => {
+    const existing: HomeWidget[] = [
+      { id: 'shortcut-plex', kind: 'shortcut', size: 'wide', height: 'medium', title: 'Living room Plex', content: '', url: 'http://192.168.1.10:32400/web', color: '#ff8800', icon: 'https://example.test/plex.png' },
+      { id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Right now', content: '', url: '', color: '', icon: '' },
+    ];
+    const incoming: HomeWidget[] = [
+      { id: 'shortcut-new-radarr', kind: 'shortcut', size: 'compact', height: 'short', title: 'Radarr', content: '', url: 'http://192.168.1.10:7878', color: '', icon: '' },
+      { id: 'shortcut-new-plex', kind: 'shortcut', size: 'compact', height: 'short', title: 'Plex', content: '', url: 'http://192.168.1.10:32400/web', color: '', icon: 'https://cdn.example/plex.png' },
+    ];
+    const merged = mergeHomarrShortcuts(existing, incoming);
+    expect(merged.map((widget) => widget.id)).toEqual(['shortcut-new-radarr', 'shortcut-plex', 'clock']);
+    expect(merged[1]).toMatchObject({ title: 'Living room Plex', size: 'wide', height: 'medium', color: '#ff8800', icon: 'https://example.test/plex.png' });
+    expect(mergeHomarrShortcuts(existing, [incoming[0]!]).map((widget) => widget.id)).toEqual(['shortcut-new-radarr', 'clock']);
+  });
+
+  it('copies widgets onto another Home with new ids and rejects script URLs', () => {
+    const plex: HomeWidget = { id: 'shortcut-plex', kind: 'shortcut', size: 'compact', height: 'short', title: 'Plex', content: '', url: 'http://192.168.1.10:32400/web', color: '', icon: '' };
+    const payload = exportHomeWidgetsClipboard([plex]);
+    expect(parseHomeWidgetsClipboard(payload)[0]).toMatchObject({ kind: 'shortcut', title: 'Plex', url: 'http://192.168.1.10:32400/web' });
+    expect(parseHomeWidgetsClipboard('{"format":"helix-home-widgets","version":1,"widgets":[{"kind":"shortcut","size":"compact","title":"Nope","url":"javascript:alert(1)"}]}')[0]?.url).toBe('');
+    const clones = cloneHomeWidgets([plex]);
+    expect(clones[0]?.id).not.toBe('shortcut-plex');
+    expect(clones[0]?.url).toBe(plex.url);
+    const templates = [
+      { id: 'home-main', name: 'Main', accent: '#d7f64d', widgets: defaultHomeWidgets.map((widget) => ({ ...widget })) },
+      { id: HOMARR_HOME_ID, name: 'Homarr', accent: '#d7f64d', widgets: [plex] },
+    ];
+    const result = pasteHomeWidgets(templates, 'home-main', [plex], 'clock');
+    expect('templates' in result).toBe(true);
+    if (!('templates' in result)) return;
+    expect(result.pasted).toHaveLength(1);
+    expect(result.templates[0]?.widgets[1]).toMatchObject({ kind: 'shortcut', title: 'Plex', url: plex.url });
+    expect(result.templates[0]?.widgets[1]?.id).not.toBe('shortcut-plex');
+    expect(result.templates[1]?.widgets).toHaveLength(1);
+  });
+
+  it('refuses to paste past the per-Home cap', () => {
+    const full = Array.from({ length: 32 }, (_, index) => ({
+      id: `clock-${index}`,
+      kind: 'clock' as const,
+      size: 'compact' as const,
+      height: 'medium' as const,
+      title: 'Clock',
+      content: '',
+      url: '',
+      color: '',
+      icon: '',
+    }));
+    const result = pasteHomeWidgets(
+      [{ id: 'home-main', name: 'Main', accent: '#d7f64d', widgets: full }],
+      'home-main',
+      [{ id: 'extra', kind: 'clock', size: 'compact', height: 'medium', title: 'Extra', content: '', url: '', color: '', icon: '' }],
+    );
+    expect(result).toEqual({ error: 'Main already has 32 widgets.' });
   });
 });

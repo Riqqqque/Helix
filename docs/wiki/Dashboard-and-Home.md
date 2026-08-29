@@ -38,8 +38,11 @@ backups.
 
 Choose **Edit layout** to add widgets, drag them by their handle, or move them
 with keyboard-accessible controls. Every widget can choose width, height, title,
-and accent color. The grid reflows at desktop, tablet, and mobile widths, so a
-layout with one widget and a layout at the configured maximum both stay usable.
+and accent color. Click a tile to select it, then **Copy** (or Ctrl+C / Cmd+C)
+and **Paste** (or Ctrl+V / Cmd+V) to duplicate it on this Home or another one.
+Widget settings also has **Copy to another Home**. The grid reflows at desktop,
+tablet, and mobile widths, so a layout with one widget and a layout at the
+configured maximum both stay usable.
 
 Available widgets are Clock, Host pulse, Live graphs, Servers, Storage, Docker,
 Weather, Notes, Shortcut, and Strand. Shortcuts accept only validated HTTP(S)
@@ -48,10 +51,15 @@ declared `helix:ui.widget`. While editing, **Import from Homarr** reads Homarr
 apps that already have an http(s) address. Current Homarr stores those in SQLite; older
 Homarr JSON configs still work. Helix places them on a dedicated **Homarr** Home in
 Homarr's layout order as short tiles, instead of dumping them onto Main.
-Long names stay inside the picker rows and tiles. Icons come
+Those tiles are normal widgets: rename them, resize them, recolor them, or copy
+them onto Main or any other Home. Re-import keeps those edits for apps that are
+still checked, adds new Homarr apps, and drops unchecked ones. Other widgets you
+added on the Homarr Home stay put. On a plain HTTP dashboard, Paste uses Helix's
+saved copy when the browser blocks the system clipboard. Long names stay inside
+the picker rows and tiles. Icons come
 from Homarr's http(s) icon URLs, Homarr icon names via the dashboard-icons set, or
 Helix's matcher on the app name and link. Uploaded Homarr media files, notes, and
-Homarr-only apps stay in Homarr. Re-import replaces the Homarr Home. **Full screen**
+Homarr-only apps stay in Homarr. **Full screen**
 hides the sidebar and the top bar (Helix, refresh, theme, account). Exit full
 screen from the Home page button to bring them back.
 
