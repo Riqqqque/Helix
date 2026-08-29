@@ -131,10 +131,6 @@ impl UpnpGateway {
         self.soap("AddPortMapping", &body).map(|_| ())
     }
 
-    pub fn tcp_mapping_exists(&self, port: u16) -> Result<bool, String> {
-        Ok(self.tcp_mapping_description(port)?.is_some())
-    }
-
     pub fn tcp_mapping_description(&self, port: u16) -> Result<Option<String>, String> {
         let body = format!(
             "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>TCP</NewProtocol>"
