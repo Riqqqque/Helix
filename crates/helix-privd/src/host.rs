@@ -387,10 +387,11 @@ impl HostControl {
                 continue;
             };
             let percent = (second_usec.saturating_sub(first_usec) as f64) / 1_200.0;
-            if percent.is_finite() && (0.0..=10_000.0).contains(&percent) {
-                if let Some(object) = hooks[*index].as_object_mut() {
-                    object.insert("cpu_percent".to_owned(), json!(percent));
-                }
+            if percent.is_finite()
+                && (0.0..=10_000.0).contains(&percent)
+                && let Some(object) = hooks[*index].as_object_mut()
+            {
+                object.insert("cpu_percent".to_owned(), json!(percent));
             }
         }
     }
