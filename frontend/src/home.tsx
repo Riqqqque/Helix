@@ -2,27 +2,29 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import type { HostInventory, ManagedServer } from './control-api';
 import { calculatePercent, formatBytes, formatDuration, formatPercent } from './format';
 import {
+  exportHomeWidgetsClipboard,
+  mergeHomarrShortcuts,
+  newHomeWidgetId,
+  parseHomeWidgetsClipboard,
+  pasteHomeWidgets,
+  readWidgetClipboard,
+  saveWidgetClipboard,
+} from './home-clipboard';
+import {
   exportHomeTemplate,
   homarrShortcutSize,
   homeShortcutUrls,
   HOMARR_HOME_ID,
   importHomeTemplate,
-  mergeHomarrShortcuts,
   moveHomeWidget,
-  newHomeWidgetId,
   newHomarrShortcuts,
   nextHomeWidgetHeight,
   nextHomeWidgetSize,
   normalizeShortcutUrl,
-  parseHomeWidgetsClipboard,
   parseNoteWidgetConfiguration,
   parseWeatherWidgetConfiguration,
-  pasteHomeWidgets,
-  readWidgetClipboard,
   reorderHomeWidgets,
   replaceHomarrHome,
-  saveWidgetClipboard,
-  exportHomeWidgetsClipboard,
   serializeNoteWidgetConfiguration,
   serializeWeatherWidgetConfiguration,
   type HomeTemplate,
@@ -101,6 +103,25 @@ function makeWidget(kind: HomeWidgetKind): HomeWidget {
   return { id: newHomeWidgetId(kind), kind, ...defaults[kind] };
 }
 
+function CopyGlyph({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.7"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="8" y="8" width="12" height="12" rx="1.5" />
+      <path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8" />
+    </svg>
+  );
+}
+
 function WidgetControls({
   widget,
   first,
@@ -144,7 +165,7 @@ function WidgetControls({
         {widget.height}
       </button>
       <button type="button" onClick={onCopy} aria-label={`Copy ${widget.title}`} title="Copy widget">
-        <Icon name="copy" size={14} />
+        <CopyGlyph size={14} />
       </button>
       <button type="button" onClick={onSettings} aria-label={`Open ${widget.title} settings`} title="Widget settings">
         <Icon name="settings" size={14} />
@@ -745,7 +766,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
         <div class="page-head-actions home-page-actions">
           {editing && <button class="button button--quiet" type="button" onClick={() => setAdding((value) => !value)}><Icon name="plus" size={15} />Add widget</button>}
           {editing && <button class="button button--quiet" type="button" disabled={homarrLoading} onClick={() => void loadHomarr()}>{homarrLoading ? 'Reading Homarr…' : 'Import from Homarr'}</button>}
-          {editing && <button class="button button--quiet" type="button" onClick={() => void pasteFromClipboard()}><Icon name="copy" size={15} />Paste</button>}
+          {editing && <button class="button button--quiet" type="button" onClick={() => void pasteFromClipboard()}><CopyGlyph size={15} />Paste</button>}
           <button class={`button${homeFocus ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={homeFocus} onClick={onHomeFocusToggle}><Icon name="expand" size={15} />{homeFocus ? 'Exit full screen' : 'Full screen'}</button>
           <button class={`button${templatesOpen ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={templatesOpen} onClick={() => setTemplatesOpen((value) => !value)}><Icon name="home" size={15} />Homes</button>
           <button class={`button${editing ? ' button--primary' : ''}`} type="button" aria-pressed={editing} onClick={() => { setEditing((value) => !value); setAdding(false); setSettingsWidgetId(null); setSelectedWidgetId(null); finishDrag(); }}><Icon name={editing ? 'check' : 'edit'} size={15} />{editing ? 'Done editing' : 'Edit layout'}</button>
