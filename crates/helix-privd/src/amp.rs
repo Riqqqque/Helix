@@ -437,6 +437,8 @@ impl AmpClient {
                 (0, false)
             }
         };
+        let game_port = minecraft_port_from_config(&config)
+            .or_else(|| self.instance_minecraft_listen_port(&instance_name));
         Ok(AmpServer {
             id: format!("amp:{id}"),
             name,
@@ -463,8 +465,7 @@ impl AmpClient {
             tps: metric_f64(metrics, "TPS", "RawValue"),
             manager_panel_port: self.public_panel_port,
             panel_port,
-            game_port: minecraft_port_from_config(&config)
-                .or_else(|| self.instance_minecraft_listen_port(&instance_name)),
+            game_port,
             path: path.to_string_lossy().into_owned(),
             warnings,
             manager: "amp_import",
