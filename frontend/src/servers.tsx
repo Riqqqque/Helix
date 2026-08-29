@@ -18,20 +18,12 @@ import {
   getServerBackups,
   getServerDetail,
   getServerLogs,
-  getMinecraftPortPolicy,
-  getVRisingPortPolicy,
-  getValheimPortPolicy,
-  getTerrariaPortPolicy,
   restoreServerBackup,
   restoreTrashedServerBackup,
   restoreTrashedNativeServer,
   runServerAction,
   saveServerSettings,
   sendConsoleCommand,
-  saveMinecraftPortPolicy,
-  saveVRisingPortPolicy,
-  saveValheimPortPolicy,
-  saveTerrariaPortPolicy,
   setNativeStartOnBoot,
   setNativeMemory,
   trashServerBackup,
@@ -82,6 +74,8 @@ import { InfoTip } from "./info-tip";
 import { useJobPolling } from "./job-polling";
 import {
   getNetworkInventory,
+  leftoverAmpForwardConfirmation,
+  releaseAmpRouterForward,
   type GamePortMapping,
   type NetworkInventory,
 } from "./network-api";
@@ -93,6 +87,16 @@ import {
   type ModpackSelection,
 } from "./modpack-api";
 import { ModpackRoute, preloadModpackPicker } from "./modpack-route";
+import {
+  getMinecraftPortPolicy,
+  getTerrariaPortPolicy,
+  getValheimPortPolicy,
+  getVRisingPortPolicy,
+  saveMinecraftPortPolicy,
+  saveTerrariaPortPolicy,
+  saveValheimPortPolicy,
+  saveVRisingPortPolicy,
+} from "./port-policy-api";
 import { Dialog } from "./modal";
 import { ServerArtwork, ServerIconDialog } from "./server-artwork";
 import {
@@ -634,9 +638,177 @@ export function joinErrorOffersPortChange(message: string): boolean {
   const lower = message.toLowerCase();
   return (
     lower.includes("amp already has port")
+    || lower.includes("leftover amp router mapping")
     || lower.includes("unowned router")
     || lower.includes("already has a mapping")
     || /port \d+ is already/.test(lower)
+  );
+}
+
+export function parseAmpPortClaim(message: string): { port: number; leftover: boolean } | null {
+  const leftover = /^Leftover AMP router mapping on port (\d+)\b/u.exec(message);
+  if (leftover) {
+    const port = Number(leftover[1]);
+    if (Number.isInteger(port) && port >= 1 && port <= 65_535) return { port, leftover: true };
+  }
+  const live = /^AMP already has port (\d+) claimed/u.exec(message);
+  if (live) {
+    const port = Number(live[1]);
+    if (Number.isInteger(port) && port >= 1 && port <= 65_535) return { port, leftover: false };
+  }
+  return null;
+}
+
+export function ampHelpPanelUrl(
+  message: string,
+  servers: ManagedServer[],
+  hostname: string,
+): string | null {
+  const named = servers.find((server) => {
+    if (server.manager !== "amp_import") return false;
+    return (
+      (server.instanceName.length > 0 && message.includes(server.instanceName))
+      || (server.name.length > 0 && message.includes(server.name))
+    );
+  });
+  if (named !== undefined) {
+    const url = importedServerPanelUrl(named, hostname);
+    if (url !== null) return url;
+  }
+  for (const server of servers) {
+    const url = importedServerPanelUrl(server, hostname);
+    if (url !== null) return url.replace(/\/instances\/[0-9a-f]+$/iu, "");
+  }
+  return null;
+}
+
+function ServerFault({
+  message,
+  csrfToken,
+  servers,
+  canManageNetwork,
+  onSessionExpired,
+}: {
+  message: string | null;
+  csrfToken: string;
+  servers: ManagedServer[];
+  canManageNetwork: boolean;
+  onSessionExpired: () => void;
+}) {
+  if (message === null) return null;
+  const claim = parseAmpPortClaim(message);
+  if (claim === null) return <InlineError message={message} />;
+  return (
+    <AmpPortClaimHelp
+      message={message}
+      claim={claim}
+      csrfToken={csrfToken}
+      servers={servers}
+      canManageNetwork={canManageNetwork}
+      onSessionExpired={onSessionExpired}
+    />
+  );
+}
+
+function AmpPortClaimHelp({
+  message,
+  claim,
+  csrfToken,
+  servers,
+  canManageNetwork,
+  onSessionExpired,
+}: {
+  message: string;
+  claim: { port: number; leftover: boolean };
+  csrfToken: string;
+  servers: ManagedServer[];
+  canManageNetwork: boolean;
+  onSessionExpired: () => void;
+}) {
+  const [confirmation, setConfirmation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [released, setReleased] = useState(false);
+  const expected = leftoverAmpForwardConfirmation(claim.port);
+  const hostname = globalThis.location?.hostname ?? "";
+  const panelUrl = ampHelpPanelUrl(message, servers, hostname);
+  const release = async (): Promise<void> => {
+    setBusy(true);
+    setLocalError(null);
+    try {
+      const result = await releaseAmpRouterForward(claim.port, confirmation.trim(), csrfToken);
+      if (result.ampFilesChanged) {
+        setLocalError("Helix stopped because AMP files would have changed.");
+        return;
+      }
+      setReleased(true);
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setLocalError(describeError(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (released) {
+    return (
+      <div class="amp-port-help amp-port-help--ready" role="status">
+        <Icon name="check" size={15} />
+        <div>
+          <strong>Leftover AMP forward on {claim.port} is gone.</strong>
+          <p>AMP instance files were not changed. Retry create or save.</p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div class="amp-port-help" role="alert">
+      <Icon name="warning" size={15} />
+      <div>
+        <strong>
+          {claim.leftover
+            ? `Leftover AMP router mapping on ${claim.port}`
+            : `AMP already has port ${claim.port} claimed`}
+        </strong>
+        <p>{message}</p>
+        <div class="amp-port-help__actions">
+          {panelUrl !== null && (
+            <a class="button button--quiet" href={panelUrl} target="_blank" rel="noreferrer">
+              Open AMP
+            </a>
+          )}
+        </div>
+        {claim.leftover && canManageNetwork && (
+          <label class="field">
+            <span>Type {expected} to delete only the leftover UPnP mapping</span>
+            <input
+              value={confirmation}
+              disabled={busy}
+              autoComplete="off"
+              spellcheck={false}
+              onInput={(event) => setConfirmation(event.currentTarget.value)}
+            />
+            <small>This does not stop AMP, rewrite instance files, or touch Helix servers.</small>
+          </label>
+        )}
+        {claim.leftover && canManageNetwork && (
+          <button
+            class="button button--primary"
+            type="button"
+            disabled={busy || confirmation.trim() !== expected}
+            onClick={() => void release()}
+          >
+            {busy ? "Removing…" : "Remove leftover AMP forward"}
+          </button>
+        )}
+        {claim.leftover && !canManageNetwork && (
+          <p>
+            Removing that leftover UPnP mapping needs network.firewall.write. You can also delete
+            that TCP forward on the router. Do not hand-edit AMP instance files.
+          </p>
+        )}
+        <InlineError message={localError} />
+      </div>
+    </div>
   );
 }
 
@@ -892,6 +1064,12 @@ function PortPoolDialog({
       <p class="dialog-intro">
         Automatic server creation takes individual ports first, then walks each range in order. It also skips ports already assigned to Helix, ports AMP already has claimed, and ports currently bound on the host.
       </p>
+      {policy !== null && policy.ampClaimedPorts.length > 0 && (
+        <p class="dialog-intro">
+          AMP still has {policy.ampClaimedPorts.slice(0, 8).join(", ")}
+          {policy.ampClaimedPorts.length > 8 ? ", …" : ""} in this pool. Automatic create skips those. Helix will not steal them; change the port in AMP or pick a different Helix number.
+        </p>
+      )}
       <div class="form-grid">
         <label class="field field--wide">
           <span>Port ranges</span>
@@ -1303,7 +1481,9 @@ function CreateServerDialog({
                 : "Helix is downloading a verified build, creating the workload, and starting Minecraft."
               : job.status === "complete"
                 ? `${name} is online and ready to join.`
-                : (job.error ?? "Helix rolled back the incomplete server.")}
+                : parseAmpPortClaim(job.error ?? "") !== null
+                  ? "That port is still held by AMP."
+                  : (job.error ?? "Helix rolled back the incomplete server.")}
           </span>
           <ProgressBar
             value={job.progressPercent}
@@ -1337,13 +1517,21 @@ function CreateServerDialog({
               <span>
                 <strong>{publicJoin === null ? "Server online · public access needs attention" : publicJoin}</strong>
                 {publicJoin === null
-                  ? (publicSetupError ?? "Open the server’s Join section to retry automatic public setup.")
+                  ? parseAmpPortClaim(publicSetupError ?? "") !== null
+                    ? "Public access stopped on an AMP-held port. Use the steps below; Helix did not overwrite AMP."
+                    : (publicSetupError ?? "Open the server’s Join section to retry automatic public setup.")
                   : "Router mapping confirmed. Test this address from a separate external network before sharing it broadly."}
               </span>
             </div>
           )}
         </div>
-        <InlineError message={polling.error ?? error} />
+        <ServerFault
+          message={polling.error ?? error ?? (job.status === "failed" ? job.error : null) ?? publicSetupError}
+          csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
+          onSessionExpired={onSessionExpired}
+        />
         <div class="dialog-actions">
           {polling.paused && (
             <button
@@ -1431,7 +1619,13 @@ function CreateServerDialog({
           </button>
         </div>
       )}
-      <InlineError message={error} />
+      <ServerFault
+        message={error}
+        csrfToken={csrfToken}
+        servers={servers}
+        canManageNetwork={canManageNetwork}
+        onSessionExpired={onSessionExpired}
+      />
       {step === 1 ? (
         <form
           class="server-form"
@@ -2759,7 +2953,9 @@ function ConsolePanel({
 function SettingsPanel({
   detail,
   csrfToken,
+  servers,
   canManageServers,
+  canManageNetwork,
   restartSuccessRevision,
   onRestart,
   onSaved,
@@ -2767,7 +2963,9 @@ function SettingsPanel({
 }: {
   detail: NativeServerDetail & { settings: MinecraftSettings };
   csrfToken: string;
+  servers: ManagedServer[];
   canManageServers: boolean;
+  canManageNetwork: boolean;
   restartSuccessRevision: number;
   onRestart: () => void;
   onSaved: () => Promise<void> | void;
@@ -2867,7 +3065,13 @@ function SettingsPanel({
           </button>
         )}
       </div>
-      <InlineError message={error} />
+      <ServerFault
+        message={error}
+        csrfToken={csrfToken}
+        servers={servers}
+        canManageNetwork={canManageNetwork}
+        onSessionExpired={onSessionExpired}
+      />
       {notice !== null && (
         <p class="settings-port-note" role="status">
           {notice}
@@ -4082,9 +4286,11 @@ function portDiagnostic(port: GamePortMapping | undefined): {
 
 function NativeServerPage({
   server,
+  servers,
   csrfToken,
   canManageServers,
   canManageBackups,
+  canManageNetwork,
   hostInventory,
   onBack,
   onRefresh,
@@ -4092,6 +4298,7 @@ function NativeServerPage({
   refreshIntervalMs,
 }: {
   server: ManagedServer;
+  servers: ManagedServer[];
   csrfToken: string;
   canManageServers: boolean;
   canManageBackups: boolean;
@@ -4566,7 +4773,9 @@ function NativeServerPage({
           <SettingsPanel
             detail={{ ...detail, settings: detail.settings }}
             csrfToken={csrfToken}
+            servers={servers}
             canManageServers={canManageServers}
+            canManageNetwork={canManageNetwork}
             restartSuccessRevision={restartSuccessRevision}
             onRestart={() => setPending("restart")}
             onSaved={refresh}
@@ -5194,11 +5403,15 @@ export function NewServerChooser({
 
 function CreateVRisingDialog({
   csrfToken,
+  servers,
+  canManageNetwork,
   onClose,
   onComplete,
   onSessionExpired,
 }: {
   csrfToken: string;
+  servers: ManagedServer[];
+  canManageNetwork: boolean;
   onClose: () => void;
   onComplete: () => Promise<void>;
   onSessionExpired: () => void;
@@ -5290,7 +5503,15 @@ function CreateVRisingDialog({
           <small>
             First create downloads the dedicated server into an isolated container. Leave this open.
           </small>
-          {polling.error !== null && <InlineError message={polling.error} />}
+          {polling.error !== null && (
+            <ServerFault
+              message={polling.error}
+              csrfToken={csrfToken}
+              servers={servers}
+              canManageNetwork={canManageNetwork}
+              onSessionExpired={onSessionExpired}
+            />
+          )}
         </div>
       ) : (
         <>
@@ -5337,7 +5558,13 @@ function CreateVRisingDialog({
               <small>Docker restart policy unless-stopped. Survives host reboot without starting the server now.</small>
             </span>
           </label>
-          <InlineError message={error ?? (job?.error ?? null)} />
+          <ServerFault
+            message={error ?? (job?.error ?? null)}
+            csrfToken={csrfToken}
+            servers={servers}
+            canManageNetwork={canManageNetwork}
+            onSessionExpired={onSessionExpired}
+          />
           <div class="dialog-actions">
             <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
             <button class="button button--primary" type="button" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
@@ -5352,11 +5579,15 @@ function CreateVRisingDialog({
 
 function CreateValheimDialog({
   csrfToken,
+  servers,
+  canManageNetwork,
   onClose,
   onComplete,
   onSessionExpired,
 }: {
   csrfToken: string;
+  servers: ManagedServer[];
+  canManageNetwork: boolean;
   onClose: () => void;
   onComplete: () => Promise<void>;
   onSessionExpired: () => void;
@@ -5421,7 +5652,15 @@ function CreateValheimDialog({
           <strong>{job.stage}</strong>
           <ProgressBar value={job.progressPercent} />
           <small>First create downloads the dedicated server through SteamCMD. Drop a BepInEx pack zip at `/data/bepinex-pack.zip` and plugin DLLs in `/data/plugins` for one-restart mods.</small>
-          {polling.error !== null && <InlineError message={polling.error} />}
+          {polling.error !== null && (
+            <ServerFault
+              message={polling.error}
+              csrfToken={csrfToken}
+              servers={servers}
+              canManageNetwork={canManageNetwork}
+              onSessionExpired={onSessionExpired}
+            />
+          )}
         </div>
       ) : (
         <>
@@ -5434,7 +5673,13 @@ function CreateValheimDialog({
             {portMode === "manual" && <label class="field"><span>Game UDP</span><input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} /></label>}
           </div>
           <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>Start with the host</strong><small>Docker restart policy unless-stopped.</small></span></label>
-          <InlineError message={error ?? (job?.error ?? null)} />
+          <ServerFault
+            message={error ?? (job?.error ?? null)}
+            csrfToken={csrfToken}
+            servers={servers}
+            canManageNetwork={canManageNetwork}
+            onSessionExpired={onSessionExpired}
+          />
           <div class="dialog-actions">
             <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
             <button class="button button--primary" type="button" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>{submitting ? "Starting…" : "Create Valheim server"}</button>
@@ -5447,11 +5692,15 @@ function CreateValheimDialog({
 
 function CreateTerrariaDialog({
   csrfToken,
+  servers,
+  canManageNetwork,
   onClose,
   onComplete,
   onSessionExpired,
 }: {
   csrfToken: string;
+  servers: ManagedServer[];
+  canManageNetwork: boolean;
   onClose: () => void;
   onComplete: () => Promise<void>;
   onSessionExpired: () => void;
@@ -5519,7 +5768,15 @@ function CreateTerrariaDialog({
           <strong>{job.stage}</strong>
           <ProgressBar value={job.progressPercent} />
           <small>Vanilla downloads the publisher zip. tModLoader uses SteamCMD. Drop `.tmod` files in `/data/mods` and restart for one-click mods.</small>
-          {polling.error !== null && <InlineError message={polling.error} />}
+          {polling.error !== null && (
+            <ServerFault
+              message={polling.error}
+              csrfToken={csrfToken}
+              servers={servers}
+              canManageNetwork={canManageNetwork}
+              onSessionExpired={onSessionExpired}
+            />
+          )}
         </div>
       ) : (
         <>
@@ -5533,7 +5790,13 @@ function CreateTerrariaDialog({
             {portMode === "manual" && <label class="field"><span>Game TCP</span><input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} /></label>}
           </div>
           <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>Start with the host</strong><small>Docker restart policy unless-stopped.</small></span></label>
-          <InlineError message={error ?? (job?.error ?? null)} />
+          <ServerFault
+            message={error ?? (job?.error ?? null)}
+            csrfToken={csrfToken}
+            servers={servers}
+            canManageNetwork={canManageNetwork}
+            onSessionExpired={onSessionExpired}
+          />
           <div class="dialog-actions">
             <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
             <button class="button button--primary" type="button" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>{submitting ? "Starting…" : "Create Terraria server"}</button>
@@ -5629,6 +5892,7 @@ export function ServersPage({
     return selected.manager === "helix" ? (
       <NativeServerPage
         server={selected}
+        servers={servers}
         csrfToken={csrfToken}
         canManageServers={canManageServers}
         canManageBackups={canManageBackups}
@@ -5915,6 +6179,8 @@ export function ServersPage({
       {creatingVRising && (
         <CreateVRisingDialog
           csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
           onClose={() => setCreatingVRising(false)}
           onComplete={async () => {
             await data.refresh();
@@ -5926,6 +6192,8 @@ export function ServersPage({
       {creatingValheim && (
         <CreateValheimDialog
           csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
           onClose={() => setCreatingValheim(false)}
           onComplete={async () => {
             await data.refresh();
@@ -5937,6 +6205,8 @@ export function ServersPage({
       {creatingTerraria && (
         <CreateTerrariaDialog
           csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
           onClose={() => setCreatingTerraria(false)}
           onComplete={async () => {
             await data.refresh();

@@ -37,6 +37,10 @@ pub enum BrokerRequest {
         instance_id: String,
         enabled: bool,
     },
+    ReleaseAmpRouterForward {
+        port: u16,
+        confirmation: String,
+    },
     CreateFirewallRule {
         rule: FirewallRuleSpec,
     },
@@ -1230,6 +1234,16 @@ mod tests {
         assert_eq!(create["rule"]["protocol"], "tcp");
         assert_eq!(create["rule"]["port_start"], 25_565);
         assert!(create.get("command").is_none());
+
+        let leftover = serde_json::to_value(BrokerRequest::ReleaseAmpRouterForward {
+            port: 25_566,
+            confirmation: "REMOVE AMP FORWARD 25566".to_owned(),
+        })
+        .expect("serialize leftover AMP forward release");
+        assert_eq!(leftover["operation"], "release_amp_router_forward");
+        assert_eq!(leftover["port"], 25_566);
+        assert_eq!(leftover["confirmation"], "REMOVE AMP FORWARD 25566");
+        assert!(leftover.get("command").is_none());
 
         let delete = serde_json::to_value(BrokerRequest::DeleteFirewallRule {
             rule_id: "8953dc16-3891-42bf-802f-711b3ba2965a".to_owned(),

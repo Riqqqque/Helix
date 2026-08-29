@@ -260,6 +260,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/host/reboot/{operation_id}", delete(cancel_host_reboot))
         .route("/network/inventory", get(network_inventory))
         .route(
+            "/network/amp-router-forwards/release",
+            post(release_amp_router_forward),
+        )
+        .route(
             "/network/firewall/rules",
             post(create_firewall_rule).layer(DefaultBodyLimit::max(FIREWALL_RULE_BODY_LIMIT_BYTES)),
         )
@@ -1343,6 +1347,13 @@ struct RenameBody {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AmpRouterForwardReleaseBody {
+    port: u16,
+    confirmation: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EnableFirewallBody {
     ssh_port: u16,
     confirmation: String,
@@ -1591,6 +1602,25 @@ async fn network_inventory(
 ) -> Result<impl IntoResponse, ApiError> {
     auth::require_capability(&state, &headers, "network.firewall.read").await?;
     broker_json(&state, BrokerRequest::NetworkInventory {}).await
+}
+
+async fn release_amp_router_forward(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<AmpRouterForwardReleaseBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::ReleaseAmpRouterForward {
+            port: body.port,
+            confirmation: body.confirmation,
+        },
+    )
+    .await
 }
 
 async fn minecraft_port_policy(
@@ -5155,6 +5185,45 @@ mod tests {
             .await
             .expect("firewall create response");
         assert_eq!(create.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let leftover_without_csrf = context
+            .app
+            .clone()
+            .oneshot(with_cookie(
+                post_json(
+                    "/api/v1/network/amp-router-forwards/release",
+                    &json!({
+                        "port": 25566,
+                        "confirmation": "REMOVE AMP FORWARD 25566"
+                    }),
+                    67,
+                ),
+                &client.cookie,
+            ))
+            .await
+            .expect("missing leftover AMP CSRF response");
+        assert_eq!(leftover_without_csrf.status(), StatusCode::FORBIDDEN);
+
+        let leftover_release = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    post_json(
+                        "/api/v1/network/amp-router-forwards/release",
+                        &json!({
+                            "port": 25566,
+                            "confirmation": "REMOVE AMP FORWARD 25566"
+                        }),
+                        67,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("leftover AMP forward release response");
+        assert_eq!(leftover_release.status(), StatusCode::SERVICE_UNAVAILABLE);
 
         for request in [
             with_csrf(

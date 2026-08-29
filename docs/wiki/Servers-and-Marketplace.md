@@ -20,7 +20,9 @@ game containers.
 V Rising is not a Linux dedicated server. Helix builds `helix-vrising-runtime:1`
 from an embedded Dockerfile the first time you create a V Rising server. Game
 files, saves, and the isolated runtime live in that instance’s data directory.
-The host never receives Wine packages.
+The host never receives Wine packages. That first image build writes Docker CLI
+state under Helix native data, not the execution backend’s home directory, so
+it works with helix-privd’s locked-down service.
 
 Create is one click after you pick a name, memory, and UDP ports. Public UPnP
 is not offered. Allocated memory can be changed later from Overview. Player
@@ -175,10 +177,24 @@ Minecraft and Terraria, UDP game plus query for V Rising, and UDP
 `game` through `game+2` for Valheim.
 
 Minecraft create can still request UPnP public access on the same private IPv4
-gateway and refuses to overwrite an existing router rule. If AMP already has
-that port claimed, or the router mapping description starts with `AMP`, the
-error says so. Change the Helix game port in Settings instead of overwriting
-AMP. Public setup requests one TCP mapping, verifies the exact internal
+gateway and refuses to overwrite an existing router rule.
+
+If Helix says AMP already has a port claimed, it is refusing to steal a number
+AMP still lists. Open AMP (the error card has a link when Helix can see the
+instance), stop that instance, open **Configuration → Server Settings / Portals**,
+change the listed port to a free number, Apply, then retry. You can also leave
+AMP on that number and let Helix auto-pick from **Port pools**; automatic create
+already skips AMP numbers. Helix will not edit AMP instance files, kvp, or
+`server.properties`.
+
+If the AMP instance is already gone and only a leftover UPnP mapping remains
+(description starts with `AMP`, no instance file still lists the port), Helix
+asks you to type `REMOVE AMP FORWARD <port>`. That deletes the leftover router
+forward only. It does not stop AMP or rewrite AMP files. Helix-owned public
+access on that port is removed from the Helix server instead.
+
+Change the Helix game port in Settings if you want Helix to use a different
+number. Public setup requests one TCP mapping, verifies the exact internal
 IP/port/description returned by the router, and journals ownership. If UFW is
 already active, Helix also adds one exact owned TCP rule; it never turns UFW on
 as a side effect. V Rising stays private at create; Helix does not offer UPnP
@@ -196,7 +212,7 @@ Open **Port pools** on the Servers page to set Minecraft or V Rising ranges and
 optional individual priority ports. Automatic allocation tries the individual
 list first, then each range in order, skipping duplicates, ports assigned to
 another Helix server, ports AMP already has claimed, and ports currently bound
-on the host. Up to 32 ranges,
+on the host. AMP-claimed numbers in the pool are listed on that dialog. Up to 32 ranges,
 256 individual entries, and 4,096 unique ports are accepted. The summary shows
 total capacity, assigned ports, and the next available candidate.
 

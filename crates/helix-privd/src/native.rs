@@ -273,6 +273,7 @@ struct ConsoleArchiverConfig {
     instance_id: String,
     container_name: String,
     docker_binary: PathBuf,
+    docker_cli_home: PathBuf,
     archive_root: PathBuf,
     stop: Arc<AtomicBool>,
 }
@@ -420,6 +421,7 @@ impl NativeManager {
             fs::Permissions::from_mode(0o700),
         )
         .map_err(|_| "could not protect the update staging directory".to_owned())?;
+        prepare_docker_cli_home(&config.state_root)?;
         fs::create_dir_all(config.state_root.join("server-trash"))
             .map_err(|_| "could not create the protected server trash registry".to_owned())?;
         fs::set_permissions(
@@ -570,6 +572,23 @@ impl NativeManager {
             .unwrap_or_default()
     }
 
+    fn port_conflict_error(&self, port: u16, helix: &HashSet<u16>) -> Option<String> {
+        if self.amp_occupied_ports().contains(&port) {
+            Some(
+                self.amp
+                    .as_ref()
+                    .map(|amp| amp.explain_claimed_port(port))
+                    .unwrap_or_else(|| amp_port_claimed_message(port)),
+            )
+        } else if helix.contains(&port) {
+            Some(format!(
+                "game port {port} is already assigned to another Helix server"
+            ))
+        } else {
+            None
+        }
+    }
+
     fn used_game_ports(&self, manifests: &[InstanceManifest]) -> HashSet<u16> {
         let mut used = assigned_game_ports(manifests);
         used.extend(self.amp_occupied_ports());
@@ -715,6 +734,7 @@ impl NativeManager {
             candidates,
             used,
             next_available,
+            self.amp_occupied_ports(),
         ))
     }
 
@@ -749,8 +769,7 @@ impl NativeManager {
                 return Err("game port must be at least 1024".to_owned());
             }
             let helix = assigned_game_ports(manifests);
-            let amp = self.amp_occupied_ports();
-            if let Some(error) = port_claimed_error(port, &helix, &amp) {
+            if let Some(error) = self.port_conflict_error(port, &helix) {
                 return Err(error);
             }
             ensure_port_available(port, true)?;
@@ -785,7 +804,6 @@ impl NativeManager {
         manifests: &[InstanceManifest],
     ) -> Result<(u16, u16, bool), String> {
         let helix = assigned_game_ports(manifests);
-        let amp = self.amp_occupied_ports();
         if let Some(game_port) = requested_game {
             let query_port = requested_query.unwrap_or(game_port.saturating_add(1));
             if query_port < 1_024 || query_port == game_port {
@@ -794,10 +812,10 @@ impl NativeManager {
                         .to_owned(),
                 );
             }
-            if let Some(error) = port_claimed_error(game_port, &helix, &amp) {
+            if let Some(error) = self.port_conflict_error(game_port, &helix) {
                 return Err(error);
             }
-            if let Some(error) = port_claimed_error(query_port, &helix, &amp) {
+            if let Some(error) = self.port_conflict_error(query_port, &helix) {
                 return Err(error);
             }
             ensure_port_available(game_port, true)?;
@@ -811,7 +829,7 @@ impl NativeManager {
         let policy = self.read_game_port_policy(GameKind::VRising)?;
         let candidates = policy_candidates(&policy)?;
         let mut used = helix;
-        used.extend(&amp);
+        used.extend(self.amp_occupied_ports());
         let available = candidates
             .iter()
             .copied()
@@ -834,7 +852,6 @@ impl NativeManager {
         manifests: &[InstanceManifest],
     ) -> Result<(u16, u16, bool), String> {
         let helix = assigned_game_ports(manifests);
-        let amp = self.amp_occupied_ports();
         if let Some(game_port) = requested_game_port {
             let query_port = game_port.saturating_add(1);
             let steam_port = game_port.saturating_add(2);
@@ -845,7 +862,7 @@ impl NativeManager {
                 );
             }
             for port in [game_port, query_port, steam_port] {
-                if let Some(error) = port_claimed_error(port, &helix, &amp) {
+                if let Some(error) = self.port_conflict_error(port, &helix) {
                     return Err(error);
                 }
                 ensure_port_available(port, true)?;
@@ -859,7 +876,7 @@ impl NativeManager {
         let policy = self.read_game_port_policy(GameKind::Valheim)?;
         let candidates = policy_candidates(&policy)?;
         let mut used = helix;
-        used.extend(&amp);
+        used.extend(self.amp_occupied_ports());
         let available = candidates
             .iter()
             .copied()
@@ -1636,6 +1653,7 @@ impl NativeManager {
             instance_id: manifest.id.clone(),
             container_name: manifest.container_name.clone(),
             docker_binary: self.docker_binary.clone(),
+            docker_cli_home: prepare_docker_cli_home(&self.state_root)?,
             archive_root,
             stop,
         };
@@ -2368,8 +2386,7 @@ impl NativeManager {
         for occupied in manifest.occupied_ports() {
             helix.remove(&occupied);
         }
-        let amp = self.amp_occupied_ports();
-        if let Some(error) = port_claimed_error(port, &helix, &amp) {
+        if let Some(error) = self.port_conflict_error(port, &helix) {
             return Err(error);
         }
         ensure_port_available(port, true)
@@ -5141,8 +5158,28 @@ impl NativeManager {
     }
 
     fn docker_owned(&self, args: &[String], timeout_seconds: u64) -> Result<String, String> {
-        run_program(&self.docker_binary, args, timeout_seconds)
-            .map_err(|error| format!("the Helix execution backend failed: {error}"))
+        let home = prepare_docker_cli_home(&self.state_root)?;
+        let cache = home.join("cache");
+        let buildx = home.join("buildx");
+        let tmp = home.join("tmp");
+        let home_s = home.to_string_lossy().into_owned();
+        let cache_s = cache.to_string_lossy().into_owned();
+        let buildx_s = buildx.to_string_lossy().into_owned();
+        let tmp_s = tmp.to_string_lossy().into_owned();
+        run_program_with_env(
+            &self.docker_binary,
+            args,
+            timeout_seconds,
+            &[
+                ("HOME", home_s.as_str()),
+                ("DOCKER_CONFIG", home_s.as_str()),
+                ("XDG_CACHE_HOME", cache_s.as_str()),
+                ("XDG_CONFIG_HOME", home_s.as_str()),
+                ("BUILDX_CONFIG", buildx_s.as_str()),
+                ("TMPDIR", tmp_s.as_str()),
+            ],
+        )
+        .map_err(|error| format!("the Helix execution backend failed: {error}"))
     }
 }
 
@@ -5360,6 +5397,23 @@ impl Clone for RuntimeState {
 
 fn default_docker_binary() -> PathBuf {
     PathBuf::from("/usr/bin/docker")
+}
+
+fn prepare_docker_cli_home(state_root: &Path) -> Result<PathBuf, String> {
+    let home = state_root.join(".docker-cli");
+    for dir in [
+        home.clone(),
+        home.join("cache"),
+        home.join("buildx"),
+        home.join("buildx").join("activity"),
+        home.join("tmp"),
+    ] {
+        fs::create_dir_all(&dir)
+            .map_err(|_| "could not create the Docker CLI state directory".to_owned())?;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+            .map_err(|_| "could not protect the Docker CLI state directory".to_owned())?;
+    }
+    Ok(home)
 }
 
 const fn default_console_history_max_bytes() -> u64 {
@@ -5766,6 +5820,8 @@ fn console_archiver_loop(config: ConsoleArchiverConfig, archive: Arc<Mutex<Conso
                 since.as_str(),
                 config.container_name.as_str(),
             ])
+            .env("HOME", &config.docker_cli_home)
+            .env("DOCKER_CONFIG", &config.docker_cli_home)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -6117,6 +6173,7 @@ fn game_port_policy_response(
     candidates: Vec<u16>,
     used: HashSet<u16>,
     next_available: Option<u16>,
+    amp_claimed: HashSet<u16>,
 ) -> Value {
     let used_ports = candidates
         .iter()
@@ -6124,15 +6181,22 @@ fn game_port_policy_response(
         .filter(|port| used.contains(port))
         .collect::<Vec<_>>();
     let available_count = candidates.len().saturating_sub(used_ports.len());
+    let mut amp_claimed_ports = candidates
+        .iter()
+        .copied()
+        .filter(|port| amp_claimed.contains(port))
+        .collect::<Vec<_>>();
+    amp_claimed_ports.sort_unstable();
     json!({
         "schema_version": 1,
         "policy": policy,
         "capacity": candidates.len(),
         "assigned_ports": used_ports,
+        "amp_claimed_ports": amp_claimed_ports,
         "available_count": available_count,
         "next_available_port": next_available,
         "allocation_order": "individual_ports_then_ranges",
-        "note": "Automatic allocation skips ports already assigned to Helix servers, ports AMP already has claimed, and ports currently bound on the host."
+        "note": "Automatic allocation skips ports already assigned to Helix servers, ports AMP already has claimed, and ports currently bound on the host. AMP-claimed numbers in this pool are listed in amp_claimed_ports. Helix will not steal those; change the port in AMP or pick a different Helix port."
     })
 }
 
@@ -7543,6 +7607,7 @@ fn run_program_combined(
         args,
         timeout_seconds,
         MAX_CONSOLE_HISTORY_PAGE_TEXT_BYTES,
+        &[],
     )?;
     if output.status.success() {
         let mut combined = String::from_utf8(output.stdout)
@@ -7568,11 +7633,21 @@ fn run_program_combined(
 }
 
 fn run_program(program: &Path, args: &[String], timeout_seconds: u64) -> Result<String, String> {
+    run_program_with_env(program, args, timeout_seconds, &[])
+}
+
+fn run_program_with_env(
+    program: &Path,
+    args: &[String],
+    timeout_seconds: u64,
+    extra_env: &[(&str, &str)],
+) -> Result<String, String> {
     let output = run_program_output_bounded(
         program,
         args,
         timeout_seconds,
         MAX_NATIVE_COMMAND_OUTPUT_BYTES,
+        extra_env,
     )?;
     if output.status.success() {
         return String::from_utf8(output.stdout)
@@ -7602,15 +7677,21 @@ fn run_program_output_bounded(
     args: &[String],
     timeout_seconds: u64,
     maximum_bytes: usize,
+    extra_env: &[(&str, &str)],
 ) -> Result<BoundedProgramOutput, String> {
-    let mut child = Command::new("/usr/bin/timeout")
+    let mut command = Command::new("/usr/bin/timeout");
+    command
         .arg("--signal=TERM")
         .arg("--kill-after=5s")
         .arg(format!("{timeout_seconds}s"))
         .arg(program)
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (name, value) in extra_env {
+        command.env(name, value);
+    }
+    let mut child = command
         .spawn()
         .map_err(|_| format!("could not run {}", program.display()))?;
     let stdout = child
@@ -8470,6 +8551,17 @@ mod tests {
         assert!(validate_allocated_memory(GameKind::Terraria, 512).is_ok());
         assert!(validate_allocated_memory(GameKind::VRising, 1_024).is_err());
         assert!(validate_allocated_memory(GameKind::Valheim, 24_576).is_err());
+    }
+
+    #[test]
+    fn docker_cli_home_lives_under_native_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state_root = temporary.path().join("state");
+        fs::create_dir_all(&state_root).unwrap();
+        let home = prepare_docker_cli_home(&state_root).unwrap();
+        assert_eq!(home, state_root.join(".docker-cli"));
+        assert!(home.join("buildx").join("activity").is_dir());
+        assert!(home.join("tmp").is_dir());
     }
 
     #[test]

@@ -780,6 +780,52 @@ main {
   font-size: 10px;
   line-height: 1.45;
 }
+.amp-port-help {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.amp-port-help > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--danger);
+}
+.amp-port-help > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.amp-port-help strong {
+  color: var(--danger);
+}
+.amp-port-help p {
+  margin: 0;
+  color: var(--text);
+}
+.amp-port-help .field {
+  margin: 0;
+}
+.amp-port-help__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.amp-port-help--ready {
+  border-color: color-mix(in srgb, var(--good) 40%, var(--line));
+  background: color-mix(in srgb, var(--good) 8%, var(--surface));
+}
+.amp-port-help--ready > svg,
+.amp-port-help--ready strong {
+  color: var(--good);
+}
 .text-good {
   color: var(--good) !important;
 }

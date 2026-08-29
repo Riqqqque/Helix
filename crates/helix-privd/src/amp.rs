@@ -29,6 +29,17 @@ pub(crate) fn amp_port_claimed_message(port: u16) -> String {
     format!("AMP already has port {port} claimed")
 }
 
+pub(crate) fn leftover_amp_forward_confirmation(port: u16) -> String {
+    format!("REMOVE AMP FORWARD {port}")
+}
+
+pub(crate) fn leftover_amp_router_mapping_message(port: u16) -> String {
+    format!(
+        "Leftover AMP router mapping on port {port}. No AMP instance currently lists that port in its files. Helix will not overwrite it. To free it without touching AMP instances, type {} below. That only deletes the leftover UPnP forward on the router.",
+        leftover_amp_forward_confirmation(port)
+    )
+}
+
 pub(crate) fn amp_router_mapping_description(description: &str) -> bool {
     description
         .trim()
@@ -205,6 +216,115 @@ impl AmpClient {
             }
         }
         ports
+    }
+
+    pub fn explain_claimed_port(&self, port: u16) -> String {
+        let headline = amp_port_claimed_message(port);
+        if self.public_panel_port == port || self.endpoint.port() == port {
+            return format!(
+                "{headline} That number is AMP's own web panel on this host. Do not reuse it as a game port. Pick a different Helix port, or leave Helix on Automatic so it skips AMP numbers."
+            );
+        }
+        let owners = self.collect_port_owners(port);
+        if owners.is_empty() {
+            return format!(
+                "{headline} Helix saw that port in AMP's files or panel. Open AMP, find which instance still lists it, stop that instance, change the port in Configuration → Server Settings / Portals, Apply, then retry. Helix will not edit AMP files. You can also leave AMP on that number and let Helix auto-pick from Port pools."
+            );
+        }
+        let listed = owners
+            .iter()
+            .take(4)
+            .map(|(name, role)| format!("{name} ({role})"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(
+            "{headline} Held by {listed}. Helix will not take that number while AMP still has it. To free it without deleting AMP: open AMP → that instance → stop it → Configuration → Server Settings / Portals → change the listed port to a free number → Apply. Then retry here. Or leave AMP as-is and let Helix auto-pick from Port pools (automatic already skips AMP numbers). Helix does not edit AMP files."
+        )
+    }
+
+    fn instance_display_names(&self) -> HashMap<String, String> {
+        let mut names = HashMap::new();
+        let Ok(instances) = self.local_instances() else {
+            return names;
+        };
+        for instance in instances.into_iter().take(MAX_LOCAL_INSTANCES) {
+            let Some(name) = text(&instance, "InstanceName") else {
+                continue;
+            };
+            let label = text(&instance, "FriendlyName").unwrap_or_else(|| name.clone());
+            names.insert(name, label);
+        }
+        names
+    }
+
+    fn collect_port_owners(&self, port: u16) -> Vec<(String, &'static str)> {
+        let mut owners = Vec::new();
+        let labels = self.instance_display_names();
+        let Ok(entries) = fs::read_dir(&self.instance_root) else {
+            return owners;
+        };
+        let mut seen = 0usize;
+        for entry in entries {
+            if seen >= MAX_LOCAL_INSTANCES {
+                break;
+            }
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if validate_instance_name(&name).is_err() {
+                continue;
+            }
+            seen += 1;
+            let display = labels.get(&name).cloned().unwrap_or_else(|| name.clone());
+            for (claimed, role) in self.instance_named_ports(&name) {
+                if claimed == port {
+                    owners.push((display.clone(), role));
+                }
+            }
+        }
+        if let Ok(instances) = self.local_instances() {
+            for instance in instances.into_iter().take(MAX_LOCAL_INSTANCES) {
+                if required_u16(&instance, "Port").ok() != Some(port) {
+                    continue;
+                }
+                let name = text(&instance, "InstanceName");
+                let label = text(&instance, "FriendlyName")
+                    .or(name)
+                    .unwrap_or_else(|| "AMP instance".to_owned());
+                owners.push((label, "AMP instance API port"));
+            }
+        }
+        let mut unique = Vec::new();
+        for owner in owners {
+            if !unique.contains(&owner) {
+                unique.push(owner);
+            }
+        }
+        unique
+    }
+
+    fn instance_named_ports(&self, instance_name: &str) -> Vec<(u16, &'static str)> {
+        let mut claimed = Vec::new();
+        let names = match list_instance_kvp_names(&self.instance_root, instance_name) {
+            Ok(names) if !names.is_empty() => names,
+            _ => vec!["MinecraftModule.kvp".to_owned()],
+        };
+        for name in names {
+            if let Ok(config) = read_instance_kvp_file(&self.instance_root, instance_name, &name) {
+                collect_named_ports_from_kvp(&config, &mut claimed);
+            }
+        }
+        collect_named_minecraft_properties_ports(&self.instance_root, instance_name, &mut claimed);
+        claimed
     }
 
     fn scan_instance_root_ports(&self) -> HashSet<u16> {
@@ -1021,6 +1141,62 @@ fn collect_ports_from_kvp(config: &HashMap<String, String>, ports: &mut HashSet<
     }
 }
 
+fn classify_amp_port_key(key: &str) -> &'static str {
+    let lower = key.to_ascii_lowercase();
+    if lower.contains("query") {
+        "query port"
+    } else if lower.contains("rcon") {
+        "RCON port"
+    } else if lower.contains("filemanager") || lower.contains("file manager") {
+        "File Manager port"
+    } else if lower.contains("portnumber")
+        || lower.contains("serverport")
+        || lower.contains("gameport")
+        || lower.contains("applicationport")
+    {
+        "game port"
+    } else {
+        "configured port"
+    }
+}
+
+fn collect_named_ports_from_kvp(
+    config: &HashMap<String, String>,
+    claimed: &mut Vec<(u16, &'static str)>,
+) {
+    for (key, value) in config {
+        if !key.to_ascii_lowercase().contains("port") {
+            continue;
+        }
+        let role = classify_amp_port_key(key);
+        let mut ports = HashSet::new();
+        collect_ports_from_amp_value(value, &mut ports);
+        for port in ports {
+            claimed.push((port, role));
+        }
+    }
+}
+
+fn collect_named_minecraft_properties_ports(
+    instance_root: &Path,
+    instance_name: &str,
+    claimed: &mut Vec<(u16, &'static str)>,
+) {
+    for components in [
+        ["server.properties"].as_slice(),
+        ["Minecraft", "server.properties"].as_slice(),
+    ] {
+        if let Ok(text) = read_instance_relative_file(instance_root, instance_name, components) {
+            if let Some(port) = parse_properties_port(&text, "server-port") {
+                claimed.push((port, "Minecraft server.properties game port"));
+            }
+            if let Some(port) = parse_properties_port(&text, "query.port") {
+                claimed.push((port, "Minecraft server.properties query port"));
+            }
+        }
+    }
+}
+
 fn collect_ports_from_amp_value(value: &str, ports: &mut HashSet<u16>) {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1498,6 +1674,18 @@ mod tests {
             amp_port_claimed_message(25566),
             "AMP already has port 25566 claimed"
         );
+        let explanation = client.explain_claimed_port(25566);
+        assert!(explanation.starts_with("AMP already has port 25566 claimed"));
+        assert!(explanation.contains("Survival01"));
+        assert!(explanation.contains("game port"));
+        assert!(explanation.contains("Configuration"));
+        let panel = client.explain_claimed_port(8080);
+        assert!(panel.contains("web panel"));
+        assert_eq!(
+            leftover_amp_forward_confirmation(25566),
+            "REMOVE AMP FORWARD 25566"
+        );
+        assert!(leftover_amp_router_mapping_message(25566).contains("REMOVE AMP FORWARD 25566"));
         assert!(amp_router_mapping_description(
             "AMP:Survival01:MinecraftModule.Minecraft.PortNumber"
         ));

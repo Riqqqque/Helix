@@ -7,15 +7,21 @@ binary or package release yet.
 
 ### Fixed
 
+- First-time V Rising, Valheim, and Terraria creates can build their runtime
+  images while helix-privd has a read-only home. Docker CLI/buildx state now
+  lives under Helix native state instead of `/root/.docker`.
 - Homarr import keeps Homarr's board order and tile width, places shortcuts on
   a dedicated Homarr Home, and no longer alphabetizes the catalog.
 - Server-list Restart and Open sit in their own actions column instead of
   crowding the TPS value.
-- Helix no longer assigns or public-maps ports AMP already has claimed, even
-  when that AMP instance is stopped and only the router mapping is left. The
-  error is `AMP already has port <n> claimed`. Router rules whose UPnP
-  description starts with `AMP` get the same message even if the instance files
-  were not readable. Minecraft Settings can move the Helix server off that port.
+- Helix no longer assigns or public-maps ports AMP still has in instance files.
+  The error names the AMP instance when Helix can see it and tells you the AMP
+  clicks to free the number: stop the instance, Configuration → Server Settings
+  / Portals, change the port, Apply. Helix still will not edit AMP files. If
+  the AMP instance is already gone and only a leftover UPnP mapping remains,
+  Helix offers a typed `REMOVE AMP FORWARD <port>` action that deletes that
+  router mapping only. Minecraft Settings can still move the Helix server off
+  that port.
 - Homarr import names stay inside the picker and shortcut tiles instead of
   spilling across neighboring cells.
 - Homarr import picker rows keep their height and scroll instead of stacking

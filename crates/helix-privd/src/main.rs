@@ -168,6 +168,9 @@ impl BrokerContext {
                 instance_id,
                 enabled,
             } => self.set_server_network_exposure(&instance_id, enabled),
+            BrokerRequest::ReleaseAmpRouterForward { port, confirmation } => {
+                self.release_amp_router_forward(port, &confirmation)
+            }
             BrokerRequest::CreateFirewallRule { rule } => {
                 self.firewall_mutation(|network| network.create_rule(rule))
             }
@@ -513,6 +516,21 @@ impl BrokerContext {
             .unwrap_or_default()
     }
 
+    fn explain_amp_claimed_port(&self, port: u16) -> Option<String> {
+        let amp = self.amp.as_ref()?;
+        amp.occupied_ports()
+            .contains(&port)
+            .then(|| amp.explain_claimed_port(port))
+    }
+
+    fn release_amp_router_forward(&self, port: u16, confirmation: &str) -> Result<Value, String> {
+        self.network.release_stale_amp_router_forward(
+            port,
+            confirmation,
+            &self.amp_occupied_ports(),
+        )
+    }
+
     fn set_server_network_exposure(
         &self,
         instance_id: &str,
@@ -530,6 +548,9 @@ impl BrokerContext {
         let port = server
             .game_port
             .ok_or_else(|| "the server does not report a game port".to_owned())?;
+        if enabled && let Some(error) = self.explain_amp_claimed_port(port) {
+            return Err(error);
+        }
         self.network.set_server_exposure(
             &GamePortMapping {
                 instance_id: server.id,
@@ -612,27 +633,37 @@ impl BrokerContext {
             return value;
         };
         let network = if requested == ServerNetworkExposure::Public {
-            self.network
-                .set_server_exposure(
-                    &GamePortMapping {
-                        instance_id,
-                        name: server_name.to_owned(),
-                        manager: "helix".to_owned(),
-                        port,
-                        running: true,
-                    },
-                    true,
-                    &self.amp_occupied_ports(),
-                )
-                .unwrap_or_else(|error| {
-                    json!({
-                        "enabled": false,
-                        "state": "needs_attention",
-                        "server_created": true,
-                        "error": error,
-                        "note": "The server is online, but automatic public access could not be confirmed. Retry from the server's Join section."
-                    })
+            if let Some(error) = self.explain_amp_claimed_port(port) {
+                json!({
+                    "enabled": false,
+                    "state": "needs_attention",
+                    "server_created": true,
+                    "error": error,
+                    "note": "The server is online, but automatic public access could not be confirmed. Retry from the server's Join section."
                 })
+            } else {
+                self.network
+                    .set_server_exposure(
+                        &GamePortMapping {
+                            instance_id,
+                            name: server_name.to_owned(),
+                            manager: "helix".to_owned(),
+                            port,
+                            running: true,
+                        },
+                        true,
+                        &self.amp_occupied_ports(),
+                    )
+                    .unwrap_or_else(|error| {
+                        json!({
+                            "enabled": false,
+                            "state": "needs_attention",
+                            "server_created": true,
+                            "error": error,
+                            "note": "The server is online, but automatic public access could not be confirmed. Retry from the server's Join section."
+                        })
+                    })
+            }
         } else {
             json!({
                 "enabled": false,
