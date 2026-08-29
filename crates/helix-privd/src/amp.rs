@@ -29,6 +29,14 @@ pub(crate) fn amp_port_claimed_message(port: u16) -> String {
     format!("AMP already has port {port} claimed")
 }
 
+pub(crate) fn amp_router_mapping_description(description: &str) -> bool {
+    description
+        .trim()
+        .split([':', ' ', '/', '|'])
+        .next()
+        .is_some_and(|head| head.eq_ignore_ascii_case("AMP"))
+}
+
 pub struct AmpClient {
     endpoint: SocketAddr,
     public_panel_port: u16,
@@ -241,7 +249,23 @@ impl AmpClient {
                 collect_ports_from_kvp(&config, &mut ports);
             }
         }
+        collect_minecraft_properties_ports(&self.instance_root, instance_name, &mut ports);
         ports
+    }
+
+    fn instance_minecraft_listen_port(&self, instance_name: &str) -> Option<u16> {
+        for components in [
+            ["server.properties"].as_slice(),
+            ["Minecraft", "server.properties"].as_slice(),
+        ] {
+            if let Ok(text) =
+                read_instance_relative_file(&self.instance_root, instance_name, components)
+                && let Some(port) = parse_properties_port(&text, "server-port")
+            {
+                return Some(port);
+            }
+        }
+        None
     }
 
     fn parse_inventory(&self, instances: &Value) -> Result<AmpInventory, String> {
@@ -439,9 +463,8 @@ impl AmpClient {
             tps: metric_f64(metrics, "TPS", "RawValue"),
             manager_panel_port: self.public_panel_port,
             panel_port,
-            game_port: config
-                .get("Minecraft.PortNumber")
-                .and_then(|value| value.parse().ok()),
+            game_port: minecraft_port_from_config(&config)
+                .or_else(|| self.instance_minecraft_listen_port(&instance_name)),
             path: path.to_string_lossy().into_owned(),
             warnings,
             manager: "amp_import",
@@ -854,6 +877,139 @@ fn insert_nonzero_port(ports: &mut HashSet<u16>, port: u16) {
     if port != 0 {
         ports.insert(port);
     }
+}
+
+fn parse_nonzero_port(value: &str) -> Option<u16> {
+    value.trim().parse().ok().filter(|port| *port != 0)
+}
+
+fn minecraft_port_from_config(config: &HashMap<String, String>) -> Option<u16> {
+    for key in [
+        "Minecraft.PortNumber",
+        "MinecraftModule.Minecraft.PortNumber",
+    ] {
+        if let Some(port) = config.get(key).and_then(|value| parse_nonzero_port(value)) {
+            return Some(port);
+        }
+    }
+    config.iter().find_map(|(key, value)| {
+        key.to_ascii_lowercase()
+            .ends_with("minecraft.portnumber")
+            .then(|| parse_nonzero_port(value))
+            .flatten()
+    })
+}
+
+fn collect_minecraft_properties_ports(
+    instance_root: &Path,
+    instance_name: &str,
+    ports: &mut HashSet<u16>,
+) {
+    for components in [
+        ["server.properties"].as_slice(),
+        ["Minecraft", "server.properties"].as_slice(),
+    ] {
+        if let Ok(text) = read_instance_relative_file(instance_root, instance_name, components) {
+            collect_ports_from_server_properties(&text, ports);
+        }
+    }
+}
+
+fn collect_ports_from_server_properties(text: &str, ports: &mut HashSet<u16>) {
+    for key in ["server-port", "query.port"] {
+        if let Some(port) = parse_properties_port(text, key) {
+            insert_nonzero_port(ports, port);
+        }
+    }
+}
+
+fn parse_properties_port(text: &str, wanted: &str) -> Option<u16> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(['#', '!']) {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if key.trim() == wanted {
+            return parse_nonzero_port(value);
+        }
+    }
+    None
+}
+
+fn validate_relative_name(name: &str) -> Result<(), ConfigReadError> {
+    if name.is_empty()
+        || name.len() > 255
+        || name == "."
+        || name == ".."
+        || name
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\'))
+    {
+        return Err(ConfigReadError::UnsafePath);
+    }
+    Ok(())
+}
+
+fn read_instance_relative_file(
+    instance_root: &Path,
+    instance_name: &str,
+    components: &[&str],
+) -> Result<String, ConfigReadError> {
+    validate_instance_name(instance_name).map_err(|_| ConfigReadError::UnsafePath)?;
+    if components.is_empty() || components.len() > 3 {
+        return Err(ConfigReadError::UnsafePath);
+    }
+    for component in components {
+        validate_relative_name(component)?;
+    }
+    reject_symlink(instance_root)?;
+    let instance_path = instance_root.join(instance_name);
+    reject_symlink(&instance_path)?;
+
+    let root = open_absolute_directory_without_symlinks(instance_root)?;
+    let instance_name =
+        CString::new(instance_name.as_bytes()).map_err(|_| ConfigReadError::UnsafePath)?;
+    let mut directory = open_directory_at(&root, instance_name.as_c_str())?;
+    for (index, component) in components.iter().enumerate() {
+        let name = CString::new(component.as_bytes()).map_err(|_| ConfigReadError::UnsafePath)?;
+        if index + 1 == components.len() {
+            let descriptor = rustix::fs::openat(
+                &directory,
+                name.as_c_str(),
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::CLOEXEC
+                    | rustix::fs::OFlags::NOFOLLOW,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(map_config_open_error)?;
+            return read_opened_text_file(descriptor);
+        }
+        directory = open_directory_at(&directory, name.as_c_str())?;
+    }
+    Err(ConfigReadError::Unavailable)
+}
+
+fn read_opened_text_file(descriptor: OwnedFd) -> Result<String, ConfigReadError> {
+    let metadata = rustix::fs::fstat(&descriptor).map_err(|_| ConfigReadError::Unavailable)?;
+    if !rustix::fs::FileType::from_raw_mode(metadata.st_mode).is_file() {
+        return Err(ConfigReadError::UnsafePath);
+    }
+    let length = u64::try_from(metadata.st_size).map_err(|_| ConfigReadError::UnsafePath)?;
+    if length > MAX_CONFIG_BYTES {
+        return Err(ConfigReadError::Unavailable);
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
+    fs::File::from(descriptor)
+        .take(MAX_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ConfigReadError::Unavailable)?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(ConfigReadError::Unavailable);
+    }
+    String::from_utf8(bytes).map_err(|_| ConfigReadError::Unavailable)
 }
 
 fn collect_ports_from_kvp(config: &HashMap<String, String>, ports: &mut HashSet<u16>) {
@@ -1341,5 +1497,39 @@ mod tests {
             amp_port_claimed_message(25566),
             "AMP already has port 25566 claimed"
         );
+        assert!(amp_router_mapping_description(
+            "AMP:Survival01:MinecraftModule.Minecraft.PortNumber"
+        ));
+        assert!(amp_router_mapping_description("AMP"));
+        assert!(!amp_router_mapping_description("Helix Minecraft abcd1234"));
+    }
+
+    #[test]
+    fn occupied_ports_include_amp_server_properties_and_prefixed_kvp_keys() {
+        let root = tempfile::tempdir().unwrap();
+        let instance = root.path().join("PrefixPort");
+        fs::create_dir(&instance).unwrap();
+        fs::write(
+            instance.join("MinecraftModule.kvp"),
+            "MinecraftModule.Minecraft.PortNumber=25566\n",
+        )
+        .unwrap();
+        let minecraft = instance.join("Minecraft");
+        fs::create_dir(&minecraft).unwrap();
+        fs::write(
+            minecraft.join("server.properties"),
+            "server-port=25568\nquery.port=25568\nmax-players=20\n",
+        )
+        .unwrap();
+        let client = test_client(root.path());
+        let ports = client.occupied_ports();
+        assert!(ports.contains(&25566), "{ports:?}");
+        assert!(ports.contains(&25568), "{ports:?}");
+        let mut config = HashMap::new();
+        config.insert(
+            "MinecraftModule.Minecraft.PortNumber".to_owned(),
+            "25566".to_owned(),
+        );
+        assert_eq!(minecraft_port_from_config(&config), Some(25566));
     }
 }

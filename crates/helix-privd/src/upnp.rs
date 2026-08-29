@@ -132,12 +132,18 @@ impl UpnpGateway {
     }
 
     pub fn tcp_mapping_exists(&self, port: u16) -> Result<bool, String> {
+        Ok(self.tcp_mapping_description(port)?.is_some())
+    }
+
+    pub fn tcp_mapping_description(&self, port: u16) -> Result<Option<String>, String> {
         let body = format!(
             "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>TCP</NewProtocol>"
         );
         match self.soap("GetSpecificPortMappingEntry", &body) {
-            Ok(_) => Ok(true),
-            Err(error) if missing_mapping_error(&error) => Ok(false),
+            Ok(response) => Ok(Some(
+                xml_text(&response, "NewPortMappingDescription").unwrap_or_default(),
+            )),
+            Err(error) if missing_mapping_error(&error) => Ok(None),
             Err(error) => Err(error),
         }
     }

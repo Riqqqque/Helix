@@ -1603,31 +1603,55 @@ impl NativeManager {
         }
         let changed_fields = changed_setting_fields(&parse_properties(&original), settings);
         let updated = update_properties(&original, settings);
-        if updated == original {
+        let port_changed = settings.game_port != manifest.game_port;
+        if port_changed {
+            self.ensure_replacement_game_port(&manifest, settings.game_port)?;
+        }
+        if updated == original && !port_changed {
             return Ok(json!({
                 "instance_id": format!("helix:{}", manifest.id),
                 "changed": false,
                 "restart_required": false,
+                "container_republished": false,
                 "changed_fields": changed_fields,
                 "settings": self.server_settings_for(&manifest)?
             }));
         }
         let backup = path.with_extension(format!("properties.{}.bak", now_unix_ms()));
-        write_managed_file(&backup, original.as_bytes(), 0o600, 0, 0)?;
-        write_managed_file(&path, updated.as_bytes(), 0o660, 0, manifest.run_uid)?;
+        let previous = manifest.clone();
+        let data_path = self.instance_path(&manifest.id)?;
+        if updated != original {
+            write_managed_file(&backup, original.as_bytes(), 0o600, 0, 0)?;
+            write_managed_file(&path, updated.as_bytes(), 0o660, 0, manifest.run_uid)?;
+        }
         manifest.max_players = settings.max_players;
+        manifest.game_port = settings.game_port;
         if let Err(error) = write_manifest(&self.manifest_path(&manifest.id)?, &manifest) {
-            let _ = write_managed_file(&path, original.as_bytes(), 0o660, 0, manifest.run_uid);
+            if updated != original {
+                let _ = write_managed_file(&path, original.as_bytes(), 0o660, 0, manifest.run_uid);
+            }
             return Err(error);
         }
         let running = self.container_running(&manifest.container_name);
+        if port_changed
+            && let Err(error) = self.republish_minecraft_container(&manifest, &data_path, running)
+        {
+            if updated != original {
+                let _ = write_managed_file(&path, original.as_bytes(), 0o660, 0, previous.run_uid);
+            }
+            let _ = write_manifest(&self.manifest_path(&previous.id)?, &previous);
+            let _ = self.republish_minecraft_container(&previous, &data_path, running);
+            return Err(error);
+        }
         Ok(json!({
             "instance_id": format!("helix:{}", manifest.id),
             "changed": true,
-            "restart_required": running,
+            "restart_required": running && !port_changed,
+            "container_republished": port_changed,
+            "previous_game_port": if port_changed { json!(previous.game_port) } else { Value::Null },
             "changed_fields": changed_fields,
             "settings": self.server_settings_for(&manifest)?,
-            "rollback_file": backup
+            "rollback_file": if updated != original { json!(backup) } else { Value::Null }
         }))
     }
 
@@ -2104,14 +2128,16 @@ impl NativeManager {
             "white_list": property_bool(&properties, "white-list", false),
             "enforce_white_list": property_bool(&properties, "enforce-whitelist", false),
             "spawn_protection": property_u64(&properties, "spawn-protection", 16, 0, 65_535),
+            "game_port": property_u64(&properties, "server-port", u64::from(manifest.game_port), 1_024, 65_535),
             "restart_behavior": {
                 "activation": "server_restart",
                 "restart_required_fields": [
                     "motd", "game_mode", "difficulty", "max_players", "view_distance",
                     "simulation_distance", "player_idle_timeout", "online_mode", "pvp",
-                    "allow_flight", "white_list", "enforce_white_list", "spawn_protection"
+                    "allow_flight", "white_list", "enforce_white_list", "spawn_protection",
+                    "game_port"
                 ],
-                "message": "Changes saved here take effect the next time Minecraft starts."
+                "message": "Most changes take effect the next time Minecraft starts. Changing the game port rebinds the published container immediately."
             }
         }))
     }
@@ -2216,6 +2242,52 @@ impl NativeManager {
             Err(_) if !self.container_running(name) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    fn ensure_replacement_game_port(
+        &self,
+        manifest: &InstanceManifest,
+        port: u16,
+    ) -> Result<(), String> {
+        if port < 1_024 {
+            return Err("game port must be at least 1024".to_owned());
+        }
+        if port == manifest.rcon_port {
+            return Err("game port cannot reuse this server's RCON port".to_owned());
+        }
+        let manifests = self.load_manifests()?;
+        let mut helix = assigned_game_ports(&manifests);
+        for occupied in manifest.occupied_ports() {
+            helix.remove(&occupied);
+        }
+        let amp = self.amp_occupied_ports();
+        if let Some(error) = port_claimed_error(port, &helix, &amp) {
+            return Err(error);
+        }
+        ensure_port_available(port, true)
+    }
+
+    fn republish_minecraft_container(
+        &self,
+        manifest: &InstanceManifest,
+        data_path: &Path,
+        was_running: bool,
+    ) -> Result<(), String> {
+        if self
+            .exact_container_identity(&manifest.container_name)?
+            .is_some()
+        {
+            if was_running || self.container_running(&manifest.container_name) {
+                self.terminate_container(&manifest.container_name, false)?;
+            }
+            self.docker(["rm", manifest.container_name.as_str()], 60)?;
+        }
+        self.create_container(manifest, data_path)?;
+        if was_running {
+            self.clear_ready_marker(manifest)?;
+            self.docker(["start", manifest.container_name.as_str()], 90)?;
+        }
+        Ok(())
     }
 
     pub fn create_minecraft<F>(
@@ -6754,6 +6826,9 @@ fn validate_settings(settings: &MinecraftSettingsPatch) -> Result<(), String> {
     if !(1..=10_000).contains(&settings.max_players) {
         return Err("player limit must be between 1 and 10,000".to_owned());
     }
+    if settings.game_port < 1_024 {
+        return Err("game port must be at least 1024".to_owned());
+    }
     if !(2..=32).contains(&settings.view_distance)
         || !(2..=32).contains(&settings.simulation_distance)
     {
@@ -6820,6 +6895,7 @@ fn changed_setting_fields(
             "spawn-protection",
             settings.spawn_protection.to_string(),
         ),
+        ("game_port", "server-port", settings.game_port.to_string()),
     ];
     expected
         .iter()
@@ -6829,7 +6905,10 @@ fn changed_setting_fields(
 }
 
 fn update_properties(original: &str, settings: &MinecraftSettingsPatch) -> String {
-    let replacements = [
+    let properties = parse_properties(original);
+    let new_port = settings.game_port.to_string();
+    let current_server_port = properties.get("server-port");
+    let mut replacements = vec![
         ("motd", settings.motd.trim().to_owned()),
         ("gamemode", game_mode_name(settings.game_mode).to_owned()),
         (
@@ -6852,7 +6931,14 @@ fn update_properties(original: &str, settings: &MinecraftSettingsPatch) -> Strin
         ("white-list", settings.white_list.to_string()),
         ("enforce-whitelist", settings.enforce_white_list.to_string()),
         ("spawn-protection", settings.spawn_protection.to_string()),
+        ("server-port", new_port.clone()),
     ];
+    if current_server_port.map(String::as_str) != Some(new_port.as_str()) {
+        let current_query = properties.get("query.port");
+        if current_query.is_none() || current_query == current_server_port {
+            replacements.push(("query.port", new_port));
+        }
+    }
     let mut seen = HashSet::new();
     let mut output = String::with_capacity(original.len().saturating_add(256));
     for line in original.lines() {
@@ -7886,7 +7972,7 @@ mod tests {
 
     #[test]
     fn settings_update_preserves_unmanaged_properties_and_does_not_overwrite_rcon() {
-        let original = "# custom comment\nmotd=Old\nonline-mode=true\nrcon.password=secret\ncustom-setting=yes\n";
+        let original = "# custom comment\nmotd=Old\nonline-mode=true\nrcon.password=secret\ncustom-setting=yes\nserver-port=25565\nquery.port=25565\n";
         let settings = MinecraftSettingsPatch {
             expected_revision: "a".repeat(64),
             motd: "Survival night".to_owned(),
@@ -7902,6 +7988,7 @@ mod tests {
             white_list: true,
             enforce_white_list: true,
             spawn_protection: 8,
+            game_port: 25_565,
         };
         assert!(validate_settings(&settings).is_ok());
         let updated = update_properties(original, &settings);
@@ -7916,6 +8003,16 @@ mod tests {
         assert!(changed.contains(&"difficulty"));
         assert!(changed.contains(&"max_players"));
         assert!(!changed.contains(&"online_mode"));
+        assert!(!changed.contains(&"game_port"));
+        let mut retarget = settings.clone();
+        retarget.game_port = 25_567;
+        let retargeted = update_properties(original, &retarget);
+        assert!(retargeted.contains("server-port=25567"));
+        assert!(retargeted.contains("query.port=25567"));
+        assert!(retargeted.contains("rcon.password=secret"));
+        assert!(
+            changed_setting_fields(&parse_properties(original), &retarget).contains(&"game_port")
+        );
     }
 
     #[test]
@@ -7938,9 +8035,13 @@ mod tests {
             white_list: false,
             enforce_white_list: false,
             spawn_protection: 0,
+            game_port: 25_565,
         };
         assert!(validate_settings(&settings).is_ok());
         settings.view_distance = 33;
+        assert!(validate_settings(&settings).is_err());
+        settings.view_distance = 2;
+        settings.game_port = 80;
         assert!(validate_settings(&settings).is_err());
     }
 

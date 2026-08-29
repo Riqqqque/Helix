@@ -2212,7 +2212,7 @@ main {
   gap: 5px;
 }
 .server-actions .button {
-  min-width: 84px;
+  min-width: 72px;
 }
 .server-action-error {
   grid-column: 1 / -1;
@@ -3483,6 +3483,9 @@ textarea:focus {
   text-decoration: none;
   cursor: pointer;
 }
+.join-card > .button--small {
+  margin: 0 13px 10px;
+}
 .join-evidence {
   min-height: 43px;
   display: flex;
@@ -4035,6 +4038,12 @@ textarea:focus {
   color: var(--muted);
   font-size: 8px;
   line-height: 1.5;
+}
+.settings-port-note {
+  margin: 0;
+  padding: 0 20px 12px;
+  color: var(--muted);
+  font-size: 12px;
 }
 .settings-restart-choice > div:last-child {
   display: flex;

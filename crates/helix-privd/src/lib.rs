@@ -397,6 +397,7 @@ pub struct MinecraftSettingsPatch {
     pub white_list: bool,
     pub enforce_white_list: bool,
     pub spawn_protection: u16,
+    pub game_port: u16,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]

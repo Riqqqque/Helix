@@ -229,7 +229,8 @@ export type MinecraftSettingField =
   | 'allow_flight'
   | 'white_list'
   | 'enforce_white_list'
-  | 'spawn_protection';
+  | 'spawn_protection'
+  | 'game_port';
 
 export interface MinecraftRestartBehavior {
   activation: 'server_restart';
@@ -252,6 +253,7 @@ export interface MinecraftSettings {
   whiteList: boolean;
   enforceWhiteList: boolean;
   spawnProtection: number;
+  gamePort: number;
   restartBehavior: MinecraftRestartBehavior;
 }
 
@@ -260,6 +262,9 @@ export interface MinecraftSettingsSaveResult {
   restartRequired: boolean;
   changedFields: MinecraftSettingField[];
   settings: MinecraftSettings;
+  containerRepublished: boolean;
+  exposureNote: string | null;
+  exposureWarning: string | null;
 }
 
 export interface NativeServerDetail {
@@ -660,6 +665,7 @@ const minecraftSettingFields = new Set<MinecraftSettingField>([
   'motd', 'game_mode', 'difficulty', 'max_players', 'view_distance',
   'simulation_distance', 'player_idle_timeout', 'online_mode', 'pvp',
   'allow_flight', 'white_list', 'enforce_white_list', 'spawn_protection',
+  'game_port',
 ]);
 
 function parseSettingFields(value: unknown, context: string): MinecraftSettingField[] {
@@ -715,6 +721,7 @@ function parseMinecraftSettings(value: unknown): MinecraftSettings {
     whiteList: boolean(root, 'white_list'),
     enforceWhiteList: boolean(root, 'enforce_white_list'),
     spawnProtection: number(root, 'spawn_protection'),
+    gamePort: number(root, 'game_port'),
     restartBehavior: parseRestartBehavior(root.restart_behavior),
   };
 }
@@ -726,6 +733,9 @@ export function parseMinecraftSettingsSaveResult(value: unknown): MinecraftSetti
     restartRequired: boolean(root, 'restart_required'),
     changedFields: parseSettingFields(root.changed_fields, 'changed fields'),
     settings: parseMinecraftSettings(root.settings),
+    containerRepublished: root.container_republished === true,
+    exposureNote: optionalString(root, 'exposure_note'),
+    exposureWarning: optionalString(root, 'exposure_warning'),
   };
 }
 
@@ -1237,9 +1247,10 @@ export function saveServerSettings(id: string, settings: MinecraftSettings, csrf
       white_list: settings.whiteList,
       enforce_white_list: settings.enforceWhiteList,
       spawn_protection: settings.spawnProtection,
+      game_port: settings.gamePort,
     },
     csrfToken,
-    timeoutMs: 20_000,
+    timeoutMs: 90_000,
   });
 }
 

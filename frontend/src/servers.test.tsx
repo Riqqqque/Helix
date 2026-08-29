@@ -5,6 +5,7 @@ import type { DashboardData } from './dashboard-model';
 import {
   canRunBackupMutation,
   importedServerPanelUrl,
+  joinErrorOffersPortChange,
   minecraftCreateSoftwareOptions,
   NewServerChooser,
   serverActionDescription,
@@ -216,5 +217,11 @@ describe('Servers route', () => {
     expect(importedServerPanelUrl({ ...ampServer, managerPanelPort: 0 }, '192.0.2.10')).toBeNull();
     expect(importedServerPanelUrl({ ...ampServer, id: 'amp:../../admin' }, '192.0.2.10')).toBeNull();
     expect(importedServerPanelUrl(ampServer, 'host.example/path')).toBeNull();
+  });
+
+  it('points Join port conflicts at Settings and names AMP mappings', () => {
+    expect(joinErrorOffersPortChange('AMP already has port 25566 claimed')).toBe(true);
+    expect(joinErrorOffersPortChange('router TCP port 25566 already has a mapping; Helix will not overwrite an unowned router rule')).toBe(true);
+    expect(joinErrorOffersPortChange('the router reports CGNAT address 100.64.1.1')).toBe(false);
   });
 });

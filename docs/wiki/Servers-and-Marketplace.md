@@ -100,7 +100,10 @@ stays visibly unavailable instead of silently trusting the whole host.
 The console opens at the newest output and follows it until the operator scrolls
 away. History is captured by the host even when no browser is open and spans
 retained boots. Retention is bounded, not unlimited. Settings mark fields that
-need a restart and keep a pending-restart state after save.
+need a restart and keep a pending-restart state after save. The game port can
+be changed there; Helix rebinds the published container immediately, skips
+ports AMP already has claimed, and removes public access on the old port. Join
+offers **Change game port** when public setup hits that kind of conflict.
 
 Removing a native server stops and removes its exact container, then moves its
 managed data into recoverable trash. The Removed section can restore it before
@@ -159,8 +162,10 @@ dashboard.
 Each native detail view shows a LAN address, a separately detected Tailscale
 address when present, and the public-internet state. Minecraft **Set up public
 access** uses UPnP only on the same private IPv4 gateway and refuses to
-overwrite an existing router rule. If AMP already has that port claimed, the
-error says so. It requests one TCP mapping, verifies the exact internal
+overwrite an existing router rule. If AMP already has that port claimed, or the
+router mapping description starts with `AMP`, the error says so. Change the
+Helix game port in Settings instead of overwriting AMP. Public setup requests
+one TCP mapping, verifies the exact internal
 IP/port/description returned by the router, and journals ownership before
 presenting a public join address. If UFW is already active, Helix also adds one
 exact owned TCP rule; it never turns UFW on as a side effect. V Rising stays
