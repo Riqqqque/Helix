@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getMinecraftPortPolicy,
+  saveMinecraftPortPolicy,
+  saveVRisingPortPolicy,
+} from './port-policy-api';
+import {
   getMinecraftVersions,
   getDirectory,
   getServerBackups,
@@ -9,8 +13,6 @@ import {
   parseMinecraftSettingsSaveResult,
   restoreTrashedServerBackup,
   runServerAction,
-  saveMinecraftPortPolicy,
-  saveVRisingPortPolicy,
   setNativeMemory,
   setNativeStartOnBoot,
   setServerNetworkExposure,
@@ -179,6 +181,7 @@ describe('native server API', () => {
       },
       capacity: 11,
       assigned_ports: [25565],
+      amp_claimed_ports: [25566],
       available_count: 10,
       next_available_port: 25600,
     };
@@ -192,6 +195,7 @@ describe('native server API', () => {
       nextAvailablePort: 25600,
       autoForwardOnCreate: true,
       availableCount: 10,
+      ampClaimedPorts: [25566],
     });
     await saveMinecraftPortPolicy({
       ranges: [{ start: 25565, end: 25574 }],
@@ -224,6 +228,7 @@ describe('native server API', () => {
       },
       capacity: 35,
       assigned_ports: [],
+      amp_claimed_ports: [],
       available_count: 35,
       next_available_port: 9876,
     };

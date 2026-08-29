@@ -801,3 +801,45 @@ export function enableFirewall(
     },
   );
 }
+
+export function leftoverAmpForwardConfirmation(port: number): string {
+  return `REMOVE AMP FORWARD ${port}`;
+}
+
+export function releaseAmpRouterForward(
+  port: number,
+  confirmation: string,
+  csrfToken: string,
+): Promise<{
+  removed: boolean;
+  port: number;
+  previousDescription: string;
+  ampFilesChanged: boolean;
+}> {
+  return requestJson(
+    "/api/v1/network/amp-router-forwards/release",
+    (value) => {
+      const root = expectRecord(value, "AMP router forward release");
+      return {
+        removed: bool(root, "removed", "AMP router forward release"),
+        port: integer(root, "port", "AMP router forward release", 65_535),
+        previousDescription: expectString(
+          root,
+          "previous_description",
+          "AMP router forward release",
+        ),
+        ampFilesChanged: bool(
+          root,
+          "amp_files_changed",
+          "AMP router forward release",
+        ),
+      };
+    },
+    {
+      method: "POST",
+      body: { port, confirmation },
+      csrfToken,
+      timeoutMs: 30_000,
+    },
+  );
+}

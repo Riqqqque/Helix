@@ -586,11 +586,12 @@ impl NetworkManager {
         }
         let description = format!("Helix Minecraft {}", &id[..8]);
         if let Some(existing) = gateway.tcp_mapping_description(mapping.port)? {
-            return Err(unowned_router_mapping_message(
-                mapping.port,
-                amp_claimed_ports.contains(&mapping.port)
-                    || crate::amp::amp_router_mapping_description(&existing),
-            ));
+            if crate::amp::amp_router_mapping_description(&existing) {
+                return Err(crate::amp::leftover_amp_router_mapping_message(
+                    mapping.port,
+                ));
+            }
+            return Err(unowned_router_mapping_message(mapping.port));
         }
         gateway.add_tcp_mapping(mapping.port, &description)?;
         if !gateway.verify_tcp_mapping(mapping.port, &description)? {
@@ -680,6 +681,64 @@ impl NetworkManager {
         }
         self.set_server_exposure(mapping, false, &HashSet::new())?;
         Ok(true)
+    }
+
+    pub fn release_stale_amp_router_forward(
+        &self,
+        port: u16,
+        confirmation: &str,
+        amp_claimed_ports: &HashSet<u16>,
+    ) -> Result<Value, String> {
+        let expected = crate::amp::leftover_amp_forward_confirmation(port);
+        if confirmation != expected {
+            return Err(format!(
+                "type {expected} exactly to delete only the leftover AMP UPnP mapping. Helix will not edit AMP files."
+            ));
+        }
+        if port < 1_024 {
+            return Err("that port is below 1024; Helix will not delete it".to_owned());
+        }
+        if amp_claimed_ports.contains(&port) {
+            return Err(
+                "AMP still lists that port in an instance. Change the port in AMP first. Helix will not delete a live AMP forward or edit AMP files."
+                    .to_owned(),
+            );
+        }
+        let _exposure = self
+            .exposure_mutation
+            .lock()
+            .map_err(|_| "the server exposure lock is unavailable".to_owned())?;
+        if self
+            .load_exposure_records_bounded()
+            .values()
+            .any(|record| record.port == port)
+        {
+            return Err(
+                "Helix already owns a public-access record on that port. Remove public access from that Helix server instead."
+                    .to_owned(),
+            );
+        }
+        let gateway = self.router_snapshot(true)?;
+        let Some(existing) = gateway.tcp_mapping_description(port)? else {
+            return Err("the router does not report a mapping on that port".to_owned());
+        };
+        if !crate::amp::amp_router_mapping_description(&existing) {
+            return Err(
+                "that router mapping is not leftover AMP UPnP; Helix will not delete it".to_owned(),
+            );
+        }
+        gateway.delete_tcp_mapping(port)?;
+        if gateway.tcp_mapping_description(port)?.is_some() {
+            return Err("the router still reports a mapping after deletion".to_owned());
+        }
+        self.invalidate_router_cache();
+        Ok(json!({
+            "removed": true,
+            "port": port,
+            "previous_description": existing,
+            "amp_files_changed": false,
+            "note": "Only the leftover UPnP mapping was deleted. AMP instance files were not changed."
+        }))
     }
 
     fn router_snapshot(&self, force: bool) -> Result<UpnpGateway, String> {
@@ -1913,14 +1972,10 @@ fn exposure_result(
     })
 }
 
-fn unowned_router_mapping_message(port: u16, amp_claimed: bool) -> String {
-    if amp_claimed {
-        crate::amp::amp_port_claimed_message(port)
-    } else {
-        format!(
-            "router TCP port {port} already has a mapping; Helix will not overwrite an unowned router rule"
-        )
-    }
+fn unowned_router_mapping_message(port: u16) -> String {
+    format!(
+        "router TCP port {port} already has a mapping; Helix will not overwrite an unowned router rule"
+    )
 }
 
 fn write_exposure_record(path: &Path, record: &ServerExposureRecord) -> Result<(), String> {
@@ -2559,24 +2614,39 @@ mod tests {
     #[test]
     fn router_mapping_conflict_names_amp_when_amp_already_claimed_the_port() {
         assert_eq!(
-            unowned_router_mapping_message(25_566, true),
+            crate::amp::amp_port_claimed_message(25_566),
             "AMP already has port 25566 claimed"
         );
         assert_eq!(
-            unowned_router_mapping_message(25_566, false),
+            unowned_router_mapping_message(25_566),
             "router TCP port 25566 already has a mapping; Helix will not overwrite an unowned router rule"
         );
         assert!(crate::amp::amp_router_mapping_description(
             "AMP:Cube:MinecraftModule.Minecraft.PortNumber"
         ));
-        assert_eq!(
-            unowned_router_mapping_message(
-                25_566,
-                crate::amp::amp_router_mapping_description(
-                    "AMP:Cube:MinecraftModule.Minecraft.PortNumber"
-                )
-            ),
-            "AMP already has port 25566 claimed"
-        );
+        let leftover = crate::amp::leftover_amp_router_mapping_message(25_566);
+        assert!(leftover.starts_with("Leftover AMP router mapping on port 25566"));
+        assert!(leftover.contains("REMOVE AMP FORWARD 25566"));
+        assert!(!leftover.contains("AMP already has port 25566 claimed"));
+    }
+
+    #[test]
+    fn leftover_amp_forward_release_refuses_without_exact_confirmation_or_live_amp_claim() {
+        let temporary = tempfile::tempdir().unwrap();
+        let manager = NetworkManager::with_runner(
+            config(temporary.path().join("state")),
+            Arc::new(MockRunner::default()),
+        )
+        .unwrap();
+        let error = manager
+            .release_stale_amp_router_forward(25_566, "delete it", &HashSet::new())
+            .unwrap_err();
+        assert!(error.contains("REMOVE AMP FORWARD 25566"));
+        let claimed = HashSet::from([25_566]);
+        let live = manager
+            .release_stale_amp_router_forward(25_566, "REMOVE AMP FORWARD 25566", &claimed)
+            .unwrap_err();
+        assert!(live.contains("AMP still lists that port"));
+        assert!(live.contains("will not delete a live AMP forward"));
     }
 }

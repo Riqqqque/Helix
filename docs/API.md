@@ -170,6 +170,7 @@ response retains logical byte lengths for comparison.
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/network/inventory` | `network.firewall.read` | Private IPv4, bounded UPnP router state, local listeners, Docker publications, game ports, owned mappings, and UFW state |
+| `POST` | `/api/v1/network/amp-router-forwards/release` | `games.manage` + `network.firewall.write` | Delete a leftover AMP-described UPnP mapping after typing `REMOVE AMP FORWARD {port}`. Refused when AMP instance files still list the port or Helix owns public access on it. AMP files are not changed |
 | `POST` | `/api/v1/network/firewall/rules` | `network.firewall.write` | Create a named TCP/UDP single-port or bounded-range UFW allow rule |
 | `DELETE` | `/api/v1/network/firewall/rules/{rule_id}` | `network.firewall.write` | Delete the exact Helix-owned rule into bounded Undo state |
 | `POST` | `/api/v1/network/firewall/rules/{rule_id}/restore` | `network.firewall.write` | Restore the exact deleted rule before expiry |
@@ -199,7 +200,11 @@ UFW or changes its defaults. The server-specific public-access route can create
 one exact TCP UPnP mapping on a same-origin private IPv4 gateway, refuses to
 overwrite any existing mapping including ports AMP already has claimed, and
 creates a matching owned UFW rule only when UFW is already active. It cannot
-bypass CGNAT or an ISP block.
+bypass CGNAT or an ISP block. Live AMP claims name the instance and the AMP
+clicks to change the port. Leftover AMP-described UPnP mappings (no instance
+file still listing that port) can be removed with
+`POST /api/v1/network/amp-router-forwards/release` after the exact confirmation
+`REMOVE AMP FORWARD {port}`. Helix never rewrites AMP instance files.
 
 ### System packages
 
@@ -280,7 +285,7 @@ or output. Disconnect ends the PTY.
 | `GET` | `/api/v1/servers/inventory-health` | `games.view` | Typed AMP compatibility-inventory health, bounded unverified-instance details, and unavailable/degraded state |
 | `GET` | `/api/v1/servers/manager/readiness` | `games.view` | Native manager backend, supported software, capabilities, and retention policy |
 | `GET` | `/api/v1/servers/minecraft/versions?software=` | `games.view` | Bounded published Minecraft releases for one installable software choice |
-| `GET` | `/api/v1/servers/port-policies/minecraft` | `games.view` | Read the normalized Minecraft ranges, priority ports, capacity, assignments, and next free port |
+| `GET` | `/api/v1/servers/port-policies/minecraft` | `games.view` | Read the normalized Minecraft ranges, priority ports, capacity, assignments, AMP-claimed numbers in the pool, and next free port |
 | `PUT` | `/api/v1/servers/port-policies/minecraft` | `games.manage` | Persist bounded ranges, individual priority ports, and the public-setup default |
 | `GET` | `/api/v1/servers/port-policies/vrising` | `games.view` | Read the V Rising UDP pool (game + query pairs) |
 | `PUT` | `/api/v1/servers/port-policies/vrising` | `games.manage` | Persist the V Rising UDP pool; public auto-forward stays off |

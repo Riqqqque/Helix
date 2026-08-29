@@ -4,9 +4,11 @@ import type { ManagedServer } from './control-api';
 import type { DashboardData } from './dashboard-model';
 import {
   allocatedMemoryOptions,
+  ampHelpPanelUrl,
   canRunBackupMutation,
   importedServerPanelUrl,
   joinErrorOffersPortChange,
+  parseAmpPortClaim,
   minecraftCreateSoftwareOptions,
   NewServerChooser,
   publicInternetHint,
@@ -240,8 +242,36 @@ describe('Servers route', () => {
 
   it('points Join port conflicts at Settings and names AMP mappings', () => {
     expect(joinErrorOffersPortChange('AMP already has port 25566 claimed')).toBe(true);
+    expect(joinErrorOffersPortChange('Leftover AMP router mapping on port 25566. No AMP instance currently lists that port in its files.')).toBe(true);
     expect(joinErrorOffersPortChange('router TCP port 25566 already has a mapping; Helix will not overwrite an unowned router rule')).toBe(true);
     expect(joinErrorOffersPortChange('the router reports CGNAT address 100.64.1.1')).toBe(false);
+  });
+
+  it('parses live AMP claims and leftover UPnP forwards for the create help card', () => {
+    expect(parseAmpPortClaim('AMP already has port 25566 claimed. Held by Survival01 (game port).')).toEqual({
+      port: 25566,
+      leftover: false,
+    });
+    expect(parseAmpPortClaim('Leftover AMP router mapping on port 25566. No AMP instance currently lists that port in its files.')).toEqual({
+      port: 25566,
+      leftover: true,
+    });
+    expect(parseAmpPortClaim('game port 25565 is already assigned to another Helix server')).toBeNull();
+    const ampServer: ManagedServer = {
+      ...nativeServer,
+      id: 'amp:a1b2c3d4-1111-4222-8333-123456789abc',
+      name: 'Survival01',
+      instanceName: 'Survival01',
+      manager: 'amp_import',
+      managerPanelPort: 8_080,
+      executionBackend: 'external',
+    };
+    expect(ampHelpPanelUrl('Held by Survival01 (game port)', [ampServer], '192.0.2.10')).toBe(
+      'http://192.0.2.10:8080/instances/a1b2c3d4',
+    );
+    expect(ampHelpPanelUrl('AMP already has port 25566 claimed', [ampServer], '192.0.2.10')).toBe(
+      'http://192.0.2.10:8080',
+    );
   });
 
   it('shows a native TPS sample on the list and an em dash when it is missing', () => {

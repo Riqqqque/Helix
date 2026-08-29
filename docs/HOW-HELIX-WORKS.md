@@ -91,7 +91,11 @@ not offered for AMP.
 AMP is not the native runtime. When configured, Helix reaches a separately
 protected loopback AMP API and exposes only the AMP operations it understands.
 AMP remains responsible for its own identities, files, credentials, and
-lifecycle semantics. An unavailable or ambiguous AMP response fails closed.
+lifecycle semantics. Helix will not rewrite AMP instance files or steal a live
+AMP game port; it names the instance and the AMP clicks to change the port, or
+it can delete a leftover AMP-described UPnP mapping after an exact confirmation
+when no instance still lists that number. An unavailable or ambiguous AMP
+response fails closed.
 
 ## Host, storage, network, and updates
 

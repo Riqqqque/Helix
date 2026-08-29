@@ -3,7 +3,9 @@ import {
   createFirewallRule,
   deleteFirewallRule,
   getNetworkInventory,
+  leftoverAmpForwardConfirmation,
   parseNetworkInventory,
+  releaseAmpRouterForward,
   restoreFirewallRule,
   validateFirewallRuleSpec,
 } from './network-api';
@@ -109,5 +111,31 @@ describe('network API', () => {
     const remove = fetchMock.mock.calls[2]?.[1] as RequestInit;
     expect(remove.method).toBe('DELETE');
     expect(remove.body).toBe('{}');
+  });
+
+  it('releases only a leftover AMP UPnP mapping with the typed confirmation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      removed: true,
+      port: 25566,
+      previous_description: 'AMP:Survival01:MinecraftModule.Minecraft.PortNumber',
+      amp_files_changed: false,
+      note: 'Only the leftover UPnP mapping was deleted. AMP instance files were not changed.',
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(leftoverAmpForwardConfirmation(25566)).toBe('REMOVE AMP FORWARD 25566');
+    await expect(releaseAmpRouterForward(25566, leftoverAmpForwardConfirmation(25566), 'csrf')).resolves.toEqual({
+      removed: true,
+      port: 25566,
+      previousDescription: 'AMP:Survival01:MinecraftModule.Minecraft.PortNumber',
+      ampFilesChanged: false,
+    });
+    const [path, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe('/api/v1/network/amp-router-forwards/release');
+    expect(request.method).toBe('POST');
+    expect(JSON.parse(String(request.body))).toEqual({
+      port: 25566,
+      confirmation: 'REMOVE AMP FORWARD 25566',
+    });
   });
 });
