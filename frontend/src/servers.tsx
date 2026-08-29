@@ -630,6 +630,16 @@ export function serverWorkloadIsRunning(server: ManagedServer): boolean {
   return server.status === "online";
 }
 
+export function joinErrorOffersPortChange(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("amp already has port")
+    || lower.includes("unowned router")
+    || lower.includes("already has a mapping")
+    || /port \d+ is already/.test(lower)
+  );
+}
+
 export function serverActionDescription(
   server: ManagedServer,
   action: ServerAction,
@@ -2144,6 +2154,14 @@ function ServerRow({
             Start
           </button>
         )}
+        <button
+          class="button button--quiet"
+          type="button"
+          onClick={onOpen}
+        >
+          <Icon name="chevron" size={15} />
+          Open
+        </button>
         <div class={`menu-wrap server-more ${menuOpen ? "is-open" : ""}`}>
           <button
             class="icon-button"
@@ -2155,10 +2173,6 @@ function ServerRow({
             <Icon name="more" />
           </button>
           <div class="pop-menu">
-            <button type="button" onClick={onOpen}>
-              <Icon name="chevron" size={15} />
-              Open
-            </button>
             <button
               type="button"
               disabled={!canManageServers}
@@ -2700,6 +2714,7 @@ function SettingsPanel({
   canManageServers,
   restartSuccessRevision,
   onRestart,
+  onSaved,
   onSessionExpired,
 }: {
   detail: NativeServerDetail & { settings: MinecraftSettings };
@@ -2707,6 +2722,7 @@ function SettingsPanel({
   canManageServers: boolean;
   restartSuccessRevision: number;
   onRestart: () => void;
+  onSaved: () => Promise<void> | void;
   onSessionExpired: () => void;
 }) {
   const [settings, setSettings] = useState<MinecraftSettings>(detail.settings);
@@ -2715,6 +2731,7 @@ function SettingsPanel({
   const [restartPending, setRestartPending] = useState(false);
   const [showRestartChoice, setShowRestartChoice] = useState(false);
   const [changedFields, setChangedFields] = useState<string[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const observedRestartSuccess = useRef(restartSuccessRevision);
   const dirty = JSON.stringify(settings) !== JSON.stringify(saved);
@@ -2728,6 +2745,7 @@ function SettingsPanel({
   const save = async (): Promise<void> => {
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const result = await saveServerSettings(detail.id, settings, csrfToken);
       setSettings(result.settings);
@@ -2736,6 +2754,16 @@ function SettingsPanel({
         setChangedFields(result.changedFields);
         setRestartPending(result.restartRequired);
         setShowRestartChoice(result.restartRequired);
+        const notes = [result.exposureNote, result.exposureWarning].filter(
+          (value): value is string => value !== null && value.length > 0,
+        );
+        if (result.containerRepublished) {
+          notes.unshift(
+            `Published port is now ${result.settings.gamePort}. The container was rebound to that port.`,
+          );
+        }
+        setNotice(notes.length > 0 ? notes.join(" ") : null);
+        await onSaved();
       }
     } catch (requestError) {
       if (isSessionError(requestError)) onSessionExpired();
@@ -2785,6 +2813,11 @@ function SettingsPanel({
         )}
       </div>
       <InlineError message={error} />
+      {notice !== null && (
+        <p class="settings-port-note" role="status">
+          {notice}
+        </p>
+      )}
       {showRestartChoice && (
         <div class="settings-restart-choice" role="status">
           <span class="settings-restart-choice__icon">
@@ -2829,6 +2862,24 @@ function SettingsPanel({
             disabled={!canManageServers}
             title={manageTitle}
             onInput={(event) => update("motd", event.currentTarget.value)}
+          />
+        </label>
+        <label class="field">
+          <span>
+            Game port {restartLabel("game_port")}{" "}
+            <InfoTip text="Helix rebinds the published container when this changes. Public access on the old port is removed. AMP-claimed ports stay with AMP." />
+          </span>
+          <input
+            type="number"
+            min={1024}
+            max={65_535}
+            value={settings.gamePort}
+            disabled={!canManageServers}
+            title={manageTitle}
+            onInput={(event) => {
+              const value = event.currentTarget.valueAsNumber;
+              if (Number.isFinite(value)) update("gamePort", value);
+            }}
           />
         </label>
         <label class="field">
@@ -3014,7 +3065,9 @@ function SettingsPanel({
             !canManageServers ||
             !dirty ||
             busy ||
-            settings.motd.trim().length === 0
+            settings.motd.trim().length === 0 ||
+            !Number.isFinite(settings.gamePort) ||
+            settings.gamePort < 1024
           }
           title={manageTitle}
           onClick={() => void save()}
@@ -4231,6 +4284,17 @@ function NativeServerPage({
                 </article>
               </div>
               <InlineError message={networkError} />
+              {networkError !== null &&
+                joinErrorOffersPortChange(networkError) &&
+                detail.settings !== null && (
+                  <button
+                    class="button button--small"
+                    type="button"
+                    onClick={() => setTab("settings")}
+                  >
+                    Change game port
+                  </button>
+                )}
               <div class="join-evidence">
                 {!isReadyMarkerGame && (
                 <span
@@ -4377,6 +4441,7 @@ function NativeServerPage({
             canManageServers={canManageServers}
             restartSuccessRevision={restartSuccessRevision}
             onRestart={() => setPending("restart")}
+            onSaved={refresh}
             onSessionExpired={onSessionExpired}
           />
         )}
@@ -4690,6 +4755,17 @@ function ImportedServerPage({
                 <Icon name="restart" size={15} />
                 Restart
               </button>
+              {panelUrl !== null && (
+                <a
+                  class="button button--quiet"
+                  href={panelUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open AMP
+                  <Icon name="external" size={14} />
+                </a>
+              )}
               <button
                 class="button button--danger-quiet"
                 type="button"
@@ -4702,16 +4778,29 @@ function ImportedServerPage({
               </button>
             </>
           ) : (
-            <button
-              class="button button--primary"
-              type="button"
-              disabled={!canManageServers}
-              title={manageTitle}
-              onClick={() => setPending("start")}
-            >
-              <Icon name="play" size={15} />
-              Start
-            </button>
+            <>
+              <button
+                class="button button--primary"
+                type="button"
+                disabled={!canManageServers}
+                title={manageTitle}
+                onClick={() => setPending("start")}
+              >
+                <Icon name="play" size={15} />
+                Start
+              </button>
+              {panelUrl !== null && (
+                <a
+                  class="button button--quiet"
+                  href={panelUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open AMP
+                  <Icon name="external" size={14} />
+                </a>
+              )}
+            </>
           )}
           <button
             class="button button--danger-quiet"
@@ -4736,16 +4825,6 @@ function ImportedServerPage({
             receive the full toolset.
           </p>
         </div>
-        {panelUrl !== null && (
-          <a
-            class="button button--primary"
-            href={panelUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Open AMP <Icon name="external" size={14} />
-          </a>
-        )}
       </section>
       <div class="server-overview-grid">
         <section class="surface server-health">

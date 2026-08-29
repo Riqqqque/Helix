@@ -379,6 +379,9 @@ bounded by configured bytes and segment count, so “persistent” does not mean
 unlimited or permanent.
 
 Settings identify restart-required fields and report pending restart state.
+Minecraft `game_port` is included: a change rewrites `server-port` and
+`query.port`, recreates the published container, and removes Helix public access
+on the previous port. AMP-claimed ports are refused.
 Marketplace profiles prevent plugin/mod loader mixing and require a matching
 game version and supported loader. A missing or negative Modrinth server-side
 flag is advisory: the API returns it for the UI warning, but does not block an

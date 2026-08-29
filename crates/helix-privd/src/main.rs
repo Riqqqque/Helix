@@ -33,8 +33,8 @@ use files::{FileManager, MAX_CONFIGURED_ROOTS, StorageAnalysisManager};
 use helix_privd::{
     BrokerClient, BrokerRequest, BrokerResponse, DockerContainerActionKind, FileUploadPurpose,
     FileUploadTarget, HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec,
-    PackageUpdateCandidate, ServerNetworkExposure, TerrariaCreateSpec, VRisingCreateSpec,
-    ValheimCreateSpec, read_frame, write_frame,
+    MinecraftSettingsPatch, PackageUpdateCandidate, ServerNetworkExposure, TerrariaCreateSpec,
+    VRisingCreateSpec, ValheimCreateSpec, read_frame, write_frame,
 };
 #[cfg(target_os = "linux")]
 use hook_install::{HookInstaller, HookInstallerConfig};
@@ -379,9 +379,7 @@ impl BrokerContext {
             BrokerRequest::UpdateServerSettings {
                 instance_id,
                 settings,
-            } => self
-                .native_manager(&instance_id)
-                .and_then(|native| native.update_server_settings(&instance_id, &settings)),
+            } => self.update_minecraft_settings(&instance_id, &settings),
             BrokerRequest::ListBackups { instance_id } => self
                 .native_manager(&instance_id)
                 .and_then(|native| native.list_backups(&instance_id)),
@@ -537,6 +535,55 @@ impl BrokerContext {
             enabled,
             &self.amp_occupied_ports(),
         )
+    }
+
+    fn update_minecraft_settings(
+        &self,
+        instance_id: &str,
+        settings: &MinecraftSettingsPatch,
+    ) -> Result<Value, String> {
+        let native = self.native_manager(instance_id)?;
+        let mut result = native.update_server_settings(instance_id, settings)?;
+        let previous_port = result
+            .get("previous_game_port")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok());
+        let republished = result
+            .get("container_republished")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if republished && let Some(old_port) = previous_port {
+            match self.drop_owned_server_exposure(instance_id, old_port) {
+                Ok(true) => {
+                    result["public_access_cleared"] = json!(true);
+                    result["exposure_note"] = json!(
+                        "Public access on the old port was removed. Set it up again from Join if you still want it."
+                    );
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    result["exposure_warning"] = json!(error);
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    fn drop_owned_server_exposure(&self, instance_id: &str, port: u16) -> Result<bool, String> {
+        let native = self.native_manager(instance_id)?;
+        let server = native
+            .list_servers()?
+            .into_iter()
+            .find(|server| server.id == instance_id)
+            .ok_or_else(|| "the Helix-owned server does not exist".to_owned())?;
+        self.network
+            .drop_server_exposure_if_present(&GamePortMapping {
+                instance_id: server.id,
+                name: server.name,
+                manager: server.manager.to_owned(),
+                port,
+                running: server.panel_running,
+            })
     }
 
     fn apply_creation_exposure(

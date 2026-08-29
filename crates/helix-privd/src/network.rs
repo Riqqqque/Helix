@@ -585,10 +585,11 @@ impl NetworkManager {
             });
         }
         let description = format!("Helix Minecraft {}", &id[..8]);
-        if gateway.tcp_mapping_exists(mapping.port)? {
+        if let Some(existing) = gateway.tcp_mapping_description(mapping.port)? {
             return Err(unowned_router_mapping_message(
                 mapping.port,
-                amp_claimed_ports.contains(&mapping.port),
+                amp_claimed_ports.contains(&mapping.port)
+                    || crate::amp::amp_router_mapping_description(&existing),
             ));
         }
         gateway.add_tcp_mapping(mapping.port, &description)?;
@@ -664,6 +665,21 @@ impl NetworkManager {
             "router_mapping_confirmed",
             Some(firewall_state),
         ))
+    }
+
+    pub fn drop_server_exposure_if_present(
+        &self,
+        mapping: &GamePortMapping,
+    ) -> Result<bool, String> {
+        let id = mapping.instance_id.strip_prefix("helix:").ok_or_else(|| {
+            "automatic public access is available only for Helix-owned servers".to_owned()
+        })?;
+        validate_rule_id(id)?;
+        if !self.exposure_record_path(id)?.exists() {
+            return Ok(false);
+        }
+        self.set_server_exposure(mapping, false, &HashSet::new())?;
+        Ok(true)
     }
 
     fn router_snapshot(&self, force: bool) -> Result<UpnpGateway, String> {
@@ -2549,6 +2565,18 @@ mod tests {
         assert_eq!(
             unowned_router_mapping_message(25_566, false),
             "router TCP port 25566 already has a mapping; Helix will not overwrite an unowned router rule"
+        );
+        assert!(crate::amp::amp_router_mapping_description(
+            "AMP:Cube:MinecraftModule.Minecraft.PortNumber"
+        ));
+        assert_eq!(
+            unowned_router_mapping_message(
+                25_566,
+                crate::amp::amp_router_mapping_description(
+                    "AMP:Cube:MinecraftModule.Minecraft.PortNumber"
+                )
+            ),
+            "AMP already has port 25566 claimed"
         );
     }
 }

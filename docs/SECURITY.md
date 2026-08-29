@@ -282,7 +282,8 @@ credentials, fragments, cross-origin control URLs, oversized HTTP/XML bodies,
 and XML document types are rejected. Helix checks for any existing TCP mapping
 before creation, verifies its exact internal address, port, enabled flag, and
 description afterward, and journals ownership. If AMP already has that port
-claimed, Helix says so and does not overwrite the mapping. Removal re-verifies
+claimed, or the existing mapping description starts with `AMP`, Helix says so
+and does not overwrite the mapping. Removal re-verifies
 that exact body and refuses drifted/unowned state. Only TCP is requested for
 Minecraft.
 UFW is supplemented only if already active. A CGNAT/private/reserved WAN address

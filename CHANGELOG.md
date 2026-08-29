@@ -11,7 +11,9 @@ binary or package release yet.
   a dedicated Homarr Home, and no longer alphabetizes the catalog.
 - Helix no longer assigns or public-maps ports AMP already has claimed, even
   when that AMP instance is stopped and only the router mapping is left. The
-  error is `AMP already has port <n> claimed`.
+  error is `AMP already has port <n> claimed`. Router rules whose UPnP
+  description starts with `AMP` get the same message even if the instance files
+  were not readable. Minecraft Settings can move the Helix server off that port.
 - Homarr import names stay inside the picker and shortcut tiles instead of
   spilling across neighboring cells.
 - Homarr import picker rows keep their height and scroll instead of stacking
@@ -40,6 +42,11 @@ binary or package release yet.
   colors, and extra widgets on that Home, and drops only unchecked apps.
 - Copy a Home widget, then paste it on the same layout or another Home. Settings
   can send a copy to a different Home without leaving the current one.
+- Minecraft Settings can change the published game port. Helix rewrites
+  `server.properties`, rebinds the container, and drops public access on the
+  old port instead of leaving a stale router mapping.
+- Server cards put Open next to Restart or Start. Imported AMP servers put
+  Open AMP in that same row.
 
 - `scripts/install-from-source.sh --port` / `--listen` for a loopback bind
   other than 8080 on a fresh config. `--yes` skips prompts. `install-local.sh

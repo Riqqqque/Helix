@@ -126,12 +126,14 @@ const settings: MinecraftSettings = {
   whiteList: true,
   enforceWhiteList: true,
   spawnProtection: 8,
+  gamePort: 25565,
   restartBehavior: {
     activation: 'server_restart',
     restartRequiredFields: [
       'motd', 'game_mode', 'difficulty', 'max_players', 'view_distance',
       'simulation_distance', 'player_idle_timeout', 'online_mode', 'pvp',
       'allow_flight', 'white_list', 'enforce_white_list', 'spawn_protection',
+      'game_port',
     ],
     message: 'Changes saved here take effect the next time Minecraft starts.',
   },
@@ -153,6 +155,7 @@ function wireSettings(value = settings): Record<string, unknown> {
     white_list: value.whiteList,
     enforce_white_list: value.enforceWhiteList,
     spawn_protection: value.spawnProtection,
+    game_port: value.gamePort,
     restart_behavior: {
       activation: value.restartBehavior.activation,
       restart_required_fields: value.restartBehavior.restartRequiredFields,
@@ -291,12 +294,16 @@ describe('native server API', () => {
       restartRequired: true,
       changedFields: ['motd'],
       settings: committed,
+      containerRepublished: false,
+      exposureNote: null,
+      exposureWarning: null,
     });
     const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(request.body))).toMatchObject({
       expected_revision: 'a'.repeat(64),
       max_players: 20,
       enforce_white_list: true,
+      game_port: 25565,
     });
   });
 
@@ -306,7 +313,15 @@ describe('native server API', () => {
       restart_required: false,
       changed_fields: [],
       settings: wireSettings(),
-    })).toEqual({ changed: false, restartRequired: false, changedFields: [], settings });
+    })).toEqual({
+      changed: false,
+      restartRequired: false,
+      changedFields: [],
+      settings,
+      containerRepublished: false,
+      exposureNote: null,
+      exposureWarning: null,
+    });
   });
 
   it('parses recoverable backup trash and uses only opaque IDs for delete and undo', async () => {
