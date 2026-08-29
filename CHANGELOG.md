@@ -25,6 +25,9 @@ release, not a public-internet support promise.
 
 ### Changed
 
+- Globe and Join copy treat game-port lines as pings and join attempts, and say
+  scanners can find an open public port without anyone sharing the IP.
+
 - Host puts Linux updates at the top, with Check for updates as the main action.
   Copy talks about a preview of what would change instead of a "simulation", and
   it says when Linux needs a host reboot. Helix still never reboots for you.
@@ -39,6 +42,8 @@ release, not a public-internet support promise.
 
 ### Fixed
 
+- Home Globe fills the widget instead of sitting in a letterboxed 2:1 box. The
+  Globe page still shows the whole world.
 - Checking for Linux updates no longer dies on APT's HTTPS helper (`seteuid 42`
   / `Method https has died`). The host broker keeps APT as root inside its
   existing sandbox instead of letting APT drop to `_apt`.

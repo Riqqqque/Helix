@@ -22,11 +22,20 @@ Helix cannot open a router, bypass CGNAT, or prove internet reachability.
 ## Globe
 
 The Globe page (and matching Home widget) maps established public TCP sockets to
-country centroids. Player pins are sockets whose local port is a published game
-port. Outbound pins are the rest. Helix does not geolocate private, loopback,
+country centroids. Game-port pins are sockets whose local port is a published
+game port, including pings and join attempts, not only logged-in players.
+Outbound pins are the rest. Helix does not geolocate private, loopback,
 link-local, multicast, or CGNAT (`100.64/10`) addresses, and it does not send
 those remote IPs to the browser. If the WAN address is missing or not globally
 routable, destination countries still plot without a host pin.
+
+An open public game port is found by internet scanners even if you never shared
+the address. That is not a Helix leak of the IP. Turn off Helix public access
+for LAN or Tailscale only, and for Minecraft turn on **Whitelist** so unapproved
+accounts cannot play.
+
+The Home Globe widget fills its card (the map covers the tile; poles or the date
+line may be cropped). The Globe page still shows the full 2:1 world.
 
 ## Host services and processes
 

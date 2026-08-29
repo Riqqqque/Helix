@@ -28,7 +28,7 @@ function saveFlowPreference(value: boolean): void {
 
 function describeLink(peers: number, kind: 'player' | 'outbound'): string {
   if (kind === 'player') {
-    return peers === 1 ? '1 player session' : `${peers} player sessions`;
+    return peers === 1 ? '1 connection on a hosted game port' : `${peers} connections on hosted game ports`;
   }
   return peers === 1 ? '1 outbound connection' : `${peers} outbound connections`;
 }
@@ -95,7 +95,7 @@ export function GlobePage({
     <div class="page page--globe">
       <PageHead
         title="Globe"
-        detail="Country-level view of this host and where established connections are going."
+        detail="Country-level view of this host and where established connections are going. Game-port lines include pings and join attempts, not only people who made it in."
         actions={(
           <button class={`button${flow ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={flow} onClick={toggleFlow}>
             {flow ? 'Data motion on' : 'Solid lines'}
@@ -107,9 +107,9 @@ export function GlobePage({
         <div class="globe-toolbar">
           <div class="globe-legend">
             <span><i class="is-origin" />This host</span>
-            <span><i class="is-player" />Players on hosted games</span>
+            <span><i class="is-player" />Joins and pings on hosted games</span>
             <span><i class="is-outbound" />Other outbound sockets</span>
-            <InfoTip text="Pins are country centroids, not streets. Helix looks up addresses on the host and never sends remote IPs to the browser. A player in the Netherlands shows as a line to the Netherlands. Motion is optional and stays in this tab; it is not a live bytes-per-second meter." />
+            <InfoTip text="Pins are country centroids, not streets. Helix looks up addresses on the host and never sends remote IPs to the browser. An open public game port is found by scanners even if you never shared the address; those attempts show up here the same way a real join does. Motion is optional and stays in this tab; it is not a live bytes-per-second meter." />
           </div>
           <small>{flow ? 'Dots travel faster where more sessions or queued traffic share a country.' : 'Turn on data motion if you want the lines to pulse with activity.'}</small>
         </div>
@@ -140,7 +140,7 @@ export function GlobePage({
           <div class="globe-link-list">
             {[...players, ...outbound].map((link) => (
               <article class="globe-link-card" key={link.id}>
-                <span class="globe-link-kind">{link.kind === 'player' ? 'Players' : 'Outbound'}</span>
+                <span class="globe-link-kind">{link.kind === 'player' ? 'Game port' : 'Outbound'}</span>
                 <strong>{link.countryName}</strong>
                 <small>{describeLink(link.peers, link.kind)}{link.servers.length > 0 ? ` · ${link.servers.join(', ')}` : ''}</small>
               </article>

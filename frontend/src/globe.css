@@ -1,4 +1,5 @@
 .globe-map {
+  --globe-ocean: color-mix(in srgb, var(--bg) 72%, var(--surface));
   position: relative;
   overflow: hidden;
   aspect-ratio: 2 / 1;
@@ -7,13 +8,14 @@
   background:
     radial-gradient(120% 90% at 50% 8%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 52%),
     radial-gradient(80% 70% at 18% 88%, color-mix(in srgb, var(--surface-raised, var(--surface)) 80%, transparent), transparent 60%),
-    var(--bg);
+    var(--globe-ocean);
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent);
 }
 
 .globe-map--compact {
-  border-radius: 10px;
+  border-radius: 0;
   min-height: 0;
+  height: 100%;
 }
 
 .globe-map__svg,
@@ -30,7 +32,7 @@
 }
 
 .globe-map__ocean {
-  fill: color-mix(in srgb, var(--bg) 72%, var(--surface));
+  fill: var(--globe-ocean);
 }
 
 .globe-map__grid {
@@ -193,24 +195,25 @@
   color: var(--quiet);
 }
 
-.home-widget--kind-globe .globe-map {
-  min-height: 168px;
-}
-
-.home-widget--kind-globe.home-widget--height-tall .globe-map {
-  min-height: 248px;
-}
-
 .home-globe-widget {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  flex: 1 1 auto;
   min-height: 0;
   height: 100%;
 }
 
-.home-globe-widget .globe-map {
-  flex: 1;
-  height: 100%;
+.home-globe-widget .globe-map,
+.home-widget--kind-globe .globe-map {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: auto;
+  aspect-ratio: unset;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

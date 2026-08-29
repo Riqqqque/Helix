@@ -606,7 +606,7 @@ impl NetworkManager {
                 "servers": link.servers
             })).collect::<Vec<_>>(),
             "truncated": truncated || link_truncated,
-            "note": "Pins are country-level. Helix never sends remote addresses to the browser. A Netherlands player shows as a line to the Netherlands, not a street."
+            "note": "Pins are country-level. Helix never sends remote addresses to the browser. Game-port lines include pings and join attempts, not only logged-in players."
         }))
     }
 
