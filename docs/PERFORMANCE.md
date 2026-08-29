@@ -26,6 +26,11 @@ context.
 container memory ceilings. Server RAM must never be reported as Helix dashboard
 RAM.
 
+Hooks and Security are allowed to skip work that those pages do not display.
+That means no full Host integration, no Network listener/UPnP walk, and no
+Docker `stats` on the Hooks card itself. AMP inventory still has to finish for
+the AMP card. The 1-second metrics poll is no longer the factory default.
+
 ## Investigation budgets
 
 These are tripwires for a future clean Ubuntu reference run. Exceeding one

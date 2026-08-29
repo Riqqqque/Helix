@@ -18,9 +18,10 @@ beside Pages to move, hide, or add primary pages; the set and order follow the
 owner account. Hidden pages keep their slot, so Add puts them back where they
 were.
 
-Host metrics refresh every second by default. Change that interval in
+Host metrics refresh every five seconds by default. Change that interval in
 **Settings → Dashboard behavior**. The top-right refresh button requests a
-fresh snapshot immediately and stays static between requests.
+fresh snapshot immediately and stays static between requests. A saved one-second
+interval stays one second.
 
 ## Home layouts
 

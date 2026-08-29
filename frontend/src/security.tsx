@@ -51,11 +51,11 @@ export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, o
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<'host' | 'recommended' | 'helix' | 'all'>('host');
 
-  const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
+  const refresh = useCallback(async (signal?: AbortSignal, fresh = false): Promise<void> => {
     setLoading(true);
     setError(null);
     try {
-      setInventory(await getSecurityInventory(csrfToken, signal));
+      setInventory(await getSecurityInventory(csrfToken, signal, { fresh }));
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
       else if (signal?.aborted !== true) setError(describeError(reason));
@@ -88,7 +88,7 @@ export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, o
       await setSecurityControl(pending.id, next, typed, csrfToken);
       setPending(null);
       setTyped('');
-      await refresh();
+      await refresh(undefined, true);
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
       else setError(describeError(reason));
@@ -103,7 +103,7 @@ export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, o
         title="Security"
         detail="Host hardening, firewall and SSH facts, and the few Helix switches that still need a confirmation phrase."
         actions={
-          <button class="button button--quiet" type="button" disabled={loading} onClick={() => void refresh()}>
+          <button class="button button--quiet" type="button" disabled={loading} onClick={() => void refresh(undefined, true)}>
             <Icon name="refresh" size={15} />{loading ? 'Checking…' : 'Recheck'}
           </button>
         }
@@ -138,7 +138,13 @@ export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, o
           </div>
         </section>
       )}
-      <div class="security-list">
+      {inventory === null && loading ? (
+        <div class="detail-loading" aria-busy="true">
+          <Icon name="security" size={28} />
+          <span>Reading host protections…</span>
+        </div>
+      ) : (
+      <div class="security-list" aria-busy={loading}>
         {visible.map((control) => (
           <article class="security-card surface" key={control.id}>
             <header>
@@ -172,6 +178,7 @@ export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, o
           </article>
         ))}
       </div>
+      )}
       {pending !== null && (
         <Dialog title={`${pending.enabled ? 'Turn off' : 'Turn on'} ${pending.title}?`} onClose={() => setPending(null)}>
           <p class="security-confirm">{pending.enabled ? pending.offReason : pending.summary}</p>

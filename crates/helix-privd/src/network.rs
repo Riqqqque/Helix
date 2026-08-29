@@ -1291,6 +1291,21 @@ impl NetworkManager {
         Ok(snapshot)
     }
 
+    pub fn firewall_status(&self) -> Value {
+        match self.ufw_snapshot() {
+            Ok(firewall) => json!({
+                "installed": firewall.installed,
+                "active": firewall.active,
+                "status": firewall.status,
+            }),
+            Err(_) => json!({
+                "installed": false,
+                "active": false,
+                "status": "unavailable",
+            }),
+        }
+    }
+
     fn ufw_snapshot(&self) -> Result<UfwSnapshot, String> {
         if !self.binary_available(&self.config.ufw_binary) {
             return Ok(UfwSnapshot {

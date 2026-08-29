@@ -15,8 +15,10 @@ complete API. The built-in catalog currently knows about:
 
 The protected broker configuration decides which exact systemd units are
 controllable. Installed services report running, start-after-boot state, and
-cgroup memory and a short CPU sample when systemd exposes them. Docker totals
-use engine stats when they succeed. Supported buttons issue only start, stop,
+cgroup memory plus one short CPU sample when systemd exposes them. The Docker
+card lists containers from `docker ps`. Live CPU and memory for those
+containers still come from engine stats when you open the Docker panel.
+Supported buttons issue only start, stop,
 restart, enable, or disable for that exact unit and verify the result. AMP uses
 its separate loopback API adapter. Docker start/stop/restart uses the typed
 container-action route and refuses Helix dashboard/gateway names.

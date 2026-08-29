@@ -19,8 +19,13 @@ export function loadHooksRoute(): Promise<HooksComponent> {
   return pendingHooks;
 }
 
-export function preloadHooksRoute(): void {
+export function preloadHooksRoute(csrfToken?: string): void {
   void loadHooksRoute().catch(() => undefined);
+  if (csrfToken !== undefined) {
+    void import('./hooks-api').then((module) => {
+      module.prefetchHookInventory(csrfToken);
+    }).catch(() => undefined);
+  }
 }
 
 export function HooksRoute(props: HooksPageProps) {

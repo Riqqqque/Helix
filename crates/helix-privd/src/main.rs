@@ -151,6 +151,163 @@ enum JobState {
 }
 
 #[cfg(target_os = "linux")]
+fn amp_hook_card(amp: Option<&AmpClient>) -> Value {
+    match amp {
+        Some(amp) => match amp.list_servers() {
+            Ok(inventory) => {
+                let memory = inventory
+                    .servers
+                    .iter()
+                    .map(|server| server.memory_used_mb.saturating_mul(1024 * 1024))
+                    .sum::<u64>();
+                let cpu = inventory
+                    .servers
+                    .iter()
+                    .map(|server| server.cpu_percent)
+                    .sum::<f64>();
+                json!({
+                    "id": "amp",
+                    "kind": "api",
+                    "installed": true,
+                    "active": true,
+                    "active_state": if inventory.issue_count == 0 { "connected" } else { "degraded" },
+                    "enabled": true,
+                    "enabled_state": "configured",
+                    "controllable": false,
+                    "actions": [],
+                    "instance_count": inventory.servers.len(),
+                    "unverified_instance_count": inventory.issue_count,
+                    "panel_port": amp.public_panel_port(),
+                    "memory_used_bytes": if memory > 0 { Value::from(memory) } else { Value::Null },
+                    "cpu_percent": if inventory.servers.iter().any(|server| server.cpu_percent > 0.0) { Value::from(cpu) } else { Value::Null },
+                    "error": Value::Null
+                })
+            }
+            Err(error) => json!({
+                "id": "amp",
+                "kind": "api",
+                "installed": true,
+                "active": false,
+                "active_state": "unavailable",
+                "enabled": true,
+                "enabled_state": "configured",
+                "controllable": false,
+                "actions": [],
+                "panel_port": amp.public_panel_port(),
+                "error": error
+            }),
+        },
+        None => json!({
+            "id": "amp",
+            "kind": "api",
+            "installed": false,
+            "active": false,
+            "active_state": "not_configured",
+            "enabled": false,
+            "enabled_state": "not_configured",
+            "controllable": false,
+            "actions": [],
+            "error": Value::Null
+        }),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn push_docker_hook_cards(hooks: &mut Vec<Value>, docker: Value) {
+    let containers = docker
+        .get("containers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let running = containers
+        .iter()
+        .filter(|item| item.get("running").and_then(Value::as_bool) == Some(true))
+        .count();
+    let memory = containers
+        .iter()
+        .filter_map(|item| item.get("memory_used_bytes").and_then(Value::as_u64))
+        .sum::<u64>();
+    let cpu = containers
+        .iter()
+        .filter_map(|item| item.get("cpu_percent").and_then(Value::as_f64))
+        .sum::<f64>();
+    let portainer = docker.get("portainer").cloned().unwrap_or(Value::Null);
+    let installed = docker.get("docker_installed").and_then(Value::as_bool) == Some(true);
+    let portainer_running = portainer.get("running").and_then(Value::as_bool) == Some(true);
+    let portainer_detected = portainer.get("detected").and_then(Value::as_bool) == Some(true);
+    hooks.push(json!({
+        "id": "docker",
+        "kind": "docker",
+        "installed": installed,
+        "active": running > 0,
+        "active_state": if installed { if running > 0 { "running" } else { "idle" } } else { "unavailable" },
+        "enabled": installed,
+        "enabled_state": if installed { "installed" } else { "not_found" },
+        "controllable": false,
+        "actions": [],
+        "instance_count": containers.len(),
+        "unverified_instance_count": Value::Null,
+        "panel_port": Value::Null,
+        "panel_scheme": Value::Null,
+        "memory_used_bytes": if memory > 0 { Value::from(memory) } else { Value::Null },
+        "cpu_percent": if cpu > 0.0 { Value::from(cpu) } else { Value::Null },
+        "error": docker.get("error").cloned().unwrap_or(Value::Null)
+    }));
+    hooks.push(json!({
+        "id": "portainer",
+        "kind": "panel",
+        "installed": portainer_detected,
+        "active": portainer_running,
+        "active_state": if portainer_detected {
+            if portainer_running { "running" } else { "stopped" }
+        } else {
+            "not_found"
+        },
+        "enabled": portainer_detected,
+        "enabled_state": if portainer_detected { "detected" } else { "not_found" },
+        "controllable": false,
+        "actions": [],
+        "instance_count": if portainer_detected { 1 } else { 0 },
+        "unverified_instance_count": Value::Null,
+        "panel_port": portainer.get("panel_port").cloned().unwrap_or(Value::Null),
+        "panel_scheme": portainer.get("panel_scheme").cloned().unwrap_or(Value::Null),
+        "memory_used_bytes": Value::Null,
+        "cpu_percent": Value::Null,
+        "error": Value::Null
+    }));
+}
+
+#[cfg(target_os = "linux")]
+fn push_unavailable_docker_hook_cards(hooks: &mut Vec<Value>, error: String) {
+    hooks.push(json!({
+        "id": "docker",
+        "kind": "docker",
+        "installed": false,
+        "active": false,
+        "active_state": "unavailable",
+        "enabled": false,
+        "enabled_state": "unavailable",
+        "controllable": false,
+        "actions": [],
+        "error": error
+    }));
+    hooks.push(json!({
+        "id": "portainer",
+        "kind": "panel",
+        "installed": false,
+        "active": false,
+        "active_state": "not_found",
+        "enabled": false,
+        "enabled_state": "not_found",
+        "controllable": false,
+        "actions": [],
+        "panel_port": Value::Null,
+        "panel_scheme": Value::Null,
+        "error": Value::Null
+    }));
+}
+
+#[cfg(target_os = "linux")]
 impl BrokerContext {
     fn dispatch(self: &Arc<Self>, request: BrokerRequest) -> BrokerResponse {
         let result = match request {
@@ -723,167 +880,24 @@ impl BrokerContext {
     }
 
     fn hook_inventory(&self) -> Result<Value, String> {
-        let mut host_inventory = self.host_control()?.hook_inventory()?;
-        let hooks = host_inventory
-            .get_mut("hooks")
-            .and_then(Value::as_array_mut)
-            .ok_or_else(|| "host hook inventory was invalid".to_owned())?;
-        let amp = match &self.amp {
-            Some(amp) => match amp.list_servers() {
-                Ok(inventory) => {
-                    let memory = inventory
-                        .servers
-                        .iter()
-                        .map(|server| server.memory_used_mb.saturating_mul(1024 * 1024))
-                        .sum::<u64>();
-                    let cpu = inventory
-                        .servers
-                        .iter()
-                        .map(|server| server.cpu_percent)
-                        .sum::<f64>();
-                    json!({
-                        "id": "amp",
-                        "kind": "api",
-                        "installed": true,
-                        "active": true,
-                        "active_state": if inventory.issue_count == 0 { "connected" } else { "degraded" },
-                        "enabled": true,
-                        "enabled_state": "configured",
-                        "controllable": false,
-                        "actions": [],
-                        "instance_count": inventory.servers.len(),
-                        "unverified_instance_count": inventory.issue_count,
-                        "panel_port": amp.public_panel_port(),
-                        "memory_used_bytes": if memory > 0 { Value::from(memory) } else { Value::Null },
-                        "cpu_percent": if inventory.servers.iter().any(|server| server.cpu_percent > 0.0) { Value::from(cpu) } else { Value::Null },
-                        "error": Value::Null
-                    })
-                }
-                Err(error) => json!({
-                    "id": "amp",
-                    "kind": "api",
-                    "installed": true,
-                    "active": false,
-                    "active_state": "unavailable",
-                    "enabled": true,
-                    "enabled_state": "configured",
-                    "controllable": false,
-                    "actions": [],
-                    "panel_port": amp.public_panel_port(),
-                    "error": error
-                }),
-            },
-            None => json!({
-                "id": "amp",
-                "kind": "api",
-                "installed": false,
-                "active": false,
-                "active_state": "not_configured",
-                "enabled": false,
-                "enabled_state": "not_configured",
-                "controllable": false,
-                "actions": [],
-                "error": Value::Null
-            }),
-        };
-        hooks.push(amp);
-        match self.host_control().and_then(|host| host.docker_inventory()) {
-            Ok(docker) => {
-                let containers = docker
-                    .get("containers")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                let running = containers
-                    .iter()
-                    .filter(|item| item.get("running").and_then(Value::as_bool) == Some(true))
-                    .count();
-                let memory = containers
-                    .iter()
-                    .filter_map(|item| item.get("memory_used_bytes").and_then(Value::as_u64))
-                    .sum::<u64>();
-                let cpu = containers
-                    .iter()
-                    .filter_map(|item| item.get("cpu_percent").and_then(Value::as_f64))
-                    .sum::<f64>();
-                let portainer = docker.get("portainer").cloned().unwrap_or(Value::Null);
-                let installed =
-                    docker.get("docker_installed").and_then(Value::as_bool) == Some(true);
-                let portainer_running =
-                    portainer.get("running").and_then(Value::as_bool) == Some(true);
-                let portainer_detected =
-                    portainer.get("detected").and_then(Value::as_bool) == Some(true);
-                hooks.push(json!({
-                    "id": "docker",
-                    "kind": "docker",
-                    "installed": installed,
-                    "active": running > 0,
-                    "active_state": if installed { if running > 0 { "running" } else { "idle" } } else { "unavailable" },
-                    "enabled": installed,
-                    "enabled_state": if installed { "installed" } else { "not_found" },
-                    "controllable": false,
-                    "actions": [],
-                    "instance_count": containers.len(),
-                    "unverified_instance_count": Value::Null,
-                    "panel_port": Value::Null,
-                    "panel_scheme": Value::Null,
-                    "memory_used_bytes": if memory > 0 { Value::from(memory) } else { Value::Null },
-                    "cpu_percent": if running > 0 { Value::from(cpu) } else { Value::Null },
-                    "error": docker.get("error").cloned().unwrap_or(Value::Null)
-                }));
-                hooks.push(json!({
-                    "id": "portainer",
-                    "kind": "panel",
-                    "installed": portainer_detected,
-                    "active": portainer_running,
-                    "active_state": if portainer_detected {
-                        if portainer_running { "running" } else { "stopped" }
-                    } else {
-                        "not_found"
-                    },
-                    "enabled": portainer_detected,
-                    "enabled_state": if portainer_detected { "detected" } else { "not_found" },
-                    "controllable": false,
-                    "actions": [],
-                    "instance_count": if portainer_detected { 1 } else { 0 },
-                    "unverified_instance_count": Value::Null,
-                    "panel_port": portainer.get("panel_port").cloned().unwrap_or(Value::Null),
-                    "panel_scheme": portainer.get("panel_scheme").cloned().unwrap_or(Value::Null),
-                    "memory_used_bytes": Value::Null,
-                    "cpu_percent": Value::Null,
-                    "error": Value::Null
-                }));
+        let host = self.host_control()?;
+        let amp = self.amp.as_deref();
+        thread::scope(|scope| {
+            let host_hooks = scope.spawn(|| host.hook_inventory());
+            let amp_card = scope.spawn(|| amp_hook_card(amp));
+            let docker = scope.spawn(|| host.docker_inventory_listing());
+            let mut host_inventory = host_hooks.join().expect("host hook inventory")?;
+            let hooks = host_inventory
+                .get_mut("hooks")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| "host hook inventory was invalid".to_owned())?;
+            hooks.push(amp_card.join().expect("amp hook card"));
+            match docker.join().expect("docker hook listing") {
+                Ok(docker) => push_docker_hook_cards(hooks, docker),
+                Err(error) => push_unavailable_docker_hook_cards(hooks, error),
             }
-            Err(error) => {
-                hooks.push(json!({
-                    "id": "docker",
-                    "kind": "docker",
-                    "installed": false,
-                    "active": false,
-                    "active_state": "unavailable",
-                    "enabled": false,
-                    "enabled_state": "unavailable",
-                    "controllable": false,
-                    "actions": [],
-                    "error": error
-                }));
-                hooks.push(json!({
-                    "id": "portainer",
-                    "kind": "panel",
-                    "installed": false,
-                    "active": false,
-                    "active_state": "not_found",
-                    "enabled": false,
-                    "enabled_state": "not_found",
-                    "controllable": false,
-                    "actions": [],
-                    "panel_port": Value::Null,
-                    "panel_scheme": Value::Null,
-                    "error": Value::Null
-                }));
-            }
-        }
-        Ok(host_inventory)
+            Ok(host_inventory)
+        })
     }
 
     fn docker_container_action(

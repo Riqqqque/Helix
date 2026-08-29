@@ -72,7 +72,7 @@ const navigation: ReadonlyArray<{
   { id: 'settings', label: 'Settings', description: 'Dashboard and account', icon: 'settings' },
 ];
 
-function preloadForSection(section: DashboardSectionId): (() => void) | undefined {
+function preloadForSection(section: DashboardSectionId, csrfToken: string): (() => void) | undefined {
   if (section === 'storage') return () => { preloadFileManager(); preloadWorkspacePages(); };
   if (section === 'home') return preloadHomeRoute;
   if (section === 'network') return () => { preloadNetworkOperationsRoute(); preloadWorkspacePages(); };
@@ -80,10 +80,10 @@ function preloadForSection(section: DashboardSectionId): (() => void) | undefine
   if (section === 'overview') return () => { preloadOverviewRoute(); preloadDockerPanel(); };
   if (section === 'terminal') return preloadTerminalRoute;
   if (section === 'servers') return preloadServersRoute;
-  if (section === 'hooks') return preloadHooksRoute;
+  if (section === 'hooks') return () => preloadHooksRoute(csrfToken);
   if (section === 'strands') return preloadStrandsRoute;
   if (section === 'globe') return preloadGlobeRoute;
-  if (section === 'security') return preloadSecurityRoute;
+  if (section === 'security') return () => preloadSecurityRoute(csrfToken);
   if (section === 'settings') return preloadSettingsRoute;
   return undefined;
 }
@@ -111,6 +111,7 @@ function useDashboardData(
   csrfToken: string,
   onSessionExpired: () => void,
   refreshIntervalMs: RefreshIntervalMs,
+  hostIntegrationNeeded: boolean,
 ): DashboardData {
   const [overview, setOverview] = useState<Resource<SystemOverview>>(EMPTY_RESOURCE);
   const [inventory, setInventory] = useState<Resource<HostInventory>>(EMPTY_RESOURCE);
@@ -200,8 +201,11 @@ function useDashboardData(
   }, [csrfToken, onSessionExpired]);
 
   const refresh = useCallback(async (): Promise<void> => {
-    await Promise.all([refreshLive(), refreshIntegration()]);
-  }, [refreshIntegration, refreshLive]);
+    await Promise.all([
+      refreshLive(),
+      hostIntegrationNeeded ? refreshIntegration() : Promise.resolve(),
+    ]);
+  }, [hostIntegrationNeeded, refreshIntegration, refreshLive]);
 
   useEffect(() => {
     mounted.current = true;
@@ -219,6 +223,7 @@ function useDashboardData(
   }, [refreshIntervalMs, refreshLive]);
 
   useEffect(() => {
+    if (!hostIntegrationNeeded) return;
     void refreshIntegration();
     const refreshWhenVisible = (): void => {
       if (document.visibilityState !== 'hidden') void refreshIntegration();
@@ -230,7 +235,7 @@ function useDashboardData(
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
-  }, [refreshIntegration]);
+  }, [hostIntegrationNeeded, refreshIntegration]);
 
   useEffect(() => () => {
     mounted.current = false;
@@ -260,6 +265,7 @@ function HelixBrand() {
 
 function Sidebar({
   active,
+  csrfToken,
   order,
   hiddenPages,
   serversEnabled,
@@ -268,6 +274,7 @@ function Sidebar({
   onServersEnabledChange,
 }: {
   active: DashboardSectionId;
+  csrfToken: string;
   order: readonly PrimaryDashboardSectionId[];
   hiddenPages: readonly PrimaryDashboardSectionId[];
   serversEnabled: boolean;
@@ -293,7 +300,7 @@ function Sidebar({
             const visibleIndex = visibleOrder.indexOf(section);
             return (
               <div class={`nav-item-wrap${arranging ? ' is-arranging' : ''}`} key={item.id}>
-                <a href={`#${item.id}`} class={`nav-item${active === item.id ? ' is-active' : ''}`} aria-current={active === item.id ? 'page' : undefined} title={item.description} onPointerEnter={preloadForSection(item.id)} onFocus={preloadForSection(item.id)}>
+                <a href={`#${item.id}`} class={`nav-item${active === item.id ? ' is-active' : ''}`} aria-current={active === item.id ? 'page' : undefined} title={item.description} onPointerEnter={preloadForSection(item.id, csrfToken)} onFocus={preloadForSection(item.id, csrfToken)}>
                   <Icon name={item.icon} size={19} /><span>{item.label}</span>
                 </a>
                 {arranging && arrange !== null && (
@@ -322,7 +329,7 @@ function Sidebar({
             onAdd={(page) => arrange.addArrangedPage(hiddenPages, page, onHiddenPagesChange, onServersEnabledChange)}
           />
         )}
-        <a href="#settings" class={`nav-item nav-item--settings${active === 'settings' ? ' is-active' : ''}`} aria-current={active === 'settings' ? 'page' : undefined} title="Dashboard and account settings" onPointerEnter={preloadForSection('settings')} onFocus={preloadForSection('settings')}><Icon name="settings" size={19} /><span>Settings</span></a>
+        <a href="#settings" class={`nav-item nav-item--settings${active === 'settings' ? ' is-active' : ''}`} aria-current={active === 'settings' ? 'page' : undefined} title="Dashboard and account settings" onPointerEnter={preloadForSection('settings', csrfToken)} onFocus={preloadForSection('settings', csrfToken)}><Icon name="settings" size={19} /><span>Settings</span></a>
       </nav>
       <div class="sidebar-foot">
         <span class="status-dot status-dot--good" />
@@ -335,11 +342,13 @@ function Sidebar({
 
 function MobileNav({
   active,
+  csrfToken,
   order,
   hiddenPages,
   serversEnabled,
 }: {
   active: DashboardSectionId;
+  csrfToken: string;
   order: readonly PrimaryDashboardSectionId[];
   hiddenPages: readonly PrimaryDashboardSectionId[];
   serversEnabled: boolean;
@@ -354,8 +363,8 @@ function MobileNav({
           href={`#${item.id}`}
           class={active === item.id ? 'is-active' : ''}
           aria-current={active === item.id ? 'page' : undefined}
-          onPointerEnter={preloadForSection(item.id)}
-          onFocus={preloadForSection(item.id)}
+          onPointerEnter={preloadForSection(item.id, csrfToken)}
+          onFocus={preloadForSection(item.id, csrfToken)}
         >
           <Icon name={item.icon} size={18} />
           <span>{item.label}</span>
@@ -552,7 +561,11 @@ export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated,
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
   const dashboardPreferences = useDashboardPreferences(csrfToken, onSessionExpired);
   const { navigationOrder, hiddenPages, metricsRefreshMs: refreshIntervalMs, serversEnabled } = dashboardPreferences;
-  const data = useDashboardData(csrfToken, onSessionExpired, refreshIntervalMs);
+  const hostIntegrationNeeded = active === 'overview' || active === 'settings';
+  const data = useDashboardData(csrfToken, onSessionExpired, refreshIntervalMs, hostIntegrationNeeded);
+  useEffect(() => {
+    preloadForSection(active, csrfToken)?.();
+  }, [active, csrfToken]);
   useEffect(() => {
     applyDashboardColors(dashboardPreferences.colors);
   }, [dashboardPreferences.colors]);
@@ -599,10 +612,10 @@ export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated,
     <>
       <a class="skip-link" href="#main-content">Skip to content</a>
       <div class={`dashboard-shell${homeFocused ? ' is-home-focus' : ''}`}>
-        <Sidebar active={active} order={navigationOrder} hiddenPages={hiddenPages} serversEnabled={serversEnabled} onOrderChange={changeNavigationOrder} onHiddenPagesChange={dashboardPreferences.setHiddenPages} onServersEnabledChange={dashboardPreferences.setServersEnabled} />
+        <Sidebar active={active} csrfToken={csrfToken} order={navigationOrder} hiddenPages={hiddenPages} serversEnabled={serversEnabled} onOrderChange={changeNavigationOrder} onHiddenPagesChange={dashboardPreferences.setHiddenPages} onServersEnabledChange={dashboardPreferences.setServersEnabled} />
         <div class="dashboard-workspace">
           <Topbar section={active} hostname={hostname} refreshedAt={refreshedAt} user={user} notices={notices} onRefresh={data.refresh} onLogout={onLogout} theme={theme} onThemeChange={setTheme} />
-          <MobileNav active={active} order={navigationOrder} hiddenPages={hiddenPages} serversEnabled={serversEnabled} />
+          <MobileNav active={active} csrfToken={csrfToken} order={navigationOrder} hiddenPages={hiddenPages} serversEnabled={serversEnabled} />
           <main id="main-content" tabIndex={-1}>
             {active === 'overview' && <OverviewRoute data={data} themeLabel={themeLabel} csrfToken={csrfToken} canManageDocker={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}
             {active === 'home' && <HomeRoute overview={data.overview.data} inventory={data.inventory.data} servers={data.servers.data ?? []} displayName={user.displayName} templates={dashboardPreferences.homeTemplates} activeHomeId={dashboardPreferences.activeHomeId} syncStatus={dashboardPreferences.syncStatus} onHomeChange={dashboardPreferences.setHomeState} csrfToken={csrfToken} homeFocus={homeFocused} onHomeFocusToggle={toggleHomeFocus} canManageDocker={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}

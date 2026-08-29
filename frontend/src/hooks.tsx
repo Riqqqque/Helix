@@ -264,11 +264,11 @@ export function HooksPage({ csrfToken, canManage, onSessionExpired }: HooksPageP
   const [installDispatching, setInstallDispatching] = useState(false);
   const [installConfirmed, setInstallConfirmed] = useState(false);
 
-  const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
+  const refresh = useCallback(async (signal?: AbortSignal, fresh = false): Promise<void> => {
     setLoading(true);
     setError(null);
     try {
-      const next = await getHookInventory(csrfToken, signal);
+      const next = await getHookInventory(csrfToken, signal, { fresh });
       setInventory(next);
       setSelectedId((current) => next.hooks.some((hook) => hook.id === current) ? current : next.hooks[0]?.id ?? '');
     } catch (reason) {
@@ -333,7 +333,7 @@ export function HooksPage({ csrfToken, canManage, onSessionExpired }: HooksPageP
         }),
       });
       setNotice(`${descriptorFor(selected).name}: ${actionLabels[action]} completed and verified.`);
-      void refresh();
+      void refresh(undefined, true);
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 401) onSessionExpired();
       else setError(describeError(reason));
@@ -375,7 +375,7 @@ export function HooksPage({ csrfToken, canManage, onSessionExpired }: HooksPageP
         setInstallJob(next);
         if (next.status === 'complete') {
           setNotice('Hook installation completed and the system service was verified.');
-          void refresh();
+          void refresh(undefined, true);
         } else if (next.status !== 'failed') {
           timer = window.setTimeout(() => void poll(), 1_500);
         }
@@ -395,7 +395,7 @@ export function HooksPage({ csrfToken, canManage, onSessionExpired }: HooksPageP
   return (
     <div class="page page--hooks">
       <PageHead title="Hooks" detail="Bring host services into Helix without pretending Helix owns them." />
-      <div class="hooks-toolbar"><div><strong>{hooks.filter((hook) => hook.installed && hook.active).length}</strong><span>connected</span><i /><strong>{hooks.filter((hook) => !hook.installed).length}</strong><span>available</span><InfoTip text="Discovery is read-only. Control is exposed only for exact services configured in the root-owned broker, and every change is verified after systemd returns." /></div><button class="button button--quiet" type="button" disabled={loading} aria-busy={loading} onClick={() => void refresh()}><Icon name="refresh" size={14} />{loading ? 'Checking…' : 'Check connections'}</button></div>
+      <div class="hooks-toolbar"><div><strong>{hooks.filter((hook) => hook.installed && hook.active).length}</strong><span>connected</span><i /><strong>{hooks.filter((hook) => !hook.installed).length}</strong><span>available</span><InfoTip text="Discovery is read-only. Control is exposed only for exact services configured in the root-owned broker, and every change is verified after systemd returns." /></div><button class="button button--quiet" type="button" disabled={loading} aria-busy={loading} onClick={() => void refresh(undefined, true)}><Icon name="refresh" size={14} />{loading ? 'Checking…' : 'Check connections'}</button></div>
       <InlineError message={error} />
       {notice !== null && <div class="hooks-notice" role="status"><Icon name="check" size={15} />{notice}</div>}
       {inventory === null && loading ? <div class="detail-loading" aria-busy="true"><Icon name="hooks" size={28} /><span>Discovering safe connections…</span></div> : <div class="hooks-layout"><aside class="hooks-list" aria-label="Available Hooks">{sorted.map((hook) => <HookCard key={hook.id} hook={hook} selected={selected?.id === hook.id} onSelect={() => { setSelectedId(hook.id); setNotice(null); }} />)}</aside>{selected !== null && <HookDetails hook={selected} canManage={canManage} busyAction={busyAction} plan={plan} planLoading={planLoading} planError={planError} csrfToken={csrfToken} onSessionExpired={onSessionExpired} onAction={(action) => setPendingAction(action)} onInstall={() => { setInstallConfirmed(false); setInstallJob(null); setInstallOpen(true); }} onRetryPlan={() => setPlanRevision((value) => value + 1)} />}</div>}

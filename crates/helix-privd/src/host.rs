@@ -10,6 +10,7 @@ use std::{
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
@@ -256,35 +257,7 @@ impl HostControl {
         let gateway =
             self.container_status_or_error(&self.config.gateway_container, "gateway", &mut errors);
         let resources = self.resource_status(&mut errors);
-        let policies = [dashboard.as_ref(), gateway.as_ref()]
-            .into_iter()
-            .flatten()
-            .map(|container| container.restart_policy.name.as_str())
-            .collect::<Vec<_>>();
-        let start_on_boot = if policies.len() == 2 {
-            let enabled = policies
-                .iter()
-                .all(|policy| matches!(*policy, "always" | "unless-stopped"));
-            let disabled = policies.iter().all(|policy| *policy == "no");
-            json!({
-                "state": if enabled { "enabled" } else if disabled { "disabled" } else { "mixed" },
-                "enabled": if enabled { Value::Bool(true) } else if disabled { Value::Bool(false) } else { Value::Null },
-                "reconciled": enabled || disabled,
-                "persistence": "docker_restart_policy",
-                "current_runtime_changed_by_toggle": false,
-                "container_recreation_may_reset": true,
-                "note": "The setting survives Docker daemon and host restarts. Recreating either container can reapply its Compose restart policy, so Helix reads both exact container policies whenever status is requested."
-            })
-        } else {
-            json!({
-                "state": "unavailable",
-                "enabled": Value::Null,
-                "reconciled": false,
-                "persistence": "docker_restart_policy",
-                "current_runtime_changed_by_toggle": false,
-                "container_recreation_may_reset": true
-            })
-        };
+        let start_on_boot = start_on_boot_value(dashboard.as_ref(), gateway.as_ref());
         let scheduled_reboot = self.scheduled_reboot_status(&mut errors)?;
         let recurring_reboot = self.recurring_reboot_status(&mut errors)?;
         Ok(json!({
@@ -313,60 +286,113 @@ impl HostControl {
         }))
     }
 
+    pub fn start_on_boot_snapshot(&self) -> Value {
+        let dashboard = self
+            .inspect_container(&self.config.dashboard_container)
+            .ok();
+        let gateway = self.inspect_container(&self.config.gateway_container).ok();
+        start_on_boot_value(dashboard.as_ref(), gateway.as_ref())
+    }
+
     pub fn hook_inventory(&self) -> Result<Value, String> {
-        let hooks = self
-            .config
-            .hook_services
-            .iter()
-            .map(|hook| {
-                let enabled_state = self.systemctl_state("is-enabled", &hook.unit);
-                let active_state = self.systemctl_state("is-active", &hook.unit);
-                let installed = enabled_state.as_deref() != Ok("not-found")
-                    && active_state.as_deref() != Ok("unknown")
-                    && (enabled_state.is_ok() || active_state.is_ok());
-                let active = active_state.as_deref() == Ok("active");
-                let enabled = matches!(
-                    enabled_state.as_deref(),
-                    Ok("enabled" | "enabled-runtime" | "linked" | "linked-runtime" | "alias")
-                );
-                json!({
-                    "id": hook.id,
-                    "kind": "systemd",
-                    "unit": hook.unit,
-                    "installed": installed,
-                    "active": active,
-                    "active_state": active_state.as_deref().unwrap_or("unavailable"),
-                    "enabled": enabled,
-                    "enabled_state": enabled_state.as_deref().unwrap_or("unavailable"),
-                    "controllable": installed && enabled_state.is_ok() && active_state.is_ok(),
-                    "actions": if installed {
-                        json!(["start", "stop", "restart", "enable", "disable"])
-                    } else {
-                        json!([])
-                    },
-                    "memory_used_bytes": if installed {
-                        self.unit_memory_bytes(&hook.unit)
-                    } else {
-                        None
-                    },
-                    "cpu_percent": if installed && active {
-                        self.unit_cpu_percent(&hook.unit)
-                    } else {
-                        None
-                    },
-                    "error": if enabled_state.is_err() || active_state.is_err() {
-                        Value::String("Helix could not verify every systemd state for this service.".to_owned())
-                    } else {
-                        Value::Null
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut hooks = thread::scope(|scope| {
+            let handles = self
+                .config
+                .hook_services
+                .iter()
+                .map(|hook| scope.spawn(|| self.probe_systemd_hook(hook)))
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("hook probe"))
+                .collect::<Vec<_>>()
+        });
+        self.apply_hook_cpu_samples(&mut hooks);
         Ok(json!({
             "schema_version": 1,
             "hooks": hooks,
             "collected_at_unix_ms": now_unix_ms()
         }))
+    }
+
+    fn probe_systemd_hook(&self, hook: &HookServiceConfig) -> Value {
+        let enabled_state = self.systemctl_state("is-enabled", &hook.unit);
+        let active_state = self.systemctl_state("is-active", &hook.unit);
+        let installed = enabled_state.as_deref() != Ok("not-found")
+            && active_state.as_deref() != Ok("unknown")
+            && (enabled_state.is_ok() || active_state.is_ok());
+        let active = active_state.as_deref() == Ok("active");
+        let enabled = matches!(
+            enabled_state.as_deref(),
+            Ok("enabled" | "enabled-runtime" | "linked" | "linked-runtime" | "alias")
+        );
+        json!({
+            "id": hook.id,
+            "kind": "systemd",
+            "unit": hook.unit,
+            "installed": installed,
+            "active": active,
+            "active_state": active_state.as_deref().unwrap_or("unavailable"),
+            "enabled": enabled,
+            "enabled_state": enabled_state.as_deref().unwrap_or("unavailable"),
+            "controllable": installed && enabled_state.is_ok() && active_state.is_ok(),
+            "actions": if installed {
+                json!(["start", "stop", "restart", "enable", "disable"])
+            } else {
+                json!([])
+            },
+            "memory_used_bytes": if installed {
+                self.unit_memory_bytes(&hook.unit)
+            } else {
+                None
+            },
+            "cpu_percent": Value::Null,
+            "error": if enabled_state.is_err() || active_state.is_err() {
+                Value::String("Helix could not verify every systemd state for this service.".to_owned())
+            } else {
+                Value::Null
+            }
+        })
+    }
+
+    fn apply_hook_cpu_samples(&self, hooks: &mut [Value]) {
+        let active_units = hooks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, hook)| {
+                if hook.get("installed").and_then(Value::as_bool) == Some(true)
+                    && hook.get("active").and_then(Value::as_bool) == Some(true)
+                {
+                    hook.get("unit")
+                        .and_then(Value::as_str)
+                        .map(|unit| (index, unit.to_owned()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if active_units.is_empty() {
+            return;
+        }
+        let first = active_units
+            .iter()
+            .map(|(_, unit)| self.cgroup_cpu_usage_usec(unit))
+            .collect::<Vec<_>>();
+        thread::sleep(Duration::from_millis(120));
+        for ((index, unit), first_sample) in active_units.iter().zip(first) {
+            let Some(first_usec) = first_sample else {
+                continue;
+            };
+            let Some(second_usec) = self.cgroup_cpu_usage_usec(unit) else {
+                continue;
+            };
+            let percent = (second_usec.saturating_sub(first_usec) as f64) / 1_200.0;
+            if percent.is_finite() && (0.0..=10_000.0).contains(&percent) {
+                if let Some(object) = hooks[*index].as_object_mut() {
+                    object.insert("cpu_percent".to_owned(), json!(percent));
+                }
+            }
+        }
     }
 
     pub fn manage_hook_service(
@@ -907,19 +933,6 @@ impl HostControl {
             }
         }
         self.cgroup_memory_bytes(unit)
-    }
-
-    fn unit_cpu_percent(&self, unit: &str) -> Option<f64> {
-        let first = self.cgroup_cpu_usage_usec(unit)?;
-        std::thread::sleep(Duration::from_millis(120));
-        let second = self.cgroup_cpu_usage_usec(unit)?;
-        let delta = second.saturating_sub(first);
-        let percent = (delta as f64) / 1_200.0;
-        if percent.is_finite() && (0.0..=10_000.0).contains(&percent) {
-            Some(percent)
-        } else {
-            None
-        }
     }
 
     fn cgroup_dir(&self, unit: &str) -> Option<PathBuf> {
@@ -2121,6 +2134,41 @@ fn validate_power_record(record: &PowerOperationRecord, operation_id: &str) -> R
     Ok(())
 }
 
+fn start_on_boot_value(
+    dashboard: Option<&ContainerStatus>,
+    gateway: Option<&ContainerStatus>,
+) -> Value {
+    let policies = [dashboard, gateway]
+        .into_iter()
+        .flatten()
+        .map(|container| container.restart_policy.name.as_str())
+        .collect::<Vec<_>>();
+    if policies.len() == 2 {
+        let enabled = policies
+            .iter()
+            .all(|policy| matches!(*policy, "always" | "unless-stopped"));
+        let disabled = policies.iter().all(|policy| *policy == "no");
+        json!({
+            "state": if enabled { "enabled" } else if disabled { "disabled" } else { "mixed" },
+            "enabled": if enabled { Value::Bool(true) } else if disabled { Value::Bool(false) } else { Value::Null },
+            "reconciled": enabled || disabled,
+            "persistence": "docker_restart_policy",
+            "current_runtime_changed_by_toggle": false,
+            "container_recreation_may_reset": true,
+            "note": "The setting survives Docker daemon and host restarts. Recreating either container can reapply its Compose restart policy, so Helix reads both exact container policies whenever status is requested."
+        })
+    } else {
+        json!({
+            "state": "unavailable",
+            "enabled": Value::Null,
+            "reconciled": false,
+            "persistence": "docker_restart_policy",
+            "current_runtime_changed_by_toggle": false,
+            "container_recreation_may_reset": true
+        })
+    }
+}
+
 fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2393,6 +2441,56 @@ mod tests {
                 Some("is-enabled" | "is-active")
             )
         }));
+    }
+
+    #[test]
+    fn start_on_boot_snapshot_inspects_only_the_two_helix_containers() {
+        let temporary = tempfile::tempdir().unwrap();
+        let runner = Arc::new(MockRunner::default());
+        runner.push(inspect("server-dashboard", "unless-stopped"));
+        runner.push(inspect("server-dashboard-gateway", "unless-stopped"));
+        let control =
+            HostControl::with_runner(config(temporary.path().join("power")), runner.clone())
+                .unwrap();
+
+        let snapshot = control.start_on_boot_snapshot();
+
+        assert_eq!(snapshot["enabled"], true);
+        assert_eq!(snapshot["state"], "enabled");
+        assert!(runner.calls().iter().all(|(program, args)| {
+            program == Path::new("/usr/bin/docker")
+                && args.first().map(String::as_str) == Some("inspect")
+        }));
+        assert_eq!(runner.calls().len(), 2);
+    }
+
+    #[test]
+    fn docker_inventory_listing_skips_engine_stats() {
+        let temporary = tempfile::tempdir().unwrap();
+        let runner = Arc::new(MockRunner::default());
+        runner.push(success(
+            "plex\tplexinc/pms-docker\trunning\tUp 2 hours\t0.0.0.0:32400->32400/tcp\n",
+        ));
+        let control =
+            HostControl::with_runner(config(temporary.path().join("power")), runner.clone())
+                .unwrap();
+
+        let inventory = control.docker_inventory_listing().unwrap();
+
+        assert_eq!(inventory["containers"][0]["name"], "plex");
+        assert_eq!(inventory["containers"][0]["running"], true);
+        assert!(
+            inventory["containers"][0]
+                .get("cpu_percent")
+                .and_then(Value::as_f64)
+                .is_none()
+        );
+        assert!(
+            runner
+                .calls()
+                .iter()
+                .all(|(_, args)| { args.first().map(String::as_str) == Some("ps") })
+        );
     }
 
     #[test]

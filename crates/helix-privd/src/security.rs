@@ -2,7 +2,7 @@ use crate::{host::HostControl, native::NativeManager, network::NetworkManager};
 use helix_privd::{GameKind, GamePortPolicySpec};
 use serde_json::{Value, json};
 use std::{
-    fs,
+    fs, thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -11,52 +11,91 @@ pub fn inventory(
     network: &NetworkManager,
     native: Option<&NativeManager>,
 ) -> Result<Value, String> {
-    let start_on_boot = host
-        .status()
-        .ok()
-        .and_then(|status| status.get("start_on_boot").cloned())
-        .unwrap_or(Value::Null);
-    let firewall = network
-        .inventory(&[])
-        .ok()
-        .and_then(|inventory| inventory.get("firewall").cloned())
-        .unwrap_or(Value::Null);
-    let minecraft_forward = native.and_then(|manager| {
-        manager
-            .game_port_policy(GameKind::Minecraft)
-            .ok()
-            .and_then(|value| {
-                value
-                    .pointer("/policy/auto_forward_on_create")
-                    .and_then(Value::as_bool)
-            })
+    let (
+        start_on_boot,
+        firewall,
+        minecraft_forward,
+        unattended,
+        docker_live_restore,
+        fail2ban,
+        timesync,
+        ssh_password,
+        ptrace,
+        kptr,
+        dmesg,
+        rp_filter,
+        userns,
+        apparmor,
+        ssh_root,
+        aslr,
+    ) = thread::scope(|scope| {
+        let start_on_boot = scope.spawn(|| host.start_on_boot_snapshot());
+        let firewall = scope.spawn(|| network.firewall_status());
+        let minecraft_forward =
+            scope.spawn(|| native.and_then(NativeManager::minecraft_auto_forward_on_create));
+        let unattended = scope.spawn(|| unattended_upgrades_state(host));
+        let docker_live_restore = scope.spawn(|| docker_live_restore(host));
+        let fail2ban = scope.spawn(|| unit_flag(host, "fail2ban.service"));
+        let timesync = scope.spawn(|| unit_flag(host, "systemd-timesyncd.service"));
+        let ssh_password = scope.spawn(|| ssh_directive("PasswordAuthentication"));
+        let ptrace = scope.spawn(|| {
+            sysctl_flag(
+                "/proc/sys/kernel/yama/ptrace_scope",
+                &["1", "2", "3"],
+                "ptrace_scope",
+            )
+        });
+        let kptr = scope.spawn(|| {
+            sysctl_flag(
+                "/proc/sys/kernel/kptr_restrict",
+                &["1", "2"],
+                "kptr_restrict",
+            )
+        });
+        let dmesg = scope
+            .spawn(|| sysctl_flag("/proc/sys/kernel/dmesg_restrict", &["1"], "dmesg_restrict"));
+        let rp_filter = scope.spawn(|| {
+            sysctl_flag(
+                "/proc/sys/net/ipv4/conf/all/rp_filter",
+                &["1", "2"],
+                "rp_filter",
+            )
+        });
+        let userns = scope.spawn(|| {
+            sysctl_flag(
+                "/proc/sys/kernel/unprivileged_userns_clone",
+                &["1"],
+                "unprivileged_userns_clone",
+            )
+        });
+        let apparmor = scope.spawn(apparmor_state);
+        let ssh_root = scope.spawn(ssh_permit_root);
+        let aslr = scope.spawn(kernel_aslr);
+        (
+            start_on_boot.join().expect("security start-on-boot probe"),
+            firewall.join().expect("security firewall probe"),
+            minecraft_forward
+                .join()
+                .expect("security minecraft forward probe"),
+            unattended
+                .join()
+                .expect("security unattended-upgrades probe"),
+            docker_live_restore
+                .join()
+                .expect("security live-restore probe"),
+            fail2ban.join().expect("security fail2ban probe"),
+            timesync.join().expect("security timesync probe"),
+            ssh_password.join().expect("security ssh password probe"),
+            ptrace.join().expect("security ptrace probe"),
+            kptr.join().expect("security kptr probe"),
+            dmesg.join().expect("security dmesg probe"),
+            rp_filter.join().expect("security rp_filter probe"),
+            userns.join().expect("security userns probe"),
+            apparmor.join().expect("security apparmor probe"),
+            ssh_root.join().expect("security ssh root probe"),
+            aslr.join().expect("security aslr probe"),
+        )
     });
-    let unattended = unattended_upgrades_state(host);
-    let docker_live_restore = docker_live_restore(host);
-    let fail2ban = unit_flag(host, "fail2ban.service");
-    let timesync = unit_flag(host, "systemd-timesyncd.service");
-    let ssh_password = ssh_directive("PasswordAuthentication");
-    let ptrace = sysctl_flag(
-        "/proc/sys/kernel/yama/ptrace_scope",
-        &["1", "2", "3"],
-        "ptrace_scope",
-    );
-    let kptr = sysctl_flag(
-        "/proc/sys/kernel/kptr_restrict",
-        &["1", "2"],
-        "kptr_restrict",
-    );
-    let dmesg = sysctl_flag("/proc/sys/kernel/dmesg_restrict", &["1"], "dmesg_restrict");
-    let rp_filter = sysctl_flag(
-        "/proc/sys/net/ipv4/conf/all/rp_filter",
-        &["1", "2"],
-        "rp_filter",
-    );
-    let userns = sysctl_flag(
-        "/proc/sys/kernel/unprivileged_userns_clone",
-        &["1"],
-        "unprivileged_userns_clone",
-    );
     Ok(json!({
         "schema_version": 1,
         "tips": [
@@ -215,8 +254,8 @@ pub fn inventory(
                 "AppArmor",
                 "Linux mandatory access control for confined services, when the kernel module is loaded.",
                 "Disable AppArmor only if you are debugging a confinement issue and understand the wider host policy. Helix does not change LSM state.",
-                apparmor_state().state,
-                apparmor_state().enabled,
+                apparmor.state,
+                apparmor.enabled,
                 false,
                 true,
                 "This is a kernel/LSM fact, not a Helix switch. A host without AppArmor is still usable; it just has one less confinement layer.",
@@ -227,8 +266,8 @@ pub fn inventory(
                 "SSH root login",
                 "Reads PermitRootLogin from the primary sshd_config. Included drop-in files are not parsed.",
                 "Allowing password root login makes a stolen password a host-takeover. Key-only or prohibit-password is the usual hardening.",
-                ssh_permit_root().state,
-                ssh_permit_root().permissive,
+                ssh_root.state,
+                ssh_root.permissive,
                 false,
                 false,
                 "Helix does not rewrite sshd_config. Change SSH in the file or with the tools you already use, then reload sshd yourself.",
@@ -239,8 +278,8 @@ pub fn inventory(
                 "Kernel address space layout randomization",
                 "Reads /proc/sys/kernel/randomize_va_space. 2 is the usual full randomization.",
                 "Lowering this is a debugging choice. Leave it at 2 on a machine that runs game servers and a dashboard.",
-                kernel_aslr().state,
-                kernel_aslr().recommended,
+                aslr.state,
+                aslr.recommended,
                 false,
                 true,
                 "Helix does not write sysctl. A live change would not survive reboot unless you also persist it in sysctl.d.",
@@ -333,9 +372,9 @@ pub fn inventory(
         ],
         "facts": {
             "kernel": kernel_release(),
-            "apparmor": apparmor_state().detail,
-            "ssh_permit_root": ssh_permit_root().detail,
-            "aslr": kernel_aslr().detail,
+            "apparmor": apparmor.detail,
+            "ssh_permit_root": ssh_root.detail,
+            "aslr": aslr.detail,
             "docker_live_restore": docker_live_restore.detail,
             "unattended_upgrades": unattended.detail,
             "fail2ban": fail2ban.detail,
@@ -467,6 +506,7 @@ fn control(
     })
 }
 
+#[derive(Clone)]
 struct FlagState {
     state: &'static str,
     enabled: bool,

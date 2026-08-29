@@ -966,7 +966,7 @@ impl Default for DashboardPreferences {
                 PrimaryDashboardSection::Strands,
                 PrimaryDashboardSection::Globe,
             ],
-            metrics_refresh_ms: 1_000,
+            metrics_refresh_ms: 5_000,
             home_widgets: home_widgets.clone(),
             home_templates: vec![HomeTemplatePreference {
                 id: "home-main".to_owned(),
@@ -4767,7 +4767,7 @@ mod tests {
         assert_eq!(initial.status(), StatusCode::OK);
         let initial = response_json(initial).await;
         assert_eq!(initial["revision"], 0);
-        assert_eq!(initial["preferences"]["metricsRefreshMs"], 1_000);
+        assert_eq!(initial["preferences"]["metricsRefreshMs"], 5_000);
 
         let preferences = json!({
             "navigationOrder": ["home", "overview", "servers", "storage", "network", "host"],

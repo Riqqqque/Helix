@@ -260,8 +260,69 @@ export function parseHookInstallJob(value: unknown): HookInstallJob {
   };
 }
 
-export function getHookInventory(csrfToken: string, signal?: AbortSignal): Promise<HookInventory> {
-  return requestJson('/api/v1/hooks', parseHookInventory, { csrfToken, signal, timeoutMs: 20_000 });
+function followAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return promise;
+  return new Promise((resolve, reject) => {
+    const abort = (): void => {
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+const HOOK_INVENTORY_CACHE_MS = 8_000;
+let hookInventoryInflight: { csrf: string; promise: Promise<HookInventory> } | null = null;
+let hookInventoryCache: { csrf: string; at: number; value: HookInventory } | null = null;
+
+export function resetHookInventoryPrefetch(): void {
+  hookInventoryInflight = null;
+  hookInventoryCache = null;
+}
+
+export function prefetchHookInventory(csrfToken: string): void {
+  void getHookInventory(csrfToken).catch(() => undefined);
+}
+
+export function getHookInventory(
+  csrfToken: string,
+  signal?: AbortSignal,
+  options?: { fresh?: boolean },
+): Promise<HookInventory> {
+  const fresh = options?.fresh === true;
+  if (
+    !fresh
+    && hookInventoryCache !== null
+    && hookInventoryCache.csrf === csrfToken
+    && Date.now() - hookInventoryCache.at < HOOK_INVENTORY_CACHE_MS
+  ) {
+    return followAbort(Promise.resolve(hookInventoryCache.value), signal);
+  }
+  if (!fresh && hookInventoryInflight !== null && hookInventoryInflight.csrf === csrfToken) {
+    return followAbort(hookInventoryInflight.promise, signal);
+  }
+  const promise = requestJson('/api/v1/hooks', parseHookInventory, { csrfToken, timeoutMs: 20_000 }).then((value) => {
+    hookInventoryCache = { csrf: csrfToken, at: Date.now(), value };
+    return value;
+  });
+  hookInventoryInflight = { csrf: csrfToken, promise };
+  void promise.finally(() => {
+    if (hookInventoryInflight?.promise === promise) hookInventoryInflight = null;
+  });
+  return followAbort(promise, signal);
 }
 
 export function manageHookService(

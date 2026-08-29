@@ -137,20 +137,27 @@ export function visibleDashboardSections(
   );
 }
 
+export const defaultRefreshIntervalMs: RefreshIntervalMs = 5_000;
+const LEGACY_FACTORY_REFRESH_INTERVAL_MS: RefreshIntervalMs = 1_000;
+
+export function isFactoryRefreshInterval(value: RefreshIntervalMs): boolean {
+  return value === defaultRefreshIntervalMs || value === LEGACY_FACTORY_REFRESH_INTERVAL_MS;
+}
+
 export function normalizeRefreshInterval(value: unknown): RefreshIntervalMs {
   const candidate = typeof value === 'string' ? Number(value) : value;
   return refreshIntervalOptions.includes(candidate as RefreshIntervalMs)
     ? (candidate as RefreshIntervalMs)
-    : 1_000;
+    : defaultRefreshIntervalMs;
 }
 
 export function readRefreshInterval(): RefreshIntervalMs {
   try {
-    return normalizeRefreshInterval(
-      canStore() ? globalThis.localStorage.getItem(REFRESH_STORAGE_KEY) : null,
-    );
+    const stored = canStore() ? globalThis.localStorage.getItem(REFRESH_STORAGE_KEY) : null;
+    if (stored === null) return defaultRefreshIntervalMs;
+    return normalizeRefreshInterval(stored);
   } catch {
-    return 1_000;
+    return defaultRefreshIntervalMs;
   }
 }
 

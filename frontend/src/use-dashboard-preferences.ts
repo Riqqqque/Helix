@@ -3,6 +3,7 @@ import { ApiError } from './api';
 import {
   defaultDashboardColors,
   defaultHiddenPages,
+  isFactoryRefreshInterval,
   primaryDashboardSections,
   readDashboardColors,
   readHiddenPages,
@@ -66,7 +67,7 @@ export function shouldMigrateLocalPreferences(
   if (remoteRevision !== 0) return false;
   return (
     !sameValue(preferences.navigationOrder, primaryDashboardSections) ||
-    preferences.metricsRefreshMs !== 1_000 ||
+    !isFactoryRefreshInterval(preferences.metricsRefreshMs) ||
     !sameValue(preferences.homeWidgets, defaultHomeWidgets) ||
     !sameValue(preferences.homeTemplates, defaultHomeTemplates) ||
     preferences.activeHomeId !== defaultHomeTemplates[0]?.id ||
