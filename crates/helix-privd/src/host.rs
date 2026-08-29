@@ -129,10 +129,8 @@ impl HostCommandRunner for ProcessRunner {
         )?;
         Ok(CommandOutput {
             success: output.status.success(),
-            stdout: String::from_utf8(output.stdout)
-                .map_err(|_| format!("{} returned invalid output", program.display()))?,
-            stderr: String::from_utf8(output.stderr)
-                .map_err(|_| format!("{} returned invalid output", program.display()))?,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
     }
 }

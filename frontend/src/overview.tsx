@@ -6,6 +6,7 @@ import { dismissNotice, isDismissed } from './dismissals';
 import { calculatePercent, formatBytes, formatDuration, formatPercent } from './format';
 import { Icon } from './icons';
 import { InfoTip } from './info-tip';
+import { serverIsLive, serverStatusSummary, serverStatusTone } from './control-api';
 
 export interface OverviewPageProps {
   data: DashboardData;
@@ -142,8 +143,8 @@ export function OverviewPage({ data, themeLabel, csrfToken, canManageDocker, onS
         <section class="surface overview-servers">
           <div class="section-title"><div><h2>Servers</h2><p>Helix and imported workloads</p></div><a href="#servers">Manage <Icon name="chevron" size={14} /></a></div>
           <div class="compact-server-list">
-            {(servers.data ?? []).slice().sort((a, b) => Number(b.status === 'online') - Number(a.status === 'online')).slice(0, 6).map((server) => (
-              <div key={server.id}><span class={`status-dot status-dot--${server.status === 'online' ? 'good' : 'idle'}`} /><strong>{server.name}</strong><span>{server.status === 'online' ? `${server.playersOnline}/${server.maxPlayers} players` : 'Offline'}</span><small>{server.software} {server.version}</small></div>
+            {(servers.data ?? []).slice().sort((a, b) => Number(serverIsLive(b.status)) - Number(serverIsLive(a.status))).slice(0, 6).map((server) => (
+              <div key={server.id}><span class={`status-dot status-dot--${serverStatusTone(server.status)}`} /><strong>{server.name}</strong><span>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers)}</span><small>{server.software} {server.version}</small></div>
             ))}
           </div>
         </section>

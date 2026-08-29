@@ -20,10 +20,10 @@ V Rising installs the official dedicated server into an isolated Helix
 container; the host never receives Wine packages.
 
 AMP integration is a bridge to a separate loopback AMP API. Helix may show and
-invoke the AMP actions it understands, but AMP remains responsible for its own
-instances and files. Helix will not steal a live AMP game port or rewrite AMP
-configs; leftover AMP UPnP mappings can be removed only after an exact typed
-confirmation.
+invoke the AMP actions it understands, including idle/sleep versus actually
+online, but AMP remains responsible for its own instances and files. Helix will
+not steal a live AMP game port or rewrite AMP configs; leftover AMP UPnP
+mappings can be removed only after an exact typed confirmation.
 
 The Home page is deliberately modular: widgets can be added, moved, resized,
 renamed, recolored, and removed across multiple exportable layouts without

@@ -193,9 +193,12 @@ browser; open the catalog or View releases for the rest.
 
 AMP stays separate. Helix can import verified instance identity, status,
 players, ports, console data, and supported lifecycle actions that the adapter
-can prove. Helix does not force-kill AMP instances; use Stop here or kill from
-the AMP panel. **Open AMP** uses the configured public panel port, not the private
-loopback API port. AMP-only settings stay in AMP.
+can prove. AMP Idle (sleep) is not treated as online: the game is hibernated,
+the AMP manager is often still running, and Helix offers Start to wake it
+instead of Restart. Stopped, starting, failed, and AMP-manager-stopped states
+are shown as themselves. Helix does not force-kill AMP instances; use Stop here
+or kill from the AMP panel. **Open AMP** uses the configured public panel port,
+not the private loopback API port. AMP-only settings stay in AMP.
 
 Hide removes an import from this browser's list without touching AMP. Deleting
 the upstream AMP instance must happen in AMP; Helix will not reinterpret a Hide

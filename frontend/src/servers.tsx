@@ -50,6 +50,11 @@ import {
   type ServerBackupKeepPolicy,
   type ServerLogSnapshot,
   type TrashedNativeServerCatalog,
+  serverIsLive,
+  serverPrimaryLifecycleAction,
+  serverShowsRuntimeStats,
+  serverStatusLabel,
+  serverStatusTone,
 } from "./control-api";
 import type { DashboardData } from "./dashboard-model";
 import type { RefreshIntervalMs } from "./dashboard-preferences";
@@ -875,7 +880,9 @@ export function serverActionDescription(
   }
   if (server.manager === "amp_import") {
     if (action === "start")
-      return `Helix will ask AMP to start ${server.name} and wait for AMP to report the instance online.`;
+      return server.status === "idle"
+        ? `Helix will ask AMP to wake ${server.name}. Idle means the game is sleeping; AMP's manager is already up.`
+        : `Helix will ask AMP to start ${server.name} and wait for AMP to report the instance online.`;
     if (action === "restart")
       return `Helix will ask AMP to restart ${server.name} and wait for AMP to report the instance online.`;
     if (action === "stop")
@@ -2307,8 +2314,10 @@ function ServerRow({
   const [pending, setPending] = useState<ServerAction | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
-  const online = server.status === "online";
+  const live = serverIsLive(server.status);
+  const showStats = serverShowsRuntimeStats(server.status);
   const running = serverWorkloadIsRunning(server);
+  const primaryAction = serverPrimaryLifecycleAction(server);
   const memoryPercent =
     server.memoryLimitMb > 0
       ? (server.memoryUsedMb / server.memoryLimitMb) * 100
@@ -2339,27 +2348,27 @@ function ServerRow({
           <span>
             {server.software} {server.version}
           </span>
-          <small>{server.instanceName}</small>
+          <small>{serverStatusLabel(server.status)} · {server.instanceName}</small>
         </span>
       </button>
       <div class="server-stat">
         <span>Players</span>
         <strong>
-          {online ? `${server.playersOnline} / ${server.maxPlayers}` : "—"}
+          {live ? `${server.playersOnline} / ${server.maxPlayers}` : "—"}
         </strong>
       </div>
       <div class="server-stat">
         <span>CPU</span>
-        <strong>{online ? formatPercent(server.cpuPercent) : "—"}</strong>
+        <strong>{live ? formatPercent(server.cpuPercent) : "—"}</strong>
       </div>
       <div class="server-stat server-stat--memory">
         <span>Memory</span>
         <strong>
-          {online
+          {showStats
             ? `${formatBytes(server.memoryUsedMb * 1024 * 1024)} / ${formatBytes(server.memoryLimitMb * 1024 * 1024)}`
             : `${server.memoryLimitMb / 1024} GiB limit`}
         </strong>
-        {online && (
+        {live && (
           <ProgressBar
             value={memoryPercent}
             tone={toneForPercent(memoryPercent)}
@@ -2372,10 +2381,10 @@ function ServerRow({
       </div>
       <div class="server-stat">
         <span>TPS</span>
-        <strong>{!online || server.tps === null ? "—" : server.tps.toFixed(1)}</strong>
+        <strong>{!live || server.tps === null ? "—" : server.tps.toFixed(1)}</strong>
       </div>
       <div class="server-actions">
-        {running ? (
+        {primaryAction === "restart" ? (
           <button
             class="button button--quiet"
             type="button"
@@ -2386,7 +2395,7 @@ function ServerRow({
             <Icon name="restart" size={15} />
             Restart
           </button>
-        ) : (
+        ) : primaryAction === "start" ? (
           <button
             class="button button--primary"
             type="button"
@@ -2397,7 +2406,7 @@ function ServerRow({
             <Icon name="play" size={15} />
             Start
           </button>
-        )}
+        ) : null}
         <button
           class="button button--quiet"
           type="button"
@@ -2452,7 +2461,7 @@ function ServerRow({
                 Update
               </button>
             )}
-            {running && (
+            {(running || (server.manager === "amp_import" && server.panelRunning)) && (
               <button
                 class="danger-link"
                 type="button"
@@ -5287,7 +5296,8 @@ function ImportedServerPage({
   const [pending, setPending] = useState<ServerAction | null>(null);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [hideOpen, setHideOpen] = useState(false);
-  const online = server.status === "online";
+  const live = serverIsLive(server.status);
+  const primaryAction = serverPrimaryLifecycleAction(server);
   const panelUrl =
     typeof window === "undefined"
       ? null
@@ -5324,7 +5334,7 @@ function ImportedServerPage({
             <Icon name="edit" size={15} />
             Icon
           </button>
-          {online ? (
+          {primaryAction === "restart" ? (
             <>
               <button
                 class="button button--quiet"
@@ -5360,16 +5370,18 @@ function ImportedServerPage({
             </>
           ) : (
             <>
-              <button
-                class="button button--primary"
-                type="button"
-                disabled={!canManageServers}
-                title={manageTitle}
-                onClick={() => setPending("start")}
-              >
-                <Icon name="play" size={15} />
-                Start
-              </button>
+              {primaryAction === "start" && (
+                <button
+                  class="button button--primary"
+                  type="button"
+                  disabled={!canManageServers}
+                  title={manageTitle}
+                  onClick={() => setPending("start")}
+                >
+                  <Icon name="play" size={15} />
+                  Start
+                </button>
+              )}
               {panelUrl !== null && (
                 <a
                   class="button button--quiet"
@@ -5380,6 +5392,18 @@ function ImportedServerPage({
                   Open AMP
                   <Icon name="external" size={14} />
                 </a>
+              )}
+              {server.panelRunning && (
+                <button
+                  class="button button--danger-quiet"
+                  type="button"
+                  disabled={!canManageServers}
+                  title={manageTitle}
+                  onClick={() => setPending("stop")}
+                >
+                  <Icon name="stop" size={15} />
+                  Stop
+                </button>
               )}
             </>
           )}
@@ -5400,10 +5424,11 @@ function ImportedServerPage({
         <div>
           <strong>This server still belongs to AMP</strong>
           <p>
-            Helix reads its status and offers basic lifecycle shortcuts so the
-            host is visible in one place. It does not pretend this is a
-            Helix-managed server. New servers use Helix’s own manager and
-            receive the full toolset.
+            Helix reads AMP's real instance state, including idle/sleep, and
+            offers basic lifecycle shortcuts so the host is visible in one
+            place. Idle means the game is sleeping; AMP's manager is often still
+            running. It does not pretend this is a Helix-managed server. New
+            servers use Helix’s own manager and receive the full toolset.
           </p>
         </div>
       </section>
@@ -5415,28 +5440,29 @@ function ImportedServerPage({
               <p>Compatibility inventory from AMP</p>
             </div>
             <span
-              class={`state-label state-label--${online ? "good" : "idle"}`}
+              class={`state-label state-label--${serverStatusTone(server.status)}`}
             >
-              {server.status.replace("_", " ")}
+              {serverStatusLabel(server.status)}
             </span>
           </div>
           <div class="server-health-stats">
             <div>
               <span>Players</span>
               <strong>
-                {server.playersOnline} / {server.maxPlayers}
+                {live ? `${server.playersOnline} / ${server.maxPlayers}` : "—"}
               </strong>
             </div>
             <div>
               <span>CPU</span>
-              <strong>{formatPercent(server.cpuPercent)}</strong>
+              <strong>{live ? formatPercent(server.cpuPercent) : "—"}</strong>
             </div>
             <div>
               <span>Memory</span>
               <strong>{formatBytes(server.memoryUsedMb * 1024 * 1024)}</strong>
+              <small>of {formatBytes(server.memoryLimitMb * 1024 * 1024)}</small>
             </div>
             <div>
-              <span>Panel</span>
+              <span>AMP manager</span>
               <strong>{server.panelRunning ? "Running" : "Stopped"}</strong>
             </div>
           </div>

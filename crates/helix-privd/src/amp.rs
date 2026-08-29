@@ -511,7 +511,7 @@ impl AmpClient {
         let panel_running = required_boolean(instance, "Running")
             .map_err(|_| MapServerError::invalid_panel_state())?;
         let metrics = instance.get("Metrics").and_then(Value::as_object);
-        let online = panel_running && metrics.is_some_and(|metrics| !metrics.is_empty());
+        let status = helix_status_from_amp(panel_running, instance, metrics).to_owned();
         let (config, config_warning) = match read_instance_kvp(&self.instance_root, &instance_name)
         {
             Ok(config) => (config, None),
@@ -566,14 +566,7 @@ impl AmpClient {
             kind: "imported",
             software,
             version,
-            status: if online {
-                "online"
-            } else if panel_running {
-                "offline"
-            } else {
-                "manager_stopped"
-            }
-            .to_owned(),
+            status,
             panel_running,
             start_on_boot: boolean(instance, "DaemonAutostart"),
             players_online,
@@ -1355,6 +1348,92 @@ fn server_version(config: &HashMap<String, String>, software: &str) -> String {
         .unwrap_or_else(|| "Managed by AMP".to_owned())
 }
 
+fn helix_status_from_amp(
+    panel_running: bool,
+    instance: &Value,
+    metrics: Option<&serde_json::Map<String, Value>>,
+) -> &'static str {
+    if !panel_running {
+        return "manager_stopped";
+    }
+    if boolean(instance, "Suspended") {
+        return "offline";
+    }
+    let memory_used = metric(metrics, "Memory Usage", "RawValue").unwrap_or(0);
+    match amp_app_state_code(instance) {
+        Some(20) => "online",
+        Some(45 | 50) => "idle",
+        Some(5 | 7 | 10 | 30 | 60 | 80) => "starting",
+        Some(40) => "stopping",
+        Some(70 | 75 | 250) => "updating",
+        Some(100) => "failed",
+        Some(0 | 200 | -1 | 999) => "offline",
+        Some(_) | None => amp_status_from_metrics(metrics, memory_used),
+    }
+}
+
+fn amp_status_from_metrics(
+    metrics: Option<&serde_json::Map<String, Value>>,
+    memory_used: u64,
+) -> &'static str {
+    if metrics.is_some_and(|metrics| !metrics.is_empty()) {
+        if memory_used == 0 { "idle" } else { "online" }
+    } else {
+        "offline"
+    }
+}
+
+fn amp_app_state_code(instance: &Value) -> Option<i64> {
+    let value = instance
+        .get("AppState")
+        .or_else(|| instance.get("ApplicationState"))?;
+    match value {
+        Value::Number(number) => number.as_i64().or_else(|| {
+            number
+                .as_u64()
+                .and_then(|value| i64::try_from(value).ok())
+                .or_else(|| {
+                    number.as_f64().and_then(|value| {
+                        (value.is_finite() && value.fract() == 0.0).then_some(value as i64)
+                    })
+                })
+        }),
+        Value::String(name) => amp_app_state_from_name(name),
+        _ => None,
+    }
+}
+
+fn amp_app_state_from_name(name: &str) -> Option<i64> {
+    Some(
+        match name
+            .trim()
+            .to_ascii_lowercase()
+            .replace([' ', '_'], "")
+            .as_str()
+        {
+            "undefined" => -1,
+            "stopped" => 0,
+            "prestart" => 5,
+            "configuring" => 7,
+            "starting" => 10,
+            "ready" => 20,
+            "restarting" => 30,
+            "stopping" => 40,
+            "preparingforsleep" => 45,
+            "sleeping" | "idle" => 50,
+            "waiting" => 60,
+            "installing" => 70,
+            "updating" => 75,
+            "awaitinguserinput" => 80,
+            "failed" => 100,
+            "suspended" => 200,
+            "maintainence" | "maintenance" => 250,
+            "indeterminate" => 999,
+            _ => return None,
+        },
+    )
+}
+
 fn metric(
     metrics: Option<&serde_json::Map<String, Value>>,
     name: &str,
@@ -1576,6 +1655,85 @@ mod tests {
             .unwrap();
         assert_eq!(inventory.servers[0].status, "manager_stopped");
         assert!(!inventory.servers[0].player_count_verified);
+    }
+
+    #[test]
+    fn amp_sleeping_is_idle_not_online() {
+        let root = create_instance_root("sleeping");
+        let client = test_client(root.path());
+        let mut sleeping = valid_instance("sleeping");
+        sleeping["AppState"] = json!(50);
+        sleeping["Metrics"]["CPU Usage"]["RawValue"] = json!(0.0);
+        sleeping["Metrics"]["Memory Usage"]["RawValue"] = json!(0);
+        sleeping["Metrics"]["Memory Usage"]["MaxValue"] = json!(10_240);
+        let inventory = client.parse_inventory(&json!([sleeping])).unwrap();
+        assert_eq!(inventory.servers[0].status, "idle");
+        assert!(inventory.servers[0].panel_running);
+        assert_eq!(inventory.servers[0].memory_used_mb, 0);
+        assert_eq!(inventory.servers[0].memory_limit_mb, 10_240);
+
+        let mut named = valid_instance("sleeping");
+        named["AppState"] = json!("Sleeping");
+        named["Metrics"]["Memory Usage"]["RawValue"] = json!(0);
+        named["Metrics"]["Memory Usage"]["MaxValue"] = json!(10_240);
+        let inventory = client.parse_inventory(&json!([named])).unwrap();
+        assert_eq!(inventory.servers[0].status, "idle");
+    }
+
+    #[test]
+    fn amp_zero_memory_metrics_without_app_state_are_idle() {
+        let root = create_instance_root("heuristic");
+        let client = test_client(root.path());
+        let mut instance = valid_instance("heuristic");
+        instance["Metrics"]["CPU Usage"]["RawValue"] = json!(0.0);
+        instance["Metrics"]["Memory Usage"]["RawValue"] = json!(0);
+        instance["Metrics"]["Memory Usage"]["MaxValue"] = json!(10_240);
+        let inventory = client.parse_inventory(&json!([instance])).unwrap();
+        assert_eq!(inventory.servers[0].status, "idle");
+    }
+
+    #[test]
+    fn amp_app_state_maps_lifecycle() {
+        let root = create_instance_root("states");
+        let client = test_client(root.path());
+        for (app_state, expected) in [
+            (json!(20), "online"),
+            (json!(10), "starting"),
+            (json!(40), "stopping"),
+            (json!(75), "updating"),
+            (json!(100), "failed"),
+            (json!(0), "offline"),
+            (json!(45), "idle"),
+        ] {
+            let mut instance = valid_instance("states");
+            instance["AppState"] = app_state;
+            let inventory = client.parse_inventory(&json!([instance])).unwrap();
+            assert_eq!(inventory.servers[0].status, expected, "{expected}");
+        }
+
+        let mut suspended = valid_instance("states");
+        suspended["Suspended"] = json!(true);
+        let inventory = client.parse_inventory(&json!([suspended])).unwrap();
+        assert_eq!(inventory.servers[0].status, "offline");
+    }
+
+    #[test]
+    fn amp_app_state_names_and_unknown_codes() {
+        assert_eq!(amp_app_state_from_name("Ready"), Some(20));
+        assert_eq!(amp_app_state_from_name("Idle"), Some(50));
+        assert_eq!(amp_app_state_from_name("PreparingForSleep"), Some(45));
+        assert_eq!(amp_app_state_from_name("Maintainence"), Some(250));
+        assert_eq!(amp_app_state_from_name("nope"), None);
+        let ready = json!({"AppState": 20.0, "Running": true});
+        assert_eq!(helix_status_from_amp(true, &ready, None), "online");
+        let unknown = json!({"AppState": 55, "Running": true});
+        let metrics = json!({"Memory Usage": {"RawValue": 512}})
+            .as_object()
+            .cloned();
+        assert_eq!(
+            helix_status_from_amp(true, &unknown, metrics.as_ref()),
+            "online"
+        );
     }
 
     #[test]
