@@ -74,7 +74,8 @@ deployment guide. Nothing ships with a demo city or demo server.
 
 Broad/unattended package upgrades, public-network
 exposure, portable Wasm Strands, and native Strand sidecars are not implemented.
-Helix can apply a SHA-256-pinned GitHub release to itself from System updates.
+Helix can apply a SHA-256-pinned GitHub release to itself from Host → Linux
+updates.
 Exact selected APT candidates do have a guarded path but no rollback claim.
 Helix can inspect UFW, manage exact owned allow rules, and separately enable
 inactive UFW only after preserving a verified SSH listener; it cannot configure

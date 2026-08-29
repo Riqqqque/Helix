@@ -108,7 +108,7 @@ mutates anyway, reports false success, or bypasses its boundary is in scope.
   be enabled only through a separate confirmed SSH-safety flow; Helix never
   resets or changes defaults and cannot prove outside reachability.
 - Exact selected APT candidates can be applied after revalidation, no-removal
-  simulation, disk/conffile checks, explicit disruption acknowledgement, and
+  preview, disk/conffile checks, explicit disruption acknowledgement, and
   final-version verification. Helix self-update applies a digest-pinned GitHub
   source archive to the dashboard, gateway, and broker only, with Helix-only
   rollback. It is not a signed-key channel and does not replace game containers.

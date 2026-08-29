@@ -126,7 +126,7 @@ started, stopped, or restarted from the Docker inventory page; Servers uses a
 
 Opening the package page is read-only. Package-list refresh and exact selected-
 candidate Apply are separate confirmed jobs. Apply revalidates versions, holds,
-disk headroom, a no-removal/no-new-package simulation, conffile policy, and final
+disk headroom, a no-removal/no-new-package preview, conffile policy, and final
 installed versions. It does not claim rollback or reboot automatically. Helix
 self-update can apply a SHA-256-pinned GitHub source archive to the dashboard,
 gateway, and broker, then roll those back if health-check fails. `git pull` is

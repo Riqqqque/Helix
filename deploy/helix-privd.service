@@ -18,6 +18,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
+# APT's https helper wants to drop to _apt (uid 42). NoNewPrivileges blocks
+# that seteuid, so helix-privd passes APT::Sandbox::User=root for package work
+# instead of loosening this unit.
 # Managed content roots stay explicit. The OS package, UFW, and recurring-reboot
 # operations also need the package-managed trees and kernel firewall controls;
 # removing these exceptions intentionally makes those mutations fail closed.

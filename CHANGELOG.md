@@ -25,6 +25,9 @@ release, not a public-internet support promise.
 
 ### Changed
 
+- Host puts Linux updates at the top, with Check for updates as the main action.
+  Copy talks about a preview of what would change instead of a "simulation", and
+  it says when Linux needs a host reboot. Helix still never reboots for you.
 - Overlay windows keep a real inset so titles, copy, forms, and actions no
   longer sit on the border.
 - Copy on join addresses, Terminal, and Home tiles flips to Copied so you can
@@ -36,6 +39,9 @@ release, not a public-internet support promise.
 
 ### Fixed
 
+- Checking for Linux updates no longer dies on APT's HTTPS helper (`seteuid 42`
+  / `Method https has died`). The host broker keeps APT as root inside its
+  existing sandbox instead of letting APT drop to `_apt`.
 - Overview and Host process count is Linux processes (thread groups), not
   kernel threads. `/proc/loadavg` still supplies the thread total, shown as a
   subtitle. On this class of host that is typically a few hundred processes and

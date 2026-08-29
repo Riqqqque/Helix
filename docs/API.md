@@ -215,7 +215,7 @@ file still listing that port) can be removed with
 
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/system/packages` | `system.packages.read` | Read installed/candidate versions, sizes, source/category, held/security/restart hints, cache age, APT simulation state, and Helix GitHub-update readiness |
+| `GET` | `/api/v1/system/packages` | `system.packages.read` | Read installed/candidate versions, sizes, source/category, held/security/restart hints, cache age, APT preview state, and Helix GitHub-update readiness |
 | `POST` | `/api/v1/system/packages/refresh` | `system.packages.write` | Start a serialized bounded APT package-list refresh job |
 | `POST` | `/api/v1/system/packages/apply` | `system.packages.write` | Start a guarded job for exact selected installed/candidate tuples |
 | `GET` | `/api/v1/system/packages/jobs/{job_id}` | `system.packages.read` | Read bounded refresh/apply/Helix-update progress, result, and safe logs |
@@ -224,7 +224,7 @@ file still listing that port) can be removed with
 
 Opening the inventory does not refresh APT lists or mutate dpkg. Refresh and
 apply are separate explicit jobs. Apply rechecks current/candidate versions,
-holds, download headroom, and an exact no-removal/no-new-package simulation;
+holds, download headroom, and an exact no-removal/no-new-package preview;
 preserves current conffiles; requires disruption acknowledgement plus the
 literal selection confirmation; verifies final versions; and never reboots.
 The response makes `rollback_claimed: false` explicit for APT. Helix self-update

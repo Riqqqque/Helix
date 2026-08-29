@@ -262,6 +262,41 @@ describe("infrastructure evidence panels", () => {
     expect(markup).toContain("Helix 1.0.0");
     expect(markup).toContain("Check GitHub");
     expect(markup).toContain("Update Helix");
+    expect(markup).toContain("Linux packages");
+    expect(markup).toContain("can be upgraded");
+    expect(markup).not.toMatch(/Simulation/u);
     expect(markup.match(/disabled/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("says a host reboot is needed in plain language when Linux asked for one", () => {
+    const markup = render(
+      <PackageInventoryView
+        data={{
+          ...packages,
+          hostRestart: {
+            rebootRequiredMarkerPresent: true,
+            packages: ["linux-image-generic"],
+            automaticReboot: false,
+          },
+        }}
+        filter="updates"
+        query=""
+        page={0}
+        onFilter={() => undefined}
+        onQuery={() => undefined}
+        onPage={() => undefined}
+        selected={new Set()}
+        onToggleSelected={() => undefined}
+        onSelectSafeUpdates={() => undefined}
+        onApplySelected={() => undefined}
+        onCheckHelix={() => undefined}
+        onUpdateHelix={() => undefined}
+        mutationBusy={false}
+      />,
+    );
+    expect(markup).toContain("Linux needs a host reboot");
+    expect(markup).toContain("linux-image-generic");
+    expect(markup).toContain("#settings");
+    expect(markup).not.toMatch(/Simulation/u);
   });
 });
