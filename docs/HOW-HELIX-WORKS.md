@@ -6,7 +6,8 @@ Helix is one private control center for a Linux server. The dashboard shows the
 host, storage, network evidence, services, files, and game servers without
 placing the web process in the game or player traffic path.
 
-The current build is a private alpha, not a public release. Its authentication,
+The current build is Helix 1.0, a private-LAN release, not a public-internet
+product. Its authentication,
 modular Home page, typed Linux broker, native Minecraft manager, separate AMP
 bridge, persistent console history, recoverable backups, and bounded host
 controls are real. Complete supported-host, fault, recovery, security, and game
@@ -123,8 +124,9 @@ Opening the package page is read-only. Package-list refresh and exact selected-
 candidate Apply are separate confirmed jobs. Apply revalidates versions, holds,
 disk headroom, a no-removal/no-new-package simulation, conffile policy, and final
 installed versions. It does not claim rollback or reboot automatically. Helix
-self-update remains unavailable until signed, digest-pinned releases can be
-staged, health-checked, and rolled back safely.
+self-update can apply a SHA-256-pinned GitHub source archive to the dashboard,
+gateway, and broker, then roll those back if health-check fails. `git pull` is
+not used. Game containers are not replaced.
 
 ## Home and future Strands
 
@@ -172,7 +174,7 @@ substitute for an independent off-host copy or a clean-machine restore drill.
 - **Risky controls are narrow:** root authority crosses typed operations with
   exact identities. The optional general shell runs separately as a normal
   Linux user and needs a fresh password proof per connection.
-- **Unsupported remains unsupported:** signed self-update, outside reachability,
+- **Unsupported remains unsupported:** independently signed Helix keys, outside reachability,
   public exposure, third-party Strand execution, and unimplemented
   server/content combinations are not presented as success.
 

@@ -288,6 +288,8 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
                 .layer(DefaultBodyLimit::max(PACKAGE_UPDATE_BODY_LIMIT_BYTES)),
         )
         .route("/system/packages/jobs/{job_id}", get(system_package_job))
+        .route("/system/helix/check", post(check_helix_update))
+        .route("/system/helix/apply", post(apply_helix_update))
         .route("/hooks", get(hook_inventory))
         .route(
             "/hooks/{hook_id}/install/preflight",
@@ -1468,6 +1470,14 @@ struct ApplySystemPackageUpdatesBody {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ApplyHelixUpdateBody {
+    target_tag: String,
+    confirmation: String,
+    disruption_acknowledged: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ServerActionBody {
     action: ServerAction,
 }
@@ -1948,6 +1958,36 @@ async fn apply_system_package_updates(
         &state,
         BrokerRequest::ApplySystemPackageUpdates {
             packages: body.packages,
+            confirmation: body.confirmation,
+            disruption_acknowledged: body.disruption_acknowledged,
+        },
+    )
+    .await
+}
+
+async fn check_helix_update(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<EmptyPackageActionBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "system.packages.read").await?;
+    let Json(EmptyPackageActionBody {}) = body.map_err(auth::map_json_rejection)?;
+    broker_json(&state, BrokerRequest::CheckHelixUpdate {}).await
+}
+
+async fn apply_helix_update(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<ApplyHelixUpdateBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "system.packages.write").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::ApplyHelixUpdate {
+            target_tag: body.target_tag,
             confirmation: body.confirmation,
             disruption_acknowledged: body.disruption_acknowledged,
         },
@@ -5536,6 +5576,28 @@ mod tests {
                 ),
                 &client.csrf,
             ),
+            with_csrf(
+                with_cookie(
+                    post_json("/api/v1/system/helix/check", &json!({}), 72),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ),
+            with_csrf(
+                with_cookie(
+                    post_json(
+                        "/api/v1/system/helix/apply",
+                        &json!({
+                            "target_tag": "v1.0.1",
+                            "confirmation": "UPDATE HELIX",
+                            "disruption_acknowledged": true
+                        }),
+                        73,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ),
         ] {
             let response = context
                 .app
@@ -5612,6 +5674,28 @@ mod tests {
                             "disruption_acknowledged": false
                         }),
                         69,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ),
+            with_csrf(
+                with_cookie(
+                    post_json("/api/v1/system/helix/check", &json!({}), 70),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ),
+            with_csrf(
+                with_cookie(
+                    post_json(
+                        "/api/v1/system/helix/apply",
+                        &json!({
+                            "target_tag": "v1.0.1",
+                            "confirmation": "UPDATE HELIX",
+                            "disruption_acknowledged": true
+                        }),
+                        71,
                     ),
                     &client.cookie,
                 ),

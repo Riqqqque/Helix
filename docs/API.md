@@ -2,7 +2,7 @@
 
 ## Status
 
-This document describes the implemented private-alpha HTTP surface. It is not a
+This document describes the implemented private-LAN HTTP surface. It is not a
 stable public API promise. Executable route, protocol, and frontend-adapter tests
 remain authoritative when this document and code disagree.
 
@@ -213,18 +213,22 @@ file still listing that port) can be removed with
 
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/system/packages` | `system.packages.read` | Read installed/candidate versions, sizes, source/category, held/security/restart hints, cache age, and APT simulation state |
+| `GET` | `/api/v1/system/packages` | `system.packages.read` | Read installed/candidate versions, sizes, source/category, held/security/restart hints, cache age, APT simulation state, and Helix GitHub-update readiness |
 | `POST` | `/api/v1/system/packages/refresh` | `system.packages.write` | Start a serialized bounded APT package-list refresh job |
 | `POST` | `/api/v1/system/packages/apply` | `system.packages.write` | Start a guarded job for exact selected installed/candidate tuples |
-| `GET` | `/api/v1/system/packages/jobs/{job_id}` | `system.packages.read` | Read bounded refresh/apply progress, result, and safe logs |
+| `GET` | `/api/v1/system/packages/jobs/{job_id}` | `system.packages.read` | Read bounded refresh/apply/Helix-update progress, result, and safe logs |
+| `POST` | `/api/v1/system/helix/check` | `system.packages.read` | Refresh the GitHub latest-release check for Helix itself |
+| `POST` | `/api/v1/system/helix/apply` | `system.packages.write` | Start a digest-pinned Helix source apply job for an exact `vMAJOR.MINOR.PATCH` tag |
 
 Opening the inventory does not refresh APT lists or mutate dpkg. Refresh and
 apply are separate explicit jobs. Apply rechecks current/candidate versions,
 holds, download headroom, and an exact no-removal/no-new-package simulation;
 preserves current conffiles; requires disruption acknowledgement plus the
 literal selection confirmation; verifies final versions; and never reboots.
-The response makes `rollback_claimed: false` explicit. Helix self-update remains
-unavailable and has no route.
+The response makes `rollback_claimed: false` explicit for APT. Helix self-update
+is a separate control: it requires `UPDATE HELIX`, disruption acknowledgement,
+and a newer digest-pinned GitHub tag. It claims rollback only for Helix
+dashboard/gateway images and broker binaries. `git_pull_used` stays false.
 
 ### Hooks
 
@@ -494,10 +498,10 @@ an optimistic frontend transition succeeded.
 
 Within `/api/v1`, additive response fields may appear. Removing a field or
 changing its meaning requires an explicit version/deprecation decision. The
-private-alpha API has not completed a public compatibility period.
+private-LAN API has not completed a public compatibility period.
 
 Still unvalidated for public support: public exposure of the Helix dashboard, arbitrary router protocols, a general TLS
 and proxy deployment, independent authentication/broker/terminal review, broad
 supported-Ubuntu matrices, browser reconnect events, live UFW mutation and
-package-interruption matrices, signed self-update, and broad game or modpack
+package-interruption matrices, independently signed Helix keys, and broad game or modpack
 compatibility.

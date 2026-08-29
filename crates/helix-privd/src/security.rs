@@ -162,7 +162,7 @@ pub fn inventory(
                 true,
                 false,
                 true,
-                "Helix is a private-alpha LAN console. Publishing it, putting it behind a generic reverse proxy, or trusting forwarded headers is a different product with a different review.",
+                "Helix is a private-LAN console. Publishing it, putting it behind a generic reverse proxy, or trusting forwarded headers is a different product with a different review.",
                 None,
             ),
             control(

@@ -363,9 +363,19 @@ impl PackageManager {
             },
             "helix_self_update": {
                 "available": false,
-                "reason_code": "verified_release_pipeline_not_implemented",
-                "reason": "Helix self-update remains unavailable until releases are signed and digest-pinned and the updater has staging, configuration/data backup, health verification, and automatic rollback.",
-                "git_pull_used": false
+                "reason_code": "github_release_check_pending",
+                "reason": "Helix fills this from a digest-pinned GitHub release check.",
+                "git_pull_used": false,
+                "current_version": env!("CARGO_PKG_VERSION"),
+                "latest_version": Value::Null,
+                "latest_tag": Value::Null,
+                "release_url": Value::Null,
+                "release_notes": Value::Null,
+                "update_available": false,
+                "compose_detected": false,
+                "required_confirmation": "UPDATE HELIX",
+                "rollback_claimed": true,
+                "automatic_reboot": false
             },
             "tools": {
                 "dpkg_query": dpkg_available,

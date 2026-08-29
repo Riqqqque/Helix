@@ -9,7 +9,7 @@ Helix keeps plans and evidence separate:
 - [`ROADMAP.md`](https://github.com/Riqqqque/Helix/blob/main/ROADMAP.md) describes
   dependency order, not promises or dates.
 
-The current private alpha includes the authenticated dashboard, modular Home,
+The current private-LAN 1.0 release includes the authenticated dashboard, modular Home,
 typed Linux broker, configured-root storage tools, native Docker-backed
 Minecraft manager, separate AMP bridge, persistent console history, recoverable
 backups, safe host controls, network/UFW inventory and narrow owned-rule
@@ -18,14 +18,15 @@ terminal, and a compatibility-aware Modrinth marketplace. A narrow “Start with
 declared-hash-verified server-safe subsets from listed stable server-capable
 Fabric `.mrpack` releases.
 
-Public release remains blocked on supported-host lifecycle matrices,
+Public-internet release remains blocked on supported-host lifecycle matrices,
 independent security review, recovery and fault drills, live disposable UFW and
-reboot validation, signed artifacts, safe update design, accessibility/mobile
+reboot validation, independently signed artifacts, accessibility/mobile
 review, and real Minecraft version matrices.
 
-Broad/unattended Package Apply, package rollback, and signed self-update are
+Broad/unattended Package Apply and package rollback are
 unavailable. Exact selected APT candidates can be applied after strict preflight
-and explicit confirmation. Public exposure is not supported. Modpack create is a server-safe subset from
+and explicit confirmation. Helix can apply a digest-pinned GitHub release to
+itself. Public exposure is not supported. Modpack create is a server-safe subset from
 Modrinth or public CurseForge catalogs, not a full client copy. Unknown loaders
 and every upstream pack remain unclaimed.
 

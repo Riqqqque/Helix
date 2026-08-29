@@ -2,7 +2,7 @@
 
 ## Status
 
-This is a private-alpha deployment example, not a supported installer. Use it
+This is a private-LAN deployment example, not a public-internet installer. Use it
 on a network you control, with current backups and a rollback plan. Do not bind
 it to every interface, forward its port, place it behind a public tunnel, or
 treat a successful container start as a completed security review.
@@ -89,6 +89,14 @@ Before starting anything:
    `deploy/helix-privd.docker-sock.conf` as a drop-in if the unit was customized.
 6. Keep the deployment `.env` operator-owned and mode `0600`.
 7. Keep world data, state, and backups out of the image and source tree.
+
+Install the broker unit and the Helix-update finalize unit:
+
+```text
+install -m 0644 deploy/helix-privd.service /etc/systemd/system/helix-privd.service
+install -m 0644 deploy/helix-finalize-update.service /etc/systemd/system/helix-finalize-update.service
+systemctl daemon-reload
+```
 
 The checked service expects the broker binary and configuration at the paths
 declared in `deploy/helix-privd.service`. Its socket path must match the
@@ -234,7 +242,8 @@ Confirm on the host that:
   expected identities;
 - unrelated Docker containers, UFW rules, services, and storage were unchanged;
 - the Network page labels outside reachability `unverified`; and
-- the package and Helix self-update controls remain unavailable.
+- Helix Update on System updates can check GitHub, and Apply stays disabled
+  until a newer digest-pinned tag exists and Compose is detected.
 
 The Start on boot setting changes only the exact configured dashboard/gateway
 container restart policies and does not stop/start them. A later Compose

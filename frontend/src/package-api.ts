@@ -67,10 +67,20 @@ export interface SystemPackageInventory {
     packageRemovalsAllowed: false;
   };
   helixSelfUpdate: {
-    available: false;
+    available: boolean;
     reasonCode: string;
     reason: string;
     gitPullUsed: false;
+    currentVersion: string;
+    latestVersion: string | null;
+    latestTag: string | null;
+    releaseUrl: string | null;
+    releaseNotes: string | null;
+    updateAvailable: boolean;
+    composeDetected: boolean;
+    requiredConfirmation: string;
+    rollbackClaimed: true;
+    automaticReboot: false;
   };
   tools: {
     dpkgQuery: boolean;
@@ -218,6 +228,27 @@ function parsePackage(value: unknown): SystemPackage {
   };
 }
 
+function parseHelixSelfUpdate(value: unknown): SystemPackageInventory["helixSelfUpdate"] {
+  const context = "Helix update readiness";
+  const selfUpdate = expectRecord(value, context);
+  return {
+    available: bool(selfUpdate, "available", context),
+    reasonCode: text(selfUpdate, "reason_code", context),
+    reason: text(selfUpdate, "reason", context),
+    gitPullUsed: requiredFalse(selfUpdate, "git_pull_used", context),
+    currentVersion: text(selfUpdate, "current_version", context),
+    latestVersion: nullableText(selfUpdate, "latest_version", context),
+    latestTag: nullableText(selfUpdate, "latest_tag", context),
+    releaseUrl: nullableText(selfUpdate, "release_url", context),
+    releaseNotes: nullableText(selfUpdate, "release_notes", context),
+    updateAvailable: bool(selfUpdate, "update_available", context),
+    composeDetected: bool(selfUpdate, "compose_detected", context),
+    requiredConfirmation: text(selfUpdate, "required_confirmation", context),
+    rollbackClaimed: requiredTrue(selfUpdate, "rollback_claimed", context),
+    automaticReboot: requiredFalse(selfUpdate, "automatic_reboot", context),
+  };
+}
+
 export function parseSystemPackageInventory(
   value: unknown,
 ): SystemPackageInventory {
@@ -231,10 +262,6 @@ export function parseSystemPackageInventory(
   const simulation = expectRecord(root.simulation, "package simulation");
   const restart = expectRecord(root.host_restart, "host restart state");
   const apply = expectRecord(root.upgrade_apply, "package update readiness");
-  const selfUpdate = expectRecord(
-    root.helix_self_update,
-    "Helix update readiness",
-  );
   const tools = expectRecord(root.tools, "package tools");
   return {
     availability: literal(root, "availability", context, [
@@ -383,20 +410,7 @@ export function parseSystemPackageInventory(
         "package update readiness",
       ),
     },
-    helixSelfUpdate: {
-      available: requiredFalse(
-        selfUpdate,
-        "available",
-        "Helix update readiness",
-      ),
-      reasonCode: text(selfUpdate, "reason_code", "Helix update readiness"),
-      reason: text(selfUpdate, "reason", "Helix update readiness"),
-      gitPullUsed: requiredFalse(
-        selfUpdate,
-        "git_pull_used",
-        "Helix update readiness",
-      ),
-    },
+    helixSelfUpdate: parseHelixSelfUpdate(root.helix_self_update),
     tools: {
       dpkgQuery: bool(tools, "dpkg_query", "package tools"),
       aptCache: bool(tools, "apt_cache", "package tools"),
@@ -477,6 +491,35 @@ export function applySystemPackageUpdates(
       confirmation,
       disruption_acknowledged: disruptionAcknowledged,
     },
+    csrfToken,
+    timeoutMs: 20_000,
+  });
+}
+
+export function applyHelixUpdate(
+  targetTag: string,
+  confirmation: string,
+  disruptionAcknowledged: boolean,
+  csrfToken: string,
+): Promise<{ jobId: string }> {
+  return requestJson("/api/v1/system/helix/apply", parseJobDispatch, {
+    method: "POST",
+    body: {
+      target_tag: targetTag,
+      confirmation,
+      disruption_acknowledged: disruptionAcknowledged,
+    },
+    csrfToken,
+    timeoutMs: 20_000,
+  });
+}
+
+export function checkHelixUpdate(
+  csrfToken: string,
+): Promise<SystemPackageInventory["helixSelfUpdate"]> {
+  return requestJson("/api/v1/system/helix/check", parseHelixSelfUpdate, {
+    method: "POST",
+    body: {},
     csrfToken,
     timeoutMs: 20_000,
   });

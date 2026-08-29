@@ -1,6 +1,6 @@
 # Helix Progress
 
-Last updated: 2026-08-28
+Last updated: 2026-08-29
 
 This is the implementation ledger. [ROADMAP.md](ROADMAP.md) describes intended
 ordering; it is not evidence that a feature works.
@@ -10,16 +10,16 @@ Status vocabulary: **NOT STARTED**, **DESIGNING**, **IMPLEMENTING**,
 
 ## Overall status
 
-Helix is a **private alpha**. The authenticated dashboard, typed Linux broker,
+Helix is a **private-LAN 1.0 release**. The authenticated dashboard, typed Linux broker,
 native Minecraft manager, optional AMP bridge, Hooks, multi-layout Home,
 storage tools, selected package updates, host controls, optional
 unprivileged terminal, and installable UI-only Strands are implemented. Portable tests and focused mock/pure
 Linux-boundary tests pass in the current workspace.
 
-This is not a public-release claim. Clean supported-host matrices, destructive
-fault injection, independent security review, signed artifacts, verified
-self-update, recovery drills, broad game-version coverage, and public-network
-review remain open. Public release status is **BLOCKED**.
+This is not a public-internet release claim. Clean supported-host matrices, destructive
+fault injection, independent security review, independently signed artifacts,
+recovery drills, broad game-version coverage, and public-network
+review remain open. Public-internet release status is **BLOCKED**.
 
 ## Current implementation
 
@@ -50,7 +50,7 @@ review remain open. Public release status is **BLOCKED**.
 | Game port pools and forwarding | IMPLEMENTED — UNVALIDATED | Minecraft can allocate from bounded ordered ranges and priority ports while creation is serialized, skipping assigned/bound ports. Opt-in public setup refuses existing router mappings, verifies one exact TCP UPnP mapping, journals ownership, and adds UFW only when already active. Controlled-router mutation, CGNAT, reboot, and multi-router matrices remain open. |
 | UFW rule management | IMPLEMENTED — UNVALIDATED | Named TCP/UDP single-port or bounded-range allow rules use exact opaque Helix comments, durable ownership records, a global mutation lock, before/after verification, safe delete, and bounded Undo. A separate exact-phrase activation flow first proves the selected SSH TCP port is listening, stages a durable SSH safety rule, enables UFW, verifies both, and attempts to restore inactive state on failure. Helix never resets UFW or changes defaults. These mutations have mock/pure coverage but have not completed a disposable live-UFW matrix. |
 | System packages | IMPLEMENTED — UNVALIDATED | dpkg/APT inventory reports installed/candidate versions, sizes, source/category/description, held/security/restart hints, cache timestamp, and simulation state. Explicit refresh and exact selected-candidate apply jobs serialize mutations, revalidate versions/holds/disk/no-removal simulation, preserve current conffiles, verify final versions, retain bounded logs, and never reboot automatically. There is deliberately no package rollback claim. Disposable interruption/conffile/dpkg-recovery matrices remain open. |
-| Helix self-update | NOT STARTED | The UI reports self-update unavailable. There is no `git pull` updater. Signed/digest-pinned releases, staging, configuration/data backup, health verification, and automatic rollback must exist before this can be enabled. |
+| Helix self-update | IMPLEMENTED — UNVALIDATED | Host → System updates checks GitHub for a newer `vMAJOR.MINOR.PATCH` release and can apply a SHA-256-pinned source archive. The job rebuilds only dashboard/gateway, replaces helix-privd and helix-terminald, health-checks, and restores those on failure. `git pull` is not used. Game containers, AMP, and Plex stay running. Independently signed keys, interruption matrices, and a live apply drill remain open. |
 | Hooks | IMPLEMENTED — UNVALIDATED | The broker inventories exact allowlisted Plex, Tailscale, Pterodactyl Wings, and Jellyfin systemd units plus the AMP API adapter, Docker Engine containers, and a detected Portainer UI. Cgroup memory/CPU is used when systemd exposes it; Docker totals use engine stats when `docker stats` succeeds. The UI provides verified supported lifecycle/start-after-boot actions, local panel links, and guided official setup for absent services. It does not run remote install scripts, invent credentials, or claim full upstream API parity. |
 | Optional host terminal | IMPLEMENTED — UNVALIDATED | A lazy xterm frontend opens a real PTY through a separate non-root Linux service. Every connection requires the current Helix password, a 30-second single-use session-bound HttpOnly ticket, exact Origin/subprotocol checks, a distinct socket group, and Linux `SO_PEERCRED` matching the pinned dashboard UID. Commands/output are not audited or retained; disconnect kills the PTY. Protocol/unit tests, a real Linux PTY/resize/exit smoke, exact accepted-peer and rejected-peer checks, and a no-I/O-in-daemon-logs check pass. Clean-host service, authenticated browser, broader hostile-peer, sudo, and fault matrices remain open. |
 | Tailscale compatibility | IMPLEMENTED — UNVALIDATED | Container configuration can expose an explicitly constrained second private gateway suitable for an existing Tailscale route, while Hooks can detect/control an already installed exact service. Helix does not install, authenticate, or reconfigure Tailscale. Public-network exposure remains unsupported. |

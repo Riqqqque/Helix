@@ -2,14 +2,15 @@
 
 ## Project status
 
-Helix is a private alpha. It has real authentication, capability checks, a
+Helix is a private-LAN release. It has real authentication, capability checks, a
 typed root broker, configured-root file operations, native game management, and
 a constrained private gateway, but it has not completed an independent security
 review or a public-network deployment review.
 
 Do not expose the current build directly to the public internet or use Helix as
 the only protection or copy for credentials, worlds, saves, or backups. There
-are no supported release branches or security-maintenance guarantees yet.
+are no supported public-internet release branches or security-maintenance
+guarantees yet.
 
 The detailed current boundaries and open gates are in
 [`docs/SECURITY.md`](docs/SECURITY.md) and
@@ -43,7 +44,7 @@ Remove passwords, tokens, cookies, CSRF proofs, private addresses/hostnames,
 storage paths, personal data, world content, and unrelated logs. Use synthetic
 test data whenever possible.
 
-No response or remediation SLA is promised during the alpha. Receipt, triage,
+No response or remediation SLA is promised for this private-LAN line. Receipt, triage,
 coordinated disclosure, affected-version analysis, and credit are handled
 through the private channel.
 
@@ -73,10 +74,12 @@ Especially useful reports include:
   or storage analysis; and
 - a dashboard/broker failure that stops an independent game container.
 
-Broad/unattended Package Apply, Helix self-update, public exposure, third-party
+Broad/unattended Package Apply, public exposure, third-party
 Strand execution, and unsupported Minecraft loader/modpack paths are absent by
 design. Exact selected APT candidates do have a guarded explicit update path;
-it makes no rollback claim and never reboots automatically. The one
+it makes no rollback claim and never reboots automatically. Helix self-update
+applies a digest-pinned GitHub source archive to the dashboard, gateway, and
+broker only; it is not a signed-key channel and does not touch game containers. The one
 modpack path is limited to declared-hash-verified server-safe subsets from
 listed stable server-capable Fabric `.mrpack` releases; non-Fabric loaders and
 full-pack parity remain unavailable. Reporting only that an explicitly
@@ -106,7 +109,9 @@ mutates anyway, reports false success, or bypasses its boundary is in scope.
   resets or changes defaults and cannot prove outside reachability.
 - Exact selected APT candidates can be applied after revalidation, no-removal
   simulation, disk/conffile checks, explicit disruption acknowledgement, and
-  final-version verification. There is no signed Helix self-update route.
+  final-version verification. Helix self-update applies a digest-pinned GitHub
+  source archive to the dashboard, gateway, and broker only, with Helix-only
+  rollback. It is not a signed-key channel and does not replace game containers.
 - The optional host terminal is a separate non-root Linux service. A 30-second
   one-use ticket requires a fresh Helix password proof, and the socket checks a
   distinct group plus the dashboard process UID through `SO_PEERCRED`. Helix
@@ -137,11 +142,13 @@ Helix path before treating it as a security defect.
 
 ## Supported versions
 
-No version is supported for production use.
+`1.0.0` is the current private-LAN release. Public-internet production use is
+not supported. There is no SLA.
 
 | Version | Security support |
 | --- | --- |
-| `main` / `0.1.0-alpha.1` source | Private development preview; no support guarantee |
+| `1.0.0` / `v1.0.0` GitHub source | Private-LAN release; digest-pinned source archive; no public-internet support |
+| `main` | Development tree; use a tagged release on a live host |
 
 This changes only after the documented installation, authentication,
 authorization, broker, filesystem, secret-redaction, update-integrity,

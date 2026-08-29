@@ -194,9 +194,19 @@ const packages: SystemPackageInventory = {
   },
   helixSelfUpdate: {
     available: false,
-    reasonCode: "verified_release_pipeline_not_implemented",
-    reason: "Signed staged releases and health rollback are required.",
+    reasonCode: "already_current",
+    reason: "This host is already on Helix 1.0.0.",
     gitPullUsed: false,
+    currentVersion: "1.0.0",
+    latestVersion: "1.0.0",
+    latestTag: "v1.0.0",
+    releaseUrl: "https://github.com/Riqqqque/Helix/releases/tag/v1.0.0",
+    releaseNotes: "Private LAN release.",
+    updateAvailable: false,
+    composeDetected: true,
+    requiredConfirmation: "UPDATE HELIX",
+    rollbackClaimed: true,
+    automaticReboot: false,
   },
   tools: { dpkgQuery: true, aptCache: true, aptGet: true, aptMark: true },
   errors: [],
@@ -238,6 +248,8 @@ describe("infrastructure evidence panels", () => {
         onToggleSelected={() => undefined}
         onSelectSafeUpdates={() => undefined}
         onApplySelected={() => undefined}
+        onCheckHelix={() => undefined}
+        onUpdateHelix={() => undefined}
         mutationBusy={false}
       />,
     );
@@ -247,7 +259,9 @@ describe("infrastructure evidence panels", () => {
     expect(markup).toContain("1.9 MiB");
     expect(markup).toContain("0 selected");
     expect(markup).toContain("Select safe updates (1)");
-    expect(markup).toContain("Self-update unavailable");
+    expect(markup).toContain("Helix 1.0.0");
+    expect(markup).toContain("Check GitHub");
+    expect(markup).toContain("Update Helix");
     expect(markup.match(/disabled/g)?.length).toBeGreaterThanOrEqual(2);
   });
 });

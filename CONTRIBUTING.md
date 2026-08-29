@@ -1,6 +1,6 @@
 # Contributing to Helix
 
-Helix is private-alpha systems software. Small, well-tested changes are more
+Helix is private-LAN systems software. Small, well-tested changes are more
 useful than broad feature scaffolding, and a green build does not by itself make
 a runtime, game, backup, deployment, or security claim true.
 
