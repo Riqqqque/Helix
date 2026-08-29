@@ -65,7 +65,7 @@ overcommit.
 | Surface | Current boundary |
 | --- | --- |
 | Instance inventory | Bounded by the native/AMP manager rather than an unbounded browser fetch |
-| Console history | Cursor pagination, maximum 500 entries per page, configured byte/file retention |
+| Console history | Paged history, maximum 500 entries per page, configured byte/file retention |
 | Recent logs | Stable bounded tail response |
 | Metrics | Configurable bounded polling; no per-player polling loop |
 | Commands | One bounded typed console line with per-instance serialization |

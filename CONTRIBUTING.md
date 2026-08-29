@@ -93,6 +93,10 @@ and practical. Keep AMP separate from Helix-native servers, distinguish a
 listener from outside reachability, and avoid package/self-update, player-count,
 loader, modpack, or public-readiness claims the evidence does not support.
 
+Commits are attributed to the owner only. Do not add `Co-authored-by` trailers.
+Copy `scripts/git-hooks/commit-msg` to `.git/hooks/commit-msg` so those trailers
+are stripped if a tool injects them.
+
 ## Security reports
 
 Do not open a public issue for a vulnerability that could put users or data at risk. Follow [SECURITY.md](SECURITY.md) instead.
