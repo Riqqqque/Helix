@@ -116,6 +116,7 @@ import {
   saveVRisingPortPolicy,
 } from "./port-policy-api";
 import { Dialog } from "./modal";
+import { CopyButton } from "./copy-button";
 import { ServerArtwork, ServerIconDialog } from "./server-artwork";
 import {
   consoleHistoryEntryKey,
@@ -4768,14 +4769,7 @@ function NativeServerPage({
                   <span>LOCAL / LAN</span>
                   <strong>{joinAddress}</strong>
                   <small>Use this address from the same LAN.</small>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void navigator.clipboard?.writeText(joinAddress)
-                    }
-                  >
-                    Copy
-                  </button>
+                  <CopyButton text={joinAddress} />
                 </article>
                 <article>
                   <span>TAILSCALE</span>
@@ -4790,16 +4784,9 @@ function NativeServerPage({
                       : "Use from devices on the same tailnet."}
                   </small>
                   {tailscaleAddress !== null && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void navigator.clipboard?.writeText(
-                          formatJoinAddress(tailscaleAddress, detail.gamePort),
-                        )
-                      }
-                    >
-                      Copy
-                    </button>
+                    <CopyButton
+                      text={formatJoinAddress(tailscaleAddress, detail.gamePort)}
+                    />
                   )}
                 </article>
                 <article>
@@ -4809,14 +4796,7 @@ function NativeServerPage({
                   </strong>
                   <small>{publicInternetNote}</small>
                   {publicJoinAddress !== null && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void navigator.clipboard?.writeText(publicJoinAddress)
-                      }
-                    >
-                      Copy
-                    </button>
+                    <CopyButton text={publicJoinAddress} />
                   )}
                 </article>
               </div>

@@ -17,6 +17,8 @@ release, not a public-internet support promise.
 
 - Overlay windows keep a real inset so titles, copy, forms, and actions no
   longer sit on the border.
+- Copy on join addresses, Terminal, and Home tiles flips to Copied so you can
+  tell it landed.
 - HTTPS calls Helix makes as itself now send `Helix/1.0.0` in the User-Agent.
 - Settings → Helix data is a full-width card with real padding, stacked server
   rows, and plain-language copy for start-after-boot and dismissed notices.

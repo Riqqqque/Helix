@@ -66,7 +66,8 @@ from Homarr's http(s) icon URLs, Homarr icon names via the dashboard-icons set, 
 Helix's matcher on the app name and link. Uploaded Homarr media files, notes, and
 Homarr-only apps stay in Homarr.
 
-**Copy all** copies every widget on the current Home. **Paste onto another Home**
+**Copy all** copies every widget on the current Home. The button reads **Copied**
+for a moment after it works. **Paste onto another Home**
 drops that whole set onto the destination in one go, then you can rearrange.
 Ctrl/Cmd+A selects all tiles while editing; Ctrl/Cmd+C copies the selection, or
 all tiles if nothing is selected. Widget settings still has **Copy to another

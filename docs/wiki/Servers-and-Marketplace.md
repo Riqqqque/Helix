@@ -218,7 +218,8 @@ dashboard.
 Each native detail Overview shows a LAN address, a separately detected Tailscale
 address when present, and the public IP plus the game port when Helix can see a
 WAN address. That public row is the address people would use from the internet.
-Helix does not set up router forwarding from Overview. If players should join
+**Copy** on those rows flips to **Copied** so you can tell it landed. Helix does
+not set up router forwarding from Overview. If players should join
 from outside the LAN, port-forward the game port on the router: TCP for
 Minecraft and Terraria, UDP game plus query for V Rising, and UDP
 `game` through `game+2` for Valheim.
