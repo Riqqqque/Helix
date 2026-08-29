@@ -19,13 +19,15 @@ import {
   reorderHomeWidgets,
   saveHomeWidgets,
   HOMARR_HOME_ID,
+  type HomeWidget,
+} from './home-layout';
+import {
   cloneHomeWidgets,
   exportHomeWidgetsClipboard,
   mergeHomarrShortcuts,
   parseHomeWidgetsClipboard,
   pasteHomeWidgets,
-  type HomeWidget,
-} from './home-layout';
+} from './home-clipboard';
 
 afterEach(() => vi.unstubAllGlobals());
 
