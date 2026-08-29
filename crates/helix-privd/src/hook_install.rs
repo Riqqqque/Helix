@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
-    io::Write as _,
+    io::{ErrorKind, Write as _},
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -129,6 +129,29 @@ struct SavedFile {
     mode: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectoryRole {
+    PrivateStaging,
+    AptWrite,
+}
+
+impl DirectoryRole {
+    fn intended_mode(self) -> u32 {
+        match self {
+            Self::PrivateStaging => 0o700,
+            Self::AptWrite => 0o755,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DirectoryInspection {
+    Missing,
+    Safe { mode: u32 },
+    NeedsModeFix { mode: u32 },
+    Blocked { reason: String },
+}
+
 impl HookInstaller {
     pub fn new(config: HookInstallerConfig) -> Result<Self, String> {
         validate_config(&config)?;
@@ -209,7 +232,7 @@ impl HookInstaller {
                     &os_detail,
                 ));
                 if matches!(hook_id, "tailscale" | "jellyfin") && !apt_supported {
-                    blockers.push("One-click Tailscale and Jellyfin installs currently require a Debian-family APT release (Debian, Ubuntu, or a derivative with UBUNTU_CODENAME or a Debian codename).");
+                    blockers.push("One-click Tailscale and Jellyfin installs currently require a Debian-family APT release (Debian, Ubuntu, or a derivative with UBUNTU_CODENAME or a Debian codename).".to_owned());
                 }
                 let architecture_supported = match hook_id {
                     "jellyfin" => {
@@ -228,8 +251,10 @@ impl HookInstaller {
                     &platform.architecture,
                 ));
                 if !architecture_supported {
-                    blockers
-                        .push("This architecture is not in Helix's tested installer allowlist.");
+                    blockers.push(
+                        "This architecture is not in Helix's tested installer allowlist."
+                            .to_owned(),
+                    );
                 }
             }
             Err(error) => {
@@ -239,7 +264,9 @@ impl HookInstaller {
                     "block",
                     error,
                 ));
-                blockers.push("Helix could not verify the host distribution and architecture.");
+                blockers.push(
+                    "Helix could not verify the host distribution and architecture.".to_owned(),
+                );
             }
         }
 
@@ -271,13 +298,16 @@ impl HookInstaller {
                 if available { "Available" } else { "Missing" },
             ));
             if !available {
-                blockers.push(match id {
-                    "curl" => "curl is required for verified HTTPS downloads.",
-                    "apt" => "apt-get is required for package installation.",
-                    "dpkg" => "dpkg is required for Debian package installs.",
-                    "timeout" => "timeout is required to enforce command deadlines.",
-                    _ => "systemctl is required to verify the installed service.",
-                });
+                blockers.push(
+                    match id {
+                        "curl" => "curl is required for verified HTTPS downloads.",
+                        "apt" => "apt-get is required for package installation.",
+                        "dpkg" => "dpkg is required for Debian package installs.",
+                        "timeout" => "timeout is required to enforce command deadlines.",
+                        _ => "systemctl is required to verify the installed service.",
+                    }
+                    .to_owned(),
+                );
             }
         }
         if hook_id == "jellyfin" {
@@ -289,7 +319,9 @@ impl HookInstaller {
                 if available { "Available" } else { "Missing" },
             ));
             if !available {
-                blockers.push("GnuPG is required to convert Jellyfin's official signing key.");
+                blockers.push(
+                    "GnuPG is required to convert Jellyfin's official signing key.".to_owned(),
+                );
             }
         }
         if hook_id == "pterodactyl" {
@@ -301,9 +333,42 @@ impl HookInstaller {
                 if available { "Available" } else { "Missing" },
             ));
             if !available {
-                blockers
-                    .push("Wings requires Docker before its node configuration can be validated.");
+                blockers.push(
+                    "Wings requires Docker before its node configuration can be validated."
+                        .to_owned(),
+                );
             }
+        }
+        if matches!(hook_id, "tailscale" | "jellyfin") {
+            push_write_directory_check(
+                &mut checks,
+                &mut blockers,
+                "write_staging",
+                "Private installer workspace",
+                &self.config.staging_root,
+                DirectoryRole::PrivateStaging,
+            );
+            push_write_directory_check(
+                &mut checks,
+                &mut blockers,
+                "write_apt_sources",
+                "APT sources directory",
+                &self.config.apt_sources_root,
+                DirectoryRole::AptWrite,
+            );
+            let keyring_root = if hook_id == "jellyfin" {
+                &self.config.apt_keyrings_root
+            } else {
+                &self.config.share_keyrings_root
+            };
+            push_write_directory_check(
+                &mut checks,
+                &mut blockers,
+                "write_keyring",
+                "Repository keyring directory",
+                keyring_root,
+                DirectoryRole::AptWrite,
+            );
         }
 
         let install_available = mode == "one_click" && blockers.is_empty();
@@ -322,6 +387,7 @@ impl HookInstaller {
             "checks": checks,
             "changes": changes,
             "next_steps": next_steps,
+            "writes": planned_writes(hook_id, &self.config),
             "blockers": blockers,
             "official_docs": official_docs,
             "automatic_account_creation": false,
@@ -372,9 +438,6 @@ impl HookInstaller {
         platform: &HostPlatform,
         progress: &dyn Fn(&str, u8),
     ) -> Result<Value, String> {
-        let staging = self.private_staging_directory()?;
-        let key_download = staging.join("tailscale-keyring.gpg");
-        let list_download = staging.join("tailscale.list");
         let key_url = format!(
             "https://pkgs.tailscale.com/stable/{}/{}.noarmor.gpg",
             platform.id, platform.codename
@@ -383,7 +446,13 @@ impl HookInstaller {
             "https://pkgs.tailscale.com/stable/{}/{}.tailscale-keyring.list",
             platform.id, platform.codename
         );
+        let mut staging: Option<PathBuf> = None;
         let result = (|| {
+            progress("Preparing a private installer workspace", 16);
+            let workspace = self.private_staging_directory()?;
+            let key_download = workspace.join("tailscale-keyring.gpg");
+            let list_download = workspace.join("tailscale.list");
+            staging = Some(workspace);
             progress("Downloading Tailscale's official repository files", 20);
             self.download(&key_url, &key_download)?;
             self.download(&list_url, &list_download)?;
@@ -394,10 +463,8 @@ impl HookInstaller {
             }
             let list = read_bounded(&list_download, "Tailscale repository definition")?;
             validate_tailscale_repository(&list, platform)?;
-            fs::create_dir_all(&self.config.share_keyrings_root)
-                .map_err(|_| "could not create the shared APT keyring directory".to_owned())?;
-            fs::create_dir_all(&self.config.apt_sources_root)
-                .map_err(|_| "could not create the APT source directory".to_owned())?;
+            ensure_root_directory(&self.config.share_keyrings_root, DirectoryRole::AptWrite)?;
+            ensure_root_directory(&self.config.apt_sources_root, DirectoryRole::AptWrite)?;
             let key_path = self
                 .config
                 .share_keyrings_root
@@ -430,7 +497,9 @@ impl HookInstaller {
                 "completed_at_unix_ms": now_unix_ms(),
             }))
         })();
-        let _ = fs::remove_dir_all(staging);
+        if let Some(path) = staging {
+            let _ = fs::remove_dir_all(path);
+        }
         result
     }
 
@@ -439,10 +508,13 @@ impl HookInstaller {
         platform: &HostPlatform,
         progress: &dyn Fn(&str, u8),
     ) -> Result<Value, String> {
-        let staging = self.private_staging_directory()?;
-        let key_download = staging.join("jellyfin.asc");
-        let keyring = staging.join("jellyfin.gpg");
+        let mut staging: Option<PathBuf> = None;
         let result = (|| {
+            progress("Preparing a private installer workspace", 16);
+            let workspace = self.private_staging_directory()?;
+            let key_download = workspace.join("jellyfin.asc");
+            let keyring = workspace.join("jellyfin.gpg");
+            staging = Some(workspace);
             progress("Downloading Jellyfin's official repository key", 20);
             self.download(
                 "https://repo.jellyfin.org/jellyfin_team.gpg.key",
@@ -471,10 +543,8 @@ impl HookInstaller {
                 platform.id, platform.codename, platform.architecture
             );
             validate_jellyfin_repository(&source, platform)?;
-            fs::create_dir_all(&self.config.apt_keyrings_root)
-                .map_err(|_| "could not create the APT keyring directory".to_owned())?;
-            fs::create_dir_all(&self.config.apt_sources_root)
-                .map_err(|_| "could not create the APT source directory".to_owned())?;
+            ensure_root_directory(&self.config.apt_keyrings_root, DirectoryRole::AptWrite)?;
+            ensure_root_directory(&self.config.apt_sources_root, DirectoryRole::AptWrite)?;
             let key_path = self.config.apt_keyrings_root.join("jellyfin.gpg");
             let source_path = self.config.apt_sources_root.join("jellyfin.sources");
             let first = self.replace_file(&key_path, &key, 0o644)?;
@@ -503,7 +573,9 @@ impl HookInstaller {
                 "completed_at_unix_ms": now_unix_ms(),
             }))
         })();
-        let _ = fs::remove_dir_all(staging);
+        if let Some(path) = staging {
+            let _ = fs::remove_dir_all(path);
+        }
         result
     }
 
@@ -564,16 +636,19 @@ impl HookInstaller {
     }
 
     fn private_staging_directory(&self) -> Result<PathBuf, String> {
-        fs::create_dir_all(&self.config.staging_root)
-            .map_err(|_| "could not create the hook installer staging directory".to_owned())?;
-        require_root_directory(&self.config.staging_root)?;
-        fs::set_permissions(&self.config.staging_root, fs::Permissions::from_mode(0o700))
-            .map_err(|_| "could not protect the hook installer staging directory".to_owned())?;
+        if self.config.staging_root.parent() == Some(Path::new("/run/helix")) {
+            ensure_root_directory(Path::new("/run/helix"), DirectoryRole::AptWrite)?;
+        }
+        ensure_root_directory(&self.config.staging_root, DirectoryRole::PrivateStaging)?;
         let path = self.config.staging_root.join(Uuid::new_v4().to_string());
-        fs::create_dir(&path)
-            .map_err(|_| "could not create a private hook installer workspace".to_owned())?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-            .map_err(|_| "could not protect the hook installer workspace".to_owned())?;
+        fs::create_dir(&path).map_err(|error| {
+            format!(
+                "Helix could not create a private installer workspace at {}: {}.",
+                path.display(),
+                io_detail(&error)
+            )
+        })?;
+        set_directory_mode_nofollow(&path, 0o700)?;
         Ok(path)
     }
 
@@ -691,22 +766,32 @@ impl HookInstaller {
         let parent = path
             .parent()
             .ok_or_else(|| "the repository file has no parent directory".to_owned())?;
-        require_root_directory(parent)?;
+        require_safe_write_directory(parent)?;
         let previous = match fs::symlink_metadata(path) {
             Ok(metadata) => {
                 if !metadata.file_type().is_file()
                     || metadata.len() > MAX_REPOSITORY_FILE_BYTES
                     || metadata.uid() != 0
                 {
-                    return Err("Helix refused to replace an unsafe repository file".to_owned());
+                    return Err(format!(
+                        "Helix refused to replace {}. It must be a regular file owned by root and under 1 MiB.",
+                        path.display()
+                    ));
                 }
-                Some(
-                    fs::read(path)
-                        .map_err(|_| "could not back up the existing repository file".to_owned())?,
-                )
+                Some(fs::read(path).map_err(|_| {
+                    format!(
+                        "could not back up the existing repository file {}",
+                        path.display()
+                    )
+                })?)
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(_) => return Err("could not inspect the existing repository file".to_owned()),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(_) => {
+                return Err(format!(
+                    "could not inspect the existing repository file {}",
+                    path.display()
+                ));
+            }
         };
         let previous_mode = fs::metadata(path)
             .map(|metadata| metadata.permissions().mode() & 0o777)
@@ -889,6 +974,237 @@ fn check(id: &str, label: &str, status: &str, detail: &str) -> Value {
     json!({ "id": id, "label": label, "status": status, "detail": detail })
 }
 
+fn planned_writes(hook_id: &str, config: &HookInstallerConfig) -> Vec<Value> {
+    match hook_id {
+        "tailscale" => vec![
+            json!({
+                "path": config.staging_root.display().to_string(),
+                "kind": "staging",
+            }),
+            json!({
+                "path": config.share_keyrings_root.join("tailscale-archive-keyring.gpg").display().to_string(),
+                "kind": "keyring",
+            }),
+            json!({
+                "path": config.apt_sources_root.join("tailscale.list").display().to_string(),
+                "kind": "source",
+            }),
+        ],
+        "jellyfin" => vec![
+            json!({
+                "path": config.staging_root.display().to_string(),
+                "kind": "staging",
+            }),
+            json!({
+                "path": config.apt_keyrings_root.join("jellyfin.gpg").display().to_string(),
+                "kind": "keyring",
+            }),
+            json!({
+                "path": config.apt_sources_root.join("jellyfin.sources").display().to_string(),
+                "kind": "source",
+            }),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn push_write_directory_check(
+    checks: &mut Vec<Value>,
+    blockers: &mut Vec<String>,
+    id: &str,
+    label: &str,
+    path: &Path,
+    role: DirectoryRole,
+) {
+    match inspect_write_directory(path, role) {
+        DirectoryInspection::Missing => checks.push(check(
+            id,
+            label,
+            "warning",
+            &format!(
+                "Missing. Helix will create {} as root, mode {:04o}, before downloading anything.",
+                path.display(),
+                role.intended_mode() & 0o777
+            ),
+        )),
+        DirectoryInspection::Safe { mode } => checks.push(check(
+            id,
+            label,
+            "pass",
+            &format!(
+                "{} · mode {:04o} · owned by root",
+                path.display(),
+                mode & 0o777
+            ),
+        )),
+        DirectoryInspection::NeedsModeFix { mode } => checks.push(check(
+            id,
+            label,
+            "warning",
+            &mode_fix_detail(path, mode, role),
+        )),
+        DirectoryInspection::Blocked { reason } => {
+            checks.push(check(id, label, "block", &reason));
+            blockers.push(reason);
+        }
+    }
+}
+
+fn mode_fix_detail(path: &Path, mode: u32, role: DirectoryRole) -> String {
+    let visible = mode & 0o777;
+    match role {
+        DirectoryRole::PrivateStaging => format!(
+            "{} is mode {:04o}. Helix will set it to 0700 before downloading repository files so those files stay private. helix-privd uses umask 0007, which can leave a newly created directory group-writable until that chmod.",
+            path.display(),
+            visible
+        ),
+        DirectoryRole::AptWrite => format!(
+            "{} is mode {:04o} (group or world writable). Helix will set it to 0755 before adding the signed repository file, so another user cannot drop a fake source there.",
+            path.display(),
+            visible
+        ),
+    }
+}
+
+fn inspect_write_directory(path: &Path, role: DirectoryRole) -> DirectoryInspection {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == ErrorKind::NotFound => DirectoryInspection::Missing,
+        Err(_) => DirectoryInspection::Blocked {
+            reason: format!(
+                "Helix could not inspect {}. Confirm it is a real directory Helix may read.",
+                path.display()
+            ),
+        },
+        Ok(metadata) => classify_directory(path, &metadata, role),
+    }
+}
+
+fn classify_directory(
+    path: &Path,
+    metadata: &fs::Metadata,
+    role: DirectoryRole,
+) -> DirectoryInspection {
+    if metadata.file_type().is_symlink() {
+        return DirectoryInspection::Blocked {
+            reason: format!(
+                "{} is a symlink. Helix will not write repository files through a redirected directory because another process could retarget it. Recreate it as a real directory owned by root, mode 0755.",
+                path.display()
+            ),
+        };
+    }
+    if !metadata.file_type().is_dir() {
+        return DirectoryInspection::Blocked {
+            reason: format!(
+                "{} exists but is not a directory. Move or rename that file, then let Helix create a real directory owned by root.",
+                path.display()
+            ),
+        };
+    }
+    let mode = metadata.permissions().mode() & 0o7777;
+    if metadata.uid() != 0 {
+        return DirectoryInspection::Blocked {
+            reason: format!(
+                "{} is owned by uid {}, not root. Helix will not put a repository file in a directory it does not own as root. Change the owner to root, or recreate the directory.",
+                path.display(),
+                metadata.uid()
+            ),
+        };
+    }
+    match role {
+        DirectoryRole::PrivateStaging if mode & 0o777 != 0o700 => {
+            DirectoryInspection::NeedsModeFix { mode }
+        }
+        DirectoryRole::AptWrite if mode & 0o022 != 0 => DirectoryInspection::NeedsModeFix { mode },
+        _ => DirectoryInspection::Safe { mode },
+    }
+}
+
+fn ensure_root_directory(path: &Path, role: DirectoryRole) -> Result<(), String> {
+    match inspect_write_directory(path, role) {
+        DirectoryInspection::Missing => {
+            fs::create_dir_all(path).map_err(|error| {
+                format!(
+                    "Helix could not create {} ({}). Check that helix-privd may write that path and that nothing is blocking it.",
+                    path.display(),
+                    io_detail(&error)
+                )
+            })?;
+        }
+        DirectoryInspection::Blocked { reason } => return Err(reason),
+        DirectoryInspection::Safe { .. } | DirectoryInspection::NeedsModeFix { .. } => {}
+    }
+    match inspect_write_directory(path, role) {
+        DirectoryInspection::Safe { .. } => Ok(()),
+        DirectoryInspection::NeedsModeFix { .. } | DirectoryInspection::Missing => {
+            let intended = role.intended_mode();
+            set_directory_mode_nofollow(path, intended)?;
+            require_safe_write_directory(path)
+        }
+        DirectoryInspection::Blocked { reason } => Err(reason),
+    }
+}
+
+fn require_safe_write_directory(path: &Path) -> Result<(), String> {
+    match inspect_write_directory(path, DirectoryRole::AptWrite) {
+        DirectoryInspection::Safe { .. } => Ok(()),
+        DirectoryInspection::Missing => Err(format!(
+            "{} is missing. Helix expected a real directory owned by root.",
+            path.display()
+        )),
+        DirectoryInspection::NeedsModeFix { mode } => Err(format!(
+            "{} is mode {:04o} (group or world writable). Helix refuses that so another user cannot drop a fake repository file. It should be 0755 or 0700, owned by root.",
+            path.display(),
+            mode & 0o777
+        )),
+        DirectoryInspection::Blocked { reason } => Err(reason),
+    }
+}
+
+fn set_directory_mode_nofollow(path: &Path, mode: u32) -> Result<(), String> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| {
+        format!(
+            "Helix could not open {} as a real directory. If it is a symlink, recreate it as a real directory owned by root.",
+            path.display()
+        )
+    })?;
+    let stat = rustix::fs::fstat(&descriptor).map_err(|_| {
+        format!(
+            "Helix could not inspect {} after opening it.",
+            path.display()
+        )
+    })?;
+    if !rustix::fs::FileType::from_raw_mode(stat.st_mode).is_dir() {
+        return Err(format!("{} is not a directory.", path.display()));
+    }
+    if stat.st_uid != 0 {
+        return Err(format!(
+            "{} is owned by uid {}, not root. Helix will not change mode on a directory it does not own as root.",
+            path.display(),
+            stat.st_uid
+        ));
+    }
+    rustix::fs::fchmod(&descriptor, rustix::fs::Mode::from_raw_mode(mode)).map_err(|_| {
+        format!(
+            "Helix could not set {} to mode {:04o}. Check that helix-privd is running as root and that the path is not immutable.",
+            path.display(),
+            mode & 0o777
+        )
+    })?;
+    Ok(())
+}
+
+fn io_detail(error: &std::io::Error) -> String {
+    error.to_string().chars().take(200).collect()
+}
+
 fn executable(path: &Path) -> bool {
     path.is_absolute()
         && fs::metadata(path).is_ok_and(|metadata| {
@@ -927,18 +1243,6 @@ fn read_bounded(path: &Path, label: &str) -> Result<Vec<u8>, String> {
         return Err(format!("{label} is invalid"));
     }
     fs::read(path).map_err(|_| format!("could not read {label}"))
-}
-
-fn require_root_directory(path: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|_| "the repository directory is unavailable".to_owned())?;
-    if !metadata.file_type().is_dir()
-        || metadata.uid() != 0
-        || metadata.permissions().mode() & 0o022 != 0
-    {
-        return Err("the repository directory is not a root-owned real directory".to_owned());
-    }
-    Ok(())
 }
 
 fn write_atomic(path: &Path, body: &[u8], mode: u32) -> Result<(), String> {
@@ -1174,5 +1478,149 @@ mod tests {
         for hook in ["plex", "amp", "tailscale; reboot", "../jellyfin"] {
             assert!(validate_hook_id(hook).is_err());
         }
+    }
+
+    #[test]
+    fn inspect_explains_missing_symlink_and_non_directory_write_paths() {
+        let temporary = tempfile::tempdir().unwrap();
+        let missing = temporary.path().join("missing");
+        assert!(matches!(
+            inspect_write_directory(&missing, DirectoryRole::PrivateStaging),
+            DirectoryInspection::Missing
+        ));
+
+        let file = temporary.path().join("not-a-dir");
+        fs::write(&file, b"x").unwrap();
+        match inspect_write_directory(&file, DirectoryRole::AptWrite) {
+            DirectoryInspection::Blocked { reason } => {
+                assert!(reason.contains(file.to_str().unwrap()));
+                assert!(reason.contains("not a directory"));
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let real = temporary.path().join("real");
+        let link = temporary.path().join("link");
+        fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        match inspect_write_directory(&link, DirectoryRole::AptWrite) {
+            DirectoryInspection::Blocked { reason } => {
+                assert!(reason.contains(link.to_str().unwrap()));
+                assert!(reason.contains("symlink"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn ensure_repairs_group_writable_staging_when_running_as_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let staging = temporary.path().join("hook-installs");
+        fs::create_dir(&staging).unwrap();
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o770)).unwrap();
+        let owned_by_root = fs::symlink_metadata(&staging).unwrap().uid() == 0;
+        if owned_by_root {
+            ensure_root_directory(&staging, DirectoryRole::PrivateStaging).unwrap();
+            let mode = fs::symlink_metadata(&staging).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+        } else {
+            let error = ensure_root_directory(&staging, DirectoryRole::PrivateStaging).unwrap_err();
+            assert!(error.contains(staging.to_str().unwrap()));
+            assert!(error.contains("owned by uid"));
+            assert!(!error.contains("the repository directory is not a root-owned real directory"));
+        }
+    }
+
+    #[test]
+    fn ensure_creates_missing_apt_write_directory_when_running_as_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let sources = temporary.path().join("sources.list.d");
+        let owned_by_root = fs::symlink_metadata(temporary.path()).unwrap().uid() == 0;
+        if owned_by_root {
+            ensure_root_directory(&sources, DirectoryRole::AptWrite).unwrap();
+            assert!(sources.is_dir());
+            let mode = fs::symlink_metadata(&sources).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o755);
+        } else {
+            let error = ensure_root_directory(&sources, DirectoryRole::AptWrite).unwrap_err();
+            assert!(error.contains(sources.to_str().unwrap()));
+        }
+    }
+
+    #[test]
+    fn tailscale_and_jellyfin_preflight_list_exact_write_paths() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config = HookInstallerConfig {
+            staging_root: temporary.path().join("hook-installs"),
+            apt_sources_root: temporary.path().join("sources.list.d"),
+            apt_keyrings_root: temporary.path().join("keyrings"),
+            share_keyrings_root: temporary.path().join("share-keyrings"),
+            ..HookInstallerConfig::default()
+        };
+        let installer = HookInstaller::new(config).unwrap();
+
+        let tailscale = installer.preflight("tailscale").unwrap();
+        let tailscale_writes = tailscale["writes"].as_array().expect("tailscale writes");
+        assert_eq!(tailscale_writes.len(), 3);
+        assert_eq!(tailscale_writes[0]["kind"], "staging");
+        assert!(
+            tailscale_writes[0]["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("hook-installs")
+        );
+        assert_eq!(tailscale_writes[1]["kind"], "keyring");
+        assert!(
+            tailscale_writes[1]["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("tailscale-archive-keyring.gpg")
+        );
+        assert_eq!(tailscale_writes[2]["kind"], "source");
+        assert!(
+            tailscale_writes[2]["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("tailscale.list")
+        );
+        let staging = tailscale["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["id"] == "write_staging")
+            .expect("staging check");
+        assert_eq!(staging["status"], "warning");
+        assert!(
+            staging["detail"]
+                .as_str()
+                .unwrap()
+                .contains("hook-installs")
+        );
+
+        let jellyfin = installer.preflight("jellyfin").unwrap();
+        let jellyfin_writes = jellyfin["writes"].as_array().expect("jellyfin writes");
+        assert_eq!(jellyfin_writes.len(), 3);
+        assert!(
+            jellyfin_writes[1]["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("jellyfin.gpg")
+        );
+        assert!(
+            jellyfin_writes[2]["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("jellyfin.sources")
+        );
+
+        let guided = installer.preflight("pterodactyl").unwrap();
+        assert_eq!(guided["writes"].as_array().unwrap().len(), 0);
+        assert!(
+            guided["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|check| check["id"] != "write_staging")
+        );
     }
 }

@@ -432,7 +432,9 @@ Tailscale route.
 
 On eligible Debian/Ubuntu hosts, the built-in Hook can add Tailscale's exact
 official signed APT repository, install the exact `tailscale` package, and
-enable and verify `tailscaled.service`. It does not run the publisher's remote
+enable and verify `tailscaled.service`. It writes only the publisher keyring and
+`sources.list` paths shown in the preflight, into real root-owned directories
+without group or world write. It does not run the publisher's remote
 root script, authenticate an account, execute `tailscale up`, approve a node,
 choose a tailnet, or reconfigure gateway trust. Do not trust a wildcard
 hostname/origin/CIDR or the entire Tailscale carrier-grade NAT range just

@@ -7,6 +7,10 @@ binary or package release yet.
 
 ### Changed
 
+- One-click Tailscale and Jellyfin installs now show the exact files Helix will
+  write, and a failed job names the path, what is wrong with it, and how to
+  continue. Try again re-checks the host. Those installers still only accept the
+  built-in hook ID and the publisher's signed repository.
 - Hooks and Security feel quicker. Those pages no longer wait on a full Host
   status, Network inventory (listeners, UPnP), Docker `stats`, or Minecraft
   port-candidate scan just to fill a few cards. Independent probes run together.
@@ -18,6 +22,14 @@ binary or package release yet.
   when you open Overview or Settings, not on every other page.
 
 ### Fixed
+
+- Installing Tailscale or Jellyfin from Hooks no longer dies on the first step
+  with "the repository directory is not a root-owned real directory." helix-privd
+  uses umask `0007`, so `/run/helix/hook-installs` (and a missing APT keyring
+  directory) could be created group-writable and then fail the safety check
+  before Helix could chmod it. The installer now creates those directories,
+  sets `0700` / `0755`, and only then verifies them. Tmpfiles also declares
+  `/run/helix/hook-installs`.
 
 - AMP Idle/sleep is no longer shown as online. Sleeping instances keep their
   memory limit visible, use Start to wake the game, and do not offer Restart as
