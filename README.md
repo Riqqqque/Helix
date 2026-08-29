@@ -236,8 +236,9 @@ mods/plugins, and configuration. See
 The server chooser uses original Helix marks for Minecraft (isometric grass
 block) and V Rising (blood moon and castle). V Rising installs through a
 Helix-owned Wine + SteamCMD container. The host OS never gets Wine packages.
-First create can take a while while SteamCMD downloads the Windows dedicated
-server. Removing the last V Rising server deletes that runtime image. This path
+The create window shows download and boot progress. First Steam install often
+takes 10–30 minutes; later creates reuse that runtime. Removing the last V
+Rising server deletes that runtime image. This path
 is unofficial and not publisher-supported; it has not been proven on a live
 host yet.
 

@@ -627,7 +627,8 @@
   display: flex;
   align-items: center;
   gap: 13px;
-  padding: 18px 20px;
+  margin: -18px calc(-1 * var(--dialog-inset, 24px)) 0;
+  padding: 18px var(--dialog-inset, 24px);
   border-bottom: 1px solid var(--line);
 }
 
@@ -668,12 +669,12 @@
 .marketplace-safety-list strong { color: var(--text); }
 
 .marketplace-confirm-check {
-  margin: 0 20px;
+  margin: 0;
 }
 
 .marketplace-job-progress + .inline-error,
 .marketplace-confirm-check + .inline-error {
-  margin: 0 20px 16px;
+  margin: 0;
 }
 
 .marketplace-job-result {

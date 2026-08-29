@@ -24,8 +24,11 @@ The host never receives Wine packages. That first image build writes Docker CLI
 state under Helix native data, not the execution backend’s home directory, so
 it works with helix-privd’s locked-down service.
 
-Create is one click after you pick a name, memory, and UDP ports. Public UPnP
-is not offered. Allocated memory can be changed later from Overview. Player
+Create is one click after you pick a name, memory, and UDP ports. The create
+window keeps a spinner, a percent, and elapsed time while SteamCMD downloads
+and the server boots. First install often takes 10–30 minutes; later creates
+reuse the runtime and finish faster. Public UPnP is not offered. Allocated
+memory can be changed later from Overview. Player
 counts are not queried. There is no RCON command console
 and no Modrinth marketplace. Backups, start-on-boot, files, and logs work the
 same way as Minecraft. Host settings live in `save/Settings/ServerHostSettings.json`
@@ -39,7 +42,8 @@ This path is implemented and unvalidated. It is not publisher-supported.
 ## Native Valheim
 
 Helix builds `helix-valheim-runtime:1` and installs Steam dedicated app 896660.
-Create is private-LAN UDP: the game port plus the next two. Public UPnP is not
+Create is private-LAN UDP: the game port plus the next two. The create window
+uses the same spinner, percent, and elapsed time as V Rising. Public UPnP is not
 offered. Allocated memory can be changed later from Overview. There is no RCON console. For mods, drop a BepInEx pack zip at
 `/data/bepinex-pack.zip` and plugin files in `/data/plugins`, then restart.
 Uninstalling the last Valheim server removes that runtime image. Implemented and
@@ -48,7 +52,8 @@ unvalidated.
 ## Native Terraria
 
 Helix builds `helix-terraria-runtime:1`. Vanilla downloads the publisher
-dedicated zip. tModLoader uses Steam app 1281930. Edit `serverconfig.txt` in
+dedicated zip. tModLoader uses Steam app 1281930. Create uses the same spinner,
+percent, and elapsed time as V Rising. Edit `serverconfig.txt` in
 Files. Drop `.tmod` files in `/data/mods` and restart. Allocated memory can be
 changed later from Overview. Public UPnP is not the default port-pool behavior.
 Implemented and unvalidated.
@@ -71,7 +76,8 @@ releases for the selected software, including an explicit Latest stable choice
 except for custom JARs. Paper, Folia, and Leaves omit experimental Minecraft
 versions that create would refuse. The wizard collects the name, software, Minecraft release, memory, player limit,
 automatic-pool or specific port, private/public player-access choice,
-start-after-boot choice, and EULA acknowledgement. Paper, Purpur, Folia,
+start-after-boot choice, and EULA acknowledgement. While create runs, that
+window shows a spinner, percent, and elapsed time. Paper, Purpur, Folia,
 Leaves, Fabric, Forge, NeoForge, Quilt, Pufferfish, and Vanilla are default
 create choices. Forge uses the official installer for Minecraft 1.17 and newer
 and launches with generated `unix_args`. Pufferfish comes from the publisher

@@ -6,6 +6,22 @@ release, not a public-internet support promise.
 
 ## Unreleased
 
+### Added
+
+- Creating a Minecraft, V Rising, Valheim, or Terraria server now shows a
+  spinner, percent, and elapsed time while the download and first boot run.
+  First Steam installs still often take 10–30 minutes; later creates reuse the
+  runtime.
+
+### Changed
+
+- Overlay windows keep a real inset so titles, copy, forms, and actions no
+  longer sit on the border.
+- HTTPS calls Helix makes as itself now send `Helix/1.0.0` in the User-Agent.
+- Settings → Helix data is a full-width card with real padding, stacked server
+  rows, and plain-language copy for start-after-boot and dismissed notices.
+  Create-server and the server page use the same start-after-boot wording.
+
 ### Fixed
 
 - Overview and Host process count is Linux processes (thread groups), not
@@ -20,16 +36,6 @@ release, not a public-internet support promise.
 - The Docker page will not start, stop, or restart native `helix-game-*`
   containers. Those go through Servers so the stop is 45 seconds and
   health-checked.
-
-### Changed
-
-- HTTPS calls Helix makes as itself now send `Helix/1.0.0` in the User-Agent.
-- Settings → Helix data is a full-width card with real padding, stacked server
-  rows, and plain-language copy for start-after-boot and dismissed notices.
-  Create-server and the server page use the same start-after-boot wording.
-
-### Fixed
-
 - Open in Settings → Helix data now jumps to that server, not just the Servers
   list. Show them again also refreshes the bell menu in the same tab.
 - Arranging pages, hiding pages, Home layouts, colors, and the refresh interval

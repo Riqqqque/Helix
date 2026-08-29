@@ -102,6 +102,7 @@ describe('modal focus management', () => {
     const markup = render(<Dialog title="Confirm" onClose={() => undefined}>Body</Dialog>);
     expect(markup).toContain('role="dialog"');
     expect(markup).toContain('tabindex="-1"');
+    expect(markup).toContain('dialog-body');
   });
 
   it('focuses the preferred control and restores the opener on cleanup', () => {

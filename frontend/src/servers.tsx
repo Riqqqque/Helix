@@ -79,6 +79,7 @@ import {
   formatPercent,
   formatTimestamp,
 } from "./format";
+import { CreateJobProgress, steamCreateJobCopy } from "./create-job-progress";
 import { GameMark } from "./game-marks";
 import { Icon, type IconName } from "./icons";
 import { InfoTip } from "./info-tip";
@@ -88,7 +89,7 @@ import {
   START_WITH_HOST_DETAIL,
   START_WITH_HOST_TITLE,
 } from "./start-with-host";
-import { useJobPolling } from "./job-polling";
+import { useJobPolling, type JobPollingController } from "./job-polling";
 import {
   getNetworkInventory,
   leftoverAmpForwardConfirmation,
@@ -1481,22 +1482,10 @@ function CreateServerDialog({
         }
         onClose={() => canClose && onClose()}
       >
-        <div class="job-progress">
-          <div class={`job-icon job-icon--${job.status}`}>
-            <Icon
-              name={
-                job.status === "complete"
-                  ? "check"
-                  : job.status === "failed"
-                    ? "warning"
-                    : "servers"
-              }
-              size={26}
-            />
-          </div>
-          <strong>{job.stage}</strong>
-          <span>
-            {active
+        <CreateJobProgress
+          job={job}
+          copy={
+            active
               ? mode === "modpack"
                 ? "Helix is validating the Modrinth archive, assembling a server-safe subset, and starting the pinned Fabric runtime."
                 : "Helix is downloading a verified build, creating the workload, and starting Minecraft."
@@ -1504,13 +1493,9 @@ function CreateServerDialog({
                 ? `${name} is online and ready to join.`
                 : parseAmpPortClaim(job.error ?? "") !== null
                   ? "That port is still held by AMP."
-                  : (job.error ?? "Helix rolled back the incomplete server.")}
-          </span>
-          <ProgressBar
-            value={job.progressPercent}
-            tone={job.status === "failed" ? "danger" : "normal"}
-          />
-          <small>{job.progressPercent}%</small>
+                  : (job.error ?? "Helix rolled back the incomplete server.")
+          }
+        >
           {modpackResult !== null && (
             <div class="modpack-create-result">
               <strong>
@@ -1545,7 +1530,7 @@ function CreateServerDialog({
               </span>
             </div>
           )}
-        </div>
+        </CreateJobProgress>
         <ServerFault
           message={polling.error ?? error ?? (job.status === "failed" ? job.error : null) ?? publicSetupError}
           csrfToken={csrfToken}
@@ -5665,6 +5650,61 @@ export function NewServerChooser({
   );
 }
 
+function NativeCreateJobView({
+  game,
+  job,
+  polling,
+  csrfToken,
+  servers,
+  canManageNetwork,
+  onClose,
+  onSessionExpired,
+}: {
+  game: string;
+  job: BrokerJob;
+  polling: JobPollingController;
+  csrfToken: string;
+  servers: ManagedServer[];
+  canManageNetwork: boolean;
+  onClose: () => void;
+  onSessionExpired: () => void;
+}) {
+  const active = job.status === "queued" || job.status === "running";
+  return (
+    <>
+      <CreateJobProgress job={job} copy={steamCreateJobCopy(game, job)} />
+      {polling.error !== null && (
+        <ServerFault
+          message={polling.error}
+          csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
+          onSessionExpired={onSessionExpired}
+        />
+      )}
+      <div class="dialog-actions">
+        {polling.paused && (
+          <button
+            class="button button--quiet"
+            type="button"
+            onClick={polling.resume}
+          >
+            Resume status check
+          </button>
+        )}
+        <button
+          class="button button--primary"
+          type="button"
+          disabled={active && !polling.paused}
+          onClick={onClose}
+        >
+          {job.status === "complete" ? "View servers" : "Close"}
+        </button>
+      </div>
+    </>
+  );
+}
+
 function CreateVRisingDialog({
   csrfToken,
   servers,
@@ -5714,10 +5754,7 @@ function CreateVRisingDialog({
     job,
     csrfToken,
     onJob: setJob,
-    onComplete: async () => {
-      await onComplete();
-      onClose();
-    },
+    onComplete,
     onSessionExpired,
   });
 
@@ -5757,26 +5794,31 @@ function CreateVRisingDialog({
     }
   };
 
-  const busy = submitting || (job !== null && job.status !== "failed");
+  const installing = job !== null && (job.status === "queued" || job.status === "running");
+  const busy = submitting || installing;
   return (
-    <Dialog title="New V Rising server" onClose={onClose} wide>
+    <Dialog
+      title={
+        job === null || job.status === "failed"
+          ? "New V Rising server"
+          : job.status === "complete"
+            ? "Server ready"
+            : "Installing V Rising"
+      }
+      onClose={() => !installing && onClose()}
+      wide
+    >
       {job !== null && job.status !== "failed" ? (
-        <div class="create-progress">
-          <strong>{job.stage}</strong>
-          <ProgressBar value={job.progressPercent} />
-          <small>
-            First create downloads the dedicated server into an isolated container. Leave this open.
-          </small>
-          {polling.error !== null && (
-            <ServerFault
-              message={polling.error}
-              csrfToken={csrfToken}
-              servers={servers}
-              canManageNetwork={canManageNetwork}
-              onSessionExpired={onSessionExpired}
-            />
-          )}
-        </div>
+        <NativeCreateJobView
+          game="V Rising"
+          job={job}
+          polling={polling}
+          csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
+          onClose={onClose}
+          onSessionExpired={onSessionExpired}
+        />
       ) : (
         <>
           <p class="dialog-intro">
@@ -5870,10 +5912,7 @@ function CreateValheimDialog({
     job,
     csrfToken,
     onJob: setJob,
-    onComplete: async () => {
-      await onComplete();
-      onClose();
-    },
+    onComplete,
     onSessionExpired,
   });
 
@@ -5908,24 +5947,31 @@ function CreateValheimDialog({
     }
   };
 
-  const busy = submitting || (job !== null && job.status !== "failed");
+  const installing = job !== null && (job.status === "queued" || job.status === "running");
+  const busy = submitting || installing;
   return (
-    <Dialog title="New Valheim server" onClose={onClose} wide>
+    <Dialog
+      title={
+        job === null || job.status === "failed"
+          ? "New Valheim server"
+          : job.status === "complete"
+            ? "Server ready"
+            : "Installing Valheim"
+      }
+      onClose={() => !installing && onClose()}
+      wide
+    >
       {job !== null && job.status !== "failed" ? (
-        <div class="create-progress">
-          <strong>{job.stage}</strong>
-          <ProgressBar value={job.progressPercent} />
-          <small>First create downloads the dedicated server through SteamCMD. Drop a BepInEx pack zip at `/data/bepinex-pack.zip` and plugin DLLs in `/data/plugins` for one-restart mods.</small>
-          {polling.error !== null && (
-            <ServerFault
-              message={polling.error}
-              csrfToken={csrfToken}
-              servers={servers}
-              canManageNetwork={canManageNetwork}
-              onSessionExpired={onSessionExpired}
-            />
-          )}
-        </div>
+        <NativeCreateJobView
+          game="Valheim"
+          job={job}
+          polling={polling}
+          csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
+          onClose={onClose}
+          onSessionExpired={onSessionExpired}
+        />
       ) : (
         <>
           <p class="dialog-intro">Helix installs the Linux dedicated server in an isolated container. Public UPnP is not offered yet. Mods: put a BepInEx pack zip and plugin files in the server Files tab, then restart.</p>
@@ -5984,10 +6030,7 @@ function CreateTerrariaDialog({
     job,
     csrfToken,
     onJob: setJob,
-    onComplete: async () => {
-      await onComplete();
-      onClose();
-    },
+    onComplete,
     onSessionExpired,
   });
 
@@ -6024,24 +6067,31 @@ function CreateTerrariaDialog({
     }
   };
 
-  const busy = submitting || (job !== null && job.status !== "failed");
+  const installing = job !== null && (job.status === "queued" || job.status === "running");
+  const busy = submitting || installing;
   return (
-    <Dialog title="New Terraria server" onClose={onClose} wide>
+    <Dialog
+      title={
+        job === null || job.status === "failed"
+          ? "New Terraria server"
+          : job.status === "complete"
+            ? "Server ready"
+            : "Installing Terraria"
+      }
+      onClose={() => !installing && onClose()}
+      wide
+    >
       {job !== null && job.status !== "failed" ? (
-        <div class="create-progress">
-          <strong>{job.stage}</strong>
-          <ProgressBar value={job.progressPercent} />
-          <small>Vanilla downloads the publisher zip. tModLoader uses SteamCMD. Drop `.tmod` files in `/data/mods` and restart for one-click mods.</small>
-          {polling.error !== null && (
-            <ServerFault
-              message={polling.error}
-              csrfToken={csrfToken}
-              servers={servers}
-              canManageNetwork={canManageNetwork}
-              onSessionExpired={onSessionExpired}
-            />
-          )}
-        </div>
+        <NativeCreateJobView
+          game="Terraria"
+          job={job}
+          polling={polling}
+          csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
+          onClose={onClose}
+          onSessionExpired={onSessionExpired}
+        />
       ) : (
         <>
           <p class="dialog-intro">Vanilla uses the official dedicated zip. tModLoader installs from Steam. Edit `serverconfig.txt` in Files. Place `.tmod` files in the mods folder, then restart.</p>
