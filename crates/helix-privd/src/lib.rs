@@ -201,10 +201,16 @@ pub enum BrokerRequest {
         query: String,
         offset: u32,
         limit: u8,
+        #[serde(default, skip_serializing_if = "is_modrinth_provider")]
+        provider: ModpackProvider,
+        #[serde(default, skip_serializing_if = "is_content_catalog")]
+        catalog: MarketplaceCatalog,
     },
     ServerMarketplaceProject {
         instance_id: String,
         project_id: String,
+        #[serde(default, skip_serializing_if = "is_modrinth_provider")]
+        provider: ModpackProvider,
     },
     MinecraftModpackSearch {
         query: String,
@@ -220,6 +226,10 @@ pub enum BrokerRequest {
         instance_id: String,
         project_id: String,
         version_id: Option<String>,
+        #[serde(default, skip_serializing_if = "is_modrinth_provider")]
+        provider: ModpackProvider,
+        #[serde(default, skip_serializing_if = "is_false")]
+        restart_server: bool,
     },
     UpdateServerSettings {
         instance_id: String,
@@ -237,6 +247,18 @@ pub enum BrokerRequest {
         backup_id: String,
     },
     RestoreTrashedBackup {
+        instance_id: String,
+        trash_id: String,
+    },
+    SetBackupPolicy {
+        instance_id: String,
+        keep_count: u16,
+        keep_days: u16,
+    },
+    PruneBackups {
+        instance_id: String,
+    },
+    PurgeBackupTrash {
         instance_id: String,
         trash_id: String,
     },
@@ -610,6 +632,14 @@ fn is_modrinth_provider(provider: &ModpackProvider) -> bool {
     matches!(provider, ModpackProvider::Modrinth)
 }
 
+fn is_content_catalog(catalog: &MarketplaceCatalog) -> bool {
+    matches!(catalog, MarketplaceCatalog::Content)
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MinecraftSoftware {
@@ -624,6 +654,14 @@ pub enum MinecraftSoftware {
     Forge,
     Quilt,
     Pufferfish,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketplaceCatalog {
+    #[default]
+    Content,
+    Modpacks,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -1139,6 +1177,8 @@ mod tests {
             query: "world edit".to_owned(),
             offset: 0,
             limit: 20,
+            provider: ModpackProvider::Modrinth,
+            catalog: MarketplaceCatalog::Content,
         })
         .expect("serialize marketplace search");
         assert_eq!(search["operation"], "server_marketplace_search");
@@ -1150,6 +1190,8 @@ mod tests {
             instance_id: "helix:6f55caa9-1264-4baf-8335-d3f31a704614".to_owned(),
             project_id: "1bokaNcj".to_owned(),
             version_id: Some("abcdef12".to_owned()),
+            provider: ModpackProvider::Modrinth,
+            restart_server: false,
         })
         .expect("serialize marketplace install");
         assert_eq!(install["operation"], "install_server_marketplace_content");

@@ -10,8 +10,8 @@ binary or package release yet.
 - First-time V Rising, Valheim, and Terraria creates can build their runtime
   images while helix-privd has a read-only home. Docker CLI/buildx state now
   lives under Helix native state instead of `/root/.docker`.
-- Homarr import keeps Homarr's board order and tile width, places shortcuts on
-  a dedicated Homarr Home, and no longer alphabetizes the catalog.
+- Homarr import keeps Homarr's board order and tile width, adds shortcuts onto
+  the Home you are already editing, and no longer alphabetizes the catalog.
 - Server-list Restart and Open sit in their own actions column instead of
   crowding the TPS value.
 - Helix no longer assigns or public-maps ports AMP still has in instance files.
@@ -42,7 +42,8 @@ binary or package release yet.
   inventing an Ubuntu suite from Mint's VERSION_CODENAME.
 - From-source `--install-deps` follows the usual `/etc/os-release` symlink, so
   Debian, Ubuntu, Fedora, and Arch are not treated as an unknown distro.
-- The sidebar HELIX wordmark is centered in the top-left column.
+- Backup delete no longer hid behind a missing server-detail capability. Anyone
+  with backup manage can trash a copy, undo it, or delete it forever.
 
 ### Added
 
@@ -51,8 +52,8 @@ binary or package release yet.
 - Overview PUBLIC INTERNET shows the public IP and game port, plus a reminder
   to port-forward that port. It does not run UPnP setup from that card.
 
-- Homarr shortcuts stay editable after import. Re-import keeps titles, sizes,
-  colors, and extra widgets on that Home, and drops only unchecked apps.
+- Homarr shortcuts land on the Home you are editing. Import skips URLs already
+  on that Home and does not create a separate Homarr layout.
 - Copy a Home widget, then paste it on the same layout or another Home. Settings
   can send a copy to a different Home without leaving the current one.
 - Minecraft Settings can change the published game port. Helix rewrites
@@ -60,7 +61,19 @@ binary or package release yet.
   old port instead of leaving a stale router mapping.
 - Native Minecraft list and detail TPS come from a short local `/tps` console
   sample. Paper-family software and some plugins report a number; Vanilla and
-  most Fabric/Forge/Quilt servers still show —.
+  most Fabric/Forge/Quilt servers still show —. Helix caches that sample and
+  keeps the RCON client start/shutdown lines out of the persistent console.
+- Copy all copies every widget on a Home; Paste onto another Home drops the
+  whole set at once. Ctrl/Cmd+A selects all tiles while editing.
+- Server marketplace can search Modrinth or CurseForge for plugins, Bukkit
+  addons, mods, and (on mod loaders) CurseForge modpacks. Descriptions render
+  markdown/HTML. Search cards show Installed after a successful add, and have
+  an Install button that writes the JAR into plugins/ or mods/ without restarting.
+- Native backups can cap how many copies to keep and how many days to keep
+  them. Extra oldest copies move to trash. Delete forever is available from
+  the active list or from trash after a confirm.
+- Advanced, console, marketplace, and the server list explain jargon in place
+  (loopback-only RCON, TPS, OOM killed, SHA-256, and similar).
 - Server cards put Open next to Restart or Start. Imported AMP servers put
   Open AMP in that same row.
 

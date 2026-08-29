@@ -513,6 +513,8 @@ impl NativeManager {
                 kind: helix_privd::GameKind::Minecraft,
                 query_port: 0,
                 unix_args,
+                backup_keep_count: 0,
+                backup_keep_days: 0,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -779,6 +781,8 @@ impl NativeManager {
                 kind: helix_privd::GameKind::Minecraft,
                 query_port: 0,
                 unix_args,
+                backup_keep_count: 0,
+                backup_keep_days: 0,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;

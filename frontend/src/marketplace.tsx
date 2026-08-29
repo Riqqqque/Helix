@@ -10,13 +10,17 @@ import {
   marketplaceProfileForSoftware,
   marketplaceResponseMatchesServer,
   searchMarketplace,
+  type MarketplaceCatalog,
   type MarketplaceInstallJob,
   type MarketplaceProjectDetail,
+  type MarketplaceProvider,
   type MarketplaceSearchHit,
   type MarketplaceSearchPage,
   type MarketplaceVersion,
 } from './marketplace-api';
+import { renderMarketplaceBody } from './marketplace-markdown';
 import type { MarketplaceRouteProps } from './marketplace-route';
+import { InfoTip } from './info-tip';
 import './marketplace.css';
 
 const PAGE_SIZE = 20;
@@ -52,13 +56,13 @@ export function marketplaceInstallRuntimeCopy(status: MarketplaceRouteProps['ser
 } {
   if (status === 'stopped') {
     return {
-      backup: 'A consistent backup is created before the verified files are staged. The server stays stopped.',
-      validation: 'First startup is not automatically health-validated or rolled back. The safety backup remains available if startup fails.',
+      backup: 'Helix writes the verified JAR into plugins/ or mods/ and leaves the server stopped.',
+      validation: 'Restart the server yourself when you want the new files loaded. Helix does not create a world backup for this install.',
     };
   }
   return {
-    backup: 'A consistent backup is created before Helix stops the running server and stages the verified files.',
-    validation: 'Helix restarts the server, waits for its startup health check, and rolls the content back if that validation fails.',
+    backup: 'Helix writes the verified JAR into plugins/ or mods/ and leaves the server running.',
+    validation: 'Restart the server yourself when you want the new files loaded. Helix does not stop Minecraft or run a health check.',
   };
 }
 
@@ -97,22 +101,54 @@ function CompatibilityBar({ page }: { page: MarketplaceSearchPage }) {
   );
 }
 
-function SearchCard({ hit, kind, onOpen }: { hit: MarketplaceSearchHit; kind: 'plugin' | 'mod'; onOpen: () => void }) {
+function SearchCard({
+  hit,
+  kind,
+  canManageServers,
+  installing,
+  onOpen,
+  onInstall,
+}: {
+  hit: MarketplaceSearchHit;
+  kind: 'plugin' | 'mod';
+  canManageServers: boolean;
+  installing: boolean;
+  onOpen: () => void;
+  onInstall: () => void;
+}) {
   return (
     <article class="marketplace-card">
       <button class="marketplace-card__main" type="button" onClick={onOpen} aria-label={`View ${hit.title}`}>
         <ResultLettermark title={hit.title} kind={kind} iconUrl={hit.iconUrl} />
         <span class="marketplace-card__copy">
-          <span class="marketplace-card__title"><strong>{hit.title}</strong>{hit.latestVersion !== null && <small>v{hit.latestVersion}</small>}</span>
+          <span class="marketplace-card__title">
+            <strong>{hit.title}</strong>
+            {hit.latestVersion !== null && <small>v{hit.latestVersion}</small>}
+            {hit.installed && <span class="marketplace-installed">Installed{hit.installedVersion !== null ? ` ${hit.installedVersion}` : ''}</span>}
+          </span>
           <span class="marketplace-card__description">{hit.description ?? 'No project description was provided.'}</span>
           <span class="marketplace-card__meta">
             <span>{hit.author ?? 'Unknown author'}</span>
             <span>{compactNumber.format(hit.downloads)} downloads</span>
             <span>{compactNumber.format(hit.follows)} followers</span>
+            <span>{hit.provider === 'curseforge' ? 'CurseForge' : 'Modrinth'}</span>
           </span>
         </span>
         <Icon name="chevron" size={18} />
       </button>
+      {canManageServers && hit.projectType !== 'modpack' && (
+        <button
+          class="button button--quiet marketplace-card__install"
+          type="button"
+          disabled={installing}
+          onClick={(event) => {
+            event.stopPropagation();
+            onInstall();
+          }}
+        >
+          {installing ? 'Installing…' : hit.installed ? 'Reinstall' : 'Install'}
+        </button>
+      )}
     </article>
   );
 }
@@ -121,17 +157,23 @@ function SearchResults({
   page,
   loading,
   error,
+  canManageServers,
+  installingId,
   onOpen,
+  onInstall,
   onRetry,
 }: {
   page: MarketplaceSearchPage | null;
   loading: boolean;
   error: string | null;
+  canManageServers: boolean;
+  installingId: string | null;
   onOpen: (hit: MarketplaceSearchHit) => void;
+  onInstall: (hit: MarketplaceSearchHit) => void;
   onRetry: () => void;
 }) {
   if (loading && page === null) {
-    return <div class="marketplace-state" role="status"><Icon name="refresh" class="is-spinning" /><strong>Finding matching projects</strong><span>Modrinth results are being filtered by this server’s loader and Minecraft version.</span></div>;
+    return <div class="marketplace-state" role="status"><Icon name="refresh" class="is-spinning" /><strong>Finding matching projects</strong><span>Results are filtered by this server’s loader and Minecraft version.</span></div>;
   }
   if (error !== null) {
     return <div class="marketplace-state marketplace-state--error" role="alert"><Icon name="warning" /><strong>Search unavailable</strong><span>{error}</span><button class="button button--primary" type="button" onClick={onRetry}>Try again</button></div>;
@@ -140,7 +182,7 @@ function SearchResults({
   if (page.hits.length === 0) {
     return <div class="marketplace-state"><Icon name="search" /><strong>No matching projects found</strong><span>Try a broader name. Helix still requires the correct loader and Minecraft version.</span></div>;
   }
-  return <div class={`marketplace-results${loading ? ' is-refreshing' : ''}`} aria-busy={loading}>{page.hits.map((hit) => <SearchCard key={hit.projectId} hit={hit} kind={page.compatibility.contentKind} onOpen={() => onOpen(hit)} />)}</div>;
+  return <div class={`marketplace-results${loading ? ' is-refreshing' : ''}`} aria-busy={loading}>{page.hits.map((hit) => <SearchCard key={`${hit.provider}:${hit.projectId}`} hit={hit} kind={page.compatibility.contentKind} canManageServers={canManageServers} installing={installingId === hit.projectId} onOpen={() => onOpen(hit)} onInstall={() => onInstall(hit)} />)}</div>;
 }
 
 function VersionFacts({ version }: { version: MarketplaceVersion }) {
@@ -172,13 +214,13 @@ function InstallationResult({ job, onClose }: { job: MarketplaceInstallJob; onCl
       <span class="job-icon job-icon--complete"><Icon name="check" size={25} /></span>
       <div>
         <strong>{result.projectTitle} {result.versionNumber} installed</strong>
-        <p>{result.runtimeValidationPerformed ? 'The running server restarted and passed its startup health check.' : 'The files are staged, but the stopped server’s first startup has not been health-validated.'}</p>
+        <p>{result.restartRequired ? 'The files are in the server folder. Restart Minecraft when you want them loaded.' : 'The files are in the server folder. Start the server when you want them loaded.'}</p>
       </div>
       <dl>
-        <div><dt>Backup ID</dt><dd><code>{result.backupId}</code></dd></div>
+        <div><dt>World backup</dt><dd>{result.backupId.length > 0 ? <code>{result.backupId}</code> : 'Not created'}</dd></div>
         <div><dt>Required dependencies</dt><dd>{result.dependencyCount}</dd></div>
-        <div><dt>Activation</dt><dd>{result.runtimeValidationPerformed ? 'Restarted + verified' : 'First start not verified'}</dd></div>
-        <div><dt>Rollback protection</dt><dd>{result.rollbackOnFailedStartup ? 'Automatic on failed startup' : 'Safety backup available'}</dd></div>
+        <div><dt>Activation</dt><dd>{result.restartRequired ? 'Restart when you want' : 'Ready for first start'}</dd></div>
+        <div><dt>File rollback</dt><dd>Helix-managed JARs only</dd></div>
       </dl>
       {result.optionalDependenciesNotInstalled.length > 0 && <div class="marketplace-optional"><Icon name="info" size={15} /><span><strong>Optional dependencies were not installed</strong><small>{result.optionalDependenciesNotInstalled.join(', ')}</small></span></div>}
       <button class="button button--primary" type="button" onClick={onClose}>Done</button>
@@ -248,7 +290,7 @@ function InstallDialog({
     setDispatching(true);
     setError(null);
     try {
-      const dispatch = await installMarketplaceProject(server.id, detail.project.id, version.id, csrfToken);
+      const dispatch = await installMarketplaceProject(server.id, detail.project.id, version.id, csrfToken, detail.provider);
       setJobId(dispatch.jobId);
       setJob({
         id: dispatch.jobId,
@@ -276,19 +318,19 @@ function InstallDialog({
         <div class="marketplace-confirm-head"><ResultLettermark title={detail.project.title} kind={detail.compatibility.contentKind} iconUrl={detail.project.iconUrl} /><div><strong>{detail.project.title}</strong><span>{version.versionNumber} · {version.versionType} · {server.software} {server.minecraftVersion}</span></div></div>
         <ul class="marketplace-safety-list">
           <li><Icon name="check" size={15} /><span><strong>Required dependencies are resolved automatically.</strong> Optional dependencies stay uninstalled and will be listed afterward.</span></li>
-          <li><Icon name="backup" size={15} /><span><strong>Files are changed only after a safety backup.</strong> {runtimeCopy.backup}</span></li>
-          <li><Icon name="check" size={15} /><span><strong>Every downloaded file is SHA-512 verified.</strong> Helix writes the selected JAR only to <code>{detail.compatibility.installDirectory}/</code>.</span></li>
-          <li><Icon name="restart" size={15} /><span><strong>Runtime validation follows the server’s current state.</strong> {runtimeCopy.validation}</span></li>
+          <li><Icon name="backup" size={15} /><span><strong>The world stays online if it is already running.</strong> {runtimeCopy.backup}</span></li>
+          <li><Icon name="check" size={15} /><span><strong>Every downloaded file is checksum-verified.</strong> Helix writes the selected JAR only to <code>{detail.compatibility.installDirectory}/</code>.</span></li>
+          <li><Icon name="restart" size={15} /><span><strong>You choose when to restart.</strong> {runtimeCopy.validation}</span></li>
         </ul>
         {metadataWarning !== null && <div class="marketplace-note marketplace-note--warning"><Icon name="warning" size={14} />{metadataWarning}</div>}
-        <label class="check-row marketplace-confirm-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.currentTarget.checked)} /><span><strong>Install this exact version</strong><small>I understand the server may briefly stop or restart.</small></span></label>
+        <label class="check-row marketplace-confirm-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.currentTarget.checked)} /><span><strong>Install this exact version</strong><small>I understand I need to restart the server myself for the files to load.</small></span></label>
         <InlineError message={error} />
         <div class="dialog-actions"><button class="button button--quiet" type="button" onClick={onClose}>Cancel</button><button class="button button--primary" type="button" disabled={!confirmed || dispatching} onClick={() => void install()}>{dispatching ? 'Queuing…' : `Install ${detail.compatibility.contentKind}`}</button></div>
       </> : job.status === 'complete' || job.status === 'failed' ? <InstallationResult job={job} onClose={onClose} /> : <>
         <div class="job-progress marketplace-job-progress" role="status" aria-live="polite">
           <div class="job-icon job-icon--running"><Icon name="update" size={25} /></div>
           <strong>{job.stage}</strong>
-          <span>Helix is verifying, backing up, and applying the selected content. This operation continues on the server.</span>
+          <span>Helix is verifying and copying the selected files. Minecraft is not stopped.</span>
           <ProgressBar value={Math.max(job.progressPercent, 4)} />
           <small>{job.progressPercent}%</small>
         </div>
@@ -338,11 +380,11 @@ function ProjectView({
       <button class="back-link" type="button" onClick={onBack}><Icon name="back" size={15} />Marketplace</button>
       <header class="marketplace-project-head">
         <ResultLettermark title={detail.project.title} kind={detail.compatibility.contentKind} iconUrl={detail.project.iconUrl ?? hit.iconUrl} />
-        <div><span class="eyebrow">MODRINTH · {detail.compatibility.contentKind.toUpperCase()}</span><h2>{detail.project.title}</h2><p>{detail.project.description ?? 'No short description provided.'}</p><span class="marketplace-card__meta"><span>{hit.author ?? 'Unknown author'}</span><span>{compactNumber.format(detail.project.downloads)} downloads</span><span>{compactNumber.format(detail.project.followers)} followers</span></span></div>
-        <a class="button button--quiet" href={detail.project.webUrl} target="_blank" rel="noreferrer">Open on Modrinth <Icon name="external" size={14} /></a>
+        <div><span class="eyebrow">{(detail.project.webUrl.includes('curseforge.com') ? 'CURSEFORGE' : 'MODRINTH')} · {detail.compatibility.contentKind.toUpperCase()}{detail.installed ? ' · INSTALLED' : ''}</span><h2>{detail.project.title}</h2><p>{detail.project.description ?? 'No short description provided.'}</p><span class="marketplace-card__meta"><span>{hit.author ?? 'Unknown author'}</span><span>{compactNumber.format(detail.project.downloads)} downloads</span><span>{compactNumber.format(detail.project.followers)} followers</span></span></div>
+        <a class="button button--quiet" href={detail.project.webUrl} target="_blank" rel="noreferrer">Open on {detail.project.webUrl.includes('curseforge.com') ? 'CurseForge' : 'Modrinth'} <Icon name="external" size={14} /></a>
       </header>
       <div class="marketplace-project-grid">
-        <section class="marketplace-project-body"><h3>About</h3><pre>{shownBody}</pre>{body.length > BODY_PREVIEW_CHARS && <button class="button button--quiet" type="button" onClick={onBodyToggle}>{bodyExpanded ? 'Show less' : 'Read full description'}</button>}</section>
+        <section class="marketplace-project-body"><h3>About</h3><div class="marketplace-markdown-wrap">{renderMarketplaceBody(shownBody, detail.bodyFormat)}{body.length > BODY_PREVIEW_CHARS && <button class="button button--quiet" type="button" onClick={onBodyToggle}>{bodyExpanded ? 'Show less' : 'Read full description'}</button>}</div></section>
         <aside class="marketplace-install-card">
           <div><span class="eyebrow">EXACT COMPATIBILITY</span><h3>Choose a version</h3><p>Only versions returned for {detail.compatibility.serverSoftware} {detail.compatibility.minecraftVersion} are available.</p></div>
           <label class="field"><span>Version</span><select value={selectedVersionId} onChange={(event) => onVersionChange(event.currentTarget.value)}><option value="">Select a compatible version</option>{detail.versions.map((version) => <option key={version.id} value={version.id} disabled={!version.hasPrimaryFile}>{version.versionNumber} · {version.versionType}{version.hasPrimaryFile ? '' : ' · no primary file'}</option>)}</select></label>
@@ -352,10 +394,10 @@ function ProjectView({
           {!detail.versions.some((version) => version.versionType === 'release' && version.hasPrimaryFile) && <div class="marketplace-note marketplace-note--warning"><Icon name="warning" size={14} />No release is available. Select a beta or alpha explicitly if you accept that channel.</div>}
           {!canManageServers && <div class="marketplace-note"><Icon name="info" size={14} />Your account can browse compatible content but cannot install it.</div>}
           <button class="button button--primary marketplace-install-button" type="button" disabled={!canManageServers || !installable} onClick={onInstall}><Icon name="plus" size={15} />Review installation</button>
-          <small>Installs to <code>{detail.compatibility.installDirectory}/</code>. Optional dependencies are never added silently.</small>
+          <small>Installs to <code>{detail.compatibility.installDirectory}/</code>. Restart when you want the change. Optional dependencies are never added silently.</small>
         </aside>
       </div>
-      <footer class="marketplace-attribution">Project information and downloads are provided by <a href="https://modrinth.com" target="_blank" rel="noreferrer">Modrinth <Icon name="external" size={12} /></a>. Helix applies its own compatibility and installation safety checks.</footer>
+      <footer class="marketplace-attribution">Project information and downloads come from the selected catalog. Helix applies its own compatibility and installation safety checks.</footer>
     </div>
   );
 }
@@ -367,6 +409,8 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
   const serverMinecraftVersion = server.minecraftVersion;
   const [draftQuery, setDraftQuery] = useState('');
   const [query, setQuery] = useState('');
+  const [provider, setProvider] = useState<MarketplaceProvider>('modrinth');
+  const [catalog, setCatalog] = useState<MarketplaceCatalog>('content');
   const [offset, setOffset] = useState(0);
   const [searchRevision, setSearchRevision] = useState(0);
   const [page, setPage] = useState<MarketplaceSearchPage | null>(null);
@@ -380,6 +424,8 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
   const [selectedVersionId, setSelectedVersionId] = useState('');
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
+  const [listInstallingId, setListInstallingId] = useState<string | null>(null);
+  const [listInstallError, setListInstallError] = useState<string | null>(null);
   const searchTop = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -395,7 +441,7 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
     const controller = new AbortController();
     setSearching(true);
     setSearchError(null);
-    void searchMarketplace(server.id, query, offset, PAGE_SIZE, csrfToken, controller.signal).then((next) => {
+    void searchMarketplace(server.id, query, offset, PAGE_SIZE, csrfToken, controller.signal, provider, catalog).then((next) => {
       if (!marketplaceResponseMatchesServer(next.instanceId, next.compatibility, server)) throw new ApiError('Marketplace compatibility changed while this page was loading. Refresh the server before installing content.');
       setPage(next);
     }).catch((requestError: unknown) => {
@@ -409,7 +455,7 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
       if (!controller.signal.aborted) setSearching(false);
     });
     return () => controller.abort();
-  }, [csrfToken, offset, onSessionExpired, profile, query, searchRevision, serverId, serverMinecraftVersion, serverSoftware]);
+  }, [catalog, csrfToken, offset, onSessionExpired, profile, provider, query, searchRevision, serverId, serverMinecraftVersion, serverSoftware]);
 
   const loadProject = useCallback((hit: MarketplaceSearchHit): void => {
     setSelectedHit(hit);
@@ -424,7 +470,7 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
     const controller = new AbortController();
     setDetailLoading(true);
     setDetailError(null);
-    void getMarketplaceProject(server.id, selectedHit.projectId, csrfToken, controller.signal).then((next) => {
+    void getMarketplaceProject(server.id, selectedHit.projectId, csrfToken, controller.signal, selectedHit.provider).then((next) => {
       if (!marketplaceResponseMatchesServer(next.instanceId, next.compatibility, server) || next.project.id !== selectedHit.projectId) {
         throw new ApiError('Marketplace returned project details for a different server or project.');
       }
@@ -440,25 +486,79 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
     return () => controller.abort();
   }, [csrfToken, detailRevision, onSessionExpired, profile, selectedHit, serverId, serverMinecraftVersion, serverSoftware]);
 
+  const refreshAfterInstall = useCallback(async (): Promise<void> => {
+    setSearchRevision((value) => value + 1);
+    setDetailRevision((value) => value + 1);
+    await onInstalled();
+  }, [onInstalled]);
+
+  const installFromList = async (hit: MarketplaceSearchHit): Promise<void> => {
+    if (!canManageServers || listInstallingId !== null) return;
+    setListInstallingId(hit.projectId);
+    setListInstallError(null);
+    try {
+      const dispatch = await installMarketplaceProject(server.id, hit.projectId, null, csrfToken, hit.provider);
+      const deadline = Date.now() + 120_000;
+      let job = await getMarketplaceInstallJob(dispatch.jobId, csrfToken);
+      while (job.status === 'queued' || job.status === 'running') {
+        if (Date.now() > deadline) throw new Error('Installation is still running on the host. Refresh this tab in a minute.');
+        await new Promise((resolve) => window.setTimeout(resolve, JOB_POLL_MS));
+        job = await getMarketplaceInstallJob(dispatch.jobId, csrfToken);
+      }
+      if (job.status === 'failed') throw new Error(job.error ?? 'Installation stopped.');
+      setPage((current) => {
+        if (current === null) return current;
+        return {
+          ...current,
+          hits: current.hits.map((item) => item.projectId === hit.projectId
+            ? { ...item, installed: true, installedVersion: job.result?.versionNumber ?? item.latestVersion }
+            : item),
+        };
+      });
+      await refreshAfterInstall().catch(() => undefined);
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setListInstallError(describeError(requestError));
+    } finally {
+      setListInstallingId(null);
+    }
+  };
   const selectedVersion = useMemo(() => detail?.versions.find((version) => version.id === selectedVersionId) ?? null, [detail, selectedVersionId]);
   if (profile === null) {
     return <section class="server-tool marketplace-panel"><div class="marketplace-state marketplace-state--error"><Icon name="warning" /><strong>Marketplace unavailable</strong><span>{server.software} servers do not have a Helix marketplace installer.</span></div></section>;
   }
   if (selectedHit !== null) {
-    return <section class="server-tool marketplace-panel"><ProjectView hit={selectedHit} detail={detail} loading={detailLoading} error={detailError} canManageServers={canManageServers} selectedVersionId={selectedVersionId} bodyExpanded={bodyExpanded} onVersionChange={setSelectedVersionId} onBodyToggle={() => setBodyExpanded((value) => !value)} onBack={() => { setSelectedHit(null); setDetail(null); setInstallOpen(false); }} onRetry={() => setDetailRevision((value) => value + 1)} onInstall={() => setInstallOpen(true)} />{installOpen && detail !== null && selectedVersion !== null && <InstallDialog server={server} detail={detail} version={selectedVersion} csrfToken={csrfToken} canManageServers={canManageServers} onSessionExpired={onSessionExpired} onInstalled={onInstalled} onClose={() => setInstallOpen(false)} />}</section>;
+    return <section class="server-tool marketplace-panel"><ProjectView hit={selectedHit} detail={detail} loading={detailLoading} error={detailError} canManageServers={canManageServers} selectedVersionId={selectedVersionId} bodyExpanded={bodyExpanded} onVersionChange={setSelectedVersionId} onBodyToggle={() => setBodyExpanded((value) => !value)} onBack={() => { setSelectedHit(null); setDetail(null); setInstallOpen(false); }} onRetry={() => setDetailRevision((value) => value + 1)} onInstall={() => setInstallOpen(true)} />{installOpen && detail !== null && selectedVersion !== null && <InstallDialog server={server} detail={detail} version={selectedVersion} csrfToken={csrfToken} canManageServers={canManageServers} onSessionExpired={onSessionExpired} onInstalled={refreshAfterInstall} onClose={() => setInstallOpen(false)} />}</section>;
   }
   const firstResult = page === null || page.totalHits === 0 ? 0 : page.offset + 1;
   const lastResult = page === null ? 0 : Math.min(page.offset + page.hits.length, page.totalHits);
   const canGoNext = page !== null && lastResult < page.totalHits && page.offset + page.limit <= 10_000;
   return (
     <section class="server-tool marketplace-panel" ref={searchTop}>
-      <header class="marketplace-head"><div><span class="eyebrow">FROM MODRINTH</span><h2>{profile.contentKind === 'plugin' ? 'Plugin marketplace' : 'Mod marketplace'}</h2><p>Browse projects for this loader and Minecraft version. Missing server-side metadata is shown as a warning, not a dead end.</p></div><a class="marketplace-modrinth" href="https://modrinth.com" target="_blank" rel="noreferrer">Powered by Modrinth <Icon name="external" size={13} /></a></header>
+      <header class="marketplace-head">
+        <div>
+          <span class="eyebrow">SERVER MARKETPLACE</span>
+          <h2>{profile.contentKind === 'plugin' ? 'Plugin marketplace' : 'Mod marketplace'} <InfoTip text="Helix filters this catalog to this server’s loader and Minecraft version. Install copies the JAR into plugins/ or mods/ and leaves the server running. Restart when you want the files loaded." /></h2>
+          <p>Browse Modrinth and CurseForge for plugins, Bukkit addons, mods, and modpacks that match this loader. List Install picks a compatible release; open the project if you want a different build.</p>
+        </div>
+        <div class="marketplace-source-toggle" role="group" aria-label="Marketplace catalog">
+          <button type="button" class={provider === 'modrinth' ? 'is-active' : undefined} onClick={() => { setProvider('modrinth'); setCatalog('content'); setOffset(0); }}>Modrinth</button>
+          <button type="button" class={provider === 'curseforge' ? 'is-active' : undefined} onClick={() => { setProvider('curseforge'); setOffset(0); }}>CurseForge</button>
+        </div>
+      </header>
+      {provider === 'curseforge' && profile.contentKind === 'mod' && (
+        <div class="marketplace-source-toggle marketplace-source-toggle--catalog" role="group" aria-label="CurseForge content type">
+          <button type="button" class={catalog === 'content' ? 'is-active' : undefined} onClick={() => { setCatalog('content'); setOffset(0); }}>Mods</button>
+          <button type="button" class={catalog === 'modpacks' ? 'is-active' : undefined} onClick={() => { setCatalog('modpacks'); setOffset(0); }}>Modpacks</button>
+        </div>
+      )}
       {page !== null && <CompatibilityBar page={page} />}
-      <label class="marketplace-search"><Icon name="search" size={18} /><span class="sr-only">Search compatible projects</span><input type="search" value={draftQuery} maxlength={120} autocomplete="off" placeholder={`Search ${profile.contentKind === 'plugin' ? 'plugins' : 'mods'} by name`} onInput={(event) => setDraftQuery(event.currentTarget.value)} />{draftQuery.length > 0 && <button type="button" onClick={() => setDraftQuery('')} aria-label="Clear marketplace search"><Icon name="close" size={15} /></button>}</label>
+      <label class="marketplace-search"><Icon name="search" size={18} /><span class="sr-only">Search compatible projects</span><input type="search" value={draftQuery} maxlength={120} autocomplete="off" placeholder={`Search ${catalog === 'modpacks' ? 'modpacks' : profile.contentKind === 'plugin' ? 'plugins' : 'mods'} by name`} onInput={(event) => setDraftQuery(event.currentTarget.value)} />{draftQuery.length > 0 && <button type="button" onClick={() => setDraftQuery('')} aria-label="Clear marketplace search"><Icon name="close" size={15} /></button>}</label>
       <div class="marketplace-results-head"><div><strong>{page === null ? 'Matching projects' : `${wholeNumber.format(page.totalHits)} matching project${page.totalHits === 1 ? '' : 's'}`}</strong><span>{query.length === 0 ? 'Popular results for this server' : `Results for “${query}”`}</span></div>{page !== null && page.totalHits > 0 && <span>{firstResult}–{lastResult} of {wholeNumber.format(page.totalHits)}</span>}</div>
-      <SearchResults page={page} loading={searching} error={searchError} onOpen={loadProject} onRetry={() => setSearchRevision((value) => value + 1)} />
+      <InlineError message={listInstallError} />
+      <SearchResults page={page} loading={searching} error={searchError} canManageServers={canManageServers} installingId={listInstallingId} onOpen={loadProject} onInstall={(hit) => void installFromList(hit)} onRetry={() => setSearchRevision((value) => value + 1)} />
       {page !== null && page.totalHits > 0 && <nav class="marketplace-pagination" aria-label="Marketplace result pages"><button class="button button--quiet" type="button" disabled={searching || page.offset === 0} onClick={() => { setOffset(Math.max(0, page.offset - page.limit)); searchTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}><Icon name="back" size={14} />Previous</button><span>Showing {firstResult}–{lastResult}</span><button class="button button--quiet" type="button" disabled={searching || !canGoNext} onClick={() => { setOffset(page.offset + page.limit); searchTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Next<Icon name="chevron" size={14} /></button></nav>}
-      <footer class="marketplace-attribution">Results, metadata, and artwork come from <a href="https://modrinth.com" target="_blank" rel="noreferrer">Modrinth <Icon name="external" size={12} /></a>. Artwork is fetched through Helix’s bounded image proxy instead of connecting the browser directly to arbitrary image hosts.</footer>
+      <footer class="marketplace-attribution">Results come from {provider === 'curseforge' ? <a href="https://www.curseforge.com" target="_blank" rel="noreferrer">CurseForge <Icon name="external" size={12} /></a> : <a href="https://modrinth.com" target="_blank" rel="noreferrer">Modrinth <Icon name="external" size={12} /></a>}. Artwork is fetched through Helix’s bounded image proxy. CurseForge uses its public catalog without an API key.</footer>
     </section>
   );
 }

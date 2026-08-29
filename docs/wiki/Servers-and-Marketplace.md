@@ -103,20 +103,42 @@ stays visibly unavailable instead of silently trusting the whole host.
 
 The console opens at the newest output and follows it until the operator scrolls
 away. History is captured by the host even when no browser is open and spans
-retained boots. Retention is bounded, not unlimited. The list TPS column for
-native Minecraft is a short local `/tps` sample over RCON, not the status ping.
-Paper, Purpur, Folia, Leaves, Pufferfish, and some plugins report a number.
-Vanilla and most Fabric/Forge/Quilt servers stay as an em dash. Imported AMP
-servers still use AMP’s TPS metric. Settings mark fields that
-need a restart and keep a pending-restart state after save. The game port can
-be changed there; Helix rebinds the published container immediately, skips
-ports AMP already has claimed, and removes public access on the old port.
-Allocated memory can be changed from Settings or Overview; Helix rebinds the
-container so Docker and Minecraft `-Xmx` both pick up the new limit.
+retained boots. Retention is bounded, not unlimited. Minecraft commands use
+RCON on 127.0.0.1 only. That is loopback: the host talking to itself. Players
+never use that port, and it is not published to the LAN or internet. The
+Advanced tab labels this **Console: Loopback only** and the info tip explains
+the same thing. Helix also drops the noisy “Thread RCON Client … started /
+shutting down” lines that TPS sampling used to spam into the log.
+
+The list TPS column for native Minecraft is a short local `/tps` sample over
+that same RCON channel, not the status ping. Paper, Purpur, Folia, Leaves,
+Pufferfish, and some plugins report a number. Vanilla and most Fabric/Forge/Quilt
+servers stay as an em dash. Imported AMP servers still use AMP’s TPS metric.
+Settings mark fields that need a restart and keep a pending-restart state after
+save. The game port can be changed there; Helix rebinds the published container
+immediately, skips ports AMP already has claimed, and removes public access on
+the old port. Allocated memory can be changed from Settings or Overview; Helix
+rebinds the container so Docker and Minecraft `-Xmx` both pick up the new limit.
 
 Removing a native server stops and removes its exact container, then moves its
 managed data into recoverable trash. The Removed section can restore it before
-expiry. Backups have the same explicit trash-and-Undo behavior.
+expiry.
+
+## Backups
+
+**Back up now** stops a running server, archives the data folder, then starts it
+again. Restore replaces the live data with that archive.
+
+You can delete any backup at any time. The default delete moves it to
+**Deleted backups**, where **Undo** puts it back. **Delete forever** (from the
+active list or from trash, after a confirm) removes it from disk.
+
+Each server can keep a maximum number of backups (1–50, or 0 for no count
+limit) and/or a maximum age in days (1–365, or 0 for no age limit). After a
+backup, or when you save / apply those rules, extras move to trash oldest first.
+The newest copy from the backup that just finished is kept even if the count
+would otherwise drop it. Trash is not auto-purged; delete forever is always a
+person clicking it.
 
 ## Server icons
 
@@ -125,14 +147,21 @@ a custom PNG/JPEG. The browser crops/resizes the image locally and uploads at
 most 512 KiB. Stored images are validated by magic bytes and dimensions and are
 served from the authenticated same-origin API.
 
-## Modrinth
+## Marketplace
 
 Marketplace results use real project artwork through Helix's bounded image
-proxy. Image elements authenticate with the normal same-origin session cookie;
-the proxy still requires `games.view`, validates the exact Modrinth CDN path,
-bounds the response, and derives the media type from image bytes. Search and
-details are filtered by the exact server software, loader, and Minecraft
-release:
+proxy. Image elements authenticate with the normal same-origin session cookie.
+Modrinth icons go through `/api/v1/marketplace/modrinth/image`; CurseForge
+avatars go through `/api/v1/marketplace/curseforge/image`. Both still require
+`games.view`, validate the exact CDN path, bound the response, and derive the
+media type from image bytes.
+
+Toggle **Modrinth** or **CurseForge**. Paper-family servers get plugins (CurseForge
+lists those as Bukkit plugins / addons). Fabric, Forge, NeoForge, and Quilt get
+mods, and on CurseForge they can also browse **Modpacks**. A modpack JAR is not
+dropped onto an existing world; create a new server from **Start with a modpack**
+instead. Search and details stay filtered by the exact server software, loader,
+and Minecraft release:
 
 - Paper, Purpur, Leaves, and Pufferfish receive compatible plugins;
 - Folia requires content declaring Folia compatibility;
@@ -141,9 +170,17 @@ release:
   dead end; and
 - Vanilla does not get an install action.
 
-Install re-resolves the selected project/version at the broker before download,
-verifies its SHA-512 hash, and writes it only to the server's `plugins/` or
-`mods/` directory. Optional dependencies are never added silently.
+Project pages render the catalog description the way Modrinth and CurseForge
+write it (markdown or HTML), with scripts stripped and only https images from
+known hosts. After a successful install the search card and project header show
+**Installed**.
+
+**Install** on a search card, or **Review installation** on the project page,
+writes the verified JAR into that server's `plugins/` or `mods/` folder and
+leaves Minecraft running. Helix picks a compatible release automatically on the
+list button; open the project if you want a different build. Restart the server
+yourself when you want the files loaded. Helix does not take a world backup for
+this path. Optional dependencies are never added silently.
 
 “Start with a modpack” can search Modrinth or CurseForge without an owner API
 key. Modrinth packs use `.mrpack` hash checks. CurseForge packs use the public

@@ -374,14 +374,18 @@ optional/client-only files and `full_pack_parity: false`.
 | `GET` | `/api/v1/servers/{instance_id}/appearance/image` | `games.view` | Serve the stored same-origin icon bytes |
 | `GET` | `/api/v1/servers/{instance_id}/settings` | `games.view` | Read settings, revision, field metadata, and restart state |
 | `POST` | `/api/v1/servers/{instance_id}/settings` | `games.manage` | Revision-guarded settings update |
-| `GET` | `/api/v1/servers/{instance_id}/marketplace/search` | `games.view` | Compatibility-filtered Modrinth search |
-| `GET` | `/api/v1/servers/{instance_id}/marketplace/projects/{project_id}` | `games.view` | Bounded project/version detail |
-| `POST` | `/api/v1/servers/{instance_id}/marketplace/install` | `games.manage` | Start an exact compatible content install job |
+| `GET` | `/api/v1/servers/{instance_id}/marketplace/search` | `games.view` | Compatibility-filtered Modrinth or CurseForge search (`provider`, `catalog=content\|modpacks`) |
+| `GET` | `/api/v1/servers/{instance_id}/marketplace/projects/{project_id}` | `games.view` | Bounded project/version detail (`provider`) |
+| `POST` | `/api/v1/servers/{instance_id}/marketplace/install` | `games.manage` | Start an exact compatible content install job (files only; no restart) |
 | `GET` | `/api/v1/marketplace/modrinth/image?path=...` | `games.view` | Same-origin, session-authenticated, exact-CDN-path image proxy for marketplace and modpack artwork |
-| `GET` | `/api/v1/servers/{instance_id}/backups` | `games.view` | Active backups, recoverable trash, and retention policy |
+| `GET` | `/api/v1/marketplace/curseforge/image?path=...` | `games.view` | Same for CurseForge `media.forgecdn.net` avatars |
+| `GET` | `/api/v1/servers/{instance_id}/backups` | `games.view` | Active backups, recoverable trash, trash note, and keep-count/keep-days policy |
+| `PUT` | `/api/v1/servers/{instance_id}/backup-policy` | `games.backups.manage` | Set keep-count (0–50) and keep-days (0–365); 0 means no limit; extras move to trash |
+| `POST` | `/api/v1/servers/{instance_id}/backup-policy` | `games.backups.manage` | Apply the saved keep rules now |
 | `POST` | `/api/v1/servers/{instance_id}/backups/{backup_id}/restore` | `games.backups.manage` | Restore an exact backup |
 | `DELETE` | `/api/v1/servers/{instance_id}/backups/{backup_id}` | `games.backups.manage` | Move an exact backup into protected trash |
 | `POST` | `/api/v1/servers/{instance_id}/backups/trash/{trash_id}/restore` | `games.backups.manage` | Undo an exact recoverable deletion |
+| `DELETE` | `/api/v1/servers/{instance_id}/backups/trash/{trash_id}` | `games.backups.manage` | Delete a trashed backup forever |
 
 The game console is HTTP request/response plus durable cursor history; it is
 separate from the host-terminal WebSocket. Browser closure does not stop native
@@ -404,9 +408,14 @@ game port plus a port-forward reminder; it does not call the public-access route
 Marketplace profiles prevent plugin/mod loader mixing and require a matching
 game version and supported loader. A missing or negative Modrinth server-side
 flag is advisory: the API returns it for the UI warning, but does not block an
-otherwise matching JAR. Modpack create is a separate server-safe subset from
-Modrinth `.mrpack` or public CurseForge `manifest.json` packs; it is not a full
-client copy and does not claim every upstream pack.
+otherwise matching JAR. Search accepts `provider=modrinth|curseforge` and
+`catalog=content|modpacks`. Install writes checksum-verified JARs into
+`plugins/` or `mods/` and does not restart the container. Modpack create is a
+separate server-safe subset from Modrinth `.mrpack` or public CurseForge
+`manifest.json` packs; it is not a full client copy and does not claim every
+upstream pack. Backup list responses include `policy.keep_count` and
+`policy.keep_days`. Zero means no limit. Count/age extras move to trash;
+`DELETE .../backups/trash/{trash_id}` destroys that trash entry.
 
 ## Broker protocol boundary
 

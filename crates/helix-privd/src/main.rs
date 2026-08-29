@@ -348,15 +348,18 @@ impl BrokerContext {
                 query,
                 offset,
                 limit,
-            } => self
-                .native_manager(&instance_id)
-                .and_then(|native| native.marketplace_search(&instance_id, &query, offset, limit)),
+                provider,
+                catalog,
+            } => self.native_manager(&instance_id).and_then(|native| {
+                native.marketplace_search(&instance_id, &query, offset, limit, provider, catalog)
+            }),
             BrokerRequest::ServerMarketplaceProject {
                 instance_id,
                 project_id,
+                provider,
             } => self
                 .native_manager(&instance_id)
-                .and_then(|native| native.marketplace_project(&instance_id, &project_id)),
+                .and_then(|native| native.marketplace_project(&instance_id, &project_id, provider)),
             BrokerRequest::MinecraftModpackSearch {
                 query,
                 offset,
@@ -378,7 +381,15 @@ impl BrokerContext {
                 instance_id,
                 project_id,
                 version_id,
-            } => self.start_marketplace_install_job(instance_id, project_id, version_id),
+                provider,
+                restart_server,
+            } => self.start_marketplace_install_job(
+                instance_id,
+                project_id,
+                version_id,
+                provider,
+                restart_server,
+            ),
             BrokerRequest::UpdateServerSettings {
                 instance_id,
                 settings,
@@ -402,6 +413,22 @@ impl BrokerContext {
             } => self
                 .native_manager(&instance_id)
                 .and_then(|native| native.restore_trashed_backup(&instance_id, &trash_id)),
+            BrokerRequest::SetBackupPolicy {
+                instance_id,
+                keep_count,
+                keep_days,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.set_backup_policy(&instance_id, keep_count, keep_days)),
+            BrokerRequest::PruneBackups { instance_id } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.prune_backups(&instance_id)),
+            BrokerRequest::PurgeBackupTrash {
+                instance_id,
+                trash_id,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.purge_backup_trash(&instance_id, &trash_id)),
             BrokerRequest::ServerAction {
                 instance_id,
                 action,
@@ -1769,6 +1796,8 @@ impl BrokerContext {
         instance_id: String,
         project_id: String,
         version_id: Option<String>,
+        provider: helix_privd::ModpackProvider,
+        restart_server: bool,
     ) -> Result<Value, String> {
         let native = Arc::clone(
             self.native
@@ -1782,8 +1811,9 @@ impl BrokerContext {
         }
         let resource_key = format!("server:{instance_id}");
         let reuse_key = format!(
-            "marketplace:{project_id}:{}",
-            version_id.as_deref().unwrap_or("latest-release")
+            "marketplace:{provider:?}:{project_id}:{}:{}",
+            version_id.as_deref().unwrap_or("latest-release"),
+            restart_server
         );
         let (job_id, reused) = self.queue_job(
             "server_marketplace_install",
@@ -1807,6 +1837,8 @@ impl BrokerContext {
                     &instance_id,
                     &project_id,
                     version_id.as_deref(),
+                    provider,
+                    restart_server,
                 );
                 context.finish_job(&worker_job_id, result, "Content installed");
             })

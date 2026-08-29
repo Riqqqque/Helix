@@ -33,7 +33,8 @@ describe('Marketplace panel', () => {
     />);
 
     expect(markup).toContain('Plugin marketplace');
-    expect(markup).toContain('Powered by Modrinth');
+    expect(markup).toContain('Modrinth');
+    expect(markup).toContain('CurseForge');
     expect(markup).toContain('Search plugins by name');
     expect(markup).not.toContain('<img');
   });
@@ -42,10 +43,9 @@ describe('Marketplace panel', () => {
     const stopped = marketplaceInstallRuntimeCopy('stopped');
     const running = marketplaceInstallRuntimeCopy('online');
 
-    expect(stopped.backup).toContain('server stays stopped');
-    expect(stopped.validation).toContain('not automatically health-validated or rolled back');
-    expect(stopped.validation).toContain('safety backup remains available');
-    expect(running.validation).toContain('startup health check');
-    expect(running.validation).toContain('rolls the content back');
+    expect(stopped.backup).toContain('leaves the server stopped');
+    expect(stopped.validation).toContain('Restart the server yourself');
+    expect(running.backup).toContain('leaves the server running');
+    expect(running.validation).toContain('Restart the server yourself');
   });
 });

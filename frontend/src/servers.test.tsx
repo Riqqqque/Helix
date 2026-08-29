@@ -137,12 +137,13 @@ describe('Servers route', () => {
   });
 
   it('maps backup controls to the backend capability split', () => {
-    expect(canRunBackupMutation('create', true, false, true)).toBe(true);
-    expect(canRunBackupMutation('create', false, true, true)).toBe(false);
-    expect(canRunBackupMutation('restore', false, true, false)).toBe(true);
-    expect(canRunBackupMutation('restore', true, false, true)).toBe(false);
-    expect(canRunBackupMutation('trash', true, true, true)).toBe(true);
-    expect(canRunBackupMutation('undo', true, true, false)).toBe(false);
+    expect(canRunBackupMutation('create', true, false)).toBe(true);
+    expect(canRunBackupMutation('create', false, true)).toBe(false);
+    expect(canRunBackupMutation('restore', false, true)).toBe(true);
+    expect(canRunBackupMutation('restore', true, false)).toBe(false);
+    expect(canRunBackupMutation('trash', true, true)).toBe(true);
+    expect(canRunBackupMutation('undo', true, true)).toBe(true);
+    expect(canRunBackupMutation('trash', true, false)).toBe(false);
   });
 
   it('describes AMP lifecycle and native update safety without overclaiming', () => {

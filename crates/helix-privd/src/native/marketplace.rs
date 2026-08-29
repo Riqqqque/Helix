@@ -1,9 +1,11 @@
 use super::{
-    InstanceManifest, MinecraftSoftware, NativeManager, backup_id_from_path, native_id,
-    now_unix_ms, require_https_host, run_program, software_name, valid_hex,
+    InstanceManifest, MinecraftSoftware, NativeManager, native_id, now_unix_ms, require_https_host,
+    run_program, software_name, valid_hex,
 };
+use helix_privd::{MarketplaceCatalog, ModpackProvider};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha1::{Digest as Sha1Digest, Sha1};
 use sha2::{Digest as _, Sha512};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -48,7 +50,8 @@ struct ResolvedFile {
     filename: String,
     url: String,
     size: u64,
-    sha512: String,
+    sha512: Option<String>,
+    sha1: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -63,6 +66,12 @@ struct InstallRecord {
     content_directory: String,
     files: Vec<String>,
     installed_at_unix_ms: u64,
+    #[serde(default = "default_modrinth_provider")]
+    provider: String,
+}
+
+fn default_modrinth_provider() -> String {
+    "modrinth".to_owned()
 }
 
 struct RecordBackup {
@@ -84,40 +93,77 @@ impl NativeManager {
         query: &str,
         offset: u32,
         limit: u8,
+        provider: ModpackProvider,
+        catalog: MarketplaceCatalog,
     ) -> Result<Value, String> {
         let manifest = self.load_manifest(native_id(instance_id))?;
         self.require_minecraft_content(&manifest)?;
         let profile = content_profile(manifest.software)?;
         validate_search(query, offset, limit)?;
-        let facets = json!([
-            [format!("all_project_types:{}", profile.search_project_type)],
-            [format!("versions:{}", manifest.minecraft_version)],
-            profile
-                .accepted_loaders
-                .iter()
-                .map(|loader| format!("categories:{loader}"))
-                .collect::<Vec<_>>()
-        ]);
-        let facets = serde_json::to_string(&facets)
-            .map_err(|_| "could not encode the marketplace filter".to_owned())?;
-        let url = format!(
-            "https://api.modrinth.com/v2/search?query={}&facets={}&index=relevance&offset={offset}&limit={limit}",
-            percent_encode(query.trim()),
-            percent_encode(&facets)
-        );
-        let response = self.fetch_json(&url, &["api.modrinth.com"])?;
-        sanitize_search_response(&response, instance_id, &manifest, &profile)
+        match provider {
+            ModpackProvider::Curseforge => self.curseforge_marketplace_search(
+                instance_id,
+                &manifest,
+                &profile,
+                query,
+                offset,
+                limit,
+                catalog,
+            ),
+            ModpackProvider::Modrinth => {
+                if matches!(catalog, MarketplaceCatalog::Modpacks) {
+                    return Err(
+                        "Modrinth modpacks are installed as a new server from New Server, not onto an existing world"
+                            .to_owned(),
+                    );
+                }
+                let facets = json!([
+                    [format!("all_project_types:{}", profile.search_project_type)],
+                    [format!("versions:{}", manifest.minecraft_version)],
+                    profile
+                        .accepted_loaders
+                        .iter()
+                        .map(|loader| format!("categories:{loader}"))
+                        .collect::<Vec<_>>()
+                ]);
+                let facets = serde_json::to_string(&facets)
+                    .map_err(|_| "could not encode the marketplace filter".to_owned())?;
+                let url = format!(
+                    "https://api.modrinth.com/v2/search?query={}&facets={}&index=relevance&offset={offset}&limit={limit}",
+                    percent_encode(query.trim()),
+                    percent_encode(&facets)
+                );
+                let response = self.fetch_json(&url, &["api.modrinth.com"])?;
+                sanitize_search_response(
+                    &response,
+                    instance_id,
+                    &manifest,
+                    &profile,
+                    "modrinth",
+                    &self.load_install_records(&manifest.id),
+                )
+            }
+        }
     }
 
     pub fn marketplace_project(
         &self,
         instance_id: &str,
         project_id: &str,
+        provider: ModpackProvider,
     ) -> Result<Value, String> {
         validate_modrinth_id(project_id, "project")?;
         let manifest = self.load_manifest(native_id(instance_id))?;
         self.require_minecraft_content(&manifest)?;
         let profile = content_profile(manifest.software)?;
+        if matches!(provider, ModpackProvider::Curseforge) {
+            return self.curseforge_marketplace_project(
+                instance_id,
+                &manifest,
+                &profile,
+                project_id,
+            );
+        }
         let project = self.fetch_modrinth_project(project_id)?;
         validate_project_platform(&project, &profile)?;
         let resolved_project_id = required_text(&project, "id", 64)?;
@@ -136,9 +182,12 @@ impl NativeManager {
             .collect::<Result<Vec<_>, _>>()?;
         let version_count = versions.len();
         let slug = required_text(&project, "slug", 128)?;
+        let records = self.load_install_records(&manifest.id);
+        let installed = records.get(&resolved_project_id);
         Ok(json!({
             "schema_version": 1,
             "instance_id": instance_id,
+            "provider": "modrinth",
             "compatibility": {
                 "minecraft_version": manifest.minecraft_version,
                 "server_software": software_name(manifest.software),
@@ -167,7 +216,9 @@ impl NativeManager {
             "versions": versions,
             "version_count_returned": version_count,
             "version_results_truncated": version_count == 100,
-            "body_format": "plain_text",
+            "installed": installed.is_some(),
+            "installed_version": installed.map(|record| record.version_number.clone()),
+            "body_format": "markdown",
             "collected_at_unix_ms": now_unix_ms(),
         }))
     }
@@ -177,6 +228,8 @@ impl NativeManager {
         instance_id: &str,
         project_id: &str,
         version_id: Option<&str>,
+        provider: ModpackProvider,
+        _restart_server: bool,
     ) -> Result<Value, String> {
         validate_modrinth_id(project_id, "project")?;
         if let Some(version_id) = version_id {
@@ -186,12 +239,20 @@ impl NativeManager {
         self.require_minecraft_content(&manifest)?;
         let profile = content_profile(manifest.software)?;
         let _operation = self.begin_instance_operation(&manifest.id, "marketplace install")?;
-        let resolved = self.resolve_content_tree(
-            project_id,
-            version_id,
-            &manifest.minecraft_version,
-            &profile,
-        )?;
+        let resolved = match provider {
+            ModpackProvider::Curseforge => self.resolve_curseforge_content_tree(
+                project_id,
+                version_id,
+                &manifest.minecraft_version,
+                &profile,
+            )?,
+            ModpackProvider::Modrinth => self.resolve_content_tree(
+                project_id,
+                version_id,
+                &manifest.minecraft_version,
+                &profile,
+            )?,
+        };
         let root = resolved
             .first()
             .ok_or_else(|| "the marketplace returned no installable content".to_owned())?;
@@ -205,29 +266,6 @@ impl NativeManager {
         };
 
         let was_running = self.container_running(&manifest.container_name);
-        if was_running
-            && let Err(error) = self.docker(
-                ["stop", "--time", "45", manifest.container_name.as_str()],
-                75,
-            )
-        {
-            let _ = remove_directory_if_present(&staging);
-            return Err(error);
-        }
-        let backup = match self.archive_data(&manifest) {
-            Ok(path) => path,
-            Err(error) => {
-                let restart = self.restart_if_previously_running(&manifest, was_running);
-                let _ = remove_directory_if_present(&staging);
-                return Err(match restart {
-                    Ok(()) => format!("content installation stopped before changes: {error}"),
-                    Err(restart) => format!(
-                        "content installation stopped before changes: {error}; the previous server also failed to restart: {restart}"
-                    ),
-                });
-            }
-        };
-
         let mut mutation = ContentMutation::default();
         let commit_result = self.commit_content_tree(
             &manifest,
@@ -235,35 +273,20 @@ impl NativeManager {
             &resolved,
             &staged_files,
             &staging,
+            provider,
             &mut mutation,
         );
         if let Err(error) = commit_result {
             let rollback = rollback_content(&mut mutation);
-            let restart = self.restart_if_previously_running(&manifest, was_running);
             let _ = remove_directory_if_present(&staging);
-            return Err(combine_install_failure(error, rollback, restart));
-        }
-
-        let restart_result = self.restart_if_previously_running(&manifest, was_running);
-        if let Err(error) = restart_result {
-            let _ = self.docker(
-                ["stop", "--time", "20", manifest.container_name.as_str()],
-                45,
-            );
-            let rollback = rollback_content(&mut mutation);
-            let recovery = self.restart_if_previously_running(&manifest, was_running);
-            let _ = remove_directory_if_present(&staging);
-            return Err(combine_install_failure(
-                format!("Minecraft rejected the new content during startup: {error}"),
-                rollback,
-                recovery,
-            ));
+            return Err(combine_install_failure(error, rollback, Ok(())));
         }
 
         let _ = remove_directory_if_present(&staging);
         Ok(json!({
             "schema_version": 1,
             "instance_id": instance_id,
+            "provider": provider_name(provider),
             "project_id": root.project_id,
             "project_slug": root.project_slug,
             "project_title": root.project_title,
@@ -279,12 +302,39 @@ impl NativeManager {
             })).collect::<Vec<_>>(),
             "dependency_count": resolved.len().saturating_sub(1),
             "optional_dependencies_not_installed": resolved.iter().flat_map(|item| item.optional_dependencies.clone()).collect::<Vec<_>>(),
-            "backup_id": backup_id_from_path(&backup),
+            "backup_id": "",
             "server_was_running": was_running,
-            "restart_required": !was_running,
-            "runtime_validation_performed": was_running,
-            "rollback_on_failed_startup": was_running,
+            "restart_required": was_running,
+            "runtime_validation_performed": false,
+            "rollback_on_failed_startup": false,
         }))
+    }
+
+    fn load_install_records(&self, instance_id: &str) -> HashMap<String, InstallRecord> {
+        let root = self.state_root.join("marketplace").join(instance_id);
+        let mut records = HashMap::new();
+        let Ok(entries) = fs::read_dir(&root) else {
+            return records;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(body) = fs::read(&path) else {
+                continue;
+            };
+            if body.len() as u64 > MAX_INSTALL_RECORD_BYTES {
+                continue;
+            }
+            let Ok(record) = serde_json::from_slice::<InstallRecord>(&body) else {
+                continue;
+            };
+            if record.schema_version == 1 && !record.project_id.is_empty() {
+                records.insert(record.project_id.clone(), record);
+            }
+        }
+        records
     }
 
     fn fetch_modrinth_project(&self, project_id: &str) -> Result<Value, String> {
@@ -458,7 +508,14 @@ impl NativeManager {
             if total > MAX_MARKETPLACE_TOTAL_BYTES {
                 return Err("the content dependency download exceeds 1 GiB".to_owned());
             }
-            require_https_host(&content.file.url, &["cdn.modrinth.com"])?;
+            require_https_host(
+                &content.file.url,
+                &[
+                    "cdn.modrinth.com",
+                    "edge.forgecdn.net",
+                    "mediafilez.forgecdn.net",
+                ],
+            )?;
             let path = staging.join(format!("{index:03}.jar"));
             self.curl_no_redirect(
                 &content.file.url,
@@ -473,10 +530,20 @@ impl NativeManager {
             {
                 return Err("a marketplace download had an unexpected size".to_owned());
             }
-            if !file_sha512(&path)?.eq_ignore_ascii_case(&content.file.sha512) {
-                return Err(
-                    "a marketplace download failed its Modrinth-declared SHA-512".to_owned(),
-                );
+            if let Some(expected) = &content.file.sha512 {
+                if !file_sha512(&path)?.eq_ignore_ascii_case(expected) {
+                    return Err(
+                        "a marketplace download failed its Modrinth-declared SHA-512".to_owned(),
+                    );
+                }
+            } else if let Some(expected) = &content.file.sha1 {
+                if !file_sha1(&path)?.eq_ignore_ascii_case(expected) {
+                    return Err(
+                        "a marketplace download failed its CurseForge-declared SHA-1".to_owned(),
+                    );
+                }
+            } else {
+                return Err("the content file omitted a usable checksum".to_owned());
             }
             staged.push(path);
         }
@@ -491,6 +558,7 @@ impl NativeManager {
         resolved: &[ResolvedContent],
         staged_files: &[PathBuf],
         staging: &Path,
+        provider: ModpackProvider,
         mutation: &mut ContentMutation,
     ) -> Result<(), String> {
         if resolved.len() != staged_files.len() {
@@ -571,6 +639,7 @@ impl NativeManager {
                 content_directory: profile.directory.to_owned(),
                 files: vec![content.file.filename.clone()],
                 installed_at_unix_ms: now_unix_ms(),
+                provider: provider_name(provider).to_owned(),
             };
             mutation.records.push(RecordBackup {
                 path: record_path,
@@ -584,6 +653,258 @@ impl NativeManager {
             write_install_record(record_path, &record)?;
         }
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn curseforge_marketplace_search(
+        &self,
+        instance_id: &str,
+        manifest: &InstanceManifest,
+        profile: &ContentProfile,
+        query: &str,
+        offset: u32,
+        limit: u8,
+        catalog: MarketplaceCatalog,
+    ) -> Result<Value, String> {
+        let class_id = curseforge_class_id(profile, catalog)?;
+        let mut url = format!(
+            "https://www.curseforge.com/api/v1/mods/search?gameId=432&classId={class_id}&index={offset}&pageSize={limit}&sortField=2&sortOrder=desc&gameVersion={}&searchFilter={}",
+            percent_encode(&manifest.minecraft_version),
+            percent_encode(query.trim())
+        );
+        if let Some(loader) = curseforge_loader_type(manifest.software) {
+            url.push_str(&format!("&modLoaderType={loader}"));
+        }
+        let response = self.fetch_json(&url, &["www.curseforge.com"]).map_err(|_| {
+            "CurseForge's public catalog was unreachable; Helix did not use an API key. Try again or use Modrinth."
+                .to_owned()
+        })?;
+        let hits = response
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "CurseForge returned an unexpected catalog shape".to_owned())?;
+        let records = self.load_install_records(&manifest.id);
+        let hits = hits
+            .iter()
+            .take(usize::from(MAX_SEARCH_LIMIT))
+            .map(|hit| sanitize_curseforge_hit(hit, profile, &records))
+            .collect::<Result<Vec<_>, _>>()?;
+        let total = response
+            .pointer("/pagination/totalCount")
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| u64::try_from(hits.len()).unwrap_or(u64::MAX));
+        Ok(json!({
+            "schema_version": 1,
+            "instance_id": instance_id,
+            "provider": "curseforge",
+            "catalog": catalog_name(catalog),
+            "compatibility": {
+                "minecraft_version": manifest.minecraft_version,
+                "server_software": software_name(manifest.software),
+                "content_kind": profile.kind,
+                "accepted_loaders": profile.accepted_loaders,
+                "install_directory": profile.directory,
+            },
+            "total_hits": total,
+            "offset": offset,
+            "limit": limit,
+            "hits": hits,
+            "collected_at_unix_ms": now_unix_ms(),
+        }))
+    }
+
+    fn curseforge_marketplace_project(
+        &self,
+        instance_id: &str,
+        manifest: &InstanceManifest,
+        profile: &ContentProfile,
+        project_id: &str,
+    ) -> Result<Value, String> {
+        let project = self.fetch_json(
+            &format!("https://www.curseforge.com/api/v1/mods/{project_id}"),
+            &["www.curseforge.com"],
+        )?;
+        let project = project.get("data").cloned().unwrap_or(project);
+        let slug = required_text(&project, "slug", 128)
+            .or_else(|_| required_text(&project, "name", 128))?;
+        let title = optional_text(&project, "name", 256).unwrap_or_else(|| slug.clone());
+        let class_id = project.get("classId").and_then(Value::as_u64).unwrap_or(0);
+        let project_type = curseforge_project_type(class_id, profile.kind);
+        let files = self.fetch_json(
+            &format!("https://www.curseforge.com/api/v1/mods/{project_id}/files?pageSize=50"),
+            &["www.curseforge.com"],
+        )?;
+        let files = files
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut versions = Vec::new();
+        for file in files.iter().take(100) {
+            if let Ok(summary) =
+                sanitize_curseforge_version(file, &manifest.minecraft_version, profile)
+            {
+                versions.push(summary);
+            }
+        }
+        let version_count = versions.len();
+        let records = self.load_install_records(&manifest.id);
+        let installed = records.get(project_id);
+        let web_path = curseforge_web_path(class_id, profile.kind);
+        let (body, body_format) = match self.curseforge_description(project_id) {
+            Some(html) => (html, "html"),
+            None => (
+                optional_text_chars(&project, "summary", MAX_PROJECT_BODY_CHARS)
+                    .unwrap_or_default(),
+                "markdown",
+            ),
+        };
+        Ok(json!({
+            "schema_version": 1,
+            "instance_id": instance_id,
+            "provider": "curseforge",
+            "compatibility": {
+                "minecraft_version": manifest.minecraft_version,
+                "server_software": software_name(manifest.software),
+                "content_kind": profile.kind,
+                "accepted_loaders": profile.accepted_loaders,
+                "install_directory": profile.directory,
+            },
+            "project": {
+                "id": project_id,
+                "slug": slug,
+                "title": title,
+                "description": optional_text(&project, "summary", 2_048),
+                "body": body,
+                "project_type": project_type,
+                "content_kind": profile.kind,
+                "server_side": "unknown",
+                "downloads": project.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
+                "followers": 0,
+                "license": Value::Null,
+                "source_url": Value::Null,
+                "issues_url": Value::Null,
+                "wiki_url": Value::Null,
+                "web_url": format!("https://www.curseforge.com/minecraft/{web_path}/{}", percent_encode(&slug)),
+                "icon_url": curseforge_icon_proxy_url(project.pointer("/logo/url").and_then(Value::as_str)),
+            },
+            "versions": versions,
+            "version_count_returned": version_count,
+            "version_results_truncated": files.len() > 100,
+            "installed": installed.is_some(),
+            "installed_version": installed.map(|record| record.version_number.clone()),
+            "body_format": body_format,
+            "collected_at_unix_ms": now_unix_ms(),
+        }))
+    }
+
+    fn curseforge_description(&self, project_id: &str) -> Option<String> {
+        let response = self
+            .fetch_json(
+                &format!("https://www.curseforge.com/api/v1/mods/{project_id}/description"),
+                &["www.curseforge.com"],
+            )
+            .ok()?;
+        let html = response.get("data").and_then(Value::as_str)?;
+        let cleaned = clean_text_chars(html, MAX_PROJECT_BODY_CHARS);
+        if cleaned.trim().is_empty() {
+            None
+        } else {
+            Some(cleaned)
+        }
+    }
+
+    fn resolve_curseforge_content_tree(
+        &self,
+        root_project_id: &str,
+        root_version_id: Option<&str>,
+        minecraft_version: &str,
+        profile: &ContentProfile,
+    ) -> Result<Vec<ResolvedContent>, String> {
+        let mut pending = VecDeque::from([(
+            root_project_id.to_owned(),
+            root_version_id.map(str::to_owned),
+        )]);
+        let mut resolved = Vec::new();
+        let mut seen = HashSet::new();
+        while let Some((project_id, version_hint)) = pending.pop_front() {
+            if resolved.len() >= MAX_DEPENDENCY_PROJECTS {
+                return Err(format!(
+                    "the content dependency tree exceeds the {MAX_DEPENDENCY_PROJECTS}-project safety limit"
+                ));
+            }
+            validate_modrinth_id(&project_id, "project")?;
+            if !seen.insert(project_id.clone()) {
+                continue;
+            }
+            let file = if let Some(file_id) = version_hint.as_deref() {
+                validate_modrinth_id(file_id, "version")?;
+                self.fetch_json(
+                    &format!("https://www.curseforge.com/api/v1/mods/{project_id}/files/{file_id}"),
+                    &["www.curseforge.com"],
+                )?
+                .get("data")
+                .cloned()
+                .ok_or_else(|| "CurseForge returned a file without data".to_owned())?
+            } else {
+                let files = self.fetch_json(
+                    &format!(
+                        "https://www.curseforge.com/api/v1/mods/{project_id}/files?pageSize=50"
+                    ),
+                    &["www.curseforge.com"],
+                )?;
+                let files = files
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .ok_or_else(|| "CurseForge returned no files for this project".to_owned())?;
+                select_curseforge_release(&files, minecraft_version, profile)?.clone()
+            };
+            let file_id = file
+                .get("id")
+                .and_then(Value::as_u64)
+                .map(|id| id.to_string())
+                .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
+            let project = self.fetch_json(
+                &format!("https://www.curseforge.com/api/v1/mods/{project_id}"),
+                &["www.curseforge.com"],
+            )?;
+            let project = project.get("data").cloned().unwrap_or(project);
+            let slug = required_text(&project, "slug", 128)
+                .or_else(|_| required_text(&project, "name", 128))?;
+            let title = optional_text(&project, "name", 256).unwrap_or_else(|| slug.clone());
+            let resolved_file = select_curseforge_jar(&file)?;
+            let mut optional_dependencies = Vec::new();
+            if let Some(dependencies) = file.get("dependencies").and_then(Value::as_array) {
+                for dependency in dependencies.iter().take(128) {
+                    let relation = dependency
+                        .get("relationType")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let dep_id = dependency
+                        .get("modId")
+                        .and_then(Value::as_u64)
+                        .map(|id| id.to_string());
+                    match (relation, dep_id) {
+                        (3, Some(id)) => pending.push_back((id, None)),
+                        (2, Some(id)) => optional_dependencies.push(id),
+                        _ => {}
+                    }
+                }
+            }
+            resolved.push(ResolvedContent {
+                project_id,
+                project_slug: slug,
+                project_title: title,
+                version_id: file_id,
+                version_number: optional_text(&file, "displayName", 128)
+                    .or_else(|| optional_text(&file, "fileName", 128))
+                    .unwrap_or_else(|| "unknown".to_owned()),
+                file: resolved_file,
+                optional_dependencies,
+            });
+        }
+        Ok(resolved)
     }
 }
 
@@ -713,6 +1034,8 @@ fn sanitize_search_response(
     instance_id: &str,
     manifest: &InstanceManifest,
     profile: &ContentProfile,
+    provider: &str,
+    records: &HashMap<String, InstallRecord>,
 ) -> Result<Value, String> {
     let hits = response
         .get("hits")
@@ -725,6 +1048,7 @@ fn sanitize_search_response(
             let project_id = required_text(hit, "project_id", 64)?;
             validate_modrinth_id(&project_id, "project")?;
             let slug = required_text(hit, "slug", 128)?;
+            let installed = records.get(&project_id);
             Ok(json!({
                 "project_id": project_id,
                 "slug": slug,
@@ -739,12 +1063,16 @@ fn sanitize_search_response(
                 "date_modified": optional_text(hit, "date_modified", 64),
                 "web_url": format!("https://modrinth.com/{}/{slug}", profile.kind),
                 "icon_url": modrinth_icon_proxy_url(hit.get("icon_url").and_then(Value::as_str)),
+                "provider": provider,
+                "installed": installed.is_some(),
+                "installed_version": installed.map(|record| record.version_number.clone()),
             }))
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok(json!({
         "schema_version": 1,
         "instance_id": instance_id,
+        "provider": provider,
         "compatibility": {
             "minecraft_version": manifest.minecraft_version,
             "server_software": software_name(manifest.software),
@@ -762,7 +1090,12 @@ fn sanitize_search_response(
 
 fn validate_project_platform(project: &Value, profile: &ContentProfile) -> Result<(), String> {
     let project_type = required_text(project, "project_type", 32)?;
-    if project_type != "mod" {
+    let type_ok = match profile.kind {
+        "plugin" => project_type == "plugin" || project_type == "mod",
+        "mod" => project_type == "mod",
+        _ => false,
+    };
+    if !type_ok {
         return Err(format!(
             "this server accepts {} content, not {project_type} projects",
             profile.kind
@@ -863,7 +1196,8 @@ fn select_primary_file(version: &Value) -> Result<ResolvedFile, String> {
         filename,
         url,
         size,
-        sha512,
+        sha512: Some(sha512),
+        sha1: None,
     })
 }
 
@@ -998,6 +1332,328 @@ fn file_sha512(path: &Path) -> Result<String, String> {
         let _ = write!(output, "{byte:02x}");
     }
     Ok(output)
+}
+
+fn file_sha1(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path)
+        .map_err(|_| "could not open the downloaded marketplace content".to_owned())?;
+    let mut digest = Sha1::new();
+    let mut buffer = [0_u8; 128 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| "could not hash the downloaded marketplace content".to_owned())?;
+        if read == 0 {
+            break;
+        }
+        Sha1Digest::update(&mut digest, &buffer[..read]);
+    }
+    let mut output = String::with_capacity(40);
+    for byte in digest.finalize() {
+        let _ = write!(output, "{byte:02x}");
+    }
+    Ok(output)
+}
+
+fn provider_name(provider: ModpackProvider) -> &'static str {
+    match provider {
+        ModpackProvider::Modrinth => "modrinth",
+        ModpackProvider::Curseforge => "curseforge",
+    }
+}
+
+fn catalog_name(catalog: MarketplaceCatalog) -> &'static str {
+    match catalog {
+        MarketplaceCatalog::Content => "content",
+        MarketplaceCatalog::Modpacks => "modpacks",
+    }
+}
+
+fn curseforge_class_id(
+    profile: &ContentProfile,
+    catalog: MarketplaceCatalog,
+) -> Result<u64, String> {
+    match catalog {
+        MarketplaceCatalog::Modpacks => {
+            if profile.kind != "mod" {
+                return Err(
+                    "CurseForge modpacks need a Fabric, Forge, Quilt, or NeoForge server. Create a new server from a pack instead."
+                        .to_owned(),
+                );
+            }
+            Ok(4471)
+        }
+        MarketplaceCatalog::Content if profile.kind == "plugin" => Ok(5),
+        MarketplaceCatalog::Content => Ok(6),
+    }
+}
+
+fn curseforge_loader_type(software: MinecraftSoftware) -> Option<u8> {
+    match software {
+        MinecraftSoftware::Forge => Some(1),
+        MinecraftSoftware::Fabric => Some(4),
+        MinecraftSoftware::Quilt => Some(5),
+        MinecraftSoftware::NeoForge => Some(6),
+        _ => None,
+    }
+}
+
+fn curseforge_project_type(class_id: u64, fallback_kind: &str) -> &'static str {
+    match class_id {
+        5 => "plugin",
+        6 => "mod",
+        4471 => "modpack",
+        _ if fallback_kind == "plugin" => "plugin",
+        _ => "mod",
+    }
+}
+
+fn curseforge_web_path(class_id: u64, fallback_kind: &str) -> &'static str {
+    match class_id {
+        5 => "bukkit-plugins",
+        4471 => "modpacks",
+        _ if fallback_kind == "plugin" => "bukkit-plugins",
+        _ => "mc-mods",
+    }
+}
+
+fn curseforge_game_versions(file: &Value) -> Vec<String> {
+    bounded_string_array(file.get("gameVersions"), 64, 64)
+}
+
+fn curseforge_file_matches(
+    file: &Value,
+    minecraft_version: &str,
+    profile: &ContentProfile,
+) -> bool {
+    let versions = curseforge_game_versions(file);
+    if !versions.iter().any(|value| value == minecraft_version) {
+        return false;
+    }
+    if profile.kind == "plugin" {
+        return true;
+    }
+    versions.iter().any(|value| {
+        profile
+            .accepted_loaders
+            .iter()
+            .any(|loader| value.eq_ignore_ascii_case(loader))
+    })
+}
+
+fn sanitize_curseforge_hit(
+    hit: &Value,
+    profile: &ContentProfile,
+    records: &HashMap<String, InstallRecord>,
+) -> Result<Value, String> {
+    let project_id = hit
+        .get("id")
+        .and_then(Value::as_u64)
+        .map(|id| id.to_string())
+        .ok_or_else(|| "CurseForge returned a project without an id".to_owned())?;
+    validate_modrinth_id(&project_id, "project")?;
+    let slug = required_text(hit, "slug", 128).or_else(|_| required_text(hit, "name", 128))?;
+    let class_id = hit.get("classId").and_then(Value::as_u64).unwrap_or(0);
+    let author = hit
+        .pointer("/authors/0/name")
+        .and_then(Value::as_str)
+        .map(|value| clean_text(value, 128));
+    let installed = records.get(&project_id);
+    Ok(json!({
+        "project_id": project_id,
+        "slug": slug,
+        "title": optional_text(hit, "name", 256).unwrap_or_else(|| slug.clone()),
+        "description": optional_text(hit, "summary", 2_048),
+        "author": author,
+        "project_type": curseforge_project_type(class_id, profile.kind),
+        "server_side": "unknown",
+        "downloads": hit.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
+        "follows": 0,
+        "latest_version": hit.pointer("/latestFilesIndexes/0/filename").and_then(Value::as_str).map(|value| clean_text(value, 128)),
+        "date_modified": optional_text(hit, "dateModified", 64).or_else(|| optional_text(hit, "dateCreated", 64)),
+        "web_url": format!("https://www.curseforge.com/minecraft/{}/{}", curseforge_web_path(class_id, profile.kind), percent_encode(&slug)),
+        "icon_url": curseforge_icon_proxy_url(hit.pointer("/logo/url").and_then(Value::as_str)),
+        "provider": "curseforge",
+        "installed": installed.is_some(),
+        "installed_version": installed.map(|record| record.version_number.clone()),
+    }))
+}
+
+fn sanitize_curseforge_version(
+    file: &Value,
+    minecraft_version: &str,
+    profile: &ContentProfile,
+) -> Result<Value, String> {
+    if !curseforge_file_matches(file, minecraft_version, profile) {
+        return Err("incompatible".to_owned());
+    }
+    let id = file
+        .get("id")
+        .and_then(Value::as_u64)
+        .map(|id| id.to_string())
+        .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
+    validate_modrinth_id(&id, "version")?;
+    let filename = optional_text(file, "fileName", 180).unwrap_or_default();
+    let release_type = file.get("releaseType").and_then(Value::as_u64).unwrap_or(1);
+    let version_type = match release_type {
+        1 => "release",
+        2 => "beta",
+        _ => "alpha",
+    };
+    let loaders = curseforge_game_versions(file)
+        .into_iter()
+        .filter(|value| {
+            profile
+                .accepted_loaders
+                .iter()
+                .any(|loader| value.eq_ignore_ascii_case(loader))
+                || (profile.kind == "plugin"
+                    && matches!(
+                        value.to_ascii_lowercase().as_str(),
+                        "bukkit" | "spigot" | "paper" | "purpur" | "folia" | "leaves"
+                    ))
+        })
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let loaders = if loaders.is_empty() {
+        profile
+            .accepted_loaders
+            .iter()
+            .map(|loader| (*loader).to_owned())
+            .collect()
+    } else {
+        loaders
+    };
+    Ok(json!({
+        "id": id,
+        "name": optional_text(file, "displayName", 256).unwrap_or_else(|| filename.clone()),
+        "version_number": if filename.is_empty() { id.clone() } else { filename },
+        "version_type": version_type,
+        "date_published": optional_text(file, "fileDate", 64),
+        "downloads": file.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
+        "game_versions": curseforge_game_versions(file),
+        "loaders": loaders,
+        "has_primary_file": filename.to_ascii_lowercase().ends_with(".jar"),
+    }))
+}
+
+fn select_curseforge_release<'a>(
+    files: &'a [Value],
+    minecraft_version: &str,
+    profile: &ContentProfile,
+) -> Result<&'a Value, String> {
+    files
+        .iter()
+        .find(|file| {
+            curseforge_file_matches(file, minecraft_version, profile)
+                && file.get("releaseType").and_then(Value::as_u64).unwrap_or(0) == 1
+                && optional_text(file, "fileName", 180)
+                    .is_some_and(|name| name.to_ascii_lowercase().ends_with(".jar"))
+        })
+        .or_else(|| {
+            files.iter().find(|file| {
+                curseforge_file_matches(file, minecraft_version, profile)
+                    && optional_text(file, "fileName", 180)
+                        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".jar"))
+            })
+        })
+        .ok_or_else(|| {
+            "this project has no CurseForge file for the server's exact loader and Minecraft version"
+                .to_owned()
+        })
+}
+
+fn select_curseforge_jar(file: &Value) -> Result<ResolvedFile, String> {
+    let filename = required_text(file, "fileName", 180)?;
+    validate_content_filename(&filename)?;
+    let file_id = file
+        .get("id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
+    let url = match optional_text(file, "downloadUrl", 4_096) {
+        Some(candidate)
+            if require_https_host(
+                &candidate,
+                &["edge.forgecdn.net", "mediafilez.forgecdn.net"],
+            )
+            .is_ok() =>
+        {
+            candidate
+        }
+        _ => forgecdn_file_url(file_id, &filename)?,
+    };
+    require_https_host(&url, &["edge.forgecdn.net", "mediafilez.forgecdn.net"])?;
+    let size = file
+        .get("fileLength")
+        .and_then(Value::as_u64)
+        .filter(|size| (1_024..=MAX_MARKETPLACE_FILE_BYTES).contains(size))
+        .ok_or_else(|| "the content file size is outside the safety limit".to_owned())?;
+    let sha1 = file
+        .get("hashes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|entry| {
+            let algo = entry.get("algo").and_then(Value::as_u64)?;
+            let value = entry.get("value").and_then(Value::as_str)?;
+            (algo == 1 && valid_hex(value, 40)).then(|| value.to_owned())
+        })
+        .ok_or_else(|| "the CurseForge file omitted a valid SHA-1 checksum".to_owned())?;
+    Ok(ResolvedFile {
+        filename,
+        url,
+        size,
+        sha512: None,
+        sha1: Some(sha1),
+    })
+}
+
+fn forgecdn_file_url(file_id: u64, file_name: &str) -> Result<String, String> {
+    if file_id == 0
+        || file_name.is_empty()
+        || file_name.contains(['/', '\\', ':'])
+        || Path::new(file_name)
+            .file_name()
+            .and_then(|value| value.to_str())
+            != Some(file_name)
+    {
+        return Err("the CurseForge file name is invalid".to_owned());
+    }
+    let id = file_id.to_string();
+    let (prefix, suffix) = if id.len() > 3 {
+        (&id[..id.len() - 3], &id[id.len() - 3..])
+    } else {
+        ("0", id.as_str())
+    };
+    Ok(format!(
+        "https://edge.forgecdn.net/files/{prefix}/{suffix}/{}",
+        percent_encode(file_name)
+    ))
+}
+
+pub(super) fn curseforge_icon_proxy_url(value: Option<&str>) -> Option<String> {
+    let url = value?;
+    require_https_host(url, &["media.forgecdn.net"]).ok()?;
+    let path = url.strip_prefix("https://media.forgecdn.net")?;
+    if path.len() > 512
+        || !path.starts_with("/avatars/")
+        || path.contains(['?', '#', '\\', '%'])
+        || path
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+        || !path
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
+        || ![".png", ".jpg", ".jpeg", ".webp", ".gif"]
+            .iter()
+            .any(|extension| path.to_ascii_lowercase().ends_with(extension))
+    {
+        return None;
+    }
+    Some(format!(
+        "/api/v1/marketplace/curseforge/image?path={}",
+        percent_encode(path)
+    ))
 }
 
 fn ensure_content_directory(path: &Path, run_uid: u32) -> Result<(), String> {
@@ -1242,6 +1898,16 @@ mod tests {
         assert!(
             modrinth_icon_proxy_url(Some("https://cdn.modrinth.com/data/abc/icon.svg")).is_none()
         );
+        assert_eq!(
+            curseforge_icon_proxy_url(Some("https://media.forgecdn.net/avatars/12/345/icon.png")),
+            Some(
+                "/api/v1/marketplace/curseforge/image?path=%2Favatars%2F12%2F345%2Ficon.png"
+                    .to_owned()
+            )
+        );
+        assert!(
+            curseforge_icon_proxy_url(Some("https://media.forgecdn.net/data/icon.png")).is_none()
+        );
     }
 
     #[test]
@@ -1257,6 +1923,9 @@ mod tests {
         let leaves = content_profile(MinecraftSoftware::Leaves).unwrap();
         assert_eq!(leaves.kind, "plugin");
         assert!(leaves.accepted_loaders.contains(&"paper"));
+        let neoforge = content_profile(MinecraftSoftware::NeoForge).unwrap();
+        assert_eq!(neoforge.kind, "mod");
+        assert_eq!(neoforge.accepted_loaders, ["neoforge"]);
         assert!(content_profile(MinecraftSoftware::Vanilla).is_err());
     }
 
@@ -1269,6 +1938,12 @@ mod tests {
         });
         let paper = content_profile(MinecraftSoftware::Paper).unwrap();
         assert!(validate_project_platform(&project, &paper).is_ok());
+        let plugin = json!({
+            "project_type": "plugin",
+            "loaders": ["paper", "spigot", "bukkit"],
+            "server_side": "required"
+        });
+        assert!(validate_project_platform(&plugin, &paper).is_ok());
         let fabric = content_profile(MinecraftSoftware::Fabric).unwrap();
         assert!(validate_project_platform(&project, &fabric).is_err());
         let client_only = json!({

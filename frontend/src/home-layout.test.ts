@@ -4,6 +4,7 @@ import {
   exportHomeTemplate,
   homeShortcutUrls,
   importHomeTemplate,
+  importHomarrOntoHome,
   moveHomeWidget,
   homarrShortcutSize,
   newHomarrShortcuts,
@@ -110,6 +111,30 @@ describe('home layout', () => {
       { url: 'http://192.168.1.10:7878' },
       { url: '' },
     ], existing)).toEqual([{ url: 'http://192.168.1.10:7878' }]);
+  });
+
+  it('adds Homarr shortcuts onto the Home the operator is already on', () => {
+    const templates = [
+      { id: 'home-main', name: 'Main', accent: '#d7f64d', widgets: defaultHomeWidgets.map((widget) => ({ ...widget })) },
+    ];
+    const incoming: HomeWidget[] = [
+      { id: 'shortcut-homarr-0', kind: 'shortcut', size: 'compact', height: 'short', title: 'Radarr', content: '', url: 'http://192.168.1.10:7878', color: '', icon: '' },
+      { id: 'shortcut-homarr-1', kind: 'shortcut', size: 'wide', height: 'short', title: 'Plex', content: '', url: 'http://192.168.1.10:32400/web', color: '', icon: '' },
+    ];
+    const result = importHomarrOntoHome(templates, 'home-main', incoming);
+    expect('templates' in result).toBe(true);
+    if (!('templates' in result)) return;
+    expect(result.added).toBe(2);
+    expect(result.templates).toHaveLength(1);
+    expect(result.templates[0]?.id).toBe('home-main');
+    expect(result.templates[0]?.widgets.map((widget) => widget.title)).toEqual([
+      ...defaultHomeWidgets.map((widget) => widget.title),
+      'Radarr',
+      'Plex',
+    ]);
+    expect(importHomarrOntoHome(result.templates, 'home-main', incoming)).toEqual({
+      error: 'Those Homarr apps are already on this Home. Uncheck any you do not want, or pick different apps.',
+    });
   });
 
   it('places Homarr shortcuts on a dedicated Homarr Home in catalog order', () => {

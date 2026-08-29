@@ -3,7 +3,6 @@ import type { HostInventory, ManagedServer } from './control-api';
 import { calculatePercent, formatBytes, formatDuration, formatPercent } from './format';
 import {
   exportHomeWidgetsClipboard,
-  mergeHomarrShortcuts,
   newHomeWidgetId,
   parseHomeWidgetsClipboard,
   pasteHomeWidgets,
@@ -14,8 +13,8 @@ import {
   exportHomeTemplate,
   homarrShortcutSize,
   homeShortcutUrls,
-  HOMARR_HOME_ID,
   importHomeTemplate,
+  importHomarrOntoHome,
   moveHomeWidget,
   newHomarrShortcuts,
   nextHomeWidgetHeight,
@@ -24,7 +23,6 @@ import {
   parseNoteWidgetConfiguration,
   parseWeatherWidgetConfiguration,
   reorderHomeWidgets,
-  replaceHomarrHome,
   serializeNoteWidgetConfiguration,
   serializeWeatherWidgetConfiguration,
   type HomeTemplate,
@@ -599,8 +597,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null);
   const activeTemplate = templates.find((template) => template.id === activeHomeId) ?? templates[0]!;
   const widgets = activeTemplate.widgets;
-  const homarrHome = templates.find((template) => template.id === HOMARR_HOME_ID);
-  const existingShortcutUrls = homeShortcutUrls(homarrHome?.widgets ?? []);
+  const existingShortcutUrls = homeShortcutUrls(widgets);
   const otherHomes = templates.filter((template) => template.id !== activeTemplate.id);
 
   const changeWidgets = (update: (current: HomeWidget[]) => HomeWidget[]): void => {
@@ -675,11 +672,15 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
       const target = event.target;
       if (target instanceof HTMLElement && /^(?:INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
+      if (event.key === 'a' || event.key === 'A') {
+        event.preventDefault();
+        copyWidgets(widgets);
+        return;
+      }
       if (event.key === 'c' || event.key === 'C') {
         const widget = widgets.find((item) => item.id === selectedWidgetId);
-        if (widget === undefined) return;
         event.preventDefault();
-        copyWidgets([widget]);
+        copyWidgets(widget === undefined ? widgets : [widget]);
         return;
       }
       if (event.key === 'v' || event.key === 'V') {
@@ -697,7 +698,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
     setHomarrOpen(true);
     try {
       const catalog = await getHomarrCatalog(csrfToken);
-      const already = homeShortcutUrls(templates.find((template) => template.id === HOMARR_HOME_ID)?.widgets ?? []);
+      const already = homeShortcutUrls(widgets);
       const importable = catalog.widgets.filter((widget) => !already.has(widget.url));
       setHomarrWidgets(catalog.widgets);
       setHomarrSelected(catalog.widgets.map((widget) => widget.url));
@@ -710,17 +711,11 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
         setHomarrNote(catalog.note ?? 'Homarr has no http(s) shortcuts Helix can import.');
         return;
       }
-      if (templates.length >= 8 && templates.every((template) => template.id !== HOMARR_HOME_ID)) {
-        setHomarrNote(catalog.note);
-        setHomarrError('You already have 8 Homes. Remove one, then import Homarr again.');
-        setHomarrSelected([]);
-        return;
-      }
       if (importable.length === 0) {
-        setHomarrNote('Those Homarr apps are already on the Homarr Home. Titles and sizes you already changed stay. Uncheck any you want to drop, then import again.');
+        setHomarrNote('Those Homarr apps are already on this Home. Uncheck any you want to skip, then import again.');
         return;
       }
-      setHomarrNote(catalog.note ?? 'Helix puts these on a Homarr Home in Homarr’s layout order, with matching icons. Main stays as it is.');
+      setHomarrNote(catalog.note ?? `Helix adds these shortcuts onto ${activeTemplate.name} in Homarr’s layout order, with matching icons.`);
     } catch (reason) {
       setHomarrWidgets([]);
       setHomarrSelected([]);
@@ -745,18 +740,16 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
       color: '',
       icon: shortcutIconUrl({ name: widget.name, url: widget.url, icon: widget.icon }) ?? '',
     }));
-    const existing = templates.find((template) => template.id === HOMARR_HOME_ID)?.widgets ?? [];
-    const result = replaceHomarrHome(templates, mergeHomarrShortcuts(existing, shortcuts));
+    const result = importHomarrOntoHome(templates, activeTemplate.id, shortcuts);
     if ('error' in result) {
       setHomarrError(result.error);
       return;
     }
-    onHomeChange(result.templates, result.activeHomeId);
+    onHomeChange(result.templates, activeTemplate.id);
     setHomarrOpen(false);
     setAdding(false);
     setEditing(true);
-    const count = shortcuts.length;
-    setLayoutNotice(`Placed ${count} shortcut${count === 1 ? '' : 's'} on Homarr. Edit them here, or copy them onto another Home.`);
+    setLayoutNotice(`Added ${result.added} shortcut${result.added === 1 ? '' : 's'} to ${activeTemplate.name}. Copy them onto another Home if you want a second copy.`);
   };
 
   return (
@@ -766,7 +759,31 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
         <div class="page-head-actions home-page-actions">
           {editing && <button class="button button--quiet" type="button" onClick={() => setAdding((value) => !value)}><Icon name="plus" size={15} />Add widget</button>}
           {editing && <button class="button button--quiet" type="button" disabled={homarrLoading} onClick={() => void loadHomarr()}>{homarrLoading ? 'Reading Homarr…' : 'Import from Homarr'}</button>}
+          {editing && <button class="button button--quiet" type="button" disabled={widgets.length === 0} onClick={() => copyWidgets(widgets)}><CopyGlyph size={15} />Copy all</button>}
           {editing && <button class="button button--quiet" type="button" onClick={() => void pasteFromClipboard()}><CopyGlyph size={15} />Paste</button>}
+          {editing && otherHomes.length > 0 && (
+            <label class="home-copy-all-select">
+              <span class="sr-only">Paste copied widgets onto another Home</span>
+              <select
+                value=""
+                onChange={(event) => {
+                  const homeId = event.currentTarget.value;
+                  event.currentTarget.value = '';
+                  if (homeId.length === 0) return;
+                  const incoming = readWidgetClipboard();
+                  if (incoming.length === 0) {
+                    copyWidgets(widgets);
+                    applyPaste(widgets, homeId);
+                    return;
+                  }
+                  applyPaste(incoming, homeId);
+                }}
+              >
+                <option value="">Paste onto another Home</option>
+                {otherHomes.map((home) => <option key={home.id} value={home.id}>{home.name}</option>)}
+              </select>
+            </label>
+          )}
           <button class={`button${homeFocus ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={homeFocus} onClick={onHomeFocusToggle}><Icon name="expand" size={15} />{homeFocus ? 'Exit full screen' : 'Full screen'}</button>
           <button class={`button${templatesOpen ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={templatesOpen} onClick={() => setTemplatesOpen((value) => !value)}><Icon name="home" size={15} />Homes</button>
           <button class={`button${editing ? ' button--primary' : ''}`} type="button" aria-pressed={editing} onClick={() => { setEditing((value) => !value); setAdding(false); setSettingsWidgetId(null); setSelectedWidgetId(null); finishDrag(); }}><Icon name={editing ? 'check' : 'edit'} size={15} />{editing ? 'Done editing' : 'Edit layout'}</button>
@@ -782,8 +799,8 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
               {homarrLoading
                 ? 'Reading Homarr apps from this host…'
                 : homarrWidgets.length > 0
-                  ? (homarrNote ?? 'Helix puts these on a Homarr Home in Homarr’s layout order, with matching icons. Main stays as it is.')
-                  : (homarrError ?? homarrNote ?? 'Helix puts these on a Homarr Home in Homarr’s layout order, with matching icons.')}
+                  ? (homarrNote ?? `Helix adds these shortcuts onto ${activeTemplate.name} in Homarr’s layout order, with matching icons.`)
+                  : (homarrError ?? homarrNote ?? `Helix adds these shortcuts onto ${activeTemplate.name}.`)}
             </span>
           </div>
           {homarrError !== null && homarrWidgets.length > 0 && <p class="home-homarr-error" role="status">{homarrError}</p>}
@@ -800,7 +817,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
                   <ShortcutMark name={widget.name} url={widget.url} icon={widget.icon} size={28} />
                   <span>
                     <strong>{widget.name}</strong>
-                    <small>{alreadyOnHome ? 'On Homarr Home — your edits stay' : widget.url}</small>
+                    <small>{alreadyOnHome ? `Already on ${activeTemplate.name}` : widget.url}</small>
                   </span>
                 </label>
               );
@@ -808,7 +825,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
           </div>
           <div class="home-homarr-actions">
             <button class="button button--quiet" type="button" onClick={() => setHomarrOpen(false)}>Cancel</button>
-            <button class="button button--primary" type="button" disabled={homarrSelected.length === 0 || homarrLoading} onClick={importHomarr}>Place {homarrSelected.length} on Homarr Home</button>
+            <button class="button button--primary" type="button" disabled={homarrSelected.length === 0 || homarrLoading} onClick={importHomarr}>Add {homarrSelected.length} to {activeTemplate.name}</button>
           </div>
         </section>
       )}
@@ -818,7 +835,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
           {(['clock', 'host', 'graphs', 'servers', 'storage', 'docker', 'weather', 'note', 'shortcut', 'strand'] as const).map((kind) => <button type="button" key={kind} onClick={() => addWidget(kind)}><Icon name={widgetIcons[kind]} /><span><strong>{kind === 'host' ? 'Host pulse' : kind === 'graphs' ? 'Live graphs' : kind === 'docker' ? 'Docker' : kind === 'strand' ? 'Strand' : kind[0]?.toUpperCase() + kind.slice(1)}</strong><small>{kind === 'shortcut' ? 'Open a website' : kind === 'note' ? 'Keep synced notes' : kind === 'weather' ? 'Five-day forecast' : kind === 'graphs' ? 'CPU, memory, and load' : kind === 'docker' ? 'All containers on this host' : kind === 'strand' ? 'An installed Strand page' : 'Live dashboard data'}</small></span></button>)}
         </section>
       )}
-      {editing && <div class="home-editing-hint"><Icon name="menu" size={14} /><span>Drag a widget by its handle, or use the arrow controls. Copy a tile, switch Homes, then Paste. Width, height, color, and Copy to another Home are under Settings.</span></div>}
+      {editing && <div class="home-editing-hint"><Icon name="menu" size={14} /><span>Drag a widget by its handle, or use the arrow controls. Copy all copies every tile on this Home; Paste or Paste onto another Home drops them together. Width, height, color, and Copy to another Home are under Settings.</span></div>}
       {layoutNotice !== null && <div class="home-layout-notice" role="status"><Icon name="check" size={14} /><span>{layoutNotice}</span></div>}
       <section class={`home-grid${editing ? ' is-editing' : ''}`} aria-label="Home widgets">
         {widgets.map((widget, index) => (

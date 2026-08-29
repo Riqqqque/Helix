@@ -64,7 +64,7 @@ Vanilla. V Rising uses a separate Helix-owned isolated runtime image rather than
 installing Wine on the host. The manager provides creation, lifecycle actions,
 settings where they exist, files, performance, console or logs, updates,
 backups, restore, a start-on-boot Docker restart policy, and compatible
-Modrinth content where the selected software supports it. Each server can use a
+Modrinth or CurseForge content where the selected software supports it. Each server can use a
 compact preset, a game mark, or a validated same-origin uploaded PNG/JPEG icon.
 
 “Start with a modpack” is a separate narrow creation path. Search can explain
