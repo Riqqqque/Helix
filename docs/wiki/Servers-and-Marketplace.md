@@ -99,7 +99,11 @@ stays visibly unavailable instead of silently trusting the whole host.
 
 The console opens at the newest output and follows it until the operator scrolls
 away. History is captured by the host even when no browser is open and spans
-retained boots. Retention is bounded, not unlimited. Settings mark fields that
+retained boots. Retention is bounded, not unlimited. The list TPS column for
+native Minecraft is a short local `/tps` sample over RCON, not the status ping.
+Paper, Purpur, Folia, Leaves, Pufferfish, and some plugins report a number.
+Vanilla and most Fabric/Forge/Quilt servers stay as an em dash. Imported AMP
+servers still use AMP’s TPS metric. Settings mark fields that
 need a restart and keep a pending-restart state after save. The game port can
 be changed there; Helix rebinds the published container immediately, skips
 ports AMP already has claimed, and removes public access on the old port. Join

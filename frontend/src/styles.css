@@ -1970,12 +1970,10 @@ main {
 .server-list-head,
 .server-row {
   display: grid;
-  grid-template-columns: minmax(250px, 2fr) 85px 70px minmax(
-      170px,
-      1.2fr
-    ) 65px 55px 135px;
+  grid-template-columns: minmax(220px, 2fr) 85px 70px minmax(150px, 1.2fr) 64px
+    58px minmax(248px, auto);
   align-items: center;
-  gap: 12px;
+  gap: 16px;
 }
 .server-list-head {
   min-height: 38px;
@@ -1986,6 +1984,9 @@ main {
   font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+.server-list-head span:last-child {
+  text-align: right;
 }
 .server-row {
   position: relative;
@@ -2209,9 +2210,12 @@ main {
 .server-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 5px;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 12px;
 }
 .server-actions .button {
+  flex: 0 0 auto;
   min-width: 72px;
 }
 .server-action-error {
@@ -3521,6 +3525,9 @@ textarea:focus {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
 }
+.server-health-stats--with-tps {
+  grid-template-columns: repeat(5, 1fr);
+}
 .server-health-stats > div {
   min-height: 142px;
   display: flex;
@@ -4241,6 +4248,9 @@ textarea:focus {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   border-bottom: 1px solid var(--line);
+}
+.performance-cards--with-tps {
+  grid-template-columns: repeat(5, 1fr);
 }
 .performance-cards .metric-block {
   min-height: 150px;
@@ -6653,7 +6663,8 @@ textarea:focus {
     display: none;
   }
   .server-row {
-    grid-template-columns: minmax(240px, 1fr) repeat(4, 75px) 130px;
+    grid-template-columns: minmax(200px, 1fr) repeat(4, minmax(64px, 75px))
+      minmax(236px, auto);
   }
   .server-row .server-stat:nth-of-type(5) {
     display: none;
@@ -6788,7 +6799,7 @@ textarea:focus {
     min-width: 180px;
   }
   .server-row {
-    grid-template-columns: 1fr 70px 125px;
+    grid-template-columns: 1fr 70px minmax(220px, auto);
     gap: 9px;
   }
   .server-row .server-stat:nth-of-type(2),

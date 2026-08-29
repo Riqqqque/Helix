@@ -2128,7 +2128,7 @@ function ServerRow({
       </div>
       <div class="server-stat">
         <span>TPS</span>
-        <strong>{server.tps === null ? "—" : server.tps.toFixed(1)}</strong>
+        <strong>{!online || server.tps === null ? "—" : server.tps.toFixed(1)}</strong>
       </div>
       <div class="server-actions">
         {running ? (
@@ -3734,7 +3734,19 @@ function PerformancePanel({ detail }: { detail: NativeServerDetail }) {
           {detail.status}
         </span>
       </div>
-      <div class="performance-cards">
+      <div class={`performance-cards${detail.kind === "minecraft" ? " performance-cards--with-tps" : ""}`}>
+        {detail.kind === "minecraft" && (
+          <Metric
+            icon="activity"
+            label="TPS"
+            value={detail.tps === null ? "—" : detail.tps.toFixed(1)}
+            detail={
+              detail.tps === null
+                ? "Shown when the server answers /tps"
+                : "1-minute sample from the local console"
+            }
+          />
+        )}
         <Metric
           icon="cpu"
           label="CPU"
@@ -4329,7 +4341,7 @@ function NativeServerPage({
                     {detail.status}
                   </span>
                 </div>
-                <div class="server-health-stats">
+                <div class={`server-health-stats${isReadyMarkerGame ? "" : " server-health-stats--with-tps"}`}>
                   <div>
                     <span>Players</span>
                     <strong>
@@ -4351,6 +4363,14 @@ function NativeServerPage({
                       of {formatBytes(detail.memoryLimitMb * 1024 * 1024)}
                     </small>
                   </div>
+                  {!isReadyMarkerGame && (
+                    <div>
+                      <span>TPS</span>
+                      <strong>
+                        {detail.tps === null ? "—" : detail.tps.toFixed(1)}
+                      </strong>
+                    </div>
+                  )}
                   <div>
                     <span>Files</span>
                     <strong>{formatBytes(detail.diskBytes)}</strong>
