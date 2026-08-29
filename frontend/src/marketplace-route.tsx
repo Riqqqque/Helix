@@ -36,20 +36,36 @@ export function preloadMarketplaceRoute(): void {
 export function MarketplaceRoute(props: MarketplaceRouteProps) {
   const [Panel, setPanel] = useState<MarketplacePanelComponent | null>(() => loadedPanel);
   const [error, setError] = useState<string | null>(null);
-  const request = typeof document !== 'undefined' && Panel === null && error === null
-    ? loadMarketplaceRoute()
-    : null;
+  const [loadGeneration, setLoadGeneration] = useState(0);
 
   useEffect(() => {
-    if (request === null) return;
+    if (Panel !== null) return;
     let mounted = true;
-    void request.then((component) => {
-      if (mounted) setPanel(() => component);
-    }).catch(() => {
-      if (mounted) setError('The marketplace could not be loaded.');
-    });
-    return () => { mounted = false; };
-  }, [request]);
+    let attempt = 0;
+    let timer: number | null = null;
+    const tryLoad = (): void => {
+      void loadMarketplaceRoute()
+        .then((component) => {
+          if (!mounted) return;
+          setError(null);
+          setPanel(() => component);
+        })
+        .catch(() => {
+          if (!mounted) return;
+          attempt += 1;
+          if (attempt < 3) {
+            timer = window.setTimeout(tryLoad, 400 * attempt);
+            return;
+          }
+          setError('The marketplace could not be loaded.');
+        });
+    };
+    tryLoad();
+    return () => {
+      mounted = false;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [Panel, loadGeneration]);
 
   if (Panel !== null) return <Panel {...props} />;
   return (
@@ -58,7 +74,11 @@ export function MarketplaceRoute(props: MarketplaceRouteProps) {
       <div class="detail-loading" role="status" aria-live="polite">
         <Icon name={error === null ? 'search' : 'warning'} size={28} />
         <span>{error === null ? 'Opening the marketplace…' : 'Your other server tools are still available.'}</span>
-        {error !== null && <button class="button button--primary" type="button" onClick={() => setError(null)}>Try again</button>}
+        {error !== null && (
+          <button class="button button--primary" type="button" onClick={() => { setError(null); setLoadGeneration((value) => value + 1); }}>
+            Try again
+          </button>
+        )}
       </div>
     </section>
   );

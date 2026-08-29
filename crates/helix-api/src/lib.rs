@@ -311,6 +311,12 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             "/marketplace/curseforge/image",
             get(marketplace_curseforge_image),
         )
+        .route(
+            "/marketplace/curseforge/key",
+            get(curseforge_key_status)
+                .put(set_curseforge_api_key)
+                .delete(clear_curseforge_api_key),
+        )
         .route("/files", get(list_directory))
         .route("/files/directory", post(create_directory))
         .route("/files/file", post(create_file))
@@ -814,6 +820,34 @@ async fn marketplace_image(
         HeaderValue::from_static("private, max-age=1800"),
     );
     Ok(response)
+}
+
+async fn curseforge_key_status(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    broker_json(&state, BrokerRequest::CurseforgeKeyStatus {}).await
+}
+
+async fn set_curseforge_api_key(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<CurseforgeApiKeyBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(&state, BrokerRequest::SetCurseforgeApiKey { key: body.key }).await
+}
+
+async fn clear_curseforge_api_key(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    broker_json(&state, BrokerRequest::ClearCurseforgeApiKey {}).await
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1600,6 +1634,12 @@ struct NativeCpuBody {
 #[serde(deny_unknown_fields)]
 struct NativeBrowserListingBody {
     list_on_browser: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CurseforgeApiKeyBody {
+    key: String,
 }
 
 #[derive(Deserialize)]
@@ -6220,6 +6260,7 @@ mod tests {
             "/api/v1/servers/example/marketplace/projects/1bokaNcj",
             "/api/v1/servers/minecraft/modpacks/search?query=adventure",
             "/api/v1/servers/minecraft/modpacks/projects/1bokaNcj",
+            "/api/v1/marketplace/curseforge/key",
         ] {
             let response = context
                 .app
@@ -6441,6 +6482,86 @@ mod tests {
             ))
             .await
             .expect("modpack create authorization response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response_json(response).await["code"],
+            "authorization_denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn curseforge_key_requires_games_capabilities() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let unauthenticated = context
+            .app
+            .clone()
+            .oneshot(get("/api/v1/marketplace/curseforge/key"))
+            .await
+            .expect("unauthenticated curseforge key response");
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+        let unauthenticated_put = HttpRequest::builder()
+            .method("PUT")
+            .uri("/api/v1/marketplace/curseforge/key")
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::CONTENT_TYPE, "application/json")
+            .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 41000))))
+            .body(Body::from("{"))
+            .expect("malformed unauthenticated curseforge key request");
+        let response = context
+            .app
+            .clone()
+            .oneshot(unauthenticated_put)
+            .await
+            .expect("unauthenticated curseforge key put response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let connection =
+            rusqlite::Connection::open(context.data.path().join("state").join("helix-state.db"))
+                .expect("open state database");
+        connection
+            .execute(
+                "DELETE FROM role_capabilities WHERE capability = 'games.manage'",
+                [],
+            )
+            .expect("remove server management capability");
+        drop(connection);
+        let bootstrap = install_bootstrap(&context);
+        let client = claim_owner(&context, &bootstrap).await;
+        let response = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    put_json(
+                        "/api/v1/marketplace/curseforge/key",
+                        &json!({ "key": "$2a$10$abcdefghijklmnopqrstuvwx" }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("curseforge key put authorization response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response_json(response).await["code"],
+            "authorization_denied"
+        );
+
+        let response = context
+            .app
+            .oneshot(with_csrf(
+                with_cookie(
+                    delete_json("/api/v1/marketplace/curseforge/key", 1),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("curseforge key delete authorization response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response_json(response).await["code"],

@@ -174,7 +174,9 @@ avatars go through `/api/v1/marketplace/curseforge/image`. Both still require
 `games.view`, validate the exact CDN path, bound the response, and derive the
 media type from image bytes.
 
-Toggle **Modrinth** or **CurseForge**. Paper-family servers get plugins (CurseForge
+Toggle **Modrinth** or **CurseForge**. CurseForge needs an API key in
+**Settings → Catalogs** (from [console.curseforge.com](https://console.curseforge.com/)).
+Paper-family servers get plugins (CurseForge
 lists those as Bukkit plugins / addons). Fabric, Forge, NeoForge, and Quilt get
 mods, and on CurseForge they can also browse **Modpacks**. A modpack JAR is not
 dropped onto an existing world; create a new server from **Start with a modpack**
@@ -200,9 +202,10 @@ list button; open the project if you want a different build. Restart the server
 yourself when you want the files loaded. Helix does not take a world backup for
 this path. Optional dependencies are never added silently.
 
-“Start with a modpack” can search Modrinth or CurseForge without an owner API
-key. Modrinth packs use `.mrpack` hash checks. CurseForge packs use the public
-website catalog and `edge.forgecdn.net` files plus `manifest.json`. Both pin a
+“Start with a modpack” can search Modrinth without an extra key. CurseForge
+needs an API key in Settings → Catalogs (`api.curseforge.com`). Modrinth packs
+use `.mrpack` hash checks. CurseForge packs use `manifest.json` plus forgecdn
+files. Both pin a
 matching loader and start an isolated server. The result is a server-safe
 subset, not a full client copy. Long titles and descriptions are clipped in the
 browser; open the catalog or View releases for the rest.

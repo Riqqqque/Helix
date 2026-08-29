@@ -1,8 +1,10 @@
 use super::{
-    InstanceManifest, MANIFEST_VERSION, MAX_METADATA_BYTES, MAX_SERVER_JAR_BYTES,
-    MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSoftware, NativeManager,
-    allocate_rcon_port, allocate_run_uid, instance_name, marketplace::modrinth_icon_proxy_url,
-    now_unix_ms, server_properties, validate_create_spec, write_manifest, write_new_file,
+    FORGECDN_DOWNLOAD_HOSTS, InstanceManifest, MANIFEST_VERSION, MAX_METADATA_BYTES,
+    MAX_SERVER_JAR_BYTES, MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSoftware,
+    NativeManager, allocate_rcon_port, allocate_run_uid, instance_name,
+    marketplace::{curseforge_icon_proxy_url, modrinth_icon_proxy_url},
+    now_unix_ms, require_https_host, server_properties, validate_create_spec, write_manifest,
+    write_new_file,
 };
 use helix_privd::mrpack::{
     MrpackLimits, extract_overrides, inspect_mrpack, prepare_download_path,
@@ -100,21 +102,15 @@ impl NativeManager {
         limit: u8,
     ) -> Result<Value, String> {
         validate_search(query, offset, limit)?;
-        let url = format!(
-            "https://www.curseforge.com/api/v1/mods/search?gameId=432&classId=4471&index={offset}&pageSize={limit}&sortField=2&sortOrder=desc&searchFilter={}",
+        let path = format!(
+            "mods/search?gameId=432&classId=4471&index={offset}&pageSize={limit}&sortField=2&sortOrder=desc&searchFilter={}",
             percent_encode(query.trim())
         );
-        let response = self.fetch_json(&url, &["www.curseforge.com"]).map_err(|_| {
-            "CurseForge's public catalog was unreachable; Helix did not use an API key. Try again or use Modrinth."
-                .to_owned()
-        })?;
+        let response = self.curseforge_v1(&path)?;
         let hits = response
             .get("data")
             .and_then(Value::as_array)
-            .ok_or_else(|| {
-                "CurseForge returned an unexpected catalog shape; Helix did not use an API key"
-                    .to_owned()
-            })?;
+            .ok_or_else(|| "CurseForge returned an unexpected catalog shape".to_owned())?;
         let results = hits
             .iter()
             .take(usize::from(limit))
@@ -134,7 +130,7 @@ impl NativeManager {
             "installation_scope": {
                 "loaders": ["forge", "neoforge", "fabric", "quilt"],
                 "server_pack_preferred": true,
-                "official_api_key": false,
+                "official_api_key": true,
             },
             "source": "CurseForge",
             "provider": "curseforge",
@@ -143,17 +139,11 @@ impl NativeManager {
     }
 
     fn curseforge_modpack_project(&self, project_id: &str) -> Result<Value, String> {
-        let project = self.fetch_json(
-            &format!("https://www.curseforge.com/api/v1/mods/{project_id}"),
-            &["www.curseforge.com"],
-        )?;
+        let project = self.curseforge_v1(&format!("mods/{project_id}"))?;
         let project = project.get("data").cloned().unwrap_or(project);
         let slug = required_text(&project, "slug", 128)
             .or_else(|_| required_text(&project, "name", 128))?;
-        let files = self.fetch_json(
-            &format!("https://www.curseforge.com/api/v1/mods/{project_id}/files?pageSize=50"),
-            &["www.curseforge.com"],
-        )?;
+        let files = self.curseforge_v1(&format!("mods/{project_id}/files?pageSize=50"))?;
         let files = files
             .get("data")
             .and_then(Value::as_array)
@@ -212,7 +202,7 @@ impl NativeManager {
                 "server_side": "optional",
                 "loaders": curseforge_loaders(&project),
                 "web_url": format!("https://www.curseforge.com/minecraft/modpacks/{}", percent_encode(&slug)),
-                "icon_url": project.pointer("/logo/url").and_then(Value::as_str).filter(|url| url.starts_with("https://")),
+                "icon_url": curseforge_icon_proxy_url(project.pointer("/logo/url").and_then(Value::as_str)),
             },
             "versions": versions,
             "compatible_version_count": compatible_count,
@@ -649,11 +639,8 @@ impl NativeManager {
 
         let result = (|| -> Result<Value, String> {
             ensure_before(deadline)?;
-            progress("Resolving the CurseForge file without an API key", 8);
-            let file = self.fetch_json(
-                &format!("https://www.curseforge.com/api/v1/mods/{project_id}/files/{file_id}"),
-                &["www.curseforge.com"],
-            )?;
+            progress("Resolving the CurseForge file", 8);
+            let file = self.curseforge_v1(&format!("mods/{project_id}/files/{file_id}"))?;
             let file = file.get("data").cloned().unwrap_or(file);
             let file_name = required_text(&file, "fileName", 256)?;
             let file_size = file.get("fileLength").and_then(Value::as_u64).unwrap_or(0);
@@ -665,12 +652,7 @@ impl NativeManager {
             })?;
             fs::set_permissions(&staging_path, fs::Permissions::from_mode(0o700))
                 .map_err(|_| "could not protect the modpack staging directory".to_owned())?;
-            let url = forgecdn_file_url(
-                file_id
-                    .parse()
-                    .map_err(|_| "the CurseForge file id is invalid".to_owned())?,
-                &file_name,
-            )?;
+            let url = self.resolve_curseforge_download_url(project_id, &file)?;
             progress("Downloading the CurseForge pack zip", 16);
             require_forgecdn_host(&url)?;
             self.curl_no_redirect(
@@ -687,17 +669,15 @@ impl NativeManager {
             let file_count = pack.files.len().max(1);
             for (index, entry) in pack.files.iter().enumerate() {
                 ensure_before(deadline)?;
-                let meta = self.fetch_json(
-                    &format!(
-                        "https://www.curseforge.com/api/v1/mods/{}/files/{}",
-                        entry.project_id, entry.file_id
-                    ),
-                    &["www.curseforge.com"],
-                )?;
+                let meta = self.curseforge_v1(&format!(
+                    "mods/{}/files/{}",
+                    entry.project_id, entry.file_id
+                ))?;
                 let meta = meta.get("data").cloned().unwrap_or(meta);
                 let name = required_text(&meta, "fileName", 256)?;
                 let size = meta.get("fileLength").and_then(Value::as_u64).unwrap_or(0);
-                let download = forgecdn_file_url(entry.file_id, &name)?;
+                let download =
+                    self.resolve_curseforge_download_url(&entry.project_id.to_string(), &meta)?;
                 require_forgecdn_host(&download)?;
                 let destination = staging_path.join("mods").join(&name);
                 if destination.exists() {
@@ -1048,7 +1028,7 @@ fn sanitize_curseforge_search_hit(hit: &Value) -> Result<Value, String> {
             "https://www.curseforge.com/minecraft/modpacks/{}",
             percent_encode(&slug)
         ),
-        "icon_url": icon.filter(|url| url.starts_with("https://")).map(str::to_owned),
+        "icon_url": curseforge_icon_proxy_url(icon),
     }))
 }
 
@@ -1461,30 +1441,7 @@ struct CurseforgeFileRef {
 }
 
 fn require_forgecdn_host(url: &str) -> Result<(), String> {
-    require_exact_https_host(url, "edge.forgecdn.net")
-        .or_else(|_| require_exact_https_host(url, "mediafilez.forgecdn.net"))
-}
-
-fn forgecdn_file_url(file_id: u64, file_name: &str) -> Result<String, String> {
-    if file_id == 0
-        || file_name.is_empty()
-        || file_name.contains(['/', '\\', ':'])
-        || Path::new(file_name)
-            .file_name()
-            .and_then(|value| value.to_str())
-            != Some(file_name)
-    {
-        return Err("the CurseForge file name is invalid".to_owned());
-    }
-    let id = file_id.to_string();
-    let (prefix, suffix) = if id.len() > 3 {
-        (&id[..id.len() - 3], &id[id.len() - 3..])
-    } else {
-        ("0", id.as_str())
-    };
-    Ok(format!(
-        "https://edge.forgecdn.net/files/{prefix}/{suffix}/{file_name}"
-    ))
+    require_https_host(url, FORGECDN_DOWNLOAD_HOSTS)
 }
 
 fn read_curseforge_manifest(archive_path: &Path) -> Result<CurseforgePack, String> {

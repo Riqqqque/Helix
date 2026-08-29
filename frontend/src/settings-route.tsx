@@ -42,5 +42,5 @@ export function SettingsRoute(props: SettingsRouteProps) {
   }, [request]);
 
   if (Page !== null) return <Page {...props} />;
-  return <div class="page page--dashboard-settings" aria-busy={error === null}><PageHead title="Settings" detail="Dashboard behavior, host integration, and owner security." /><InlineError message={error} /><div class="detail-loading" role="status" aria-live="polite"><Icon name={error === null ? 'settings' : 'warning'} size={28} /><span>{error === null ? 'Loading settings…' : 'The rest of the dashboard is still available.'}</span>{error !== null && <button class="button button--primary" type="button" onClick={() => setError(null)}>Try again</button>}</div></div>;
+  return <div class="page page--dashboard-settings" aria-busy={error === null}><PageHead title="Settings" detail="Dashboard and account" /><InlineError message={error} /><div class="detail-loading" role="status" aria-live="polite"><Icon name={error === null ? 'settings' : 'warning'} size={28} /><span>{error === null ? 'Loading settings…' : 'The rest of the dashboard is still available.'}</span>{error !== null && <button class="button button--primary" type="button" onClick={() => setError(null)}>Try again</button>}</div></div>;
 }

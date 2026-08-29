@@ -36,6 +36,10 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : 'Helix could not complete that marketplace request.';
 }
 
+function isCurseforgeKeyRequired(message: string): boolean {
+  return message.includes('Settings → Catalogs') || message.includes('console.curseforge.com');
+}
+
 function isSessionError(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 401 || error.code === 'csrf_rejected');
 }
@@ -153,6 +157,10 @@ function SearchCard({
   );
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function SearchResults({
   page,
   loading,
@@ -172,17 +180,37 @@ function SearchResults({
   onInstall: (hit: MarketplaceSearchHit) => void;
   onRetry: () => void;
 }) {
+  if (error !== null && isCurseforgeKeyRequired(error)) {
+    return (
+      <div class="marketplace-state" role="status">
+        <Icon name="search" />
+        <strong>CurseForge needs an API key</strong>
+        <span>Paste a key from console.curseforge.com in Settings → Catalogs. Helix stores it only on this host and never shows it again.</span>
+        <a class="button button--primary" href="#settings">Open Settings</a>
+      </div>
+    );
+  }
   if (loading && page === null) {
     return <div class="marketplace-state" role="status"><Icon name="refresh" class="is-spinning" /><strong>Finding matching projects</strong><span>Results are filtered by this server’s loader and Minecraft version.</span></div>;
   }
-  if (error !== null) {
+  if (error !== null && page === null) {
     return <div class="marketplace-state marketplace-state--error" role="alert"><Icon name="warning" /><strong>Search unavailable</strong><span>{error}</span><button class="button button--primary" type="button" onClick={onRetry}>Try again</button></div>;
   }
   if (page === null) return null;
-  if (page.hits.length === 0) {
-    return <div class="marketplace-state"><Icon name="search" /><strong>No matching projects found</strong><span>Try a broader name. Helix still requires the correct loader and Minecraft version.</span></div>;
-  }
-  return <div class={`marketplace-results${loading ? ' is-refreshing' : ''}`} aria-busy={loading}>{page.hits.map((hit) => <SearchCard key={`${hit.provider}:${hit.projectId}`} hit={hit} kind={page.compatibility.contentKind} canManageServers={canManageServers} installing={installingId === hit.projectId} onOpen={() => onOpen(hit)} onInstall={() => onInstall(hit)} />)}</div>;
+  return (
+    <>
+      {error !== null && (
+        <div class="marketplace-note marketplace-note--warning" role="alert">
+          <Icon name="warning" size={14} />
+          <span>{error}</span>
+          <button class="button button--quiet" type="button" onClick={onRetry}>Try again</button>
+        </div>
+      )}
+      {page.hits.length === 0
+        ? <div class="marketplace-state"><Icon name="search" /><strong>No matching projects found</strong><span>Try a broader name. Helix still requires the correct loader and Minecraft version.</span></div>
+        : <div class={`marketplace-results${loading ? ' is-refreshing' : ''}`} aria-busy={loading}>{page.hits.map((hit) => <SearchCard key={`${hit.provider}:${hit.projectId}`} hit={hit} kind={page.compatibility.contentKind} canManageServers={canManageServers} installing={installingId === hit.projectId} onOpen={() => onOpen(hit)} onInstall={() => onInstall(hit)} />)}</div>}
+    </>
+  );
 }
 
 function VersionFacts({ version }: { version: MarketplaceVersion }) {
@@ -441,17 +469,30 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
     const controller = new AbortController();
     setSearching(true);
     setSearchError(null);
-    void searchMarketplace(server.id, query, offset, PAGE_SIZE, csrfToken, controller.signal, provider, catalog).then((next) => {
-      if (!marketplaceResponseMatchesServer(next.instanceId, next.compatibility, server)) throw new ApiError('Marketplace compatibility changed while this page was loading. Refresh the server before installing content.');
-      setPage(next);
-    }).catch((requestError: unknown) => {
-      if (controller.signal.aborted) return;
-      if (isSessionError(requestError)) onSessionExpired();
-      else {
-        setSearchError(describeError(requestError));
-        setPage(null);
+    const run = async (): Promise<void> => {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const next = await searchMarketplace(server.id, query, offset, PAGE_SIZE, csrfToken, controller.signal, provider, catalog);
+          if (!marketplaceResponseMatchesServer(next.instanceId, next.compatibility, server)) {
+            throw new ApiError('Marketplace compatibility changed while this page was loading. Refresh the server before installing content.');
+          }
+          if (controller.signal.aborted) return;
+          setPage(next);
+          setSearchError(null);
+          return;
+        } catch (requestError: unknown) {
+          lastError = requestError;
+          if (controller.signal.aborted) return;
+          if (isSessionError(requestError) || isCurseforgeKeyRequired(describeError(requestError))) break;
+          if (attempt === 0) await wait(500);
+        }
       }
-    }).finally(() => {
+      if (controller.signal.aborted) return;
+      if (isSessionError(lastError)) onSessionExpired();
+      else setSearchError(describeError(lastError));
+    };
+    void run().finally(() => {
       if (!controller.signal.aborted) setSearching(false);
     });
     return () => controller.abort();
@@ -542,8 +583,8 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
           <p>Browse Modrinth and CurseForge for plugins, Bukkit addons, mods, and modpacks that match this loader. List Install picks a compatible release; open the project if you want a different build.</p>
         </div>
         <div class="marketplace-source-toggle" role="group" aria-label="Marketplace catalog">
-          <button type="button" class={provider === 'modrinth' ? 'is-active' : undefined} onClick={() => { setProvider('modrinth'); setCatalog('content'); setOffset(0); }}>Modrinth</button>
-          <button type="button" class={provider === 'curseforge' ? 'is-active' : undefined} onClick={() => { setProvider('curseforge'); setOffset(0); }}>CurseForge</button>
+          <button type="button" class={provider === 'modrinth' ? 'is-active' : undefined} onClick={() => { setProvider('modrinth'); setCatalog('content'); setOffset(0); setPage(null); }}>Modrinth</button>
+          <button type="button" class={provider === 'curseforge' ? 'is-active' : undefined} onClick={() => { setProvider('curseforge'); setOffset(0); setPage(null); }}>CurseForge</button>
         </div>
       </header>
       {provider === 'curseforge' && profile.contentKind === 'mod' && (
@@ -558,7 +599,7 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
       <InlineError message={listInstallError} />
       <SearchResults page={page} loading={searching} error={searchError} canManageServers={canManageServers} installingId={listInstallingId} onOpen={loadProject} onInstall={(hit) => void installFromList(hit)} onRetry={() => setSearchRevision((value) => value + 1)} />
       {page !== null && page.totalHits > 0 && <nav class="marketplace-pagination" aria-label="Marketplace result pages"><button class="button button--quiet" type="button" disabled={searching || page.offset === 0} onClick={() => { setOffset(Math.max(0, page.offset - page.limit)); searchTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}><Icon name="back" size={14} />Previous</button><span>Showing {firstResult}–{lastResult}</span><button class="button button--quiet" type="button" disabled={searching || !canGoNext} onClick={() => { setOffset(page.offset + page.limit); searchTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Next<Icon name="chevron" size={14} /></button></nav>}
-      <footer class="marketplace-attribution">Results come from {provider === 'curseforge' ? <a href="https://www.curseforge.com" target="_blank" rel="noreferrer">CurseForge <Icon name="external" size={12} /></a> : <a href="https://modrinth.com" target="_blank" rel="noreferrer">Modrinth <Icon name="external" size={12} /></a>}. Artwork is fetched through Helix’s bounded image proxy. CurseForge uses its public catalog without an API key.</footer>
+      <footer class="marketplace-attribution">Results come from {provider === 'curseforge' ? <a href="https://www.curseforge.com" target="_blank" rel="noreferrer">CurseForge <Icon name="external" size={12} /></a> : <a href="https://modrinth.com" target="_blank" rel="noreferrer">Modrinth <Icon name="external" size={12} /></a>}. Artwork is fetched through Helix’s bounded image proxy. CurseForge uses the official catalog and the API key saved in Settings → Catalogs.</footer>
     </section>
   );
 }

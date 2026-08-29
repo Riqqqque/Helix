@@ -297,11 +297,11 @@ export function parseMinecraftModpackCreateResult(value: unknown): MinecraftModp
 
 export function searchModpacks(query: string, offset: number, limit: number, csrfToken: string, signal?: AbortSignal, provider: ModpackProvider = 'modrinth'): Promise<ModpackSearchPage> {
   const params = new URLSearchParams({ query, offset: String(offset), limit: String(limit), provider });
-  return requestJson(`/api/v1/servers/minecraft/modpacks/search?${params}`, parseModpackSearchPage, { csrfToken, signal, timeoutMs: 25_000 });
+  return requestJson(`/api/v1/servers/minecraft/modpacks/search?${params}`, parseModpackSearchPage, { csrfToken, signal, timeoutMs: 40_000 });
 }
 
 export function getModpackProject(projectId: string, csrfToken: string, signal?: AbortSignal): Promise<ModpackProjectDetail> {
-  return requestJson(`/api/v1/servers/minecraft/modpacks/projects/${encodeURIComponent(projectId)}`, parseModpackProjectDetail, { csrfToken, signal, timeoutMs: 25_000 });
+  return requestJson(`/api/v1/servers/minecraft/modpacks/projects/${encodeURIComponent(projectId)}`, parseModpackProjectDetail, { csrfToken, signal, timeoutMs: 40_000 });
 }
 
 export function createMinecraftModpack(input: MinecraftModpackCreateInput, csrfToken: string): Promise<{ jobId: string }> {

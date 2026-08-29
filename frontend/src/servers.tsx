@@ -4880,6 +4880,9 @@ function NativeServerPage({
     return () => detailController.current?.abort();
   }, [load]);
   useEffect(() => {
+    if (supportsMarketplaceSoftware(server.software)) preloadMarketplaceRoute();
+  }, [server.software]);
+  useEffect(() => {
     const controller = new AbortController();
     void getNetworkInventory(csrfToken, controller.signal)
       .then((value) => {

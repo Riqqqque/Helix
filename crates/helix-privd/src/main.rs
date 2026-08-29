@@ -649,6 +649,21 @@ impl BrokerContext {
                 .ok_or_else(|| "the Helix server manager is not configured".to_owned())
                 .and_then(|native| native.list_minecraft_versions(software)),
             BrokerRequest::JobStatus { job_id } => self.job_status(&job_id),
+            BrokerRequest::CurseforgeKeyStatus {} => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(NativeManager::curseforge_key_status),
+            BrokerRequest::SetCurseforgeApiKey { key } => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(|native| native.set_curseforge_api_key(&key)),
+            BrokerRequest::ClearCurseforgeApiKey {} => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(NativeManager::clear_curseforge_api_key),
         };
 
         match result {

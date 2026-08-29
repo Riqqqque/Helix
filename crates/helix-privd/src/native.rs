@@ -4,11 +4,12 @@ use crate::files::{
     prune_uploads, upload_lock_error, validate_name,
 };
 use helix_privd::{
-    FileUploadPurpose, GameKind, GamePortPolicySpec, GamePortRangeSpec,
-    MAX_CONCURRENT_FILE_UPLOADS, MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES,
-    MAX_MINECRAFT_VERSION_CATALOG, MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode,
-    MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, ServerAction,
-    TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec,
+    CURSEFORGE_API_KEY_REQUIRED, FileUploadPurpose, GameKind, GamePortPolicySpec,
+    GamePortRangeSpec, MAX_CONCURRENT_FILE_UPLOADS, MAX_CUSTOM_JAR_UPLOAD_BYTES,
+    MAX_FILE_UPLOAD_CHUNK_BYTES, MAX_MINECRAFT_VERSION_CATALOG, MinecraftCreateSpec,
+    MinecraftDifficulty, MinecraftGameMode, MinecraftModpackCreateSpec, MinecraftSettingsPatch,
+    MinecraftSoftware, ServerAction, TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec,
+    ValheimCreateSpec, validate_curseforge_api_key,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -67,6 +68,11 @@ const USER_AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (+https://github.com/Riqqqque/Helix)"
 );
+const FORGECDN_DOWNLOAD_HOSTS: &[&str] = &[
+    "edge.forgecdn.net",
+    "mediafilez.forgecdn.net",
+    "media.forgecdn.net",
+];
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -4253,12 +4259,61 @@ impl NativeManager {
     }
 
     fn fetch_json(&self, url: &str, hosts: &[&str]) -> Result<Value, String> {
+        self.fetch_json_headers(url, hosts, &[])
+    }
+
+    fn fetch_json_headers(
+        &self,
+        url: &str,
+        hosts: &[&str],
+        extra_headers: &[(&str, &str)],
+    ) -> Result<Value, String> {
+        self.fetch_json_headers_timed(url, hosts, extra_headers, 20)
+    }
+
+    fn fetch_json_headers_timed(
+        &self,
+        url: &str,
+        hosts: &[&str],
+        extra_headers: &[(&str, &str)],
+        timeout_seconds: u64,
+    ) -> Result<Value, String> {
         require_https_host(url, hosts)?;
+        let mut last_error = "the catalog request failed".to_owned();
+        let attempt_budget = Duration::from_secs(timeout_seconds.saturating_sub(1).max(1));
+        for attempt in 0..3_u8 {
+            let started = Instant::now();
+            match self.fetch_json_headers_once(url, extra_headers, timeout_seconds) {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    last_error = error;
+                    if attempt == 2 || started.elapsed() >= attempt_budget {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(250 * u64::from(attempt + 1)));
+                }
+            }
+        }
+        Err(last_error)
+    }
+
+    fn fetch_json_headers_once(
+        &self,
+        url: &str,
+        extra_headers: &[(&str, &str)],
+        timeout_seconds: u64,
+    ) -> Result<Value, String> {
         let cache = self.state_root.join("metadata");
         fs::create_dir_all(&cache).map_err(|_| "could not create the metadata cache".to_owned())?;
         let path = cache.join(format!("{}.json", Uuid::new_v4()));
         let result = (|| {
-            self.curl_no_redirect(url, &path, MAX_METADATA_BYTES, 30)?;
+            self.curl_no_redirect_headers(
+                url,
+                &path,
+                MAX_METADATA_BYTES,
+                timeout_seconds,
+                extra_headers,
+            )?;
             let metadata =
                 fs::metadata(&path).map_err(|_| "downloaded metadata is unavailable".to_owned())?;
             if metadata.len() == 0 || metadata.len() > MAX_METADATA_BYTES {
@@ -4269,8 +4324,135 @@ impl NativeManager {
             )
             .map_err(|_| "the software catalog returned invalid metadata".to_owned())
         })();
-        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(&path);
         result
+    }
+
+    fn curseforge_key_path(&self) -> PathBuf {
+        self.state_root.join("curseforge-api-key")
+    }
+
+    fn read_curseforge_api_key(&self) -> Result<Option<String>, String> {
+        let path = self.curseforge_key_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&path)
+            .map_err(|_| "could not read the saved CurseForge API key".to_owned())?;
+        if bytes.len() > 256 {
+            return Err("the saved CurseForge API key is invalid".to_owned());
+        }
+        let raw = String::from_utf8(bytes)
+            .map_err(|_| "the saved CurseForge API key is invalid".to_owned())?;
+        Ok(Some(validate_curseforge_api_key(&raw)?))
+    }
+
+    fn require_curseforge_api_key(&self) -> Result<String, String> {
+        self.read_curseforge_api_key()?
+            .ok_or_else(|| CURSEFORGE_API_KEY_REQUIRED.to_owned())
+    }
+
+    pub fn curseforge_key_status(&self) -> Result<Value, String> {
+        Ok(json!({
+            "schema_version": 1,
+            "configured": self.read_curseforge_api_key()?.is_some(),
+            "catalog": "api.curseforge.com",
+        }))
+    }
+
+    pub fn set_curseforge_api_key(&self, key: &str) -> Result<Value, String> {
+        let key = validate_curseforge_api_key(key)?;
+        let path = self.curseforge_key_path();
+        let previous = fs::read(&path).ok();
+        write_replaced_secret_file(&path, key.as_bytes())?;
+        if let Err(error) = self.probe_curseforge_api_key() {
+            match previous {
+                Some(bytes) => {
+                    let _ = write_replaced_secret_file(&path, &bytes);
+                }
+                None => {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+            return Err(error);
+        }
+        self.curseforge_key_status()
+    }
+
+    pub fn clear_curseforge_api_key(&self) -> Result<Value, String> {
+        let path = self.curseforge_key_path();
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|_| "could not remove the saved CurseForge API key".to_owned())?;
+        }
+        self.curseforge_key_status()
+    }
+
+    fn probe_curseforge_api_key(&self) -> Result<(), String> {
+        self.curseforge_v1("games/432").map(|_| ())
+    }
+
+    fn curseforge_v1(&self, path: &str) -> Result<Value, String> {
+        if path.is_empty()
+            || path.contains("://")
+            || path.contains(['\\', '\0', ' ', '\n', '\r'])
+            || path
+                .split(['/', '?', '&', '='])
+                .any(|segment| segment == "." || segment == "..")
+        {
+            return Err("the CurseForge catalog path is invalid".to_owned());
+        }
+        let key = self.require_curseforge_api_key()?;
+        let url = format!("https://api.curseforge.com/v1/{path}");
+        self.fetch_json_headers_timed(
+            &url,
+            &["api.curseforge.com"],
+            &[("x-api-key", key.as_str())],
+            12,
+        )
+        .map_err(|error| {
+            let lower = error.to_ascii_lowercase();
+            if lower.contains("401") || lower.contains("403") {
+                "CurseForge rejected the saved API key. Replace it in Settings → Catalogs."
+                    .to_owned()
+            } else {
+                format!("CurseForge catalog was unreachable. {error}")
+            }
+        })
+    }
+
+    fn resolve_curseforge_download_url(
+        &self,
+        project_id: &str,
+        file: &Value,
+    ) -> Result<String, String> {
+        if let Some(candidate) = file.get("downloadUrl").and_then(Value::as_str) {
+            if candidate.len() <= 4_096
+                && require_https_host(candidate, FORGECDN_DOWNLOAD_HOSTS).is_ok()
+            {
+                return Ok(candidate.to_owned());
+            }
+        }
+        let file_id = file
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
+        if let Ok(response) =
+            self.curseforge_v1(&format!("mods/{project_id}/files/{file_id}/download-url"))
+        {
+            if let Some(url) = response.get("data").and_then(Value::as_str) {
+                if require_https_host(url, FORGECDN_DOWNLOAD_HOSTS).is_ok() {
+                    return Ok(url.to_owned());
+                }
+            }
+        }
+        let filename = file
+            .get("fileName")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "CurseForge returned a file without a name".to_owned())?;
+        let fallback = marketplace::forgecdn_file_url(file_id, filename)?;
+        require_https_host(&fallback, FORGECDN_DOWNLOAD_HOSTS)?;
+        Ok(fallback)
     }
 
     fn download_artifact(&self, artifact: &Artifact, destination: &Path) -> Result<String, String> {
@@ -5476,32 +5658,69 @@ impl NativeManager {
         maximum_bytes: u64,
         maximum_seconds: u64,
     ) -> Result<(), String> {
-        run_program(
+        self.curl_no_redirect_headers(url, destination, maximum_bytes, maximum_seconds, &[])
+    }
+
+    fn curl_no_redirect_headers(
+        &self,
+        url: &str,
+        destination: &Path,
+        maximum_bytes: u64,
+        maximum_seconds: u64,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<(), String> {
+        let cache = self.state_root.join("metadata");
+        fs::create_dir_all(&cache).map_err(|_| "could not create the metadata cache".to_owned())?;
+        let config_path = if extra_headers.is_empty() {
+            None
+        } else {
+            let mut config = String::new();
+            for (name, value) in extra_headers {
+                if !header_name_ok(name) || value.contains(['\r', '\n', '"', '\\']) {
+                    return Err("the catalog request used an invalid header".to_owned());
+                }
+                let escaped = value.replace('$', "$$");
+                let _ = writeln!(config, "header = \"{name}: {escaped}\"");
+            }
+            let path = cache.join(format!("curl-{}.cfg", Uuid::new_v4()));
+            write_replaced_secret_file(&path, config.as_bytes())?;
+            Some(path)
+        };
+        let mut args = vec![
+            "--fail".to_owned(),
+            "--silent".to_owned(),
+            "--show-error".to_owned(),
+            "--proto".to_owned(),
+            "=https".to_owned(),
+            "--tlsv1.2".to_owned(),
+            "--connect-timeout".to_owned(),
+            "10".to_owned(),
+            "--max-time".to_owned(),
+            maximum_seconds.to_string(),
+            "--max-filesize".to_owned(),
+            maximum_bytes.to_string(),
+            "--header".to_owned(),
+            format!("User-Agent: {USER_AGENT}"),
+            "--header".to_owned(),
+            "Accept: application/json, application/octet-stream".to_owned(),
+        ];
+        if let Some(path) = &config_path {
+            args.push("--config".to_owned());
+            args.push(path.to_string_lossy().into_owned());
+        }
+        args.push("--output".to_owned());
+        args.push(destination.to_string_lossy().into_owned());
+        args.push(url.to_owned());
+        let result = run_program(
             Path::new("/usr/bin/curl"),
-            &[
-                "--fail".to_owned(),
-                "--silent".to_owned(),
-                "--show-error".to_owned(),
-                "--proto".to_owned(),
-                "=https".to_owned(),
-                "--tlsv1.2".to_owned(),
-                "--connect-timeout".to_owned(),
-                "10".to_owned(),
-                "--max-time".to_owned(),
-                maximum_seconds.to_string(),
-                "--max-filesize".to_owned(),
-                maximum_bytes.to_string(),
-                "--header".to_owned(),
-                format!("User-Agent: {USER_AGENT}"),
-                "--header".to_owned(),
-                "Accept: application/json, application/octet-stream".to_owned(),
-                "--output".to_owned(),
-                destination.to_string_lossy().into_owned(),
-                url.to_owned(),
-            ],
+            &args,
             maximum_seconds.saturating_add(15),
-        )?;
-        Ok(())
+        )
+        .map(|_| ());
+        if let Some(path) = config_path {
+            let _ = fs::remove_file(path);
+        }
+        result
     }
 
     fn file_sha1(&self, path: &Path) -> Result<String, String> {
@@ -7255,6 +7474,41 @@ fn file_sha256(path: &Path) -> Result<String, String> {
         let _ = write!(output, "{byte:02x}");
     }
     Ok(output)
+}
+
+fn header_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+fn write_replaced_secret_file(path: &Path, content: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "secret path has no parent".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|_| "could not create the Helix secret directory".to_owned())?;
+    let temporary = parent.join(format!(".helix-secret-{}.partial", Uuid::new_v4()));
+    let result = (|| {
+        {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temporary)
+                .map_err(|_| "could not stage a Helix secret".to_owned())?;
+            file.write_all(content)
+                .and_then(|()| file.sync_all())
+                .map_err(|_| "could not persist a Helix secret".to_owned())?;
+        }
+        fs::rename(&temporary, path).map_err(|_| "could not install a Helix secret".to_owned())?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn write_new_file(path: &Path, content: &[u8], mode: u32) -> Result<(), String> {
