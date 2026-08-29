@@ -58,9 +58,13 @@ APT is not transactional. Helix does not claim it can roll back a failed package
 maintainer script or power loss. Read the job log and use normal dpkg/APT recovery
 when the operating system reports a partial configuration.
 
-Helix self-update remains unavailable. A future updater must use signed,
-digest-pinned artifacts, pre-migration data/config backup, staged health checks,
-and automatic rollback; `git pull` is not an updater.
+Helix self-update checks GitHub for a newer `vMAJOR.MINOR.PATCH` release when
+you open System updates, and **Check GitHub** forces a fresh look. **Update
+Helix** downloads the SHA-256-pinned source archive, rebuilds only Helix
+dashboard/gateway images, and replaces helix-privd and helix-terminald. It
+health-checks and restores those on failure. The browser reloads when the new
+dashboard answers. `git pull` is not an updater. Game containers, AMP, and Plex
+stay running. Independently signed Helix keys remain a public-internet gate.
 
 ## Start after boot and reboot
 

@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  github-release:
+    name: Digest-pinned GitHub source archive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Build the source archive and checksums
+        id: archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tag="${GITHUB_REF_NAME}"
+          [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Helix GitHub tags must look like v1.0.0" >&2
+            exit 1
+          }
+          version="${tag#v}"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          test "${cargo_version}" = "${version}"
+          archive="helix-source-${version}.tar.gz"
+          git archive --format=tar.gz --prefix="helix-${version}/" -o "${archive}" HEAD
+          sha256sum "${archive}" > SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "archive=${archive}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          version="${{ steps.archive.outputs.version }}"
+          tag="${{ steps.archive.outputs.tag }}"
+          archive="${{ steps.archive.outputs.archive }}"
+          notes="$(mktemp)"
+          python3 - "${version}" "${notes}" <<'PY'
+          import pathlib, sys
+          version, dest = sys.argv[1], pathlib.Path(sys.argv[2])
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          heading = f"## {version} "
+          start = text.find(heading)
+          if start < 0:
+              heading = f"## {version}\n"
+              start = text.find(heading)
+          if start < 0:
+              raise SystemExit(f"CHANGELOG.md has no {version} section")
+          rest = text[start + len(heading):]
+          end = rest.find("\n## ")
+          body = rest if end < 0 else rest[:end]
+          dest.write_text(
+              f"Helix {version} is a numbered private-LAN release. "
+              "Keep it on a network you control. Public-internet exposure is not supported.\n\n"
+              "The dashboard Update Helix control uses these SHA-256-pinned source assets. "
+              "It does not use git pull. Game containers are not replaced.\n\n"
+              + body.strip()
+              + "\n",
+              encoding="utf-8",
+          )
+          PY
+          gh release create "${tag}" \
+            --title "Helix ${version}" \
+            --notes-file "${notes}" \
+            "${archive}" \
+            SHA256SUMS
+
+      - name: Attest the source archive
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: helix-source-${{ steps.archive.outputs.version }}.tar.gz

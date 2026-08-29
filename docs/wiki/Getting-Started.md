@@ -2,7 +2,7 @@
 
 ## Before you run Helix
 
-Helix is a private alpha with no supported binary release. Evaluate it on a
+Helix 1.0 is a private-LAN release. Evaluate it on a
 private network with backups and a clear rollback path. Do not forward its
 dashboard port to the public internet or use live data as a first test.
 

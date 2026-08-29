@@ -28,9 +28,9 @@ Status vocabulary: **NOT STARTED**, **DESIGNING**, **IMPLEMENTING**,
 9. Disabled optional features must not add permanent polling or heavyweight
    runtime cost.
 
-## Phase 0 — Private-alpha foundation
+## Phase 0 — Private-LAN foundation
 
-**Status: TESTED, public release BLOCKED**
+**Status: TESTED, public-internet release BLOCKED**
 
 Implemented:
 
@@ -45,7 +45,7 @@ Implemented:
 - private container and systemd/broker deployment assets; and
 - `AGPL-3.0-or-later` repository and package metadata.
 
-Still required for a public release:
+Still required for a public-internet release:
 
 - clean supported-host install/upgrade/rollback/uninstall matrices;
 - signed artifacts and provenance;
@@ -181,7 +181,7 @@ explicit implementation and real matrix. A catalog card is not support.
 
 ## Phase 6 — Safe package and Helix updates
 
-**Status: IMPLEMENTED — UNVALIDATED for selected APT candidates; Helix update DESIGNING**
+**Status: IMPLEMENTED — UNVALIDATED for selected APT candidates; Helix GitHub update IMPLEMENTED — UNVALIDATED**
 
 Inventory, explicit list refresh, and exact selected-candidate apply jobs are
 implemented. They make no rollback claim and need disposable failure matrices.
@@ -197,13 +197,15 @@ A supported package job must continue to provide:
 
 Helix self-update must provide:
 
-- signed and digest-pinned releases;
+- digest-pinned GitHub release archives (SHA-256, plus GitHub provenance when
+  the tag workflow emits it);
 - staging and compatibility checks;
 - configuration/data backup;
 - health verification; and
-- automatic rollback to the exact previous release.
+- automatic rollback of Helix dashboard, gateway, and broker binaries only.
 
-`git pull` is not a release updater.
+`git pull` is not a release updater. Independently signed Helix keys remain a
+public-internet gate.
 
 ## Phase 7 — Vault, recovery, and migration
 

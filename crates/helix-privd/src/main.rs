@@ -9,6 +9,8 @@ mod files;
 #[cfg(target_os = "linux")]
 mod geo;
 #[cfg(target_os = "linux")]
+mod helix_update;
+#[cfg(target_os = "linux")]
 mod hook_install;
 #[cfg(target_os = "linux")]
 mod host;
@@ -38,6 +40,8 @@ use helix_privd::{
     MinecraftSettingsPatch, PackageUpdateCandidate, ServerNetworkExposure, TerrariaCreateSpec,
     VRisingCreateSpec, ValheimCreateSpec, read_frame, write_frame,
 };
+#[cfg(target_os = "linux")]
+use helix_update::{HelixUpdateConfig, HelixUpdateManager};
 #[cfg(target_os = "linux")]
 use hook_install::{HookInstaller, HookInstallerConfig};
 #[cfg(target_os = "linux")]
@@ -84,6 +88,8 @@ const MAX_JOBS: usize = 64;
 struct Args {
     #[arg(long, default_value = "/etc/helix/privd.json")]
     config: PathBuf,
+    #[arg(long, hide = true)]
+    finalize_pending_update: bool,
     #[arg(long, value_name = "SCHEDULE_ID", hide = true)]
     trigger_recurring_reboot: Option<String>,
 }
@@ -106,6 +112,8 @@ struct BrokerConfig {
     packages: PackageConfig,
     #[serde(default)]
     hook_installer: HookInstallerConfig,
+    #[serde(default)]
+    helix_update: HelixUpdateConfig,
 }
 
 #[cfg(target_os = "linux")]
@@ -117,6 +125,7 @@ struct BrokerContext {
     host: Option<Arc<HostControl>>,
     network: NetworkManager,
     packages: PackageManager,
+    helix_update: HelixUpdateManager,
     hook_installer: Arc<HookInstaller>,
     power_gate: Mutex<()>,
     jobs: Mutex<HashMap<String, JobRecord>>,
@@ -344,13 +353,19 @@ impl BrokerContext {
                 ssh_port,
                 confirmation,
             } => self.firewall_mutation(|network| network.enable_ufw(ssh_port, &confirmation)),
-            BrokerRequest::SystemPackageInventory {} => self.packages.inventory(),
+            BrokerRequest::SystemPackageInventory {} => self.package_inventory(),
             BrokerRequest::RefreshSystemPackageLists {} => self.start_package_refresh_job(),
             BrokerRequest::ApplySystemPackageUpdates {
                 packages,
                 confirmation,
                 disruption_acknowledged,
             } => self.start_package_apply_job(packages, confirmation, disruption_acknowledged),
+            BrokerRequest::CheckHelixUpdate {} => Ok(self.helix_update.status(true)),
+            BrokerRequest::ApplyHelixUpdate {
+                target_tag,
+                confirmation,
+                disruption_acknowledged,
+            } => self.start_helix_update_job(target_tag, confirmation, disruption_acknowledged),
             BrokerRequest::HookInventory {} => self.hook_inventory(),
             BrokerRequest::HookInstallPreflight { hook_id } => {
                 self.hook_installer.preflight(&hook_id)
@@ -1418,6 +1433,60 @@ impl BrokerContext {
         Ok(json!({"job_id": job_id, "reused": false}))
     }
 
+    fn package_inventory(&self) -> Result<Value, String> {
+        let mut inventory = self.packages.inventory()?;
+        inventory["helix_self_update"] = self.helix_update.status(false);
+        Ok(inventory)
+    }
+
+    fn start_helix_update_job(
+        self: &Arc<Self>,
+        target_tag: String,
+        confirmation: String,
+        disruption_acknowledged: bool,
+    ) -> Result<Value, String> {
+        let (job_id, _) = self.queue_job("helix_release_apply", Some("system:packages"), None)?;
+        let context = Arc::clone(self);
+        let worker_job_id = job_id.clone();
+        if thread::Builder::new()
+            .name(format!("helix-update-{}", &job_id[..8]))
+            .spawn(move || {
+                context.update_job(&worker_job_id, |job| {
+                    job.status = JobState::Running;
+                    job.stage = "Checking the GitHub release".to_owned();
+                    job.progress_percent = 5;
+                });
+                let worker_job_id_for_progress = worker_job_id.clone();
+                let progress_context = Arc::clone(&context);
+                let result = context.helix_update.apply(
+                    &target_tag,
+                    &confirmation,
+                    disruption_acknowledged,
+                    &|stage, percent| {
+                        progress_context.update_job(&worker_job_id_for_progress, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = percent;
+                        });
+                    },
+                );
+                context.finish_job(
+                    &worker_job_id,
+                    result,
+                    "Helix staged the release and is restarting the dashboard",
+                );
+            })
+            .is_err()
+        {
+            self.finish_job(
+                &job_id,
+                Err("could not start the Helix update job".to_owned()),
+                "",
+            );
+            return Err("could not start the Helix update job".to_owned());
+        }
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
     fn start_server_action_job(
         self: &Arc<Self>,
         instance_id: String,
@@ -2202,6 +2271,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let args = Args::parse();
     let config = load_config(&args.config)?;
+    if args.finalize_pending_update {
+        let updater = HelixUpdateManager::new(
+            config.helix_update,
+            config.host_control,
+            config
+                .native
+                .as_ref()
+                .map(|native| native.state_root.clone()),
+        )
+        .map_err(io::Error::other)?;
+        return updater.finalize_pending().map(|_| ()).map_err(|error| {
+            eprintln!("Helix release finalize failed: {error}");
+            io::Error::other(error).into()
+        });
+    }
     if let Some(schedule_id) = args.trigger_recurring_reboot {
         let result = BrokerClient::new(config.socket.clone())
             .request(&BrokerRequest::ExecuteRecurringHostReboot { schedule_id })?;
@@ -2251,6 +2335,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         .transpose()
         .map_err(io::Error::other)?
         .map(Arc::new);
+    let native_state_root = config
+        .native
+        .as_ref()
+        .map(|native| native.state_root.clone());
+    let helix_update = HelixUpdateManager::new(
+        config.helix_update,
+        config.host_control.clone(),
+        native_state_root,
+    )
+    .map_err(io::Error::other)?;
     let host = Some(Arc::new(
         HostControl::new(config.host_control).map_err(io::Error::other)?,
     ));
@@ -2266,6 +2360,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         host,
         network,
         packages,
+        helix_update,
         hook_installer,
         power_gate: Mutex::new(()),
         jobs: Mutex::new(HashMap::new()),
@@ -2440,6 +2535,15 @@ mod tests {
             host: None,
             network,
             packages: PackageManager::new(PackageConfig::default()).unwrap(),
+            helix_update: HelixUpdateManager::new(
+                HelixUpdateConfig {
+                    state_root: root.join("updates"),
+                    ..HelixUpdateConfig::default()
+                },
+                HostControlConfig::default(),
+                Some(root.join("docker-cli")),
+            )
+            .unwrap(),
             hook_installer: Arc::new(HookInstaller::new(HookInstallerConfig::default()).unwrap()),
             power_gate: Mutex::new(()),
             jobs: Mutex::new(HashMap::new()),

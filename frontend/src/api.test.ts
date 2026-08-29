@@ -673,7 +673,7 @@ describe('authentication requests', () => {
       new Response(
         JSON.stringify({
           status: 'ok',
-          version: '0.1.0-alpha.1',
+          version: '1.0.0',
           state_database: 'ok',
           metrics_database: 'ok',
           timestamp_unix_ms: 1_800_000_000_000,

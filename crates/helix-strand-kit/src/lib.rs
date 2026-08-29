@@ -30,7 +30,7 @@ pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 pub const MAX_CAPABILITIES: usize = 32;
 pub const MAX_CAPABILITY_ORIGINS: usize = 8;
 
-const DEFAULT_HELIX_COMPATIBILITY: &str = ">=0.1.0-alpha.1, <0.2.0";
+const DEFAULT_HELIX_COMPATIBILITY: &str = ">=1.0.0, <2.0.0";
 const DEFAULT_LICENSE: &str = "AGPL-3.0-or-later";
 const INSTALLABLE_CAPABILITIES: &[&str] = &[
     "helix:metrics.read",
@@ -146,13 +146,22 @@ pub struct ValidatedManifest {
     pub installable: bool,
 }
 
+fn helix_version_satisfies(required: &VersionReq, installed: &Version) -> bool {
+    if required.matches(installed) {
+        return true;
+    }
+    // Strands packed for the 0.1 preview stay loadable on the 1.x private-LAN line.
+    installed.major == 1
+        && Version::parse("0.1.0-alpha.1").is_ok_and(|preview| required.matches(&preview))
+}
+
 impl ValidatedManifest {
     pub fn ensure_helix_compatible(&self, helix_version: &str) -> Result<(), StrandKitError> {
         let version =
             Version::parse(helix_version).map_err(|error| StrandKitError::PackageInvalid {
                 message: format!("Helix version is not valid SemVer: {error}"),
             })?;
-        if self.helix_compatibility.matches(&version) {
+        if helix_version_satisfies(&self.helix_compatibility, &version) {
             Ok(())
         } else {
             Err(StrandKitError::NotInstallable {
@@ -1305,6 +1314,24 @@ mod tests {
             .ensure_helix_compatible(env!("CARGO_PKG_VERSION"))
             .expect("current Helix is inside the default range");
         assert!(created.manifest.ensure_helix_compatible("9.9.9").is_err());
+    }
+
+    #[test]
+    fn preview_helix_range_still_loads_on_1x() {
+        let required = VersionReq::parse(">=0.1.0-alpha.1, <0.2.0").expect("preview range");
+        assert!(helix_version_satisfies(
+            &required,
+            &Version::parse("1.0.0").expect("1.0.0")
+        ));
+        assert!(!helix_version_satisfies(
+            &required,
+            &Version::parse("2.0.0").expect("2.0.0")
+        ));
+        let future = VersionReq::parse(">=2.0.0, <3.0.0").expect("future range");
+        assert!(!helix_version_satisfies(
+            &future,
+            &Version::parse("1.0.0").expect("1.0.0")
+        ));
     }
 
     #[test]

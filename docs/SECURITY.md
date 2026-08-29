@@ -2,7 +2,7 @@
 
 ## Status and security claim
 
-Helix is a private alpha. It has real authentication, capability checks, a
+Helix is a private-LAN release. It has real authentication, capability checks, a
 typed Linux broker, configured-root file controls, native game management,
 private gateway policy, and focused security tests. It has not completed an
 independent security review or a public-network deployment review.
@@ -17,7 +17,8 @@ Current major gaps include:
 - no MFA;
 - no complete production master-key delivery, rotation, or independent
   recovery workflow;
-- no signed/digest-pinned Helix release and rollback channel;
+- no independently signed Helix key beyond GitHub HTTPS, SHA-256, and optional
+  GitHub build provenance;
 - no package rollback or complete interruption/conffile/dpkg-recovery matrix
   for the guarded selected-candidate update job;
 - no full clean-host broker, filesystem-race, power-loss, UFW, reboot, and game
@@ -26,10 +27,11 @@ Current major gaps include:
   ownership/mode boundary; and
 - no independent authentication, broker, or public-exposure review.
 
-Broad/unattended package upgrades and Helix self-update therefore remain
-unavailable. Exact selected APT candidates have an explicit guarded path, but it
-makes no rollback claim. Public release status remains blocked in
-[PROGRESS.md](../PROGRESS.md).
+Broad/unattended package upgrades remain unavailable. Exact selected APT
+candidates have an explicit guarded path, but it makes no rollback claim.
+Helix self-update can apply a digest-pinned GitHub source archive to Helix
+containers and broker binaries only. Public release to the internet remains
+blocked in [PROGRESS.md](../PROGRESS.md).
 
 ## Security objectives
 
@@ -335,10 +337,11 @@ the shell: `sudo` may prompt and can increase authority if that Linux user is
 allowed to use it. Long-running work belongs in `tmux` or a supervised service
 because a browser disconnect ends the PTY.
 
-Helix self-update stays unavailable until releases are signed and digest-pinned
-and the updater has staging, compatibility checks, configuration/data backup,
-health verification, and automatic rollback. `git pull` is not an acceptable
-updater.
+Helix self-update downloads a SHA-256-pinned GitHub source archive, rebuilds the
+dashboard and gateway, replaces helix-privd and helix-terminald, health-checks,
+and restores those Helix bits on failure. `git pull` is not an updater. This is
+not a signed-key channel, and it does not replace game containers or reboot the
+host.
 
 ## Marketplace and supply chain
 
@@ -439,7 +442,7 @@ root script, authenticate an account, execute `tailscale up`, approve a node,
 choose a tailnet, or reconfigure gateway trust. Do not trust a wildcard
 hostname/origin/CIDR or the entire Tailscale carrier-grade NAT range just
 because one expected node uses Tailscale. Public exposure of the dashboard is
-not supported by the private alpha; the narrow native-game UPnP operation does
+not supported by this private-LAN release; the narrow native-game UPnP operation does
 not change gateway trust or dashboard bindings.
 
 ## Root and platform limits
@@ -473,7 +476,7 @@ Before public recommendation, automated and manual testing must cover:
   retention, and recovery after process loss;
 - clean install, upgrade, rollback, uninstall, modes, systemd hardening, and
   state/key recovery on supported Ubuntu versions; and
-- signed release and self-update rollback drills.
+- digest-pinned Helix update apply/rollback drills and independently signed keys.
 
 The release gate stays closed while a required control is merely documented,
 mocked, covered only by one host, or waived without an explicit narrow reason.

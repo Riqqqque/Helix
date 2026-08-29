@@ -10,16 +10,16 @@
 
 <p align="center">
   <a href="https://github.com/Riqqqque/Helix/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI status" src="https://github.com/Riqqqque/Helix/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
-  <img alt="Status: private alpha" src="https://img.shields.io/badge/status-private%20alpha-f0c76a">
+  <img alt="Status: private LAN 1.0" src="https://img.shields.io/badge/status-private%20LAN%201.0-71e6a3">
   <img alt="Rust MSRV: 1.88" src="https://img.shields.io/badge/rust-1.88%2B-71e6a3">
   <a href="LICENSE"><img alt="License: AGPL-3.0-or-later" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-71e6a3"></a>
 </p>
 
 > [!CAUTION]
-> Helix is a private alpha, not a supported public release. Keep it on a
-> network you control. Do not expose it directly to the public internet or
-> trust it as the only copy of important data. Read [PROGRESS.md](PROGRESS.md)
-> before relying on a control.
+> Helix 1.0 is a private-LAN release, not a supported public-internet product.
+> Keep it on a network you control. Do not expose it directly to the public
+> internet or trust it as the only copy of important data. Read
+> [PROGRESS.md](PROGRESS.md) before relying on a control.
 
 ## What Helix is
 
@@ -27,7 +27,7 @@ Helix combines a responsive web dashboard, an unprivileged Rust service, and a
 narrow typed Linux broker. It gives the browser useful host controls without
 turning the dashboard into a general root shell.
 
-The current private-alpha build includes:
+The current 1.0 private-LAN build includes:
 
 - local owner setup, Argon2id password login, revocable sessions, CSRF
   protection, and owner username/password changes;
@@ -192,7 +192,7 @@ approve a machine, choose a tailnet, or widen gateway trust. “Tailscale-
 compatible” is not a claim that remote access was configured or audited.
 
 A public domain is not required for a private deployment. Public exposure of
-the Helix dashboard is not supported by this alpha. Opt-in native-game TCP
+the Helix dashboard is not supported by this release. Opt-in native-game TCP
 forwarding is a separate, narrowly owned UPnP feature and never widens the
 dashboard gateway. See
 [Container deployment](docs/CONTAINER-DEPLOYMENT.md) for the exact boundary.
@@ -288,7 +288,7 @@ or [Container deployment](docs/CONTAINER-DEPLOYMENT.md).
 | `crates/helix-strand-kit` | Strand project scaffolding, `helix.strand/1` pack/unpack, and validation |
 | `crates/helix-system` | Bounded read-only host discovery |
 | `frontend` | Preact UI, adapters, responsive styling, and tests |
-| `deploy` / `compose.yaml` | Private-alpha Linux broker and container examples |
+| `deploy` / `compose.yaml` | Private-LAN Linux broker and container examples |
 | `docs` | Architecture, security, API, recovery, and operator notes |
 
 Useful starting points:
@@ -303,7 +303,7 @@ Useful starting points:
 
 ## License
 
-Helix is versioned as `0.1.0-alpha.1` and licensed under the
+Helix is versioned as `1.0.0` and licensed under the
 [GNU Affero General Public License v3.0 or later](LICENSE).
 
 Public source availability does not mean production support, stable

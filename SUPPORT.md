@@ -1,8 +1,10 @@
 # Getting Help
 
-Helix is a private-alpha engineering preview. There is no production support
-promise, response-time guarantee, compatibility commitment, supported
-installer, or binary release yet. Public-internet exposure is unsupported.
+Helix is a private-LAN control plane. There is no production support
+promise, response-time guarantee, compatibility commitment, or public-internet
+installer. Public-internet exposure is unsupported. GitHub `vMAJOR.MINOR.PATCH`
+releases pin a source archive with SHA-256 checksums for the in-dashboard Helix
+updater.
 
 ## Before asking
 

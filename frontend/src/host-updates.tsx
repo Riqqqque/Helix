@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
-import { ApiError } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { ApiError, getHealth } from "./api";
 import { InlineError } from "./dashboard-ui";
 import { formatBytes, formatTimestamp } from "./format";
 import { Icon } from "./icons";
 import { InfoTip } from "./info-tip";
 import { Dialog } from "./modal";
 import {
+  applyHelixUpdate,
   applySystemPackageUpdates,
+  checkHelixUpdate,
   getSystemPackageInventory,
   getSystemPackageJob,
   refreshSystemPackageLists,
@@ -50,6 +52,20 @@ function isSessionError(error: unknown): boolean {
     error instanceof ApiError &&
     (error.status === 401 || error.code === "csrf_rejected")
   );
+}
+
+async function helixLiveness(signal?: AbortSignal): Promise<boolean> {
+  try {
+    const init: RequestInit = {
+      cache: "no-store",
+      credentials: "same-origin",
+    };
+    if (signal !== undefined) init.signal = signal;
+    const response = await fetch("/healthz", init);
+    return response.status === 204;
+  } catch {
+    return false;
+  }
 }
 
 function formatCacheAge(
@@ -110,6 +126,8 @@ export function PackageInventoryView({
   onToggleSelected,
   onSelectSafeUpdates,
   onApplySelected,
+  onCheckHelix,
+  onUpdateHelix,
   mutationBusy,
 }: {
   data: SystemPackageInventory;
@@ -123,6 +141,8 @@ export function PackageInventoryView({
   onToggleSelected: (item: SystemPackage) => void;
   onSelectSafeUpdates: () => void;
   onApplySelected: () => void;
+  onCheckHelix: () => void;
+  onUpdateHelix: () => void;
   mutationBusy: boolean;
 }) {
   const packages = useMemo(
@@ -296,12 +316,45 @@ export function PackageInventoryView({
           </article>
           <article>
             <span>Helix itself</span>
-            <strong>Self-update unavailable</strong>
+            <strong>
+              {data.helixSelfUpdate.updateAvailable &&
+              data.helixSelfUpdate.latestVersion !== null
+                ? `Helix ${data.helixSelfUpdate.latestVersion} available`
+                : `Helix ${data.helixSelfUpdate.currentVersion}`}
+            </strong>
             <small>{data.helixSelfUpdate.reason}</small>
-            <button class="button" type="button" disabled>
-              <Icon name="update" size={15} />
-              Update Helix
-            </button>
+            {data.helixSelfUpdate.releaseUrl !== null && (
+              <small>
+                <a
+                  href={data.helixSelfUpdate.releaseUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  GitHub release
+                </a>
+              </small>
+            )}
+            <div class="package-selection-actions">
+              <button
+                class="button button--quiet"
+                type="button"
+                disabled={mutationBusy}
+                onClick={onCheckHelix}
+              >
+                Check GitHub
+              </button>
+              <button
+                class="button button--primary"
+                type="button"
+                disabled={mutationBusy || !data.helixSelfUpdate.available}
+                onClick={onUpdateHelix}
+              >
+                <Icon name="update" size={15} />
+                {data.helixSelfUpdate.updateAvailable
+                  ? `Update to ${data.helixSelfUpdate.latestVersion}`
+                  : "Update Helix"}
+              </button>
+            </div>
           </article>
         </div>
         <p class="readiness-footnote">
@@ -549,8 +602,15 @@ export function HostUpdatesPanel({
   const [job, setJob] = useState<PackageJob | null>(null);
   const [startingMutation, setStartingMutation] = useState(false);
   const [applyOpen, setApplyOpen] = useState(false);
+  const [helixApplyOpen, setHelixApplyOpen] = useState(false);
+  const [waitingForHelix, setWaitingForHelix] = useState(false);
   const [confirmation, setConfirmation] = useState("");
+  const [helixConfirmation, setHelixConfirmation] = useState("");
   const [disruptionAcknowledged, setDisruptionAcknowledged] = useState(false);
+  const [helixDisruptionAcknowledged, setHelixDisruptionAcknowledged] =
+    useState(false);
+  const githubChecked = useRef(false);
+  const helixRestartFromVersion = useRef<string | null>(null);
 
   const load = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
@@ -575,6 +635,65 @@ export function HostUpdatesPanel({
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
+
+  useEffect(() => {
+    if (data === null || githubChecked.current || waitingForHelix) return;
+    if (
+      data.helixSelfUpdate.latestVersion !== null &&
+      data.helixSelfUpdate.reasonCode !== "github_release_unavailable"
+    ) {
+      githubChecked.current = true;
+      return;
+    }
+    githubChecked.current = true;
+    void checkHelixUpdate(csrfToken)
+      .then((helixSelfUpdate) => {
+        setData((current) =>
+          current === null ? current : { ...current, helixSelfUpdate },
+        );
+      })
+      .catch((requestError: unknown) => {
+        if (isSessionError(requestError)) onSessionExpired();
+      });
+  }, [csrfToken, data, onSessionExpired, waitingForHelix]);
+
+  useEffect(() => {
+    if (!waitingForHelix) return;
+    const started = Date.now();
+    const controller = new AbortController();
+    let sawDown = false;
+    const timer = window.setInterval(() => {
+      void (async () => {
+        const live = await helixLiveness(controller.signal);
+        if (controller.signal.aborted) return;
+        if (!live) {
+          sawDown = true;
+          return;
+        }
+        try {
+          const health = await getHealth(csrfToken, controller.signal);
+          if (controller.signal.aborted) return;
+          const from = helixRestartFromVersion.current;
+          if ((from !== null && health.version !== from) || sawDown) {
+            window.location.reload();
+            return;
+          }
+        } catch {
+          sawDown = true;
+        }
+        if (Date.now() - started > 12 * 60 * 1_000) {
+          setError(
+            "Helix is taking longer than expected to come back. Refresh this page.",
+          );
+          window.clearInterval(timer);
+        }
+      })();
+    }, 1_000);
+    return () => {
+      window.clearInterval(timer);
+      controller.abort();
+    };
+  }, [csrfToken, waitingForHelix]);
 
   useEffect(() => {
     let stored: string | null;
@@ -621,20 +740,33 @@ export function HostUpdatesPanel({
               /* Storage is optional. */
             }
             setSelected(new Set());
-            void load();
+            if (
+              next.kind === "helix_release_apply" &&
+              next.status === "complete"
+            ) {
+              helixRestartFromVersion.current =
+                data?.helixSelfUpdate.currentVersion ?? null;
+              setWaitingForHelix(true);
+            } else {
+              void load();
+            }
           }
         })
         .catch((requestError: unknown) => {
           if (controller.signal.aborted) return;
           if (isSessionError(requestError)) onSessionExpired();
-          else setError(describeError(requestError));
+          else if (job.kind === "helix_release_apply") {
+            helixRestartFromVersion.current =
+              data?.helixSelfUpdate.currentVersion ?? null;
+            setWaitingForHelix(true);
+          } else setError(describeError(requestError));
         });
     }, 1_000);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [csrfToken, job, load, onSessionExpired]);
+  }, [csrfToken, data, job, load, onSessionExpired]);
 
   const selectedPackages = useMemo(
     () =>
@@ -644,7 +776,10 @@ export function HostUpdatesPanel({
     [data, selected],
   );
   const mutationBusy =
-    startingMutation || job?.status === "queued" || job?.status === "running";
+    startingMutation ||
+    waitingForHelix ||
+    job?.status === "queued" ||
+    job?.status === "running";
   const confirmationPhrase = expectedConfirmation(selectedPackages.length);
 
   const rememberJob = (id: string, kind: string, stage: string): void => {
@@ -717,6 +852,54 @@ export function HostUpdatesPanel({
     }
   };
 
+  const startCheckHelix = async (): Promise<void> => {
+    if (data === null || mutationBusy) return;
+    setStartingMutation(true);
+    setError(null);
+    try {
+      const helixSelfUpdate = await checkHelixUpdate(csrfToken);
+      setData({ ...data, helixSelfUpdate });
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setStartingMutation(false);
+    }
+  };
+
+  const startHelixApply = async (): Promise<void> => {
+    if (
+      data === null ||
+      data.helixSelfUpdate.latestTag === null ||
+      helixConfirmation !== data.helixSelfUpdate.requiredConfirmation ||
+      !helixDisruptionAcknowledged
+    )
+      return;
+    setStartingMutation(true);
+    setError(null);
+    try {
+      const dispatched = await applyHelixUpdate(
+        data.helixSelfUpdate.latestTag,
+        helixConfirmation,
+        helixDisruptionAcknowledged,
+        csrfToken,
+      );
+      rememberJob(
+        dispatched.jobId,
+        "helix_release_apply",
+        "Queued to download a digest-pinned Helix release",
+      );
+      setHelixApplyOpen(false);
+      setHelixConfirmation("");
+      setHelixDisruptionAcknowledged(false);
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setStartingMutation(false);
+    }
+  };
+
   const toggleSelected = (item: SystemPackage): void => {
     if (!selectableUpdate(item) || mutationBusy) return;
     setSelected((current) => {
@@ -777,7 +960,22 @@ export function HostUpdatesPanel({
         </div>
       </div>
       <InlineError message={error} />
-      {job !== null && (
+      {waitingForHelix && (
+        <section
+          class="package-job-banner package-job-banner--running"
+          aria-live="polite"
+        >
+          <Icon name="update" size={18} />
+          <div>
+            <strong>Helix is restarting</strong>
+            <span>
+              This page reloads when the new dashboard answers. Game containers
+              stay running.
+            </span>
+          </div>
+        </section>
+      )}
+      {job !== null && !waitingForHelix && (
         <section
           class={`package-job-banner package-job-banner--${job.status}`}
           aria-live="polite"
@@ -795,16 +993,22 @@ export function HostUpdatesPanel({
           <div>
             <strong>
               {job.status === "complete"
-                ? "Package operation complete"
+                ? job.kind === "helix_release_apply"
+                  ? "Helix update staged"
+                  : "Package operation complete"
                 : job.status === "failed"
-                  ? "Package operation stopped safely"
+                  ? job.kind === "helix_release_apply"
+                    ? "Helix update stopped"
+                    : "Package operation stopped safely"
                   : job.stage}
             </strong>
             <span>
               {job.status === "failed"
-                ? (job.error ?? "The package operation did not complete.")
+                ? (job.error ?? "The operation did not complete.")
                 : job.status === "complete"
-                  ? job.stage
+                  ? job.kind === "helix_release_apply"
+                    ? "The dashboard will restart. Refresh after it comes back. Game containers stay running."
+                    : job.stage
                   : `${job.progressPercent}% · The broker keeps this running if you leave the page.`}
             </span>
           </div>
@@ -844,6 +1048,14 @@ export function HostUpdatesPanel({
             setConfirmation("");
             setDisruptionAcknowledged(false);
             setApplyOpen(true);
+          }}
+          onCheckHelix={() => {
+            void startCheckHelix();
+          }}
+          onUpdateHelix={() => {
+            setHelixConfirmation("");
+            setHelixDisruptionAcknowledged(false);
+            setHelixApplyOpen(true);
           }}
           mutationBusy={mutationBusy}
         />
@@ -949,6 +1161,99 @@ export function HostUpdatesPanel({
               {startingMutation
                 ? "Starting verified job…"
                 : "Apply exact updates"}
+            </button>
+          </div>
+        </Dialog>
+      )}
+      {helixApplyOpen && data !== null && (
+        <Dialog
+          title={`Update Helix to ${data.helixSelfUpdate.latestVersion ?? data.helixSelfUpdate.latestTag}?`}
+          onClose={() => !startingMutation && setHelixApplyOpen(false)}
+          wide
+        >
+          <div class="package-apply-dialog">
+            <div class="package-apply-summary">
+              <strong>
+                {data.helixSelfUpdate.currentVersion} →{" "}
+                {data.helixSelfUpdate.latestVersion}
+              </strong>
+              <span>
+                Helix downloads the SHA-256-pinned GitHub source archive, rebuilds
+                only the dashboard and gateway, replaces helix-privd and
+                helix-terminald, health-checks, and restores those if the new
+                release does not come up. Game containers, AMP, and Plex stay
+                running. This is not git pull.
+              </span>
+            </div>
+            {data.helixSelfUpdate.releaseNotes !== null &&
+              data.helixSelfUpdate.releaseNotes.length > 0 && (
+                <div class="package-apply-preview">
+                  <span>{data.helixSelfUpdate.releaseNotes}</span>
+                </div>
+              )}
+            <div class="package-safety-note package-safety-note--warning">
+              <Icon name="warning" size={17} />
+              <div>
+                <strong>The dashboard will disconnect and come back</strong>
+                <span>
+                  Wait for the new version, then refresh. Linux is not rebooted.
+                </span>
+              </div>
+            </div>
+            <label class="reboot-acknowledgement">
+              <input
+                type="checkbox"
+                checked={helixDisruptionAcknowledged}
+                onChange={(event) =>
+                  setHelixDisruptionAcknowledged(event.currentTarget.checked)
+                }
+              />
+              <span>
+                <strong>
+                  I understand Helix will restart the dashboard, gateway, and
+                  broker.
+                </strong>
+                <small>Game servers are not replaced by this job.</small>
+              </span>
+            </label>
+            <label class="confirmation-input">
+              <span>
+                Type{" "}
+                <strong>{data.helixSelfUpdate.requiredConfirmation}</strong>
+              </span>
+              <input
+                value={helixConfirmation}
+                autocomplete="off"
+                spellcheck={false}
+                autofocus
+                onInput={(event) =>
+                  setHelixConfirmation(event.currentTarget.value)
+                }
+              />
+            </label>
+          </div>
+          <div class="dialog-actions">
+            <button
+              class="button button--quiet"
+              type="button"
+              disabled={startingMutation}
+              onClick={() => setHelixApplyOpen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              class="button button--danger"
+              type="button"
+              disabled={
+                startingMutation ||
+                helixConfirmation !==
+                  data.helixSelfUpdate.requiredConfirmation ||
+                !helixDisruptionAcknowledged ||
+                data.helixSelfUpdate.latestTag === null
+              }
+              onClick={() => void startHelixApply()}
+            >
+              {startingMutation ? "Starting Helix update…" : "Update Helix"}
             </button>
           </div>
         </Dialog>

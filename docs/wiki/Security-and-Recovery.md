@@ -2,7 +2,7 @@
 
 ## Current boundary
 
-Helix is a private alpha. Source previews default to loopback. The Compose
+Helix 1.0 is a private-LAN release. Source previews default to loopback. The Compose
 example can expose an exact private-LAN address through a constrained gateway,
 but public internet exposure has not passed review. A private Tailscale route
 may use a separately constrained entry point. The built-in Hook can install and
@@ -36,7 +36,8 @@ preflight, a delay, and a cancellable systemd timer. Firewall writes affect only
 exact Helix-owned UFW rules. A separate flow can enable inactive UFW after
 preserving a verified listening SSH port; it never resets or changes defaults.
 Exact selected APT candidates have a guarded update path with no rollback claim.
-Helix self-update remains unavailable.
+Helix self-update can apply a SHA-256-pinned GitHub source archive to the
+dashboard, gateway, and broker, then restore those if health-check fails.
 
 ## Security center
 

@@ -8,9 +8,9 @@ Helix is a local-first Linux dashboard for the host, its files, and game
 servers. It pairs a fast web interface with an unprivileged daemon and a narrow
 typed Linux broker, so useful host controls do not require a general root shell.
 
-> Helix is a private alpha. Keep it on a network you control, do not expose it
-> directly to the public internet, and do not trust it as the only copy of
-> important data.
+> Helix 1.0 is a private-LAN release. Keep it on a network you control, do not
+> expose it directly to the public internet, and do not trust it as the only
+> copy of important data.
 
 The source is licensed under `AGPL-3.0-or-later`. Open source availability does
 not imply production support or a completed security review.
@@ -72,14 +72,16 @@ deployment guide. Nothing ships with a demo city or demo server.
 
 ## Important limits
 
-Broad/unattended package upgrades, signed Helix self-update, public-network
-exposure, portable Wasm Strands, and native Strand sidecars are not implemented. Exact selected
-APT candidates do have a guarded path but no rollback claim. Helix can inspect
-UFW, manage exact owned allow rules, and separately enable inactive UFW only
-after preserving a verified SSH listener; it cannot configure a router or prove
-outside reachability. It can work behind an already configured private
-Tailscale route and install/start the exact service on eligible Debian/Ubuntu
-hosts, but it does not authenticate the tailnet or widen network trust.
+Broad/unattended package upgrades, public-network
+exposure, portable Wasm Strands, and native Strand sidecars are not implemented.
+Helix can apply a SHA-256-pinned GitHub release to itself from System updates.
+Exact selected APT candidates do have a guarded path but no rollback claim.
+Helix can inspect UFW, manage exact owned allow rules, and separately enable
+inactive UFW only after preserving a verified SSH listener; it cannot configure
+a router or prove outside reachability. It can work behind an already configured
+private Tailscale route and install/start the exact service on eligible
+Debian/Ubuntu hosts, but it does not authenticate the tailnet or widen network
+trust.
 
 Modpack creation searches Modrinth or the public CurseForge catalog without an
 owner API key, pins a supported loader (Fabric, Forge, NeoForge, or Quilt),

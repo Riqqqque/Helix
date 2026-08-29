@@ -62,6 +62,12 @@ pub enum BrokerRequest {
         confirmation: String,
         disruption_acknowledged: bool,
     },
+    CheckHelixUpdate {},
+    ApplyHelixUpdate {
+        target_tag: String,
+        confirmation: String,
+        disruption_acknowledged: bool,
+    },
     HookInventory {},
     HookInstallPreflight {
         hook_id: String,
@@ -1330,6 +1336,22 @@ mod tests {
         assert_eq!(apply["disruption_acknowledged"], true);
         assert!(apply.get("command").is_none());
         assert!(apply.get("arguments").is_none());
+
+        assert_eq!(
+            serde_json::to_value(BrokerRequest::CheckHelixUpdate {}).unwrap()["operation"],
+            "check_helix_update"
+        );
+        let helix_apply = serde_json::to_value(BrokerRequest::ApplyHelixUpdate {
+            target_tag: "v1.0.1".to_owned(),
+            confirmation: "UPDATE HELIX".to_owned(),
+            disruption_acknowledged: true,
+        })
+        .expect("serialize Helix update");
+        assert_eq!(helix_apply["operation"], "apply_helix_update");
+        assert_eq!(helix_apply["target_tag"], "v1.0.1");
+        assert_eq!(helix_apply["confirmation"], "UPDATE HELIX");
+        assert_eq!(helix_apply["disruption_acknowledged"], true);
+        assert!(helix_apply.get("command").is_none());
     }
 
     #[test]

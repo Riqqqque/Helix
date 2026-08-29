@@ -1,11 +1,32 @@
 # Changelog
 
-This file records user-visible and operator-visible changes. Helix has no
-binary or package release yet.
+This file records user-visible and operator-visible changes. Numbered GitHub
+releases pin a source archive with SHA-256 checksums. That is a private-LAN
+release, not a public-internet support promise.
 
 ## Unreleased
 
+## 1.0.0 - 2026-08-29
+
+### Added
+
+- Helix 1.0.0 is the first numbered private-LAN release. Security and Overview
+  show that version instead of an alpha prerelease identifier.
+- Host → System updates checks GitHub for a newer Helix release and can apply it
+  from a SHA-256-pinned source archive. Opening that page refreshes the GitHub
+  check. After apply, the browser reloads when the new dashboard answers. The job
+  rebuilds only the dashboard and gateway, replaces helix-privd and helix-terminald,
+  health-checks, and restores those if the new release does not come up. It does
+  not use git pull, does not reboot Linux, and does not replace game containers,
+  AMP, or Plex.
+- GitHub tags `vMAJOR.MINOR.PATCH` publish `helix-source-*.tar.gz` and
+  `SHA256SUMS` from the tagged commit.
+
 ### Changed
+
+- Product copy calls this a private-LAN release. Public-internet exposure is
+  still unsupported. Independent security review, signed-key provenance beyond
+  GitHub attestations, and the remaining clean-host matrices stay open.
 
 - One-click Tailscale and Jellyfin installs now show the exact files Helix will
   write, and a failed job names the path, what is wrong with it, and how to

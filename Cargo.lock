@@ -671,7 +671,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "helix-api"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "helix-auth"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "helix-config"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "serde",
  "tempfile",
@@ -722,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "helix-core"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "helix-privd"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -740,6 +740,7 @@ dependencies = [
  "rusqlite",
  "rustix",
  "secrecy",
+ "semver",
  "serde",
  "serde_json",
  "sha1 0.11.0",
@@ -753,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "helix-secrets"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "chacha20poly1305",
  "getrandom 0.4.3",
@@ -768,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "helix-state"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "fs2",
  "getrandom 0.4.3",
@@ -786,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "helix-strand-kit"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "rustix",
  "semver",
@@ -801,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "helix-system"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "helix-core",
  "sysinfo",
@@ -809,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "helix-terminal"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "clap",
  "portable-pty",
@@ -823,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "helixctl"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "clap",
  "helix-auth",
@@ -837,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "helixd"
-version = "0.1.0-alpha.1"
+version = "1.0.0"
 dependencies = [
  "axum",
  "clap",

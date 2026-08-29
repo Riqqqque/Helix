@@ -62,7 +62,11 @@ const MINECRAFT_TPS_CACHE_ERROR: Duration = Duration::from_secs(30);
 const MINECRAFT_TPS_CONNECT_TIMEOUT: Duration = Duration::from_millis(350);
 const MINECRAFT_TPS_IO_TIMEOUT: Duration = Duration::from_millis(500);
 const DOCKER_TIMEOUT_SECONDS: u64 = 300;
-const USER_AGENT: &str = "Helix/0.1 (+https://github.com/Riqqqque/Helix)";
+const USER_AGENT: &str = concat!(
+    "Helix/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/Riqqqque/Helix)"
+);
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -5575,7 +5579,7 @@ fn default_docker_binary() -> PathBuf {
     PathBuf::from("/usr/bin/docker")
 }
 
-fn prepare_docker_cli_home(state_root: &Path) -> Result<PathBuf, String> {
+pub(crate) fn prepare_docker_cli_home(state_root: &Path) -> Result<PathBuf, String> {
     let home = state_root.join(".docker-cli");
     for dir in [
         home.clone(),

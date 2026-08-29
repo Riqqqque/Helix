@@ -30,7 +30,7 @@ reason = "Optionally pin this Strand as a Home widget."
 optional = false
 
 [compatibility]
-helix = ">=0.1.0-alpha.1, <0.2.0"
+helix = ">=1.0.0, <2.0.0"
 host_api = "1"
 
 [limits]

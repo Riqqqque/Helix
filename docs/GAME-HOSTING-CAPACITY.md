@@ -56,7 +56,7 @@ Safe capacity management means preserving operator-approved headroom:
 5. Prefer a tested server software/configuration change over optimistic
    automatic tuning.
 
-The current alpha does not provide a host-wide admission controller or automatic
+The current private-LAN release does not provide a host-wide admission controller or automatic
 resource rebalancer. Operators remain responsible for avoiding unsafe
 overcommit.
 

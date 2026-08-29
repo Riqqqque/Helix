@@ -43,8 +43,9 @@ The appeal is practical: one responsive interface for host health, storage,
 network evidence, files, native servers, and safe host actions, while managed
 games stay outside the dashboard process and player traffic path.
 
-Helix is still a private alpha. Broad/unattended package upgrades, signed
-self-update, and public internet exposure are not current features. Native
+Helix 1.0 is a private-LAN release. Broad/unattended package upgrades,
+public internet exposure, and independently signed Helix keys are not current
+features. Native
 Minecraft create includes Paper, Purpur, Folia, Leaves, Fabric, Forge, NeoForge,
 Quilt, Pufferfish, and Vanilla. Modpack create can use Modrinth `.mrpack` or
 public CurseForge `manifest.json` packs as a server-safe subset, not a full

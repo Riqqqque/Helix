@@ -1,10 +1,10 @@
 # Next Helix Work
 
-Last updated: 2026-08-27
+Last updated: 2026-08-29
 
 ## Current resumption point
 
-Helix is a working private alpha with a native Docker-backed Minecraft manager,
+Helix is a working private-LAN 1.0 release with a native Docker-backed Minecraft manager,
 an optional separate AMP bridge, persistent console history, recoverable
 backups, multi-layout Home, Hooks, storage analysis, guarded selected-package
 updates, host controls, and an optional non-root terminal.
@@ -48,10 +48,11 @@ unfinished backends.
    preservation, maintainer-script failure, interruption, partial dpkg state,
    bounded logs, final-version proof, and the no-auto-reboot contract. Keep the
    explicit no-rollback claim.
-10. **Design signed Helix updates.** Require signed and digest-pinned releases,
-    staging, configuration/data backup, compatibility checks, health
-    verification, and automatic rollback. Do not implement `git pull` as an
-    updater.
+10. **Drill Helix GitHub updates on a disposable host.** Cover a newer tagged
+    archive, SHA-256 mismatch rejection, missing Compose project, disk-full,
+    health-check failure rollback, and that unrelated container IDs stay the
+    same. Independently signed Helix keys remain a public-internet gate. Do not
+    implement `git pull` as an updater.
 11. **Exercise Modrinth content and Fabric `.mrpack` creation.** Test real
     Paper/Purpur/Folia plugin and Fabric server-mod installs, then run pinned
     stable server-capable Fabric packs through search, preview, archive/hash
@@ -79,7 +80,7 @@ point. Helix must not install, enable, authenticate, or reconfigure Tailscale.
 Do not treat the whole Tailscale carrier-grade NAT range as trusted merely
 because one node uses Tailscale.
 
-Public internet exposure remains out of scope for the alpha.
+Public internet exposure remains out of scope for this private-LAN release.
 
 ## Minecraft expansion rules
 

@@ -68,9 +68,19 @@ const response = {
   },
   helix_self_update: {
     available: false,
-    reason_code: "verified_release_pipeline_not_implemented",
-    reason: "Signed staged releases and health rollback are required.",
+    reason_code: "already_current",
+    reason: "This host is already on Helix 1.0.0, the latest digest-pinned GitHub release.",
     git_pull_used: false,
+    current_version: "1.0.0",
+    latest_version: "1.0.0",
+    latest_tag: "v1.0.0",
+    release_url: "https://github.com/Riqqqque/Helix/releases/tag/v1.0.0",
+    release_notes: "Private LAN release.",
+    update_available: false,
+    compose_detected: true,
+    required_confirmation: "UPDATE HELIX",
+    rollback_claimed: true,
+    automatic_reboot: false,
   },
   tools: { dpkg_query: true, apt_cache: true, apt_get: true, apt_mark: true },
   errors: [],
@@ -97,6 +107,9 @@ describe("package inventory API", () => {
     expect(parsed.helixSelfUpdate).toMatchObject({
       available: false,
       gitPullUsed: false,
+      currentVersion: "1.0.0",
+      updateAvailable: false,
+      rollbackClaimed: true,
     });
   });
 
