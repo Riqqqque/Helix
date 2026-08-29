@@ -89,16 +89,25 @@ function optionalGridNumber(record: Record<string, unknown>, key: string): numbe
   return value;
 }
 
+function containerLabel(record: Record<string, unknown>, key: string, maximum: number): string {
+  const value = record[key];
+  if (value === null || value === undefined) return '';
+  if (typeof value !== 'string' || value.length > maximum || Array.from(value).some((character) => /\p{Cc}/u.test(character))) {
+    throw new ApiError(`docker container returned an invalid ${key} value.`);
+  }
+  return value;
+}
+
 function parseContainer(value: unknown): DockerContainer {
   const item = expectRecord(value, 'docker container');
   const name = expectString(item, 'name', 'docker container');
   if (!NAME.test(name)) throw new ApiError('Docker inventory returned an invalid container name.');
   return {
     name,
-    image: expectString(item, 'image', 'docker container'),
-    state: expectString(item, 'state', 'docker container'),
-    status: expectString(item, 'status', 'docker container'),
-    ports: expectString(item, 'ports', 'docker container'),
+    image: containerLabel(item, 'image', 256),
+    state: containerLabel(item, 'state', 64),
+    status: containerLabel(item, 'status', 128),
+    ports: containerLabel(item, 'ports', 400),
     running: bool(item, 'running', 'docker container'),
     protected: bool(item, 'protected', 'docker container'),
     cpuPercent: optionalNumber(item, 'cpu_percent'),
@@ -122,7 +131,13 @@ export function parseDockerInventory(value: unknown): DockerInventory {
   return {
     availability,
     dockerInstalled: bool(root, 'docker_installed', 'docker inventory'),
-    containers: expectArray(root, 'containers', 'docker inventory', 64).map(parseContainer),
+    containers: expectArray(root, 'containers', 'docker inventory', 128).flatMap((entry) => {
+      try {
+        return [parseContainer(entry)];
+      } catch {
+        return [];
+      }
+    }),
     truncated: bool(root, 'truncated', 'docker inventory'),
     portainer: {
       detected: bool(portainer, 'detected', 'portainer hint'),

@@ -11,7 +11,7 @@ use std::{
 
 const DASHBOARD_ICONS_PNG: &str = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png";
 
-const MAX_CONTAINERS: usize = 64;
+const MAX_CONTAINERS: usize = 128;
 const MAX_HOMARR_WIDGETS: usize = 64;
 const MAX_HOMARR_DB_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -1298,6 +1298,29 @@ mod tests {
         let portainer = detect_portainer(&containers);
         assert_eq!(portainer["panel_port"], 9443);
         assert_eq!(portainer["panel_scheme"], "https");
+    }
+
+    #[test]
+    fn parse_docker_keeps_exited_containers_with_empty_ports() {
+        let stdout = "AMP_AllTheMons01\tcubecoders/ampbase\trunning\tUp 3 days\t\nhomarr\tghcr.io/homarr-labs/homarr:latest\texited\tExited (0) 2 hours ago\t\n";
+        let containers = parse_docker_listing(stdout);
+        assert_eq!(containers.len(), 2);
+        assert_eq!(containers[0]["name"], "AMP_AllTheMons01");
+        assert_eq!(containers[0]["running"], true);
+        assert_eq!(containers[0]["ports"], "");
+        assert_eq!(containers[1]["name"], "homarr");
+        assert_eq!(containers[1]["running"], false);
+        assert_eq!(containers[1]["image"], "ghcr.io/homarr-labs/homarr:latest");
+    }
+
+    #[test]
+    fn parse_docker_names_only_still_lists_containers() {
+        let stdout = "server-dashboard\nAMP_AllTheMons01\nplex\n";
+        let containers = parse_docker_listing(stdout);
+        assert_eq!(containers.len(), 3);
+        assert_eq!(containers[0]["name"], "server-dashboard");
+        assert_eq!(containers[0]["running"], false);
+        assert_eq!(containers[0]["image"], "");
     }
 
     #[test]

@@ -160,6 +160,37 @@ describe('Servers route', () => {
     expect(serverActionDescription(ampServer, 'kill')).toContain('cannot force-kill AMP');
   });
 
+  it('treats AMP idle as asleep, with Start instead of Restart', () => {
+    const idleAmp: ManagedServer = {
+      ...nativeServer,
+      name: 'AllTheMons',
+      instanceName: 'AllTheMons01',
+      status: 'idle',
+      panelRunning: true,
+      memoryUsedMb: 0,
+      memoryLimitMb: 10_240,
+      manager: 'amp_import',
+      executionBackend: 'external',
+    };
+    expect(serverWorkloadIsRunning(idleAmp)).toBe(false);
+    expect(serverActionDescription(idleAmp, 'start')).toContain('wake');
+    expect(serverActionDescription(idleAmp, 'start')).toContain('sleeping');
+
+    const markup = render(
+      <ServersPage
+        data={{ ...data, servers: { data: [idleAmp], phase: 'ready', error: null } }}
+        csrfToken="csrf"
+        canManageServers
+        canManageBackups
+        canManageNetwork
+        onSessionExpired={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Idle');
+    expect(markup).toContain('Start');
+    expect(markup).not.toContain('Restart');
+  });
+
   it('offers native Kill when the container is up, including hung Stop', () => {
     const onlineData: DashboardData = {
       ...data,

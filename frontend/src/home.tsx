@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import type { ComponentType } from 'preact';
-import type { HostInventory, ManagedServer } from './control-api';
+import { serverIsLive, serverStatusSummary, serverStatusTone, type HostInventory, type ManagedServer } from './control-api';
 import { calculatePercent, formatBytes, formatDuration, formatPercent } from './format';
 import {
   exportHomeWidgetsClipboard,
@@ -311,16 +311,16 @@ function GraphsWidget({ overview, inventory }: Pick<HomePageProps, 'overview' | 
 
 function ServersWidget({ servers }: Pick<HomePageProps, 'servers'>) {
   const ordered = useMemo(
-    () => servers.slice().sort((left, right) => Number(right.status === 'online') - Number(left.status === 'online')).slice(0, 5),
+    () => servers.slice().sort((left, right) => Number(serverIsLive(right.status)) - Number(serverIsLive(left.status))).slice(0, 5),
     [servers],
   );
   return (
     <div class="home-server-list">
       {ordered.map((server) => (
         <a href="#servers" key={server.id}>
-          <span class={`status-dot status-dot--${server.status === 'online' ? 'good' : 'idle'}`} />
+          <span class={`status-dot status-dot--${serverStatusTone(server.status)}`} />
           <strong>{server.name}</strong>
-          <small>{server.status === 'online' ? `${server.playersOnline}/${server.maxPlayers} players` : 'Offline'}</small>
+          <small>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers)}</small>
           <span>{server.manager === 'helix' ? 'Helix' : 'AMP'}</span>
         </a>
       ))}

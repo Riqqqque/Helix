@@ -70,6 +70,9 @@ export function DockerInventoryPanel({
   };
 
   const containers = inventory?.containers ?? [];
+  const engineReady = inventory?.dockerInstalled === true;
+  const runningCount = containers.filter((item) => item.running).length;
+  const unavailableDetail = error ?? 'Helix could not talk to the Docker engine on this host.';
   const href = typeof window === 'undefined'
     ? null
     : portainerHref(window.location.hostname, inventory?.portainer.panelPort ?? null, inventory?.portainer.panelScheme ?? null);
@@ -77,17 +80,17 @@ export function DockerInventoryPanel({
     <div class={`docker-panel${compact ? ' docker-panel--compact' : ''}`}>
       <div class="docker-panel__head">
         <div>
-          <strong>{inventory?.dockerInstalled ? `${containers.filter((item) => item.running).length} running` : 'Docker unavailable'}</strong>
-          <small>{inventory?.dockerInstalled ? `${containers.length} container${containers.length === 1 ? '' : 's'}` : 'Helix could not talk to the Docker engine on this host.'}</small>
+          <strong>{engineReady ? `${runningCount} running` : loading && inventory === null ? 'Checking…' : 'Docker unavailable'}</strong>
+          <small>{engineReady ? `${containers.length} container${containers.length === 1 ? '' : 's'}` : unavailableDetail}</small>
         </div>
         <div class="docker-panel__actions">
           {href !== null && <a class="button button--quiet" href={href} target="_blank" rel="noopener noreferrer"><Icon name="external" size={14} />Open Portainer</a>}
           <button class="button button--quiet" type="button" disabled={loading} onClick={() => void refresh()}><Icon name="refresh" size={14} />{loading ? 'Checking…' : 'Refresh'}</button>
         </div>
       </div>
-      {error !== null && <p class="docker-panel__error" role="status">{error}</p>}
+      {error !== null && engineReady && <p class="docker-panel__error" role="status">{error}</p>}
       <div class="docker-list">
-        {containers.slice(0, compact ? 8 : 64).map((container) => (
+        {containers.slice(0, compact ? 8 : 128).map((container) => (
           <article class={`docker-row${container.running ? ' is-running' : ''}${container.protected ? ' is-protected' : ''}`} key={container.name}>
             <span class={`status-dot status-dot--${container.running ? 'good' : 'idle'}`} />
             <div>

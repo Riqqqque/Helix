@@ -122,7 +122,9 @@ target host before anything starts.
    example roots blindly. `/` as an analysis root is for largest-file scans, not
    a custom-JAR import boundary.
 3. Keep `ReadWritePaths` in `deploy/helix-privd.service` aligned with those
-   same directories.
+   same directories, including `/run/docker.sock` so Overview can list
+   containers. Hosts that already customized that unit can drop
+   `deploy/helix-privd.docker-sock.conf` into `helix-privd.service.d/`.
 4. Follow the
    [container deployment guide](https://github.com/Riqqqque/Helix/blob/main/docs/CONTAINER-DEPLOYMENT.md)
    and the

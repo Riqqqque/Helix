@@ -38,8 +38,9 @@ tooltip is rendered above card clipping and stays inside the viewport.
 are shown separately so their memory is not misrepresented as dashboard cost.
 
 Host also lists every Docker container on the machine, with CPU and memory when
-Docker reports them. Start, stop, and restart require the exact container name.
-Helix dashboard and gateway containers stay protected.
+Docker reports them. Empty published ports are normal. Start, stop, and restart
+require the exact container name. Helix dashboard and gateway containers stay
+protected.
 
 ## System packages
 

@@ -421,6 +421,9 @@ img.helix-mark::after {
 .status-dot--idle {
   background: var(--quiet);
 }
+.status-dot--warning {
+  background: var(--warning);
+}
 
 .dashboard-workspace {
   grid-column: 2;

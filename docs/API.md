@@ -105,7 +105,9 @@ and next activation. Automated tests never execute a reboot.
 | `GET` | `/api/v1/docker/homarr` | `dashboard.customize` | Import Homarr http(s) shortcuts from classic JSON or a SQLite app catalog |
 
 Helix talks to the Docker engine on the host. It does not proxy Portainer’s API.
-Open Portainer uses a published port when a Portainer container is detected.
+Empty published-port strings are valid; one unreadable container row is skipped
+instead of failing the whole list. Open Portainer uses a published port when a
+Portainer container is detected.
 Dashboard and gateway container names stay protected. Homarr import reads the
 container bind or volume mounts, then classic JSON if present, otherwise a
 read-only snapshot of `db/db.sqlite` when the `app`/`apps` table has `name` and

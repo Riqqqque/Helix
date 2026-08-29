@@ -83,7 +83,9 @@ Before starting anything:
    exist on this host. The example `analysis_roots` of `/` is for largest-file
    analysis, not a custom-JAR import boundary.
 5. Review the systemd unit's user, group, socket/state directories, executable,
-   and `ReadWritePaths` against those exact choices.
+   and `ReadWritePaths` against those exact choices. The Docker engine socket
+   (`/run/docker.sock`) must be writable so container inventory works; use
+   `deploy/helix-privd.docker-sock.conf` as a drop-in if the unit was customized.
 6. Keep the deployment `.env` operator-owned and mode `0600`.
 7. Keep world data, state, and backups out of the image and source tree.
 

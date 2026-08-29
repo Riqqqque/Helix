@@ -7,6 +7,13 @@ binary or package release yet.
 
 ### Fixed
 
+- AMP Idle/sleep is no longer shown as online. Sleeping instances keep their
+  memory limit visible, use Start to wake the game, and do not offer Restart as
+  the main action. Stopped, starting, failed, and AMP-manager-stopped states
+  are labeled as themselves.
+- Overview and Host container lists accept Docker rows with empty ports or
+  images, skip one bad name instead of hiding every container, and tell helix-privd
+  it may write the Docker engine socket.
 - First-time V Rising, Valheim, and Terraria creates can build their runtime
   images while helix-privd has a read-only home. Docker CLI/buildx state now
   lives under Helix native state instead of `/root/.docker`.

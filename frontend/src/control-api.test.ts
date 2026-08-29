@@ -11,6 +11,7 @@ import {
   getServerDetail,
   parseDirectoryListing,
   parseMinecraftSettingsSaveResult,
+  parseServers,
   restoreTrashedServerBackup,
   runServerAction,
   setNativeMemory,
@@ -419,5 +420,50 @@ describe('native server API', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(getServerDetail('helix:server-id', 'csrf')).rejects.toThrow();
+  });
+});
+
+describe('server list API', () => {
+  const server = {
+    id: 'amp:71b629b7-5861-47b8-907b-acde40dadc9e',
+    name: 'AllTheMons',
+    instance_name: 'AllTheMons01',
+    kind: 'imported',
+    software: 'Paper',
+    version: '1.21.8',
+    status: 'idle',
+    panel_running: true,
+    start_on_boot: true,
+    players_online: 0,
+    max_players: 10,
+    cpu_percent: 0,
+    memory_used_mb: 0,
+    memory_limit_mb: 10_240,
+    tps: null,
+    manager_panel_port: 8080,
+    panel_port: 8081,
+    game_port: 25565,
+    path: '/home/amp/.ampdata/instances/AllTheMons01',
+    warnings: [],
+    manager: 'amp_import',
+    execution_backend: 'external',
+    appearance: { kind: 'default', revision: 0 },
+  };
+
+  it('accepts AMP idle and other lifecycle statuses', () => {
+    const parsed = parseServers([server]);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({
+      name: 'AllTheMons',
+      status: 'idle',
+      panelRunning: true,
+      memoryUsedMb: 0,
+      memoryLimitMb: 10_240,
+    });
+    const starting = parseServers([{ ...server, status: 'starting' }]);
+    expect(starting[0]?.status).toBe('starting');
+    const failed = parseServers([{ ...server, status: 'failed' }]);
+    expect(failed[0]?.status).toBe('failed');
+    expect(() => parseServers([{ ...server, status: 'mystery' }])).toThrow(/status/i);
   });
 });

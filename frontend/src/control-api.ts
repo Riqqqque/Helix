@@ -137,7 +137,79 @@ export interface TextFile {
   modifiedUnixMs: number | null;
 }
 
-export type ServerStatus = 'online' | 'offline' | 'manager_stopped';
+export type ServerStatus =
+  | 'online'
+  | 'idle'
+  | 'starting'
+  | 'stopping'
+  | 'updating'
+  | 'offline'
+  | 'manager_stopped'
+  | 'failed';
+
+const SERVER_STATUSES: readonly ServerStatus[] = [
+  'online',
+  'idle',
+  'starting',
+  'stopping',
+  'updating',
+  'offline',
+  'manager_stopped',
+  'failed',
+];
+
+export function serverStatusLabel(status: ServerStatus): string {
+  switch (status) {
+    case 'online':
+      return 'Online';
+    case 'idle':
+      return 'Idle';
+    case 'starting':
+      return 'Starting';
+    case 'stopping':
+      return 'Stopping';
+    case 'updating':
+      return 'Updating';
+    case 'offline':
+      return 'Offline';
+    case 'manager_stopped':
+      return 'AMP stopped';
+    case 'failed':
+      return 'Failed';
+  }
+}
+
+export function serverStatusTone(status: ServerStatus): 'good' | 'warning' | 'idle' {
+  if (status === 'online') return 'good';
+  if (status === 'starting' || status === 'stopping' || status === 'updating' || status === 'failed') {
+    return 'warning';
+  }
+  return 'idle';
+}
+
+export function serverIsLive(status: ServerStatus): boolean {
+  return status === 'online';
+}
+
+export function serverShowsRuntimeStats(status: ServerStatus): boolean {
+  return status === 'online' || status === 'idle';
+}
+
+export function serverPrimaryLifecycleAction(server: ManagedServer): 'start' | 'restart' | null {
+  if (server.status === 'starting' || server.status === 'stopping' || server.status === 'updating') {
+    return null;
+  }
+  if (server.manager === 'amp_import') {
+    return server.status === 'online' ? 'restart' : 'start';
+  }
+  if (server.panelRunning || server.status === 'online') return 'restart';
+  return 'start';
+}
+
+export function serverStatusSummary(status: ServerStatus, playersOnline: number, maxPlayers: number): string {
+  if (status === 'online') return `${playersOnline}/${maxPlayers} players`;
+  return serverStatusLabel(status);
+}
 
 export type ServerKind = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'imported';
 
@@ -599,7 +671,7 @@ export function parseServers(value: unknown): ManagedServer[] {
   return value.map((entry) => {
     const item = expectRecord(entry, 'server');
     const status = expectString(item, 'status', 'server') as ServerStatus;
-    if (!['online', 'offline', 'manager_stopped'].includes(status)) {
+    if (!(SERVER_STATUSES as readonly string[]).includes(status)) {
       throw new Error('Invalid server status');
     }
     const manager = expectString(item, 'manager', 'server');
