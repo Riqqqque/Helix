@@ -1212,7 +1212,7 @@ fn collect_ports_from_amp_value(value: &str, ports: &mut HashSet<u16>) {
         collect_ports_from_amp_json(&json, ports, true);
         return;
     }
-    for part in trimmed.split(|character: char| matches!(character, ',' | ';' | ' ' | '\t' | '/')) {
+    for part in trimmed.split([',', ';', ' ', '\t', '/']) {
         if let Ok(port) = part.trim().parse::<u16>() {
             insert_nonzero_port(ports, port);
         }
