@@ -354,7 +354,7 @@ optional/client-only files and `full_pack_parity: false`.
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/servers/{instance_id}/logs?lines=...` | `games.view` | Stable bounded recent-log response |
-| `GET` | `/api/v1/servers/{instance_id}/logs/history?cursor=...&lines=...` | `games.view` | Cursor page across retained native console archives, maximum 500 entries |
+| `GET` | `/api/v1/servers/{instance_id}/logs/history?cursor=...&lines=...` | `games.view` | Paged history across retained native console archives, maximum 500 entries |
 | `POST` | `/api/v1/servers/{instance_id}/console` | `games.manage` | Send one bounded native console command |
 | `GET` | `/api/v1/servers/{instance_id}/appearance` | `games.view` | Read revisioned uploaded/preset server artwork state |
 | `PUT` | `/api/v1/servers/{instance_id}/appearance` | `games.manage` | Set a validated preset or optimized PNG/JPEG icon |

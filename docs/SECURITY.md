@@ -205,7 +205,7 @@ same time.
 
 Native console input is one bounded line. Output capture runs independently of
 the browser and writes protected rotating segments with byte/file limits.
-Cursor history is bounded; persistence means retained across browser closes and
+Paged console history is bounded; persistence means retained across browser closes and
 boots, not unlimited retention.
 
 Native backup deletion creates an opaque trash record and moves only the exact

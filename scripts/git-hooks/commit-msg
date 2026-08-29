@@ -1,0 +1,8 @@
+#!/bin/sh
+# Keep published history owner-only. Drop any Co-authored-by trailer.
+file=$1
+[ -n "$file" ] && [ -f "$file" ] || exit 0
+tmp="$file.stripped"
+grep -v -E '^[[:space:]]*Co-authored-by:' "$file" >"$tmp" || true
+mv "$tmp" "$file"
+exit 0
