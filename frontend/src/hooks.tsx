@@ -10,6 +10,7 @@ import {
   type HookConnection,
   type HookInstallJob,
   type HookInstallPlan,
+  type HookInstallWriteKind,
   type HookInventory,
   type HookServiceAction,
 } from './hooks-api';
@@ -115,6 +116,17 @@ const actionLabels: Record<HookServiceAction, string> = {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : 'Helix could not complete that hook action.';
+}
+
+function writeKindLabel(kind: HookInstallWriteKind): string {
+  if (kind === 'keyring') return 'Signed repository key';
+  if (kind === 'source') return 'APT source';
+  return 'Private download workspace';
+}
+
+function installResultText(result: Record<string, unknown> | null, key: string): string | null {
+  const value = result?.[key];
+  return typeof value === 'string' && value.length > 0 && value.length <= 512 ? value : null;
 }
 
 function descriptorFor(hook: HookConnection): HookDescriptor {
@@ -227,6 +239,7 @@ function HookDetails({ hook, canManage, busyAction, plan, planLoading, planError
               <div><span class="eyebrow">HELIX WILL</span><ul>{plan.changes.map((change) => <li key={change}><Icon name="check" size={13} />{change}</li>)}</ul></div>
               <div><span class="eyebrow">YOU FINISH</span><ul>{plan.nextSteps.map((step) => <li key={step}><Icon name="chevron" size={13} />{step}</li>)}</ul></div>
             </section>
+            {plan.writes.length > 0 && <section class="hook-plan-writes"><span class="eyebrow">FILES HELIX WRITES</span><ul>{plan.writes.map((write) => <li key={write.path}><span><strong>{writeKindLabel(write.kind)}</strong><code>{write.path}</code></span></li>)}</ul><small>These paths are fixed for this hook. Helix will not accept a different repository, package, or directory from the browser.</small></section>}
             <div class="hook-plan-actions">
               {plan.installAvailable && <button class="button button--primary" type="button" disabled={!canManage} onClick={onInstall}><Icon name="plus" size={14} />Install {descriptor.name}</button>}
               {plan.mode === 'guided' && <a class="button button--primary" href="#terminal"><Icon name="terminal" size={14} />Continue in Terminal</a>}
@@ -404,11 +417,29 @@ export function HooksPage({ csrfToken, canManage, onSessionExpired }: HooksPageP
         <InlineError message={error} />
         {installJob === null ? <>
           <div class="hook-install-review"><Icon name={descriptorFor(selected).icon} size={25} /><span><strong>Publisher repository, exact package, exact service</strong><p>Helix will add only the official signed repository shown in the preflight, install the allowlisted package, enable its exact systemd unit, and verify that it is active. It will not create an external account or reboot Linux.</p></span></div>
+          {plan !== null && plan.writes.length > 0 && <ul class="hook-install-writes">{plan.writes.map((write) => <li key={write.path}><strong>{writeKindLabel(write.kind)}</strong><code>{write.path}</code></li>)}</ul>}
+          {plan !== null && plan.nextSteps.length > 0 && <p class="hook-install-next">After the service is verified: {plan.nextSteps.join(' ')}</p>}
           <label class="check-row"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.currentTarget.checked)} /><span><strong>Install {descriptorFor(selected).name} on this Linux host</strong><small>I understand this adds a publisher APT repository and packages to the host.</small></span></label>
           <div class="dialog-actions"><button class="button button--quiet" type="button" onClick={() => setInstallOpen(false)}>Cancel</button><button class="button button--primary" type="button" disabled={!installConfirmed || installDispatching} onClick={() => void startInstall()}>{installDispatching ? 'Queuing…' : 'Install and verify'}</button></div>
         </> : <>
-          <div class={`hook-install-progress hook-install-progress--${installJob.status}`} role="status"><Icon name={installJob.status === 'complete' ? 'check' : installJob.status === 'failed' ? 'warning' : 'update'} size={26} class={installJob.status === 'running' ? 'is-spinning' : undefined} /><strong>{installJob.stage}</strong><ProgressBar value={Math.max(installJob.progressPercent, installJob.status === 'running' ? 8 : 0)} /><span>{installJob.status === 'complete' ? 'The package and exact systemd service were verified.' : installJob.status === 'failed' ? installJob.error ?? 'The installer stopped before verification.' : 'This continues on the host if you leave the page.'}</span></div>
-          <div class="dialog-actions"><button class="button button--primary" type="button" disabled={!['complete', 'failed'].includes(installJob.status)} onClick={() => setInstallOpen(false)}>Close</button></div>
+          <div class={`hook-install-progress hook-install-progress--${installJob.status}`} role="status">
+            <Icon name={installJob.status === 'complete' ? 'check' : installJob.status === 'failed' ? 'warning' : 'update'} size={26} class={installJob.status === 'running' ? 'is-spinning' : undefined} />
+            <strong>{installJob.stage}</strong>
+            <ProgressBar value={Math.max(installJob.progressPercent, installJob.status === 'running' ? 8 : 0)} />
+            {installJob.status === 'complete' ? (
+              <span>{installResultText(installJob.result, 'next_action') ?? 'The package and exact systemd service were verified.'}</span>
+            ) : installJob.status === 'failed' ? (
+              <p class="hook-install-failure">{installJob.error ?? 'The installer stopped before verification.'}</p>
+            ) : (
+              <span>This continues on the host if you leave the page.</span>
+            )}
+          </div>
+          <div class="dialog-actions">
+            {installJob.status === 'failed' && <button class="button button--primary" type="button" onClick={() => { setInstallJob(null); setInstallConfirmed(false); setError(null); setPlanRevision((value) => value + 1); }}>Try again</button>}
+            {installJob.status === 'failed' && <a class="button button--quiet" href="#terminal"><Icon name="terminal" size={14} />Open Terminal</a>}
+            {installJob.status === 'failed' && plan !== null && <a class="button button--quiet" href={plan.officialDocs} target="_blank" rel="noopener noreferrer"><Icon name="external" size={14} />Official instructions</a>}
+            <button class={`button ${installJob.status === 'failed' ? 'button--quiet' : 'button--primary'}`} type="button" disabled={!['complete', 'failed'].includes(installJob.status)} onClick={() => setInstallOpen(false)}>{installJob.status === 'complete' ? 'Done' : 'Close'}</button>
+          </div>
         </>}
       </Dialog>}
     </div>

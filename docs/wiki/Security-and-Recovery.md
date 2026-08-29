@@ -7,7 +7,8 @@ example can expose an exact private-LAN address through a constrained gateway,
 but public internet exposure has not passed review. A private Tailscale route
 may use a separately constrained entry point. The built-in Hook can install and
 start the exact service on eligible Debian/Ubuntu hosts, but the owner still
-authenticates the tailnet and configures the gateway trust boundary.
+authenticates the tailnet and configures the gateway trust boundary. Install
+errors name the directory Helix refused, instead of a generic ownership line.
 
 The current owner flow uses:
 

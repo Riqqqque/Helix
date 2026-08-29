@@ -42,6 +42,12 @@ export interface HookActionResult {
 
 export type HookInstallMode = 'one_click' | 'guided';
 export type HookInstallStatus = 'ready' | 'needs_input' | 'blocked';
+export type HookInstallWriteKind = 'staging' | 'keyring' | 'source';
+
+export interface HookInstallWrite {
+  path: string;
+  kind: HookInstallWriteKind;
+}
 
 export interface HookInstallPlan {
   hookId: string;
@@ -52,6 +58,7 @@ export interface HookInstallPlan {
   checks: Array<{ id: string; label: string; status: 'pass' | 'warning' | 'block'; detail: string }>;
   changes: string[];
   nextSteps: string[];
+  writes: HookInstallWrite[];
   blockers: string[];
   officialDocs: string;
   collectedAtUnixMs: number;
@@ -198,15 +205,17 @@ export function parseHookInstallPlan(value: unknown): HookInstallPlan {
     throw new ApiError('Hook install plan returned an invalid classification.');
   }
   const platformRoot = root.platform === null ? null : expectRecord(root.platform, 'hook install platform');
-  const checks = expectArray(root, 'checks', 'hook install plan', 16).map((value) => {
+  const checks = expectArray(root, 'checks', 'hook install plan', 20).map((value) => {
     const item = expectRecord(value, 'hook install check');
     const checkStatus = expectString(item, 'status', 'hook install check');
     if (!['pass', 'warning', 'block'].includes(checkStatus)) throw new ApiError('Hook install plan returned an invalid check status.');
+    const detail = expectString(item, 'detail', 'hook install check');
+    if (detail.length > 1_024) throw new ApiError('Hook install plan returned an invalid check detail.');
     return {
       id: expectString(item, 'id', 'hook install check'),
       label: expectString(item, 'label', 'hook install check'),
       status: checkStatus as 'pass' | 'warning' | 'block',
-      detail: expectString(item, 'detail', 'hook install check'),
+      detail,
     };
   });
   const installAvailable = bool(root, 'install_available', 'hook install plan');
@@ -232,10 +241,33 @@ export function parseHookInstallPlan(value: unknown): HookInstallPlan {
     checks,
     changes: boundedStringList(root, 'changes', 'hook install plan', 16),
     nextSteps: boundedStringList(root, 'next_steps', 'hook install plan', 16),
+    writes: parseHookInstallWrites(root),
     blockers,
     officialDocs,
     collectedAtUnixMs: expectNumber(root, 'collected_at_unix_ms', 'hook install plan', { integer: true, minimum: 0 }),
   };
+}
+
+function parseHookInstallWrites(root: Record<string, unknown>): HookInstallWrite[] {
+  if (root.writes === undefined) return [];
+  return expectArray(root, 'writes', 'hook install plan', 8).map((value) => {
+    const item = expectRecord(value, 'hook install write');
+    const path = expectString(item, 'path', 'hook install write');
+    const kind = expectString(item, 'kind', 'hook install write');
+    if (
+      !path.startsWith('/')
+      || path.length > 512
+      || path.includes('//')
+      || path.split('/').includes('..')
+      || path.split('/').includes('.')
+    ) {
+      throw new ApiError('Hook install plan returned an invalid write path.');
+    }
+    if (kind !== 'staging' && kind !== 'keyring' && kind !== 'source') {
+      throw new ApiError('Hook install plan returned an invalid write kind.');
+    }
+    return { path, kind };
+  });
 }
 
 export function parseHookInstallJob(value: unknown): HookInstallJob {

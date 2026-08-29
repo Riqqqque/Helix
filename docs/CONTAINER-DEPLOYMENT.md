@@ -57,8 +57,9 @@ placed in the terminal socket group. The privileged broker socket still relies
 on its dedicated group boundary; independent kernel peer-credential validation
 for that separate protocol remains a release gate.
 
-Tmpfiles owns the shared `/run/helix` parent and its differently grouped broker
-and terminal paths. The broker unit must not also claim that parent with
+Tmpfiles owns the shared `/run/helix` parent, the private hook-install staging
+directory (`0700 root`), and the differently grouped broker and terminal paths.
+The broker unit must not also claim that parent with
 `RuntimeDirectory=`; systemd would recursively replace the terminal directory's
 group whenever the broker starts. The terminal template uses
 `WorkingDirectory=~`, and the daemon defaults to that NSS-resolved working

@@ -87,9 +87,33 @@ describe('hooks API', () => {
   });
 
   it('requires one-click readiness, no blockers, and official HTTPS documentation', () => {
-    expect(parseHookInstallPlan(installPlan)).toMatchObject({ hookId: 'tailscale', installAvailable: true, status: 'ready' });
+    expect(parseHookInstallPlan(installPlan)).toMatchObject({ hookId: 'tailscale', installAvailable: true, status: 'ready', writes: [] });
     expect(() => parseHookInstallPlan({ ...installPlan, blockers: ['APT is unavailable'] })).toThrow(/inconsistent/i);
     expect(() => parseHookInstallPlan({ ...installPlan, official_docs: 'javascript:alert(1)' })).toThrow(/documentation/i);
+  });
+
+  it('accepts exact write paths and rejects traversal', () => {
+    const parsed = parseHookInstallPlan({
+      ...installPlan,
+      writes: [
+        { path: '/run/helix/hook-installs', kind: 'staging' },
+        { path: '/usr/share/keyrings/tailscale-archive-keyring.gpg', kind: 'keyring' },
+        { path: '/etc/apt/sources.list.d/tailscale.list', kind: 'source' },
+      ],
+    });
+    expect(parsed.writes).toEqual([
+      { path: '/run/helix/hook-installs', kind: 'staging' },
+      { path: '/usr/share/keyrings/tailscale-archive-keyring.gpg', kind: 'keyring' },
+      { path: '/etc/apt/sources.list.d/tailscale.list', kind: 'source' },
+    ]);
+    expect(() => parseHookInstallPlan({
+      ...installPlan,
+      writes: [{ path: '/etc/apt/../passwd', kind: 'source' }],
+    })).toThrow(/write path/i);
+    expect(() => parseHookInstallPlan({
+      ...installPlan,
+      writes: [{ path: 'etc/apt/sources.list.d/tailscale.list', kind: 'source' }],
+    })).toThrow(/write path/i);
   });
 
   it('uses exact preflight, install, and opaque job routes', async () => {

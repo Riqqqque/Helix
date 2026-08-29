@@ -231,7 +231,7 @@ unavailable and has no route.
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/hooks` | `system.view` | Inventory exact configured systemd services, the optional AMP adapter, and the Docker engine hook |
-| `GET` | `/api/v1/hooks/{hook_id}/install/preflight` | `system.view` | Read exact host prerequisites, planned changes, blockers, and owner steps for a built-in installer |
+| `GET` | `/api/v1/hooks/{hook_id}/install/preflight` | `system.view` | Read exact host prerequisites, planned file writes, blockers, and owner steps for a built-in installer |
 | `POST` | `/api/v1/hooks/{hook_id}/install` | `system.settings.write` | Start one exact allowlisted Tailscale or Jellyfin package/service installation |
 | `GET` | `/api/v1/hooks/jobs/{job_id}` | `system.view` | Read bounded hook-install progress and verified result |
 | `POST` | `/api/v1/hooks/{hook_id}/actions` | `system.settings.write` | Start, stop, restart, enable, or disable one exact allowlisted service and verify resulting state |

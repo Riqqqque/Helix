@@ -32,7 +32,11 @@ only one built-in hook ID, downloads repository material from the publisher's
 exact HTTPS host, validates the repository definition, adds the exact signed
 APT source, installs the exact allowlisted package, enables the exact systemd
 service, and verifies that it is active. Hook installs and System Updates share
-one package-operation lock.
+one package-operation lock. The preflight lists the exact files Helix will
+write. Missing installer directories are created as root with a tight mode;
+group-writable ones are tightened to `0755` or `0700` before a repository file
+lands there. A symlink or a directory not owned by root still blocks, and the
+error names the path.
 
 Helix never runs a downloaded root script and the browser cannot supply a
 package, repository, unit, executable, or shell command. If repository setup or
