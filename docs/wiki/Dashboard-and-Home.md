@@ -82,9 +82,11 @@ the browser; Helix does not keep a timeseries database.
 
 Globe is off the sidebar until you add it. It draws this host from the router's
 public WAN country, then country pins for established public TCP peers. Game
-ports Helix already knows (native and AMP) count as players; everything else
-public is outbound. Loopback, LAN, CGNAT, and overlay addresses stay off the
-map. Lookup happens in helix-privd; the browser never receives remote IPs.
+ports Helix already knows (native and AMP) count as game-port connections,
+including pings and join attempts; everything else public is outbound. Loopback,
+LAN, CGNAT, and overlay addresses stay off the map. Lookup happens in
+helix-privd; the browser never receives remote IPs. The Home widget map fills
+its card. The Globe page keeps the full world visible.
 
 Lines default to solid. **Data motion** is opt-in. Dots travel faster where more
 sessions or queued traffic share a country. That is not a bytes-per-second

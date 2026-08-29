@@ -243,6 +243,13 @@ public access on the private IPv4 gateway and refuse to overwrite an existing
 router rule. V Rising listing on the in-game browser is separate from Direct
 Connect.
 
+A forwarded game port is reachable from the public internet. Scanners walk
+common game ports and will try yours without anyone handing out the IP. Helix
+does not advertise the server to Minecraft server lists. **Remove public player
+access** on Overview if you only want LAN or Tailscale. For Minecraft, Settings
+→ **Whitelist** still lets only approved accounts join even while the port is
+open.
+
 If Helix says AMP already has a port claimed, it is refusing to steal a number
 AMP still lists. Open AMP (the error card has a link when Helix can see the
 instance), stop that instance, open **Configuration → Server Settings / Portals**,

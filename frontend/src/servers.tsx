@@ -886,12 +886,12 @@ export function publicInternetHint(
 ): string {
   if (publicSetupConfirmed) {
     if (kind === "vrising") {
-      return `Helix confirmed UPnP for UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`}. Direct Connect uses this public address. The in-game server list is a separate listing toggle.`;
+      return `Helix confirmed UPnP for UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`}. Direct Connect uses this public address. Scanners can find those ports without you sharing the IP. The in-game server list is a separate listing toggle.`;
     }
     if (kind === "valheim") {
-      return `Helix confirmed UPnP for UDP ${port}–${port + 2}. Direct Connect uses this public address.`;
+      return `Helix confirmed UPnP for UDP ${port}–${port + 2}. Direct Connect uses this public address. Scanners can find those ports without you sharing the IP.`;
     }
-    return `Helix confirmed UPnP for TCP ${port}. Direct Connect uses this public address.`;
+    return `Helix confirmed UPnP for TCP ${port}. Direct Connect uses this public address. Scanners can find this port without you sharing the IP.`;
   }
   if (kind === "vrising") {
     return `Direct Connect from the internet needs UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`} forwarded, or Helix public setup on this page. Friends can still join from the V Rising server list when listing is on.`;
@@ -947,24 +947,24 @@ function publicAccessCopy(
   if (kind === "vrising") {
     return {
       title: "Set up public Direct Connect",
-      detail: "After the server is online, Helix requests UDP UPnP for the game and query ports. The in-game server list is the separate listing checkbox. Listing can work without this.",
+      detail: "After the server is online, Helix requests UDP UPnP for the game and query ports. The in-game server list is the separate listing checkbox. Listing can work without this. An open public port is found by scanners even if you never share the address.",
     };
   }
   if (kind === "valheim") {
     return {
       title: "Set up public player access",
-      detail: "After the server is online, Helix requests UDP UPnP for the game port and the next two.",
+      detail: "After the server is online, Helix requests UDP UPnP for the game port and the next two. Scanners can find those ports without you sharing the IP.",
     };
   }
   if (kind === "terraria") {
     return {
       title: "Set up public player access",
-      detail: "After Terraria is online, Helix requests and verifies an exact TCP mapping from a compatible UPnP router. If UFW is active, Helix also creates a matching owned rule.",
+      detail: "After Terraria is online, Helix requests and verifies an exact TCP mapping from a compatible UPnP router. If UFW is active, Helix also creates a matching owned rule. Scanners can find that port without you sharing the IP.",
     };
   }
   return {
     title: "Set up public player access",
-    detail: "After Minecraft is online, Helix will request and verify an exact TCP mapping from a compatible UPnP router. If UFW is active, Helix also creates a matching owned rule.",
+    detail: "After Minecraft is online, Helix will request and verify an exact TCP mapping from a compatible UPnP router. If UFW is active, Helix also creates a matching owned rule. Scanners can find that port without you sharing the IP; turn on Whitelist if only approved players should join.",
   };
 }
 
@@ -5208,14 +5208,21 @@ function NativeServerPage({
                     )}
                   {canManageNetwork &&
                     (usesUdpJoin ? udpEvidence : tcpEvidence)?.externalReachability.state === "router_mapping_confirmed" && (
-                      <button
-                        class="button button--quiet"
-                        type="button"
-                        disabled={exposureBusy}
-                        onClick={() => void updatePublicAccess(false)}
-                      >
-                        {exposureBusy ? "Removing…" : "Remove public player access"}
-                      </button>
+                      <>
+                        <button
+                          class="button button--quiet"
+                          type="button"
+                          disabled={exposureBusy}
+                          onClick={() => void updatePublicAccess(false)}
+                        >
+                          {exposureBusy ? "Removing…" : "Remove public player access"}
+                        </button>
+                        <p class="settings-port-note">
+                          {detail.kind === "minecraft"
+                            ? "Anyone on the internet can try this port, including scanners. You do not have to share the IP. Turn on Whitelist in Settings if only approved players should join, or remove public access for LAN or Tailscale only."
+                            : "Anyone on the internet can try this port, including scanners. You do not have to share the IP. Remove public access if you want LAN or Tailscale only."}
+                        </p>
+                      </>
                     )}
                   <InlineError message={listingError} />
                   <InlineError message={exposureError} />

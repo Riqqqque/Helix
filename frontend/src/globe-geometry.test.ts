@@ -3,6 +3,7 @@ import {
   GLOBE_HEIGHT,
   GLOBE_WIDTH,
   controlPoint,
+  coverProject,
   projectLatLon,
   quadraticPoint,
   unwrapDestination,
@@ -28,6 +29,23 @@ describe('globe projection', () => {
     const unwrapped = unwrapDestination(california, japan);
     expect(unwrapped.x).toBeLessThan(california.x);
     expect(Math.abs(unwrapped.x - california.x)).toBeLessThan(Math.abs(japan.x - california.x));
+  });
+
+  it('covers a wide widget by cropping poles instead of leaving side gutters', () => {
+    const center = { x: GLOBE_WIDTH / 2, y: GLOBE_HEIGHT / 2 };
+    const mapped = coverProject(center, 2000, 500);
+    expect(mapped.x).toBe(1000);
+    expect(mapped.y).toBe(250);
+    const north = coverProject({ x: GLOBE_WIDTH / 2, y: 0 }, 2000, 500);
+    expect(north.y).toBeLessThan(0);
+  });
+
+  it('covers a tall widget by cropping the date line instead of letterboxing', () => {
+    const center = coverProject({ x: GLOBE_WIDTH / 2, y: GLOBE_HEIGHT / 2 }, 1000, 1000);
+    expect(center.x).toBe(500);
+    expect(center.y).toBe(500);
+    const west = coverProject({ x: 0, y: GLOBE_HEIGHT / 2 }, 1000, 1000);
+    expect(west.x).toBeLessThan(0);
   });
 
   it('keeps quadratic samples on the curve between two points', () => {

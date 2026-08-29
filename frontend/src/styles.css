@@ -4995,6 +4995,17 @@ textarea:focus {
 .home-widget--height-tall > :last-child {
   min-height: 285px;
 }
+.home-widget--kind-globe {
+  display: flex;
+  flex-direction: column;
+}
+.home-widget--kind-globe > :last-child {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .home-widget--kind-shortcut.home-widget--height-short {
   min-height: 118px;
 }

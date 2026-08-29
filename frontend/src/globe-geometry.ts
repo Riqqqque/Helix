@@ -13,6 +13,19 @@ export function projectLatLon(lat: number, lon: number): GlobePoint {
   };
 }
 
+/** Map a 1000×500 point onto a viewport the way SVG `xMidYMid slice` does. */
+export function coverProject(
+  point: GlobePoint,
+  viewportWidth: number,
+  viewportHeight: number,
+): GlobePoint {
+  const scale = Math.max(viewportWidth / GLOBE_WIDTH, viewportHeight / GLOBE_HEIGHT);
+  return {
+    x: (viewportWidth - GLOBE_WIDTH * scale) / 2 + point.x * scale,
+    y: (viewportHeight - GLOBE_HEIGHT * scale) / 2 + point.y * scale,
+  };
+}
+
 export function unwrapDestination(origin: GlobePoint, destination: GlobePoint): GlobePoint {
   let { x } = destination;
   const half = GLOBE_WIDTH / 2;

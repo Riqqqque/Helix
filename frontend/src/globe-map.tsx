@@ -3,6 +3,7 @@ import { GLOBE_LAND_PATHS, GLOBE_LAND_VIEWBOX } from './globe-land';
 import {
   arcPath,
   controlPoint,
+  coverProject,
   projectLatLon,
   quadraticPoint,
   unwrapDestination,
@@ -116,8 +117,11 @@ export function GlobeMap({
         if (particle.t > 1) particle.t -= 1;
         if (particle.t < 0) particle.t += 1;
         const point = quadraticPoint(arc.from, arc.control, arc.to, particle.t);
-        const x = (point.x / 1000) * width;
-        const y = (point.y / 500) * height;
+        const mapped = compact
+          ? coverProject(point, width, height)
+          : { x: (point.x / 1000) * width, y: (point.y / 500) * height };
+        const x = mapped.x;
+        const y = mapped.y;
         const player = arc.link.kind === 'player';
         context.beginPath();
         context.fillStyle = player ? accent : text;
@@ -149,11 +153,17 @@ export function GlobeMap({
       observer.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [animate, prepared]);
+  }, [animate, compact, prepared]);
 
   return (
     <div ref={wrapRef} class={`globe-map${compact ? ' globe-map--compact' : ''}${animate ? ' is-flowing' : ''}`}>
-      <svg class="globe-map__svg" viewBox={GLOBE_LAND_VIEWBOX} role="img" aria-label="World map of this host and country-level connections">
+      <svg
+        class="globe-map__svg"
+        viewBox={GLOBE_LAND_VIEWBOX}
+        preserveAspectRatio={compact ? 'xMidYMid slice' : 'xMidYMid meet'}
+        role="img"
+        aria-label="World map of this host and country-level connections"
+      >
         <rect class="globe-map__ocean" width="1000" height="500" />
         {GRATICULE_LONS.map((lon) => {
           const x = projectLatLon(0, lon).x;

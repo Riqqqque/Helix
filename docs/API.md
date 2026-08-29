@@ -172,7 +172,7 @@ response retains logical byte lengths for comparison.
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/network/inventory` | `network.firewall.read` | Private IPv4, bounded UPnP router state, local listeners, Docker publications, game ports, owned mappings, and UFW state |
-| `GET` | `/api/v1/network/globe` | `system.view` | Country-level origin and aggregated public TCP destinations. No remote addresses. |
+| `GET` | `/api/v1/network/globe` | `system.view` | Country-level origin and aggregated public TCP destinations (game-port pings/joins vs other outbound). No remote addresses. |
 | `POST` | `/api/v1/network/amp-router-forwards/release` | `games.manage` + `network.firewall.write` | Delete a leftover AMP-described UPnP mapping after typing `REMOVE AMP FORWARD {port}`. Refused when AMP instance files still list the port or Helix owns public access on it. AMP files are not changed |
 | `POST` | `/api/v1/network/firewall/rules` | `network.firewall.write` | Create a named TCP/UDP single-port or bounded-range UFW allow rule |
 | `DELETE` | `/api/v1/network/firewall/rules/{rule_id}` | `network.firewall.write` | Delete the exact Helix-owned rule into bounded Undo state |

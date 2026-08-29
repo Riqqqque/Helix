@@ -296,8 +296,11 @@ that exact body and refuses drifted/unowned state. Minecraft and Terraria
 request TCP. V Rising requests UDP for the game and query ports. Valheim
 requests UDP for the game port and the next two.
 UFW is supplemented only if already active. A CGNAT/private/reserved WAN address
-is reported as blocked rather than public. Live router/UFW mutation testing is
-still a release gate and must use disposable rules and a controlled router.
+is reported as blocked rather than public. A confirmed mapping is reachable from
+the public internet; scanners find common game ports without the operator
+sharing the address. Helix does not treat that as proof of a leaked IP. Live
+router/UFW mutation testing is still a release gate and must use disposable
+rules and a controlled router.
 
 ## Packages and Helix updates
 
