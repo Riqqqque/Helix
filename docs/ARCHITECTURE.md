@@ -93,8 +93,9 @@ as one configured non-root Linux account, uses a socket group distinct from the
 root broker, and checks the connecting dashboard UID through Linux
 `SO_PEERCRED`. The API requires a fresh dashboard-password proof and a one-use
 session-bound ticket for every WebSocket. The service has bounded frames and
-sessions, clears inherited environment values, kills the PTY on disconnect, and
-does not log terminal input/output. It is not a privileged broker operation.
+sessions, starts an interactive login shell, clears inherited environment
+values, kills the PTY on disconnect, and does not log terminal input/output. It
+is not a privileged broker operation.
 
 ### `helix-worker`
 

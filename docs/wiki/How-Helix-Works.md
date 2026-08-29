@@ -37,6 +37,7 @@ not a runtime.
 The optional terminal is not a root-broker command. A fresh dashboard-password
 proof opens a one-use connection to a separate service running as one normal
 Linux user. Helix audits connection lifecycle but not terminal commands/output.
+Tab completes in the host shell the same way it would over SSH.
 
 The appeal is practical: one responsive interface for host health, storage,
 network evidence, files, native servers, and safe host actions, while managed

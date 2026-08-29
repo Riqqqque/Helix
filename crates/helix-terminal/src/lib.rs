@@ -1,6 +1,7 @@
 //! Length-bounded protocol shared by Helix and the unprivileged PTY daemon.
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 pub const PROTOCOL_VERSION: u8 = 1;
@@ -133,6 +134,86 @@ pub fn decode_resize(payload: &[u8]) -> Result<TerminalDimensions, ProtocolError
     .validate()
 }
 
+/// Interactive login flags for `/bin/bash`, matching a normal SSH tty.
+pub const LOGIN_SHELL_ARGS: &[&str] = &["-i", "-l"];
+pub const DEFAULT_CHILD_LANG: &str = "C.UTF-8";
+
+/// Prefer the daemon account's `HOME` so `~`, profile, and Tab completion match a real login.
+pub fn child_home(daemon_home: Option<&Path>, working_directory: &Path) -> PathBuf {
+    match daemon_home {
+        Some(home) if is_usable_home(home) => home.to_path_buf(),
+        _ => working_directory.to_path_buf(),
+    }
+}
+
+fn is_usable_home(path: &Path) -> bool {
+    if path.as_os_str().is_empty() {
+        return false;
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+    {
+        return false;
+    }
+    path.is_absolute() || path.has_root()
+}
+
+/// Copy a host `LANG` only when it is a UTF-8 locale Helix can safely set.
+pub fn child_lang(host_lang: Option<&str>) -> String {
+    match host_lang {
+        Some(value) if is_safe_utf8_locale(value) => value.to_owned(),
+        _ => DEFAULT_CHILD_LANG.to_owned(),
+    }
+}
+
+fn is_safe_utf8_locale(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 || !bytes.is_ascii() {
+        return false;
+    }
+    if !bytes
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'@'))
+    {
+        return false;
+    }
+    matches!(
+        value.rsplit_once('.').map(|(_, encoding)| encoding),
+        Some("UTF-8" | "utf-8" | "UTF8" | "utf8")
+    )
+}
+
+/// Copy `TZ` when it looks like an IANA name or POSIX offset, never a path.
+pub fn child_tz(host_tz: Option<&str>) -> Option<&str> {
+    let value = host_tz?;
+    if value.is_empty() || value.len() > 64 || !value.is_ascii() {
+        return None;
+    }
+    if value.starts_with('/') || value.contains("..") {
+        return None;
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'/' | b'+'))
+    {
+        return None;
+    }
+    Some(value)
+}
+
+/// Accept only the conventional `/run/user/<uid>` runtime dir for this account.
+pub fn child_xdg_runtime_dir(uid: u32, host_value: Option<&str>) -> Option<String> {
+    if uid == 0 {
+        return None;
+    }
+    let expected = format!("/run/user/{uid}");
+    match host_value {
+        Some(value) if value == expected => Some(expected),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +263,63 @@ mod tests {
             decode_json::<OpenRequest>(invalid),
             Err(ProtocolError::InvalidPayload)
         );
+    }
+
+    #[test]
+    fn login_shell_is_interactive_and_login() {
+        assert_eq!(LOGIN_SHELL_ARGS, ["-i", "-l"]);
+    }
+
+    #[test]
+    fn child_home_prefers_absolute_daemon_home() {
+        let working = Path::new("/var/tmp/helix-cwd");
+        assert_eq!(
+            child_home(Some(Path::new("/home/rique")), working),
+            PathBuf::from("/home/rique")
+        );
+        assert_eq!(
+            child_home(Some(Path::new("relative-home")), working),
+            working.to_path_buf()
+        );
+        assert_eq!(child_home(None, working), working.to_path_buf());
+        assert_eq!(
+            child_home(Some(Path::new("/tmp/../etc")), working),
+            working.to_path_buf()
+        );
+    }
+
+    #[test]
+    fn child_lang_allows_utf8_locales_only() {
+        assert_eq!(child_lang(Some("en_US.UTF-8")), "en_US.UTF-8");
+        assert_eq!(child_lang(Some("C.utf8")), "C.utf8");
+        assert_eq!(child_lang(Some("C")), DEFAULT_CHILD_LANG);
+        assert_eq!(child_lang(Some("en_US.ISO-8859-1")), DEFAULT_CHILD_LANG);
+        assert_eq!(
+            child_lang(Some("en_US.UTF-8/../../etc/passwd")),
+            DEFAULT_CHILD_LANG
+        );
+        assert_eq!(child_lang(None), DEFAULT_CHILD_LANG);
+    }
+
+    #[test]
+    fn child_tz_rejects_paths_and_junk() {
+        assert_eq!(child_tz(Some("America/Denver")), Some("America/Denver"));
+        assert_eq!(child_tz(Some("UTC")), Some("UTC"));
+        assert_eq!(child_tz(Some("GMT+6")), Some("GMT+6"));
+        assert_eq!(child_tz(Some("/etc/localtime")), None);
+        assert_eq!(child_tz(Some("../zoneinfo/UTC")), None);
+        assert_eq!(child_tz(Some("UTC;id")), None);
+        assert_eq!(child_tz(None), None);
+    }
+
+    #[test]
+    fn child_xdg_runtime_dir_is_uid_specific() {
+        assert_eq!(
+            child_xdg_runtime_dir(1_001, Some("/run/user/1001")).as_deref(),
+            Some("/run/user/1001")
+        );
+        assert_eq!(child_xdg_runtime_dir(1_001, Some("/run/user/0")), None);
+        assert_eq!(child_xdg_runtime_dir(0, Some("/run/user/0")), None);
+        assert_eq!(child_xdg_runtime_dir(1_001, None), None);
     }
 }

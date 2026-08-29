@@ -2,7 +2,8 @@
 mod linux_daemon {
     use clap::Parser;
     use helix_terminal::{
-        ExitResponse, Frame, OpenRequest, PROTOCOL_VERSION, ReadyResponse, TerminalDimensions,
+        ExitResponse, Frame, LOGIN_SHELL_ARGS, OpenRequest, PROTOCOL_VERSION, ReadyResponse,
+        TerminalDimensions, child_home, child_lang, child_tz, child_xdg_runtime_dir,
         decode_frame_length, decode_json, decode_resize, encode_frame, encode_json, kind,
     };
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -53,6 +54,10 @@ mod linux_daemon {
     struct SessionConfig {
         shell: PathBuf,
         working_directory: PathBuf,
+        home: PathBuf,
+        lang: String,
+        tz: Option<String>,
+        xdg_runtime_dir: Option<String>,
         user: String,
     }
 
@@ -75,8 +80,26 @@ mod linux_daemon {
         prepare_socket_path(&args.socket)?;
         let listener = UnixListener::bind(&args.socket)?;
         fs::set_permissions(&args.socket, fs::Permissions::from_mode(0o660))?;
+        let uid = rustix::process::getuid().as_raw();
+        let runtime_from_env =
+            child_xdg_runtime_dir(uid, std::env::var("XDG_RUNTIME_DIR").ok().as_deref());
+        let xdg_runtime_dir = runtime_from_env.or_else(|| {
+            let fallback = format!("/run/user/{uid}");
+            if Path::new(&fallback).is_dir() {
+                child_xdg_runtime_dir(uid, Some(fallback.as_str()))
+            } else {
+                None
+            }
+        });
         let config = Arc::new(SessionConfig {
             shell: args.shell,
+            home: child_home(
+                std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+                &working_directory,
+            ),
+            lang: child_lang(std::env::var("LANG").ok().as_deref()),
+            tz: child_tz(std::env::var("TZ").ok().as_deref()).map(str::to_owned),
+            xdg_runtime_dir,
             working_directory,
             user: args.user,
         });
@@ -256,17 +279,25 @@ mod linux_daemon {
             })
             .map_err(other_io_error)?;
         let mut command = CommandBuilder::new(&config.shell);
-        command.arg("-l");
+        for arg in LOGIN_SHELL_ARGS {
+            command.arg(*arg);
+        }
         command.cwd(&config.working_directory);
         command.env_clear();
-        command.env("HOME", &config.working_directory);
+        command.env("HOME", &config.home);
         command.env("USER", &config.user);
         command.env("LOGNAME", &config.user);
         command.env("SHELL", &config.shell);
         command.env("PATH", PATH_VALUE);
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
-        command.env("LANG", "C.UTF-8");
+        command.env("LANG", &config.lang);
+        if let Some(tz) = &config.tz {
+            command.env("TZ", tz);
+        }
+        if let Some(runtime_dir) = &config.xdg_runtime_dir {
+            command.env("XDG_RUNTIME_DIR", runtime_dir);
+        }
         let mut reader = pair.master.try_clone_reader().map_err(other_io_error)?;
         let mut terminal_input = pair.master.take_writer().map_err(other_io_error)?;
         let mut child = pair.slave.spawn_command(command).map_err(other_io_error)?;
