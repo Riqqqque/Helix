@@ -6,7 +6,7 @@ use helix_privd::{MarketplaceCatalog, ModpackProvider};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha1::{Digest as Sha1Digest, Sha1};
-use sha2::{Digest as _, Sha512};
+use sha2::{Digest as Sha2Digest, Sha512};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Write as _,
@@ -1325,7 +1325,7 @@ fn file_sha512(path: &Path) -> Result<String, String> {
         if read == 0 {
             break;
         }
-        digest.update(&buffer[..read]);
+        Sha2Digest::update(&mut digest, &buffer[..read]);
     }
     let mut output = String::with_capacity(128);
     for byte in digest.finalize() {
@@ -1527,7 +1527,7 @@ fn sanitize_curseforge_version(
     Ok(json!({
         "id": id,
         "name": optional_text(file, "displayName", 256).unwrap_or_else(|| filename.clone()),
-        "version_number": if filename.is_empty() { id.clone() } else { filename },
+        "version_number": if filename.is_empty() { id.clone() } else { filename.clone() },
         "version_type": version_type,
         "date_published": optional_text(file, "fileDate", 64),
         "downloads": file.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
