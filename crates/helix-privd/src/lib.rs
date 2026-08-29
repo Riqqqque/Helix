@@ -297,6 +297,14 @@ pub enum BrokerRequest {
         instance_id: String,
         memory_mb: u32,
     },
+    SetNativeCpu {
+        instance_id: String,
+        cpu_millis: u32,
+    },
+    SetNativeBrowserListing {
+        instance_id: String,
+        list_on_browser: bool,
+    },
     ListMinecraftVersions {
         software: MinecraftSoftware,
     },
@@ -310,6 +318,22 @@ pub enum BrokerRequest {
 pub enum FirewallProtocol {
     Tcp,
     Udp,
+}
+
+impl FirewallProtocol {
+    pub fn soap_name(self) -> &'static str {
+        match self {
+            Self::Tcp => "TCP",
+            Self::Udp => "UDP",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -463,6 +487,8 @@ pub struct MinecraftCreateSpec {
     pub software: MinecraftSoftware,
     pub version: String,
     pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
     pub max_players: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_port: Option<u16>,
@@ -486,6 +512,8 @@ pub struct CustomMinecraftJarSpec {
 pub struct VRisingCreateSpec {
     pub name: String,
     pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
     pub max_players: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_port: Option<u16>,
@@ -493,6 +521,8 @@ pub struct VRisingCreateSpec {
     pub query_port: Option<u16>,
     #[serde(default)]
     pub network_exposure: ServerNetworkExposure,
+    #[serde(default = "default_true")]
+    pub list_on_browser: bool,
     pub start_on_boot: bool,
     pub wine_runtime_acknowledged: bool,
 }
@@ -510,6 +540,7 @@ impl VRisingCreateSpec {
         if !(2_048..=24_576).contains(&self.memory_mb) {
             return Err("V Rising memory must be between 2 and 24 GiB".to_owned());
         }
+        validate_cpu_millis(self.cpu_millis)?;
         if !(1..=128).contains(&self.max_players) {
             return Err("V Rising player limit must be between 1 and 128".to_owned());
         }
@@ -527,12 +558,6 @@ impl VRisingCreateSpec {
         if self.query_port.is_some() && self.game_port.is_none() {
             return Err("a query port also needs a game port".to_owned());
         }
-        if self.network_exposure != ServerNetworkExposure::Private {
-            return Err(
-                "V Rising public UPnP is not offered yet; create the server as private and forward both UDP ports yourself if needed"
-                    .to_owned(),
-            );
-        }
         if !self.wine_runtime_acknowledged {
             return Err("Helix could not confirm the isolated V Rising runtime install".to_owned());
         }
@@ -545,6 +570,8 @@ impl VRisingCreateSpec {
 pub struct ValheimCreateSpec {
     pub name: String,
     pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
     pub max_players: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_port: Option<u16>,
@@ -559,17 +586,12 @@ impl ValheimCreateSpec {
         if !(1_024..=16_384).contains(&self.memory_mb) {
             return Err("Valheim memory must be between 1 and 16 GiB".to_owned());
         }
+        validate_cpu_millis(self.cpu_millis)?;
         if !(1..=64).contains(&self.max_players) {
             return Err("Valheim player limit must be between 1 and 64".to_owned());
         }
         if self.game_port.is_some_and(|port| port < 1_024) {
             return Err("game port must be at least 1024".to_owned());
-        }
-        if self.network_exposure != ServerNetworkExposure::Private {
-            return Err(
-                "Valheim public UPnP is not offered yet; create the server as private and forward UDP 2456–2458 yourself if needed"
-                    .to_owned(),
-            );
         }
         Ok(())
     }
@@ -581,6 +603,8 @@ pub struct TerrariaCreateSpec {
     pub name: String,
     pub software: TerrariaSoftware,
     pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
     pub max_players: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_port: Option<u16>,
@@ -595,6 +619,7 @@ impl TerrariaCreateSpec {
         if !(512..=8_192).contains(&self.memory_mb) {
             return Err("Terraria memory must be between 512 MiB and 8 GiB".to_owned());
         }
+        validate_cpu_millis(self.cpu_millis)?;
         if !(1..=255).contains(&self.max_players) {
             return Err("Terraria player limit must be between 1 and 255".to_owned());
         }
@@ -622,6 +647,8 @@ fn validate_dedicated_name(name: &str) -> Result<(), String> {
 pub struct MinecraftModpackCreateSpec {
     pub name: String,
     pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
     pub max_players: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_port: Option<u16>,
@@ -645,6 +672,22 @@ fn is_content_catalog(catalog: &MarketplaceCatalog) -> bool {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub fn validate_cpu_millis(cpu_millis: u32) -> Result<(), String> {
+    if cpu_millis == 0 || (250..=128_000).contains(&cpu_millis) {
+        Ok(())
+    } else {
+        Err("CPU limit must be off, or between 0.25 and 128 cores".to_owned())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -887,6 +930,7 @@ mod tests {
                 software: MinecraftSoftware::Paper,
                 version: "1.21.8".to_owned(),
                 memory_mb: 4096,
+                cpu_millis: 0,
                 max_players: 20,
                 game_port: Some(25565),
                 network_exposure: ServerNetworkExposure::Private,
@@ -899,15 +943,18 @@ mod tests {
         assert_eq!(encoded["operation"], "create_minecraft");
         assert_eq!(encoded["spec"]["software"], "paper");
         assert!(encoded["spec"].get("custom_jar").is_none());
+        assert!(encoded["spec"].get("cpu_millis").is_none());
 
         let vrising = serde_json::to_value(BrokerRequest::CreateVRising {
             spec: VRisingCreateSpec {
                 name: "Castle".to_owned(),
                 memory_mb: 4_096,
+                cpu_millis: 0,
                 max_players: 40,
                 game_port: None,
                 query_port: None,
                 network_exposure: ServerNetworkExposure::Private,
+                list_on_browser: true,
                 start_on_boot: true,
                 wine_runtime_acknowledged: true,
             },
@@ -915,7 +962,25 @@ mod tests {
         .expect("serialize V Rising request");
         assert_eq!(vrising["operation"], "create_vrising");
         assert_eq!(vrising["spec"]["wine_runtime_acknowledged"], true);
+        assert_eq!(vrising["spec"]["list_on_browser"], true);
         assert!(vrising["spec"].get("game_port").is_none());
+        assert!(vrising["spec"].get("cpu_millis").is_none());
+
+        let cpu = serde_json::to_value(BrokerRequest::SetNativeCpu {
+            instance_id: "helix:test".to_owned(),
+            cpu_millis: 2_000,
+        })
+        .expect("serialize CPU request");
+        assert_eq!(cpu["operation"], "set_native_cpu");
+        assert_eq!(cpu["cpu_millis"], 2_000);
+
+        let listing = serde_json::to_value(BrokerRequest::SetNativeBrowserListing {
+            instance_id: "helix:test".to_owned(),
+            list_on_browser: false,
+        })
+        .expect("serialize listing request");
+        assert_eq!(listing["operation"], "set_native_browser_listing");
+        assert_eq!(listing["list_on_browser"], false);
 
         let boot = serde_json::to_value(BrokerRequest::SetNativeStartOnBoot {
             instance_id: "helix:test".to_owned(),
@@ -939,6 +1004,7 @@ mod tests {
                 software: MinecraftSoftware::Custom,
                 version: "1.21.8".to_owned(),
                 memory_mb: 4096,
+                cpu_millis: 0,
                 max_players: 20,
                 game_port: Some(25566),
                 network_exposure: ServerNetworkExposure::Private,
@@ -1226,6 +1292,7 @@ mod tests {
             spec: MinecraftModpackCreateSpec {
                 name: "Fabric Adventure".to_owned(),
                 memory_mb: 6144,
+                cpu_millis: 0,
                 max_players: 20,
                 game_port: Some(25_565),
                 network_exposure: ServerNetworkExposure::Private,
@@ -1427,14 +1494,16 @@ mod tests {
     }
 
     #[test]
-    fn vrising_create_spec_rejects_public_exposure_and_missing_wine_ack() {
+    fn vrising_create_spec_rejects_missing_wine_ack_and_accepts_public_udp() {
         let mut spec = VRisingCreateSpec {
             name: "Castle".to_owned(),
             memory_mb: 4_096,
+            cpu_millis: 0,
             max_players: 40,
             game_port: None,
             query_port: None,
             network_exposure: ServerNetworkExposure::Private,
+            list_on_browser: true,
             start_on_boot: true,
             wine_runtime_acknowledged: true,
         };
@@ -1443,8 +1512,11 @@ mod tests {
         assert!(spec.validate().unwrap_err().contains("runtime"));
         spec.wine_runtime_acknowledged = true;
         spec.network_exposure = ServerNetworkExposure::Public;
-        assert!(spec.validate().unwrap_err().contains("private"));
-        spec.network_exposure = ServerNetworkExposure::Private;
+        spec.validate().expect("public UDP is allowed for V Rising");
+        spec.cpu_millis = 100;
+        assert!(spec.validate().unwrap_err().contains("CPU"));
+        spec.cpu_millis = 2_000;
+        spec.validate().expect("two cores is a valid cap");
         spec.game_port = Some(9_876);
         spec.query_port = Some(9_876);
         assert!(spec.validate().unwrap_err().contains("different"));

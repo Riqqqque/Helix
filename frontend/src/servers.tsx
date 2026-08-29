@@ -26,6 +26,9 @@ import {
   sendConsoleCommand,
   setNativeStartOnBoot,
   setNativeMemory,
+  setNativeCpu,
+  setNativeBrowserListing,
+  setServerNetworkExposure,
   setServerBackupPolicy,
   pruneServerBackups,
   purgeTrashedServerBackup,
@@ -117,6 +120,12 @@ import {
 } from "./port-policy-api";
 import { Dialog } from "./modal";
 import { CopyButton } from "./copy-button";
+import {
+  cpuLimitOptions,
+  cpuLimitOptionsForCurrent,
+  formatCpuLimit,
+  cpuMillisFields,
+} from "./container-resources";
 import { ServerArtwork, ServerIconDialog } from "./server-artwork";
 import {
   consoleHistoryEntryKey,
@@ -865,14 +874,90 @@ export function publicInternetHint(
   kind: "minecraft" | "vrising" | "valheim" | "terraria",
   port: number,
   queryPort: number | null,
+  publicSetupConfirmed = false,
 ): string {
+  if (publicSetupConfirmed) {
+    if (kind === "vrising") {
+      return `Helix confirmed UPnP for UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`}. Direct Connect uses this public address. The in-game server list is a separate listing toggle.`;
+    }
+    if (kind === "valheim") {
+      return `Helix confirmed UPnP for UDP ${port}–${port + 2}. Direct Connect uses this public address.`;
+    }
+    return `Helix confirmed UPnP for TCP ${port}. Direct Connect uses this public address.`;
+  }
   if (kind === "vrising") {
-    return `Helix does not open this on the internet. Forward UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`} on your router if people should join from outside the LAN.`;
+    return `Direct Connect from the internet needs UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`} forwarded, or Helix public setup on this page. Friends can still join from the V Rising server list when listing is on.`;
   }
   if (kind === "valheim") {
-    return `Helix does not open this on the internet. Forward UDP ${port}–${port + 2} on your router if people should join from outside the LAN.`;
+    return `Direct Connect from the internet needs UDP ${port}–${port + 2} forwarded, or Helix public setup on this page.`;
   }
-  return `Helix does not open this on the internet. Forward TCP ${port} on your router if people should join from outside the LAN.`;
+  return `Direct Connect from the internet needs TCP ${port} forwarded, or Helix public setup when you create the server.`;
+}
+
+function CpuCapField({
+  value,
+  onChange,
+  logicalCores,
+  disabled,
+}: {
+  value: number;
+  onChange: (cpuMillis: number) => void;
+  logicalCores: number;
+  disabled?: boolean;
+}) {
+  return (
+    <label class="field">
+      <span>
+        CPU cap{" "}
+        <InfoTip text="Optional Docker CPU ceiling for this container. No extra cap lets it share the host with everything else." />
+      </span>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(Number(event.currentTarget.value))}
+      >
+        {cpuLimitOptions(logicalCores).map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function publicAccessCopy(
+  kind: "minecraft" | "vrising" | "valheim" | "terraria",
+  canManageNetwork: boolean,
+): { title: string; detail: string } {
+  if (!canManageNetwork) {
+    return {
+      title: "Set up public player access",
+      detail: "Requires network.firewall.write permission. The server can still be created for LAN or private-network access.",
+    };
+  }
+  if (kind === "vrising") {
+    return {
+      title: "Set up public Direct Connect",
+      detail: "After the server is online, Helix requests UDP UPnP for the game and query ports. The in-game server list is the separate listing checkbox. Listing can work without this.",
+    };
+  }
+  if (kind === "valheim") {
+    return {
+      title: "Set up public player access",
+      detail: "After the server is online, Helix requests UDP UPnP for the game port and the next two.",
+    };
+  }
+  if (kind === "terraria") {
+    return {
+      title: "Set up public player access",
+      detail: "After Terraria is online, Helix requests and verifies an exact TCP mapping from a compatible UPnP router. If UFW is active, Helix also creates a matching owned rule.",
+    };
+  }
+  return {
+    title: "Set up public player access",
+    detail: "After Minecraft is online, Helix will request and verify an exact TCP mapping from a compatible UPnP router. If UFW is active, Helix also creates a matching owned rule.",
+  };
 }
 
 function formatMemoryGiB(memoryMb: number): string {
@@ -1019,7 +1104,7 @@ function PortPoolDialog({
         {
           ranges: parsedRanges,
           ports: parsedPorts,
-          autoForwardOnCreate: game === "minecraft" ? autoForward : false,
+          autoForwardOnCreate: autoForward,
         },
         csrfToken,
       );
@@ -1131,31 +1216,33 @@ function PortPoolDialog({
           <small>Optional. These are tried before the ranges; duplicates are removed safely.</small>
         </label>
       </div>
-      {game === "minecraft" ? (
-        <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
-          <input
-            class="toggle-input"
-            type="checkbox"
-            checked={autoForward}
-            disabled={busy || policy === null || !canManageNetwork}
-            onChange={(event) => setAutoForward(event.currentTarget.checked)}
-          />
-          <span>
-            <strong>Default new Minecraft servers to public setup</strong>
-            <small>
-              {canManageNetwork
-                ? "The creation review still shows this choice. Helix will never enable UFW or overwrite an unowned router mapping."
-                : "Requires network.firewall.write permission."}
-            </small>
-          </span>
-        </label>
-      ) : (
-        <p class="dialog-intro">
-          {game === "terraria"
-            ? "Terraria public setup is chosen per server, not from this pool. Automatic create still stays on the private LAN unless you flip that later."
-            : `${game === "valheim" ? "Valheim" : "V Rising"} stays private in this Helix release. Helix does not offer UPnP for its UDP game ports.`}
-        </p>
-      )}
+      <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
+        <input
+          class="toggle-input"
+          type="checkbox"
+          checked={autoForward}
+          disabled={busy || policy === null || !canManageNetwork}
+          onChange={(event) => setAutoForward(event.currentTarget.checked)}
+        />
+        <span>
+          <strong>
+            {game === "minecraft"
+              ? "Default new Minecraft servers to public setup"
+              : game === "vrising"
+                ? "Default new V Rising servers to public Direct Connect"
+                : game === "valheim"
+                  ? "Default new Valheim servers to public setup"
+                  : "Default new Terraria servers to public setup"}
+          </strong>
+          <small>
+            {canManageNetwork
+              ? game === "vrising"
+                ? "Create still shows this choice. Listing on the in-game server list is separate. Helix will never enable UFW or overwrite an unowned router mapping."
+                : "The creation review still shows this choice. Helix will never enable UFW or overwrite an unowned router mapping."
+              : "Requires network.firewall.write permission."}
+          </small>
+        </span>
+      </label>
       <InlineError message={error} />
       <div class="dialog-actions">
         <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
@@ -1174,6 +1261,7 @@ function CreateServerDialog({
   onComplete,
   onSessionExpired,
   canManageNetwork,
+  logicalCores,
 }: {
   csrfToken: string;
   servers: ManagedServer[];
@@ -1181,6 +1269,7 @@ function CreateServerDialog({
   onComplete: () => Promise<void>;
   onSessionExpired: () => void;
   canManageNetwork: boolean;
+  logicalCores: number;
 }) {
   const [step, setStep] = useState<1 | 2>(1);
   const [mode, setMode] = useState<MinecraftCreateMode>("software");
@@ -1192,6 +1281,7 @@ function CreateServerDialog({
   const [customBrowserOpen, setCustomBrowserOpen] = useState(false);
   const [customJavaVersion, setCustomJavaVersion] = useState<17 | 21 | 25>(21);
   const [memory, setMemory] = useState(4096);
+  const [cpuMillis, setCpuMillis] = useState(0);
   const [players, setPlayers] = useState(20);
   const [port, setPort] = useState(() => nextMinecraftPort(servers));
   const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
@@ -1384,6 +1474,7 @@ function CreateServerDialog({
             project_id: modpack.projectId,
             version_id: modpack.versionId,
             provider: modpack.provider,
+            ...cpuMillisFields(cpuMillis),
           },
           csrfToken,
         );
@@ -1423,6 +1514,7 @@ function CreateServerDialog({
               java_version: customJavaVersion,
             },
           } : {}),
+          ...cpuMillisFields(cpuMillis),
         };
         const result = await createMinecraftServer(input, csrfToken);
         setJob({
@@ -1911,6 +2003,11 @@ function CreateServerDialog({
                 <option value="16384">16 GiB</option>
               </select>
             </label>
+            <CpuCapField
+              value={cpuMillis}
+              onChange={setCpuMillis}
+              logicalCores={logicalCores}
+            />
             <label class="field">
               <span>Maximum players</span>
               <input
@@ -1961,7 +2058,7 @@ function CreateServerDialog({
             <div>
               <dt>Resources</dt>
               <dd>
-                {memory / 1024} GiB · {players} players
+                {memory / 1024} GiB · {formatCpuLimit(cpuMillis)} · {players} players
               </dd>
             </div>
             <div>
@@ -2023,12 +2120,8 @@ function CreateServerDialog({
               onChange={(event) => setPublicAccess(event.currentTarget.checked)}
             />
             <span>
-              <strong>Set up public player access</strong>
-              <small>
-                {canManageNetwork
-                  ? "After Minecraft is online, Helix will request and verify an exact TCP mapping from a compatible UPnP router. If UFW is active, Helix also creates a matching owned rule."
-                  : "Requires network.firewall.write permission. The server can still be created for LAN or private-network access."}
-              </small>
+              <strong>{publicAccessCopy("minecraft", canManageNetwork).title}</strong>
+              <small>{publicAccessCopy("minecraft", canManageNetwork).detail}</small>
             </span>
           </label>
           <label class="check-row">
@@ -3448,6 +3541,91 @@ function AllocatedMemoryEditor({
   );
 }
 
+function AllocatedCpuEditor({
+  detail,
+  csrfToken,
+  canManageServers,
+  logicalCores,
+  onSaved,
+  onSessionExpired,
+}: {
+  detail: NativeServerDetail;
+  csrfToken: string;
+  canManageServers: boolean;
+  logicalCores: number;
+  onSaved: () => Promise<void> | void;
+  onSessionExpired: () => void;
+}) {
+  const [cpuMillis, setCpuMillis] = useState(detail.cpuLimitMillis);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    setCpuMillis(detail.cpuLimitMillis);
+  }, [detail.cpuLimitMillis]);
+  const dirty = cpuMillis !== detail.cpuLimitMillis;
+  const manageTitle = canManageServers
+    ? undefined
+    : "Requires games.manage permission";
+  const save = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await setNativeCpu(detail.id, cpuMillis, csrfToken);
+      setCpuMillis(result.cpuMillis);
+      if (result.changed) {
+        setNotice(
+          `CPU cap is now ${formatCpuLimit(result.cpuMillis)}. The container was rebound with that limit.`,
+        );
+        await onSaved();
+      }
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div class="allocated-memory-editor allocated-cpu-editor">
+      <label class="field">
+        <span>
+          CPU cap{" "}
+          <InfoTip text="Helix rebinds the published container when this changes so Docker --cpus actually applies." />
+        </span>
+        <select
+          value={cpuMillis}
+          disabled={!canManageServers || busy}
+          title={manageTitle}
+          onChange={(event) => setCpuMillis(Number(event.currentTarget.value))}
+        >
+          {cpuLimitOptionsForCurrent(logicalCores, cpuMillis).map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        class="button button--primary"
+        type="button"
+        disabled={!canManageServers || !dirty || busy}
+        title={manageTitle}
+        onClick={() => void save()}
+      >
+        {busy ? "Saving…" : "Save CPU"}
+      </button>
+      <InlineError message={error} />
+      {notice !== null && (
+        <p class="settings-port-note" role="status">
+          {notice}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function LogsPanel({
   detail,
   csrfToken,
@@ -4497,6 +4675,7 @@ function NativeServerPage({
   canManageBackups,
   canManageNetwork,
   hostInventory,
+  logicalCores,
   onBack,
   onRefresh,
   onSessionExpired,
@@ -4509,6 +4688,7 @@ function NativeServerPage({
   canManageBackups: boolean;
   canManageNetwork: boolean;
   hostInventory: HostInventory | null;
+  logicalCores: number;
   onBack: () => void;
   onRefresh: () => Promise<void>;
   onSessionExpired: () => void;
@@ -4525,6 +4705,11 @@ function NativeServerPage({
   const [restartSuccessRevision, setRestartSuccessRevision] = useState(0);
   const [bootBusy, setBootBusy] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [listingBusy, setListingBusy] = useState(false);
+  const [listingError, setListingError] = useState<string | null>(null);
+  const [listingNotice, setListingNotice] = useState<string | null>(null);
+  const [exposureBusy, setExposureBusy] = useState(false);
+  const [exposureError, setExposureError] = useState<string | null>(null);
   const detailLoad = useRef<Promise<void> | null>(null);
   const detailController = useRef<AbortController | null>(null);
   const load = useCallback((force = false): Promise<void> => {
@@ -4627,6 +4812,7 @@ function NativeServerPage({
     detail.kind,
     detail.gamePort,
     detail.queryPort,
+    (usesUdpJoin ? udpEvidence : tcpEvidence)?.externalReachability.state === "router_mapping_confirmed",
   );
   const updateStartOnBoot = async (enabled: boolean): Promise<void> => {
     setBootBusy(true);
@@ -4639,6 +4825,36 @@ function NativeServerPage({
       else setBootError(describeError(requestError));
     } finally {
       setBootBusy(false);
+    }
+  };
+  const updateListing = async (listOnBrowser: boolean): Promise<void> => {
+    setListingBusy(true);
+    setListingError(null);
+    setListingNotice(null);
+    try {
+      const result = await setNativeBrowserListing(detail.id, listOnBrowser, csrfToken);
+      if (result.restartRequired) {
+        setListingNotice("Restart the server for the listing change to take effect.");
+      }
+      await refresh();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setListingError(describeError(requestError));
+    } finally {
+      setListingBusy(false);
+    }
+  };
+  const updatePublicAccess = async (enabled: boolean): Promise<void> => {
+    setExposureBusy(true);
+    setExposureError(null);
+    try {
+      await setServerNetworkExposure(detail.id, enabled, csrfToken);
+      await refresh();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setExposureError(describeError(requestError));
+    } finally {
+      setExposureBusy(false);
     }
   };
   const tcpDiagnostic = portDiagnostic(tcpEvidence);
@@ -4819,6 +5035,57 @@ function NativeServerPage({
                     : `${tcpDiagnostic.detail} ${udpDiagnostic.detail}`}
                 </small>
               </div>
+              {(detail.kind === "vrising" || canManageNetwork) && (
+                <div class="join-setup-actions">
+                  {detail.kind === "vrising" && detail.browserListing !== null && (
+                    <label class={`check-row ${canManageServers ? "" : "is-disabled"}`}>
+                      <input
+                        class="toggle-input"
+                        type="checkbox"
+                        checked={detail.browserListing.listOnBrowser}
+                        disabled={listingBusy || !canManageServers}
+                        title={manageTitle}
+                        onChange={(event) => void updateListing(event.currentTarget.checked)}
+                      />
+                      <span>
+                        <strong>Show on the V Rising server list</strong>
+                        <small>
+                          Turns on EOS and Steam listing. While listed, the IP is hidden so friends can join from the in-game browser without a port-forward. Direct Connect to the public IP still needs UDP {detail.gamePort}{detail.queryPort === null ? "" : ` and ${detail.queryPort}`}.
+                        </small>
+                      </span>
+                    </label>
+                  )}
+                  {canManageNetwork &&
+                    (usesUdpJoin ? udpEvidence : tcpEvidence)?.externalReachability.state === "setup_available" && (
+                      <button
+                        class="button button--primary"
+                        type="button"
+                        disabled={exposureBusy}
+                        onClick={() => void updatePublicAccess(true)}
+                      >
+                        {exposureBusy ? "Setting up…" : publicAccessCopy(detail.kind, true).title}
+                      </button>
+                    )}
+                  {canManageNetwork &&
+                    (usesUdpJoin ? udpEvidence : tcpEvidence)?.externalReachability.state === "router_mapping_confirmed" && (
+                      <button
+                        class="button button--quiet"
+                        type="button"
+                        disabled={exposureBusy}
+                        onClick={() => void updatePublicAccess(false)}
+                      >
+                        {exposureBusy ? "Removing…" : "Remove public player access"}
+                      </button>
+                    )}
+                  <InlineError message={listingError} />
+                  <InlineError message={exposureError} />
+                  {listingNotice !== null && (
+                    <p class="settings-port-note" role="status">
+                      {listingNotice}
+                    </p>
+                  )}
+                </div>
+              )}
             </section>
             <div class="server-overview-grid">
               <section class="surface server-health">
@@ -4939,6 +5206,14 @@ function NativeServerPage({
                   onSaved={refresh}
                   onSessionExpired={onSessionExpired}
                 />
+                <AllocatedCpuEditor
+                  detail={detail}
+                  csrfToken={csrfToken}
+                  canManageServers={canManageServers}
+                  logicalCores={logicalCores}
+                  onSaved={refresh}
+                  onSessionExpired={onSessionExpired}
+                />
               </section>
             </div>
           </>
@@ -5045,13 +5320,23 @@ function NativeServerPage({
               </div>
             </div>
             {isReadyMarkerGame && (
-              <AllocatedMemoryEditor
-                detail={detail}
-                csrfToken={csrfToken}
-                canManageServers={canManageServers}
-                onSaved={refresh}
-                onSessionExpired={onSessionExpired}
-              />
+              <>
+                <AllocatedMemoryEditor
+                  detail={detail}
+                  csrfToken={csrfToken}
+                  canManageServers={canManageServers}
+                  onSaved={refresh}
+                  onSessionExpired={onSessionExpired}
+                />
+                <AllocatedCpuEditor
+                  detail={detail}
+                  csrfToken={csrfToken}
+                  canManageServers={canManageServers}
+                  logicalCores={logicalCores}
+                  onSaved={refresh}
+                  onSessionExpired={onSessionExpired}
+                />
+              </>
             )}
             <dl class="advanced-facts">
               <div>
@@ -5584,7 +5869,7 @@ export function NewServerChooser({
           <span>
             <strong>V Rising</strong>
             <small>
-              One click installs the dedicated server in an isolated container.
+              Dedicated server in an isolated Helix container. Show it on the in-game list, then start it.
             </small>
           </span>
           <em>Click to install</em>
@@ -5618,7 +5903,7 @@ export function NewServerChooser({
         <Icon name="info" size={16} />
         <span>
           <strong>Nothing is installed on the host OS</strong>
-          Helix downloads each dedicated server into a private container. Backups, start-on-boot, files, and logs work the same way across games.
+          Helix already runs each dedicated server in a private container. You pick RAM and an optional CPU cap; Helix handles the Docker limits. Backups, start-on-boot, files, and logs work the same way across games.
         </span>
       </div>
       <div class="dialog-actions">
@@ -5689,6 +5974,7 @@ function CreateVRisingDialog({
   csrfToken,
   servers,
   canManageNetwork,
+  logicalCores,
   onClose,
   onComplete,
   onSessionExpired,
@@ -5696,17 +5982,21 @@ function CreateVRisingDialog({
   csrfToken: string;
   servers: ManagedServer[];
   canManageNetwork: boolean;
+  logicalCores: number;
   onClose: () => void;
   onComplete: () => Promise<void>;
   onSessionExpired: () => void;
 }) {
   const [name, setName] = useState("");
   const [memory, setMemory] = useState(4096);
+  const [cpuMillis, setCpuMillis] = useState(0);
   const [players, setPlayers] = useState(40);
   const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
   const [gamePort, setGamePort] = useState(9876);
   const [queryPort, setQueryPort] = useState(9877);
   const [startOnBoot, setStartOnBoot] = useState(true);
+  const [listOnBrowser, setListOnBrowser] = useState(true);
+  const [publicAccess, setPublicAccess] = useState(false);
   const [job, setJob] = useState<BrokerJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -5721,6 +6011,7 @@ function CreateVRisingDialog({
           setGamePort(policy.nextAvailablePort);
           setQueryPort(policy.nextAvailablePort + 1);
         }
+        setPublicAccess(canManageNetwork && policy.autoForwardOnCreate);
       })
       .catch((requestError: unknown) => {
         if (controller.signal.aborted) return;
@@ -5728,7 +6019,7 @@ function CreateVRisingDialog({
         else setError(describeError(requestError));
       });
     return () => controller.abort();
-  }, [csrfToken, onSessionExpired]);
+  }, [canManageNetwork, csrfToken, onSessionExpired]);
 
   const polling = useJobPolling({
     job,
@@ -5749,6 +6040,9 @@ function CreateVRisingDialog({
         max_players: players,
         start_on_boot: startOnBoot,
         wine_runtime_acknowledged: true,
+        network_exposure: publicAccess ? "public" : "private",
+        list_on_browser: listOnBrowser,
+        ...cpuMillisFields(cpuMillis),
       };
       if (portMode === "manual") {
         payload.game_port = gamePort;
@@ -5802,7 +6096,7 @@ function CreateVRisingDialog({
       ) : (
         <>
           <p class="dialog-intro">
-            Helix installs everything the dedicated server needs in an isolated container. Click create. When you uninstall the last V Rising server, that runtime is removed so the host looks like it was never there.
+            Helix installs the dedicated server in an isolated container. Listing on the in-game browser is on by default. Public Direct Connect is optional and needs UDP game plus query forwarded, or Helix UPnP if you check that box. When you uninstall the last V Rising server, that runtime is removed so the host looks like it was never there.
           </p>
           <div class="form-grid">
             <label class="field field--wide">
@@ -5813,6 +6107,7 @@ function CreateVRisingDialog({
               <span>Memory (MiB)</span>
               <input type="number" min={2048} max={24576} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} />
             </label>
+            <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
             <label class="field">
               <span>Player limit</span>
               <input type="number" min={1} max={128} value={players} disabled={busy} onInput={(event) => setPlayers(Number(event.currentTarget.value))} />
@@ -5844,6 +6139,26 @@ function CreateVRisingDialog({
               <small>{START_WITH_HOST_CREATE_DETAIL}</small>
             </span>
           </label>
+          <label class="check-row">
+            <input class="toggle-input" type="checkbox" checked={listOnBrowser} disabled={busy} onChange={(event) => setListOnBrowser(event.currentTarget.checked)} />
+            <span>
+              <strong>Show on the V Rising server list</strong>
+              <small>Turns on EOS and Steam listing. Friends can join from the in-game browser. Hide IP stays on while listed, so Direct Connect to a public IP is separate.</small>
+            </span>
+          </label>
+          <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
+            <input
+              class="toggle-input"
+              type="checkbox"
+              checked={publicAccess}
+              disabled={busy || !canManageNetwork}
+              onChange={(event) => setPublicAccess(event.currentTarget.checked)}
+            />
+            <span>
+              <strong>{publicAccessCopy("vrising", canManageNetwork).title}</strong>
+              <small>{publicAccessCopy("vrising", canManageNetwork).detail}</small>
+            </span>
+          </label>
           <ServerFault
             message={error ?? (job?.error ?? null)}
             csrfToken={csrfToken}
@@ -5867,6 +6182,7 @@ function CreateValheimDialog({
   csrfToken,
   servers,
   canManageNetwork,
+  logicalCores,
   onClose,
   onComplete,
   onSessionExpired,
@@ -5874,19 +6190,39 @@ function CreateValheimDialog({
   csrfToken: string;
   servers: ManagedServer[];
   canManageNetwork: boolean;
+  logicalCores: number;
   onClose: () => void;
   onComplete: () => Promise<void>;
   onSessionExpired: () => void;
 }) {
   const [name, setName] = useState("");
   const [memory, setMemory] = useState(4096);
+  const [cpuMillis, setCpuMillis] = useState(0);
   const [players, setPlayers] = useState(10);
   const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
   const [gamePort, setGamePort] = useState(2456);
   const [startOnBoot, setStartOnBoot] = useState(true);
+  const [publicAccess, setPublicAccess] = useState(false);
   const [job, setJob] = useState<BrokerJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [portPolicy, setPortPolicy] = useState<GamePortPolicy | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getValheimPortPolicy(csrfToken, controller.signal)
+      .then((policy) => {
+        setPortPolicy(policy);
+        if (policy.nextAvailablePort !== null) setGamePort(policy.nextAvailablePort);
+        setPublicAccess(canManageNetwork && policy.autoForwardOnCreate);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (isSessionError(requestError)) onSessionExpired();
+        else setError(describeError(requestError));
+      });
+    return () => controller.abort();
+  }, [canManageNetwork, csrfToken, onSessionExpired]);
 
   const polling = useJobPolling({
     job,
@@ -5906,7 +6242,9 @@ function CreateValheimDialog({
         memory_mb: memory,
         max_players: players,
         start_on_boot: startOnBoot,
+        network_exposure: publicAccess ? "public" : "private",
         ...(portMode === "manual" ? { game_port: gamePort } : {}),
+        ...cpuMillisFields(cpuMillis),
       }, csrfToken);
       setJob({
         id: result.jobId,
@@ -5954,15 +6292,23 @@ function CreateValheimDialog({
         />
       ) : (
         <>
-          <p class="dialog-intro">Helix installs the Linux dedicated server in an isolated container. Public UPnP is not offered yet. Mods: put a BepInEx pack zip and plugin files in the server Files tab, then restart.</p>
+          <p class="dialog-intro">Helix installs the Linux dedicated server in an isolated container. Public UDP setup is optional. Mods: put a BepInEx pack zip and plugin files in the server Files tab, then restart.</p>
           <div class="form-grid">
             <label class="field field--wide"><span>Server name</span><input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} /></label>
             <label class="field"><span>Memory (MiB)</span><input type="number" min={1024} max={16384} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} /></label>
+            <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
             <label class="field"><span>Player limit</span><input type="number" min={1} max={64} value={players} disabled={busy} onInput={(event) => setPlayers(Number(event.currentTarget.value))} /></label>
-            <label class="field field--wide"><span>Ports</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Valheim pool</option><option value="manual">Specific UDP game port (uses +1 and +2 too)</option></select></label>
+            <label class="field field--wide"><span>Ports</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Valheim pool{portPolicy?.nextAvailablePort ? ` (next ${portPolicy.nextAvailablePort})` : ""}</option><option value="manual">Specific UDP game port (uses +1 and +2 too)</option></select></label>
             {portMode === "manual" && <label class="field"><span>Game UDP</span><input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} /></label>}
           </div>
           <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>{START_WITH_HOST_TITLE}</strong><small>{START_WITH_HOST_CREATE_DETAIL}</small></span></label>
+          <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
+            <input class="toggle-input" type="checkbox" checked={publicAccess} disabled={busy || !canManageNetwork} onChange={(event) => setPublicAccess(event.currentTarget.checked)} />
+            <span>
+              <strong>{publicAccessCopy("valheim", canManageNetwork).title}</strong>
+              <small>{publicAccessCopy("valheim", canManageNetwork).detail}</small>
+            </span>
+          </label>
           <ServerFault
             message={error ?? (job?.error ?? null)}
             csrfToken={csrfToken}
@@ -5984,6 +6330,7 @@ function CreateTerrariaDialog({
   csrfToken,
   servers,
   canManageNetwork,
+  logicalCores,
   onClose,
   onComplete,
   onSessionExpired,
@@ -5991,6 +6338,7 @@ function CreateTerrariaDialog({
   csrfToken: string;
   servers: ManagedServer[];
   canManageNetwork: boolean;
+  logicalCores: number;
   onClose: () => void;
   onComplete: () => Promise<void>;
   onSessionExpired: () => void;
@@ -5998,13 +6346,32 @@ function CreateTerrariaDialog({
   const [name, setName] = useState("");
   const [software, setSoftware] = useState<"vanilla" | "tmodloader">("vanilla");
   const [memory, setMemory] = useState(2048);
+  const [cpuMillis, setCpuMillis] = useState(0);
   const [players, setPlayers] = useState(8);
   const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
   const [gamePort, setGamePort] = useState(7777);
   const [startOnBoot, setStartOnBoot] = useState(true);
+  const [publicAccess, setPublicAccess] = useState(false);
   const [job, setJob] = useState<BrokerJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [portPolicy, setPortPolicy] = useState<GamePortPolicy | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getTerrariaPortPolicy(csrfToken, controller.signal)
+      .then((policy) => {
+        setPortPolicy(policy);
+        if (policy.nextAvailablePort !== null) setGamePort(policy.nextAvailablePort);
+        setPublicAccess(canManageNetwork && policy.autoForwardOnCreate);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (isSessionError(requestError)) onSessionExpired();
+        else setError(describeError(requestError));
+      });
+    return () => controller.abort();
+  }, [canManageNetwork, csrfToken, onSessionExpired]);
 
   const polling = useJobPolling({
     job,
@@ -6025,8 +6392,9 @@ function CreateTerrariaDialog({
         memory_mb: memory,
         max_players: players,
         start_on_boot: startOnBoot,
-        network_exposure: "private",
+        network_exposure: publicAccess ? "public" : "private",
         ...(portMode === "manual" ? { game_port: gamePort } : {}),
+        ...cpuMillisFields(cpuMillis),
       }, csrfToken);
       setJob({
         id: result.jobId,
@@ -6074,16 +6442,24 @@ function CreateTerrariaDialog({
         />
       ) : (
         <>
-          <p class="dialog-intro">Vanilla uses the official dedicated zip. tModLoader installs from Steam. Edit `serverconfig.txt` in Files. Place `.tmod` files in the mods folder, then restart.</p>
+          <p class="dialog-intro">Vanilla uses the official dedicated zip. tModLoader installs from Steam. Edit `serverconfig.txt` in Files. Place `.tmod` files in the mods folder, then restart. This runs in a Helix container.</p>
           <div class="form-grid">
             <label class="field field--wide"><span>Server name</span><input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} /></label>
             <label class="field field--wide"><span>Software</span><select value={software} disabled={busy} onChange={(event) => setSoftware(event.currentTarget.value as "vanilla" | "tmodloader")}><option value="vanilla">Vanilla dedicated</option><option value="tmodloader">tModLoader</option></select></label>
             <label class="field"><span>Memory (MiB)</span><input type="number" min={512} max={8192} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} /></label>
+            <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
             <label class="field"><span>Player limit</span><input type="number" min={1} max={255} value={players} disabled={busy} onInput={(event) => setPlayers(Number(event.currentTarget.value))} /></label>
-            <label class="field field--wide"><span>Port</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Terraria pool</option><option value="manual">Specific TCP port</option></select></label>
+            <label class="field field--wide"><span>Port</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Terraria pool{portPolicy?.nextAvailablePort ? ` (next ${portPolicy.nextAvailablePort})` : ""}</option><option value="manual">Specific TCP port</option></select></label>
             {portMode === "manual" && <label class="field"><span>Game TCP</span><input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} /></label>}
           </div>
           <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>{START_WITH_HOST_TITLE}</strong><small>{START_WITH_HOST_CREATE_DETAIL}</small></span></label>
+          <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
+            <input class="toggle-input" type="checkbox" checked={publicAccess} disabled={busy || !canManageNetwork} onChange={(event) => setPublicAccess(event.currentTarget.checked)} />
+            <span>
+              <strong>{publicAccessCopy("terraria", canManageNetwork).title}</strong>
+              <small>{publicAccessCopy("terraria", canManageNetwork).detail}</small>
+            </span>
+          </label>
           <ServerFault
             message={error ?? (job?.error ?? null)}
             csrfToken={csrfToken}
@@ -6152,6 +6528,7 @@ export function ServersPage({
     selectedId === null
       ? null
       : (servers.find((server) => server.id === selectedId) ?? null);
+  const logicalCores = data.overview.data?.cpu.logicalCores ?? 8;
   const loadRemoved = useCallback(async (): Promise<void> => {
     try {
       setRemoved(await getTrashedNativeServers(csrfToken));
@@ -6201,6 +6578,7 @@ export function ServersPage({
         canManageBackups={canManageBackups}
         canManageNetwork={canManageNetwork}
         hostInventory={data.inventory.data}
+        logicalCores={logicalCores}
         onBack={() => {
           window.location.hash = "#servers";
         }}
@@ -6486,6 +6864,7 @@ export function ServersPage({
           }}
           onSessionExpired={onSessionExpired}
           canManageNetwork={canManageNetwork}
+          logicalCores={logicalCores}
         />
       )}
       {creatingVRising && (
@@ -6493,6 +6872,7 @@ export function ServersPage({
           csrfToken={csrfToken}
           servers={servers}
           canManageNetwork={canManageNetwork}
+          logicalCores={logicalCores}
           onClose={() => setCreatingVRising(false)}
           onComplete={async () => {
             await data.refresh();
@@ -6506,6 +6886,7 @@ export function ServersPage({
           csrfToken={csrfToken}
           servers={servers}
           canManageNetwork={canManageNetwork}
+          logicalCores={logicalCores}
           onClose={() => setCreatingValheim(false)}
           onComplete={async () => {
             await data.refresh();
@@ -6519,6 +6900,7 @@ export function ServersPage({
           csrfToken={csrfToken}
           servers={servers}
           canManageNetwork={canManageNetwork}
+          logicalCores={logicalCores}
           onClose={() => setCreatingTerraria(false)}
           onComplete={async () => {
             await data.refresh();

@@ -3715,6 +3715,26 @@ textarea:focus {
   padding: 12px 16px 16px;
   border-top: 1px solid var(--line);
 }
+.join-setup-actions {
+  display: grid;
+  gap: 12px;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--line);
+}
+.join-card .join-setup-actions span {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+}
+.join-card .join-setup-actions small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.join-card .join-setup-actions strong {
+  font: inherit;
+  font-weight: 650;
+}
 .allocated-memory-editor {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3722,6 +3742,9 @@ textarea:focus {
   align-items: end;
   margin: 0;
   padding: 12px 16px 16px;
+  border-top: 1px solid var(--line);
+}
+.allocated-cpu-editor {
   border-top: 1px solid var(--line);
 }
 .allocated-memory-editor .field {

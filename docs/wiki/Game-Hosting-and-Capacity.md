@@ -23,7 +23,7 @@ server software, Java, mods/plugins, and configuration.
 - Host and game statistics use a configurable bounded refresh cadence.
 - Background creation, update, backup, and content jobs expose bounded status
   and logs.
-- Server memory, port, player limit, and start-on-boot choices are explicit.
+- Server memory, CPU cap, port, player limit, and start-on-boot choices are explicit.
 
 Current jobs are broker-lifetime state rather than a durable crash-persistent
 queue. Helix also does not auto-scale a Minecraft process, rewrite its memory or

@@ -8,6 +8,12 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Native create can cap container CPU as well as RAM. Overview can change either
+  later. `0` means no extra CPU cap.
+- V Rising can list on the in-game server browser (EOS and Steam, on by default)
+  and can request UDP public Direct Connect the same way Minecraft does for TCP.
+- Valheim and Terraria can request public setup at create. Overview can set up
+  or remove Helix-owned public access for native servers.
 - Creating a Minecraft, V Rising, Valheim, or Terraria server now shows a
   spinner, percent, and elapsed time while the download and first boot run.
   First Steam installs still often take 10–30 minutes; later creates reuse the

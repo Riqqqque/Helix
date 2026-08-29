@@ -281,8 +281,8 @@ Native-server public setup discovers only UPnP Internet Gateway Devices on the
 local link. SSDP responses are bounded; the description URL must use plain HTTP
 to the literal private/link-local IPv4 sender; redirects, DNS names,
 credentials, fragments, cross-origin control URLs, oversized HTTP/XML bodies,
-and XML document types are rejected. Helix checks for any existing TCP mapping
-before creation, verifies its exact internal address, port, enabled flag, and
+and XML document types are rejected. Helix checks for any existing TCP or UDP
+mapping before creation, verifies its exact internal address, port, enabled flag, and
 description afterward, and journals ownership. If AMP already has that port
 claimed, Helix names the AMP instance when it can and tells you to change the
 port in AMP (stop the instance, Configuration → Server Settings / Portals,
@@ -290,8 +290,9 @@ Apply). Helix does not rewrite AMP files or call AMP SetConfig. If the instance
 is gone and only a leftover UPnP mapping whose description starts with `AMP`
 remains, a separate confirmed release can delete that router mapping only.
 Removal of Helix-owned public access re-verifies
-that exact body and refuses drifted/unowned state. Only TCP is requested for
-Minecraft.
+that exact body and refuses drifted/unowned state. Minecraft and Terraria
+request TCP. V Rising requests UDP for the game and query ports. Valheim
+requests UDP for the game port and the next two.
 UFW is supplemented only if already active. A CGNAT/private/reserved WAN address
 is reported as blocked rather than public. Live router/UFW mutation testing is
 still a release gate and must use disposable rules and a controlled router.

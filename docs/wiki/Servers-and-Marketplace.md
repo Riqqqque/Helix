@@ -2,10 +2,10 @@
 
 ## Choosing a game
 
-Choose **New Server** and then a game. Minecraft is the current native Linux
-Java runtime. V Rising, Valheim, and Terraria install dedicated servers into
-isolated Helix containers. The chooser uses original Helix marks, not
-publisher artwork.
+Choose **New Server** and then a game. Native Minecraft, V Rising, Valheim, and
+Terraria all run in isolated Helix containers. Nothing is installed on the host
+OS. The chooser uses original Helix marks, not publisher artwork. Create lets
+you set RAM and an optional CPU cap; Helix applies those as Docker limits.
 
 The server list can be filtered to **Helix** (native servers only), Minecraft,
 V Rising, Valheim, Terraria, or imported Connections. Helix-native and imported
@@ -24,15 +24,22 @@ The host never receives Wine packages. That first image build writes Docker CLI
 state under Helix native data, not the execution backend’s home directory, so
 it works with helix-privd’s locked-down service.
 
-Create is one click after you pick a name, memory, and UDP ports. The create
-window keeps a spinner, a percent, and elapsed time while SteamCMD downloads
-and the server boots. First install often takes 10–30 minutes; later creates
-reuse the runtime and finish faster. Public UPnP is not offered. Allocated
-memory can be changed later from Overview. Player
+Create is one click after you pick a name, memory, an optional CPU cap, and UDP
+ports. **Show on the V Rising server list** is on by default. That writes
+`ListOnEOS`, `ListOnSteam`, and `HideIPAddress` in
+`save/Settings/ServerHostSettings.json`. Friends can join from the in-game
+browser through EOS without a port-forward. Direct Connect to a public IP is
+separate: it still needs UDP game plus query forwarded, or Helix public setup
+(UPnP for both UDP ports). You can change listing later on Overview; a running
+server needs a restart for that file to take effect.
+
+The create window keeps a spinner, a percent, and elapsed time while SteamCMD
+downloads and the server boots. First install often takes 10–30 minutes; later
+creates reuse the runtime and finish faster. Allocated memory and CPU cap can
+be changed later from Overview. Player
 counts are not queried. There is no RCON command console
 and no Modrinth marketplace. Backups, start-on-boot, files, and logs work the
-same way as Minecraft. Host settings live in `save/Settings/ServerHostSettings.json`
-under Files. Update restarts the container so SteamCMD runs again.
+same way as Minecraft. Update restarts the container so SteamCMD runs again.
 Uninstalling the last V Rising server removes the runtime image.
 
 When the last **active** V Rising server is removed, Helix deletes the runtime
@@ -42,9 +49,10 @@ This path is implemented and unvalidated. It is not publisher-supported.
 ## Native Valheim
 
 Helix builds `helix-valheim-runtime:1` and installs Steam dedicated app 896660.
-Create is private-LAN UDP: the game port plus the next two. The create window
-uses the same spinner, percent, and elapsed time as V Rising. Public UPnP is not
-offered. Allocated memory can be changed later from Overview. There is no RCON console. For mods, drop a BepInEx pack zip at
+Create is private-LAN UDP by default: the game port plus the next two. The create
+window uses the same spinner, percent, and elapsed time as V Rising. Optional
+public setup requests UDP UPnP for those three ports. Allocated memory and CPU
+cap can be changed later from Overview. There is no RCON console. For mods, drop a BepInEx pack zip at
 `/data/bepinex-pack.zip` and plugin files in `/data/plugins`, then restart.
 Uninstalling the last Valheim server removes that runtime image. Implemented and
 unvalidated.
@@ -54,8 +62,8 @@ unvalidated.
 Helix builds `helix-terraria-runtime:1`. Vanilla downloads the publisher
 dedicated zip. tModLoader uses Steam app 1281930. Create uses the same spinner,
 percent, and elapsed time as V Rising. Edit `serverconfig.txt` in
-Files. Drop `.tmod` files in `/data/mods` and restart. Allocated memory can be
-changed later from Overview. Public UPnP is not the default port-pool behavior.
+Files. Drop `.tmod` files in `/data/mods` and restart. Allocated memory and CPU
+cap can be changed later from Overview. Public TCP UPnP is optional at create.
 Implemented and unvalidated.
 
 ## Start on boot
@@ -74,7 +82,7 @@ The native creation wizard supports Paper, Purpur, Folia, Leaves, Fabric, Forge,
 NeoForge, Quilt, Pufferfish, Vanilla, and a guarded custom server JAR. The Minecraft version field loads published
 releases for the selected software, including an explicit Latest stable choice
 except for custom JARs. Paper, Folia, and Leaves omit experimental Minecraft
-versions that create would refuse. The wizard collects the name, software, Minecraft release, memory, player limit,
+versions that create would refuse. The wizard collects the name, software, Minecraft release, memory, optional CPU cap, player limit,
 automatic-pool or specific port, private/public player-access choice,
 start-after-boot choice, and EULA acknowledgement. While create runs, that
 window shows a spinner, percent, and elapsed time. Paper, Purpur, Folia,
@@ -124,8 +132,9 @@ servers stay as an em dash. Imported AMP servers still use AMP’s TPS metric.
 Settings mark fields that need a restart and keep a pending-restart state after
 save. The game port can be changed there; Helix rebinds the published container
 immediately, skips ports AMP already has claimed, and removes public access on
-the old port. Allocated memory can be changed from Settings or Overview; Helix
-rebinds the container so Docker and Minecraft `-Xmx` both pick up the new limit.
+the old port. Allocated memory and CPU cap can be changed from Overview; Helix
+rebinds the container so Docker, and Minecraft `-Xmx` for RAM, pick up the new
+limits.
 
 Removing a native server stops and removes its exact container, then moves its
 managed data into recoverable trash. The Removed section can restore it before
@@ -218,14 +227,16 @@ dashboard.
 Each native detail Overview shows a LAN address, a separately detected Tailscale
 address when present, and the public IP plus the game port when Helix can see a
 WAN address. That public row is the address people would use from the internet.
-**Copy** on those rows flips to **Copied** so you can tell it landed. Helix does
-not set up router forwarding from Overview. If players should join
-from outside the LAN, port-forward the game port on the router: TCP for
-Minecraft and Terraria, UDP game plus query for V Rising, and UDP
-`game` through `game+2` for Valheim.
+**Copy** on those rows flips to **Copied** so you can tell it landed. Overview
+can request or remove Helix public setup (UPnP plus a matching UFW rule when
+UFW is already active). Manual port-forward still works: TCP for Minecraft and
+Terraria, UDP game plus query for V Rising, and UDP `game` through `game+2` for
+Valheim.
 
-Minecraft create can still request UPnP public access on the same private IPv4
-gateway and refuses to overwrite an existing router rule.
+Minecraft, V Rising, Valheim, and Terraria create can request that same UPnP
+public access on the private IPv4 gateway and refuse to overwrite an existing
+router rule. V Rising listing on the in-game browser is separate from Direct
+Connect.
 
 If Helix says AMP already has a port claimed, it is refusing to steal a number
 AMP still lists. Open AMP (the error card has a link when Helix can see the
@@ -242,11 +253,10 @@ forward only. It does not stop AMP or rewrite AMP files. Helix-owned public
 access on that port is removed from the Helix server instead.
 
 Change the Helix game port in Settings if you want Helix to use a different
-number. Public setup requests one TCP mapping, verifies the exact internal
-IP/port/description returned by the router, and journals ownership. If UFW is
-already active, Helix also adds one exact owned TCP rule; it never turns UFW on
-as a side effect. V Rising stays private at create; Helix does not offer UPnP
-for its UDP game and query ports.
+number. Public setup requests the exact TCP or UDP mappings for that game,
+verifies the internal IP/port/description returned by the router, and journals
+ownership. If UFW is already active, Helix also adds matching owned rules; it
+never turns UFW on as a side effect.
 
 A router-confirmed mapping is not the same as an outside test. Helix labels it
 that way and recommends testing from cellular or another network. A CGNAT or
@@ -266,6 +276,6 @@ total capacity, assigned ports, and the next available candidate.
 
 The Minecraft public-setup default only preselects the visible creation choice.
 A public request still requires `network.firewall.write`; failure to configure
-the router does not roll back an otherwise healthy new Minecraft server, and the
-creation result points back to the Join section for a safe retry. V Rising
-cannot enable that default.
+the router does not roll back an otherwise healthy new server, and the
+creation result points back to the Join section for a safe retry. V Rising,
+Valheim, and Terraria have the same optional default.

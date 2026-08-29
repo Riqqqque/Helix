@@ -17,7 +17,9 @@ by default when you create a server. Owner setup can skip the Servers page and S
 later.
 
 V Rising installs the official dedicated server into an isolated Helix
-container; the host never receives Wine packages.
+container; the host never receives Wine packages. New servers list on the
+in-game browser by default. Direct Connect to a public IP is optional and needs
+the UDP game and query ports.
 
 AMP integration is a bridge to a separate loopback AMP API. Helix may show and
 invoke the AMP actions it understands, including idle/sleep versus actually

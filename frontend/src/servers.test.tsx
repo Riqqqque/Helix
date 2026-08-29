@@ -300,11 +300,12 @@ describe('Servers route', () => {
     expect(allocatedMemoryOptions('minecraft', 3072)).toContain(3072);
   });
 
-  it('tells operators to forward the public game port themselves', () => {
-    expect(publicInternetHint('minecraft', 25565, null)).toContain('Forward TCP 25565');
-    expect(publicInternetHint('terraria', 7777, null)).toContain('Forward TCP 7777');
+  it('tells operators how public Direct Connect still needs the game ports', () => {
+    expect(publicInternetHint('minecraft', 25565, null)).toContain('TCP 25565');
+    expect(publicInternetHint('terraria', 7777, null)).toContain('TCP 7777');
     expect(publicInternetHint('vrising', 9876, 9877)).toContain('UDP 9876 and 9877');
     expect(publicInternetHint('valheim', 2456, null)).toContain('UDP 2456–2458');
+    expect(publicInternetHint('vrising', 9876, 9877, true)).toContain('UPnP');
   });
 
   it('points Join port conflicts at Settings and names AMP mappings', () => {

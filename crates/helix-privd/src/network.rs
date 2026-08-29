@@ -76,6 +76,42 @@ pub struct GamePortMapping {
     pub manager: String,
     pub port: u16,
     pub running: bool,
+    pub extra_ports: Vec<u16>,
+    pub protocol: FirewallProtocol,
+    pub kind: String,
+}
+
+pub fn exposure_ports(
+    kind: &str,
+    game_port: u16,
+    query_port: Option<u16>,
+) -> (FirewallProtocol, Vec<u16>) {
+    match kind {
+        "vrising" => (
+            FirewallProtocol::Udp,
+            query_port
+                .into_iter()
+                .filter(|port| *port != game_port)
+                .collect(),
+        ),
+        "valheim" => (
+            FirewallProtocol::Udp,
+            vec![game_port.saturating_add(1), game_port.saturating_add(2)],
+        ),
+        _ => (FirewallProtocol::Tcp, Vec::new()),
+    }
+}
+
+impl GamePortMapping {
+    fn mapped_ports(&self) -> Vec<u16> {
+        let mut ports = vec![self.port];
+        for port in &self.extra_ports {
+            if *port >= 1_024 && !ports.contains(port) {
+                ports.push(*port);
+            }
+        }
+        ports
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -205,10 +241,14 @@ struct ServerExposureRecord {
     instance_id: String,
     port: u16,
     protocol: FirewallProtocol,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    extra_ports: Vec<u16>,
     local_ip: Ipv4Addr,
     external_ip: Ipv4Addr,
     mapping_description: String,
     firewall_rule_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    extra_firewall_rule_ids: Vec<String>,
     created_at_unix_ms: u64,
     verified_at_unix_ms: u64,
 }
@@ -283,7 +323,11 @@ impl NetworkManager {
         let game_port_rows = game_ports
             .iter()
             .flat_map(|mapping| {
-                ["tcp", "udp"].into_iter().map(|protocol| {
+                let protocols: &[&str] = match mapping.kind.as_str() {
+                    "vrising" | "valheim" => &["udp"],
+                    _ => &["tcp", "udp"],
+                };
+                protocols.iter().copied().map(|protocol| {
                     let listening = listeners.iter().any(|listener| {
                         listener.protocol == protocol && listener.port == mapping.port
                     });
@@ -305,9 +349,9 @@ impl NetworkManager {
                         None
                     };
                     let exposure = exposure_records.get(&mapping.instance_id).filter(|record| {
-                        protocol == "tcp"
-                            && record.port == mapping.port
-                            && record.protocol == FirewallProtocol::Tcp
+                        protocol == record.protocol.as_str()
+                            && (record.port == mapping.port
+                                || record.extra_ports.contains(&mapping.port))
                     });
                     let external_reachability = if let Some(record) = exposure {
                         json!({
@@ -318,9 +362,15 @@ impl NetworkManager {
                             "external_ip": record.external_ip,
                             "join_address": format_join_address(record.external_ip, record.port),
                             "verified_at_unix_ms": record.verified_at_unix_ms,
-                            "note": "The router confirmed Helix's exact TCP mapping. Helix has not tested this address from a separate external network."
+                            "note": format!(
+                                "The router confirmed Helix's exact {} mapping. Helix has not tested this address from a separate external network.",
+                                record.protocol.soap_name()
+                            )
                         })
-                    } else if protocol == "udp" {
+                    } else if protocol == "udp"
+                        && mapping.kind != "vrising"
+                        && mapping.kind != "valheim"
+                    {
                         json!({
                             "state": "not_requested",
                             "reachable": Value::Null,
@@ -603,9 +653,11 @@ impl NetworkManager {
             "automatic public access is available only for Helix-owned servers".to_owned()
         })?;
         validate_rule_id(id)?;
-        if mapping.port < 1_024 {
+        let mapped_ports = mapping.mapped_ports();
+        if mapped_ports.iter().any(|port| *port < 1_024) {
             return Err("the server game port is invalid".to_owned());
         }
+        let soap = mapping.protocol.soap_name();
         let _exposure = self
             .exposure_mutation
             .lock()
@@ -613,29 +665,37 @@ impl NetworkManager {
         let path = self.exposure_record_path(id)?;
         if !enabled {
             let record = read_exposure_record(&path, &mapping.instance_id)?;
-            if record.port != mapping.port || record.protocol != FirewallProtocol::Tcp {
+            if record.port != mapping.port || record.protocol != mapping.protocol {
                 return Err("the protected router mapping record does not match this server; nothing was removed".to_owned());
             }
             let gateway = self.router_snapshot(true)?;
-            if gateway.local_ip != record.local_ip
-                || !gateway.verify_tcp_mapping(record.port, &record.mapping_description)?
-            {
+            if gateway.local_ip != record.local_ip {
                 return Err("the router no longer reports the exact Helix-owned mapping; nothing was removed".to_owned());
             }
-            gateway.delete_tcp_mapping(record.port)?;
-            if gateway
-                .verify_tcp_mapping(record.port, &record.mapping_description)
-                .unwrap_or(false)
-            {
-                return Err("the router still reports the Helix mapping after deletion".to_owned());
+            for port in record_mapped_ports(&record) {
+                let description = exposure_mapping_description(id, record.protocol, port);
+                if !gateway.verify_mapping(port, soap, &description)? {
+                    return Err("the router no longer reports the exact Helix-owned mapping; nothing was removed".to_owned());
+                }
+            }
+            for port in record_mapped_ports(&record) {
+                let description = exposure_mapping_description(id, record.protocol, port);
+                gateway.delete_mapping(port, soap)?;
+                if gateway.verify_mapping(port, soap, &description).unwrap_or(false) {
+                    return Err("the router still reports the Helix mapping after deletion".to_owned());
+                }
             }
             let mut firewall_warning = None;
-            if let Some(rule_id) = record.firewall_rule_id.as_deref()
-                && let Err(error) = self.delete_rule(rule_id)
-            {
-                firewall_warning = Some(format!(
-                    "the router mapping was removed, but the Helix UFW rule still needs attention: {error}"
-                ));
+            let mut rule_ids = record.extra_firewall_rule_ids.clone();
+            if let Some(rule_id) = record.firewall_rule_id.clone() {
+                rule_ids.insert(0, rule_id);
+            }
+            for rule_id in rule_ids {
+                if let Err(error) = self.delete_rule(&rule_id) {
+                    firewall_warning = Some(format!(
+                        "the router mapping was removed, but the Helix UFW rule still needs attention: {error}"
+                    ));
+                }
             }
             remove_record_durable(&path)?;
             self.invalidate_router_cache();
@@ -655,10 +715,16 @@ impl NetworkManager {
         if path.exists() {
             let record = read_exposure_record(&path, &mapping.instance_id)?;
             let gateway = self.router_snapshot(true)?;
-            if record.port == mapping.port
+            let matches = record.port == mapping.port
+                && record.protocol == mapping.protocol
                 && gateway.local_ip == record.local_ip
-                && gateway.verify_tcp_mapping(record.port, &record.mapping_description)?
-            {
+                && record_mapped_ports(&record).into_iter().all(|port| {
+                    let description = exposure_mapping_description(id, record.protocol, port);
+                    gateway
+                        .verify_mapping(port, soap, &description)
+                        .unwrap_or(false)
+                });
+            if matches {
                 return Ok(exposure_result(
                     mapping,
                     &record,
@@ -670,8 +736,10 @@ impl NetworkManager {
             return Err("a protected public-access record exists, but the router mapping has drifted; Helix did not overwrite it".to_owned());
         }
 
-        if amp_claimed_ports.contains(&mapping.port) {
-            return Err(crate::amp::amp_port_claimed_message(mapping.port));
+        for port in &mapped_ports {
+            if amp_claimed_ports.contains(port) {
+                return Err(crate::amp::amp_port_claimed_message(*port));
+            }
         }
 
         let gateway = self.router_snapshot(true)?;
@@ -689,56 +757,97 @@ impl NetworkManager {
                 ExternalAddressKind::Public => unreachable!("public handled above"),
             });
         }
-        let description = format!("Helix Minecraft {}", &id[..8]);
-        if let Some(existing) = gateway.tcp_mapping_description(mapping.port)? {
-            if crate::amp::amp_router_mapping_description(&existing) {
-                return Err(crate::amp::leftover_amp_router_mapping_message(
-                    mapping.port,
-                ));
+        for port in &mapped_ports {
+            if let Some(existing) = gateway.mapping_description(*port, soap)? {
+                if mapping.protocol == FirewallProtocol::Tcp
+                    && crate::amp::amp_router_mapping_description(&existing)
+                {
+                    return Err(crate::amp::leftover_amp_router_mapping_message(*port));
+                }
+                return Err(unowned_router_mapping_message(*port, soap));
             }
-            return Err(unowned_router_mapping_message(mapping.port));
         }
-        gateway.add_tcp_mapping(mapping.port, &description)?;
-        if !gateway.verify_tcp_mapping(mapping.port, &description)? {
-            return Err(
-                "the router accepted the request but did not return the exact Helix mapping; Helix did not delete an unverified router rule"
-                    .to_owned(),
-            );
+        let mut added = Vec::new();
+        for port in &mapped_ports {
+            let description = exposure_mapping_description(id, mapping.protocol, *port);
+            if let Err(error) = gateway.add_mapping(*port, soap, &description) {
+                for added_port in added.iter().rev() {
+                    let _ = gateway.delete_mapping(*added_port, soap);
+                }
+                return Err(error);
+            }
+            if !gateway
+                .verify_mapping(*port, soap, &description)
+                .unwrap_or(false)
+            {
+                let _ = gateway.delete_mapping(*port, soap);
+                for added_port in added.iter().rev() {
+                    let _ = gateway.delete_mapping(*added_port, soap);
+                }
+                return Err(
+                    "the router accepted the request but did not return the exact Helix mapping; Helix did not keep an unverified router rule"
+                        .to_owned(),
+                );
+            }
+            added.push(*port);
         }
 
         let firewall = self.ufw_snapshot()?;
         let mut firewall_rule_id = None;
+        let mut extra_firewall_rule_ids = Vec::new();
+        let rollback_router = || {
+            for port in added.iter().rev() {
+                let _ = gateway.delete_mapping(*port, soap);
+            }
+        };
         let firewall_state = if firewall.installed && firewall.error.is_none() && firewall.active {
-            match self.create_rule(FirewallRuleSpec {
-                name: format!("{} public server", mapping.name),
-                description: format!(
-                    "TCP game traffic for {} on port {}",
-                    mapping.name, mapping.port
-                ),
-                protocol: FirewallProtocol::Tcp,
-                port_start: mapping.port,
-                port_end: mapping.port,
-            }) {
-                Ok(value) => {
-                    firewall_rule_id = value
-                        .get("rule_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                    "helix_rule_verified"
-                }
-                Err(error) => {
-                    let _ = gateway.delete_tcp_mapping(mapping.port);
-                    return Err(format!(
-                        "the router mapping was rolled back because the active host firewall rule could not be verified: {error}"
-                    ));
+            let mut created = Vec::new();
+            let mut failed = None;
+            for (index, port) in mapped_ports.iter().enumerate() {
+                match self.create_rule(FirewallRuleSpec {
+                    name: format!("{} public {}", mapping.name, port),
+                    description: format!(
+                        "{} game traffic for {} on port {}",
+                        mapping.protocol.soap_name(),
+                        mapping.name,
+                        port
+                    ),
+                    protocol: mapping.protocol,
+                    port_start: *port,
+                    port_end: *port,
+                }) {
+                    Ok(value) => {
+                        if let Some(rule_id) = value.get("rule_id").and_then(Value::as_str) {
+                            created.push(rule_id.to_owned());
+                            if index == 0 {
+                                firewall_rule_id = Some(rule_id.to_owned());
+                            } else {
+                                extra_firewall_rule_ids.push(rule_id.to_owned());
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        failed = Some(error);
+                        break;
+                    }
                 }
             }
+            if let Some(error) = failed {
+                for rule_id in created {
+                    let _ = self.delete_rule(&rule_id);
+                }
+                rollback_router();
+                return Err(format!(
+                    "the router mapping was rolled back because the active host firewall rule could not be verified: {error}"
+                ));
+            }
+            "helix_rule_verified"
         } else if firewall.installed && firewall.error.is_none() {
             "ufw_inactive_not_blocking"
         } else if !firewall.installed {
             "ufw_unavailable"
         } else {
-            let _ = gateway.delete_tcp_mapping(mapping.port);
+            rollback_router();
             return Err("the router mapping was rolled back because the host firewall state could not be verified".to_owned());
         };
         let now = now_unix_ms();
@@ -746,18 +855,23 @@ impl NetworkManager {
             schema_version: 1,
             instance_id: mapping.instance_id.clone(),
             port: mapping.port,
-            protocol: FirewallProtocol::Tcp,
+            protocol: mapping.protocol,
+            extra_ports: mapping.extra_ports.clone(),
             local_ip: gateway.local_ip,
             external_ip: gateway.external_ip,
-            mapping_description: description,
+            mapping_description: exposure_mapping_description(id, mapping.protocol, mapping.port),
             firewall_rule_id: firewall_rule_id.clone(),
+            extra_firewall_rule_ids: extra_firewall_rule_ids.clone(),
             created_at_unix_ms: now,
             verified_at_unix_ms: now,
         };
         if let Err(error) = write_exposure_record(&path, &record) {
-            let _ = gateway.delete_tcp_mapping(mapping.port);
+            rollback_router();
             if let Some(rule_id) = firewall_rule_id.as_deref() {
                 let _ = self.delete_rule(rule_id);
+            }
+            for rule_id in extra_firewall_rule_ids {
+                let _ = self.delete_rule(&rule_id);
             }
             return Err(format!(
                 "public access was rolled back because its protected record could not be saved: {error}"
@@ -2176,7 +2290,7 @@ fn exposure_result(
         "instance_id": mapping.instance_id,
         "enabled": true,
         "reused": reused,
-        "protocol": "tcp",
+        "protocol": record.protocol.as_str(),
         "port": record.port,
         "private_ipv4": record.local_ip,
         "private_join_address": format_join_address(record.local_ip, record.port),
@@ -2189,20 +2303,42 @@ fn exposure_result(
             "tested_from_external_network": false,
             "router_mapping_verified": true,
             "verified_at_unix_ms": record.verified_at_unix_ms,
-            "note": "The router confirmed Helix's exact TCP mapping. Test from a separate external network before treating it as end-to-end verified."
+            "note": format!(
+                "The router confirmed Helix's exact {} mapping. Test from a separate external network before treating it as end-to-end verified.",
+                record.protocol.soap_name()
+            )
         }
     })
 }
 
-fn unowned_router_mapping_message(port: u16) -> String {
+fn unowned_router_mapping_message(port: u16, protocol: &str) -> String {
     format!(
-        "router TCP port {port} already has a mapping; Helix will not overwrite an unowned router rule"
+        "router {protocol} port {port} already has a mapping; Helix will not overwrite an unowned router rule"
     )
+}
+
+fn exposure_mapping_description(id: &str, protocol: FirewallProtocol, port: u16) -> String {
+    let short = &id[..id.len().min(8)];
+    match protocol {
+        FirewallProtocol::Tcp => format!("Helix Minecraft {short}"),
+        FirewallProtocol::Udp => format!("Helix UDP {short} {port}"),
+    }
+}
+
+fn record_mapped_ports(record: &ServerExposureRecord) -> Vec<u16> {
+    let mut ports = vec![record.port];
+    for port in &record.extra_ports {
+        if *port >= 1_024 && !ports.contains(port) {
+            ports.push(*port);
+        }
+    }
+    ports
 }
 
 fn write_exposure_record(path: &Path, record: &ServerExposureRecord) -> Result<(), String> {
     if record.schema_version != 1
         || record.port < 1_024
+        || record.extra_ports.iter().any(|port| *port < 1_024)
         || !record.instance_id.starts_with("helix:")
         || record.mapping_description.is_empty()
         || record.mapping_description.len() > 64
@@ -2254,8 +2390,8 @@ fn read_exposure_record(path: &Path, instance_id: &str) -> Result<ServerExposure
     .map_err(|_| "the Helix public-access record is invalid".to_owned())?;
     if record.schema_version != 1
         || record.instance_id != instance_id
-        || record.protocol != FirewallProtocol::Tcp
         || record.port < 1_024
+        || record.extra_ports.iter().any(|port| *port < 1_024)
         || record.mapping_description.is_empty()
         || record.mapping_description.len() > 64
     {
@@ -2474,6 +2610,19 @@ fn default_mutation_cooldown_seconds() -> u8 {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+
+    #[test]
+    fn vrising_and_valheim_expose_udp_query_ports() {
+        let (protocol, extra) = exposure_ports("vrising", 9_876, Some(9_877));
+        assert_eq!(protocol, FirewallProtocol::Udp);
+        assert_eq!(extra, vec![9_877]);
+        let (protocol, extra) = exposure_ports("valheim", 2_456, None);
+        assert_eq!(protocol, FirewallProtocol::Udp);
+        assert_eq!(extra, vec![2_457, 2_458]);
+        let (protocol, extra) = exposure_ports("minecraft", 25_565, None);
+        assert_eq!(protocol, FirewallProtocol::Tcp);
+        assert!(extra.is_empty());
+    }
 
     #[derive(Default)]
     struct MockRunner {
@@ -2855,7 +3004,7 @@ mod tests {
             "AMP already has port 25566 claimed"
         );
         assert_eq!(
-            unowned_router_mapping_message(25_566),
+            unowned_router_mapping_message(25_566, "TCP"),
             "router TCP port 25566 already has a mapping; Helix will not overwrite an unowned router rule"
         );
         assert!(crate::amp::amp_router_mapping_description(

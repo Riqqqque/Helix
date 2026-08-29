@@ -63,7 +63,9 @@ boundary.
 Helix-native Minecraft instances run in Docker containers managed by the
 broker. Current native install paths cover Paper, Purpur, Folia, Leaves, Fabric, and
 Vanilla. V Rising uses a separate Helix-owned isolated runtime image rather than
-installing Wine on the host. The manager provides creation, lifecycle actions,
+installing Wine on the host. New V Rising servers list on the in-game browser
+by default. Direct Connect to a public IP still needs the UDP game and query
+ports. The manager provides creation, lifecycle actions,
 settings where they exist, files, performance, console or logs, updates,
 backups, restore, a start-after-boot choice, and compatible
 Modrinth or CurseForge content where the selected software supports it. Each server can use a
