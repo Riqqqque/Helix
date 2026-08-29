@@ -7,20 +7,21 @@ import {
 } from './use-dashboard-preferences';
 
 const defaults: DashboardPreferences = {
-    navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands'],
+    navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands', 'globe'],
   metricsRefreshMs: 1_000,
   homeWidgets: defaultHomeWidgets.map((widget) => ({ ...widget })),
   homeTemplates: defaultHomeTemplates.map((template) => ({ ...template, widgets: template.widgets.map((widget) => ({ ...widget })) })),
   activeHomeId: 'home-main',
   colors: { accent: '', text: '', surface: '' },
   serversEnabled: true,
+  hiddenPages: ['globe'],
 };
 
 describe('dashboard preference reconciliation', () => {
   it('never migrates browser defaults over an established server revision', () => {
     expect(shouldMigrateLocalPreferences(8, {
       ...defaults,
-      navigationOrder: ['servers', 'overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'hooks', 'strands'],
+      navigationOrder: ['servers', 'overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'hooks', 'strands', 'globe'],
     })).toBe(false);
   });
 
@@ -38,7 +39,7 @@ describe('dashboard preference reconciliation', () => {
   it('rebases only fields changed by this browser after a CAS conflict', () => {
     const remote: DashboardPreferences = {
       ...defaults,
-      navigationOrder: ['home', 'overview', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands'],
+      navigationOrder: ['home', 'overview', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands', 'globe'],
     };
     const local: DashboardPreferences = {
       ...defaults,

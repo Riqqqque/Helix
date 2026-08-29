@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
+import type { ComponentType } from 'preact';
 import type { HostInventory, ManagedServer } from './control-api';
 import { calculatePercent, formatBytes, formatDuration, formatPercent } from './format';
 import {
@@ -20,9 +21,11 @@ import {
   nextHomeWidgetHeight,
   nextHomeWidgetSize,
   normalizeShortcutUrl,
+  parseGlobeWidgetConfiguration,
   parseNoteWidgetConfiguration,
   parseWeatherWidgetConfiguration,
   reorderHomeWidgets,
+  serializeGlobeWidgetConfiguration,
   serializeNoteWidgetConfiguration,
   serializeWeatherWidgetConfiguration,
   type HomeTemplate,
@@ -40,6 +43,8 @@ import type { SystemOverview } from './types';
 import { getWeatherForecast, type WeatherForecast } from './weather-api';
 import { StrandFrame } from './strand-frame';
 import { listStrands, type StrandSummary } from './strands-api';
+import { getGlobeSnapshot, type GlobeSnapshot } from './globe-api';
+import { ApiError } from './api';
 
 interface HomeLiveData {
   overview: SystemOverview | null;
@@ -71,6 +76,7 @@ const widgetIcons: Record<HomeWidgetKind, IconName> = {
   graphs: 'activity',
   docker: 'host',
   strand: 'strands',
+  globe: 'globe',
 };
 
 function ShortcutMark({ name, url, icon, size = 22 }: { name: string; url: string; icon?: string | null; size?: number }) {
@@ -97,6 +103,7 @@ function makeWidget(kind: HomeWidgetKind): HomeWidget {
     graphs: { size: 'wide', height: 'medium', title: 'Live graphs', content: '', url: '', color: '', icon: '' },
     docker: { size: 'wide', height: 'tall', title: 'Docker', content: '', url: '', color: '', icon: '' },
     strand: { size: 'wide', height: 'tall', title: 'Strand', content: '', url: '', color: '', icon: '' },
+    globe: { size: 'wide', height: 'tall', title: 'Globe', content: serializeGlobeWidgetConfiguration({ version: 1, flow: false }), url: '', color: '', icon: '' },
   };
   return { id: newHomeWidgetId(kind), kind, ...defaults[kind] };
 }
@@ -436,6 +443,88 @@ function StrandHomeWidget({ widget, editing, onChange, csrfToken, onSessionExpir
   );
 }
 
+function LazyGlobeMap(props: { snapshot: GlobeSnapshot; flow: boolean; compact?: boolean }) {
+  const [Map, setMap] = useState<ComponentType<{ snapshot: GlobeSnapshot; flow: boolean; compact?: boolean }> | null>(null);
+  useEffect(() => {
+    let live = true;
+    void import('./globe-map').then((module) => {
+      if (live) setMap(() => module.GlobeMap);
+    });
+    return () => { live = false; };
+  }, []);
+  if (Map === null) return <div class="home-widget__empty">Loading map…</div>;
+  return <Map {...props} />;
+}
+
+function GlobeHomeWidget({
+  widget,
+  editing,
+  onChange,
+  csrfToken,
+  onSessionExpired,
+}: {
+  widget: HomeWidget;
+  editing: boolean;
+  onChange: (patch: Partial<HomeWidget>) => void;
+  csrfToken: string;
+  onSessionExpired: () => void;
+}) {
+  const configuration = parseGlobeWidgetConfiguration(widget.content);
+  const [snapshot, setSnapshot] = useState<GlobeSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+    const load = async (): Promise<void> => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      try {
+        const next = await getGlobeSnapshot(csrfToken, controller.signal);
+        if (!mounted) return;
+        setSnapshot(next);
+        setError(null);
+      } catch (reason) {
+        if (!mounted || controller.signal.aborted) return;
+        if (reason instanceof ApiError && reason.status === 401) {
+          onSessionExpired();
+          return;
+        }
+        setError(reason instanceof Error ? reason.message : 'Globe could not load.');
+      }
+    };
+    void load();
+    const tick = (): void => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void load();
+    };
+    const timer = window.setInterval(tick, 8_000);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      mounted = false;
+      controller.abort();
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [csrfToken, onSessionExpired]);
+  return (
+    <div class="home-globe-widget">
+      {error !== null && <div class="home-widget__empty">{error}</div>}
+      {snapshot === null && error === null && <div class="home-widget__empty">Reading connections…</div>}
+      {snapshot !== null && <LazyGlobeMap snapshot={snapshot} flow={configuration.flow} compact />}
+      {editing && (
+        <label class="home-widget-toggle">
+          <input
+            class="toggle-input"
+            type="checkbox"
+            checked={configuration.flow}
+            onChange={(event) => onChange({ content: serializeGlobeWidgetConfiguration({ version: 1, flow: event.currentTarget.checked }) })}
+          />
+          <span><strong>Data motion</strong><small>Dots travel faster where more sessions share a country. Off keeps solid lines.</small></span>
+        </label>
+      )}
+    </div>
+  );
+}
+
 function WidgetBody({ widget, editing, onChange, data, csrfToken, canManageDocker, onSessionExpired }: {
   widget: HomeWidget;
   editing: boolean;
@@ -455,6 +544,9 @@ function WidgetBody({ widget, editing, onChange, data, csrfToken, canManageDocke
   if (widget.kind === 'note') return <NoteWidget widget={widget} editing={editing} onChange={onChange} />;
   if (widget.kind === 'strand') {
     return <StrandHomeWidget widget={widget} editing={editing} onChange={onChange} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />;
+  }
+  if (widget.kind === 'globe') {
+    return <GlobeHomeWidget widget={widget} editing={editing} onChange={onChange} csrfToken={csrfToken} onSessionExpired={onSessionExpired} />;
   }
 
   const href = normalizeShortcutUrl(widget.url);
@@ -500,6 +592,15 @@ function WidgetSettings({ widget, otherHomes, onChange, onCopyToHome, onClose }:
         )}
       </div>
       {note !== null && <label class="home-widget-toggle"><input class="toggle-input" type="checkbox" checked={note.editableOutsideLayout} onChange={(event) => onChange({ content: serializeNoteWidgetConfiguration({ ...note, editableOutsideLayout: event.currentTarget.checked }) })} /><span><strong>Quick editing</strong><small>Allow this note to be edited without turning on layout mode.</small></span></label>}
+      {widget.kind === 'globe' && (() => {
+        const globe = parseGlobeWidgetConfiguration(widget.content);
+        return (
+          <label class="home-widget-toggle">
+            <input class="toggle-input" type="checkbox" checked={globe.flow} onChange={(event) => onChange({ content: serializeGlobeWidgetConfiguration({ version: 1, flow: event.currentTarget.checked }) })} />
+            <span><strong>Data motion</strong><small>Animate the strands. Faster travel means more sessions or queued traffic toward that country.</small></span>
+          </label>
+        );
+      })()}
     </div>
   );
 }
@@ -832,7 +933,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
       {editing && adding && (
         <section class="home-widget-catalog" aria-label="Add a widget">
           <div><strong>Add a widget</strong><span>Every widget can be moved and resized after it is added.</span></div>
-          {(['clock', 'host', 'graphs', 'servers', 'storage', 'docker', 'weather', 'note', 'shortcut', 'strand'] as const).map((kind) => <button type="button" key={kind} onClick={() => addWidget(kind)}><Icon name={widgetIcons[kind]} /><span><strong>{kind === 'host' ? 'Host pulse' : kind === 'graphs' ? 'Live graphs' : kind === 'docker' ? 'Docker' : kind === 'strand' ? 'Strand' : kind[0]?.toUpperCase() + kind.slice(1)}</strong><small>{kind === 'shortcut' ? 'Open a website' : kind === 'note' ? 'Keep synced notes' : kind === 'weather' ? 'Five-day forecast' : kind === 'graphs' ? 'CPU, memory, and load' : kind === 'docker' ? 'All containers on this host' : kind === 'strand' ? 'An installed Strand page' : 'Live dashboard data'}</small></span></button>)}
+          {(['clock', 'host', 'graphs', 'servers', 'storage', 'docker', 'weather', 'note', 'shortcut', 'strand', 'globe'] as const).map((kind) => <button type="button" key={kind} onClick={() => addWidget(kind)}><Icon name={widgetIcons[kind]} /><span><strong>{kind === 'host' ? 'Host pulse' : kind === 'graphs' ? 'Live graphs' : kind === 'docker' ? 'Docker' : kind === 'strand' ? 'Strand' : kind === 'globe' ? 'Globe' : kind[0]?.toUpperCase() + kind.slice(1)}</strong><small>{kind === 'shortcut' ? 'Open a website' : kind === 'note' ? 'Keep synced notes' : kind === 'weather' ? 'Five-day forecast' : kind === 'graphs' ? 'CPU, memory, and load' : kind === 'docker' ? 'All containers on this host' : kind === 'strand' ? 'An installed Strand page' : kind === 'globe' ? 'World map of this host and connections' : 'Live dashboard data'}</small></span></button>)}
         </section>
       )}
       {editing && <div class="home-editing-hint"><Icon name="menu" size={14} /><span>Drag a widget by its handle, or use the arrow controls. Copy all copies every tile on this Home; Paste or Paste onto another Home drops them together. Width, height, color, and Copy to another Home are under Settings.</span></div>}

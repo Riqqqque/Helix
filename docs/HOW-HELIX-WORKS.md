@@ -128,8 +128,9 @@ staged, health-checked, and rolled back safely.
 
 Home is a built-in modular dashboard. Multiple named layouts can be created,
 duplicated, switched, exported, imported, and removed. Clock, host, server,
-storage, weather, paged-note, and HTTP(S) shortcut widgets can be added, dragged,
-resized in both dimensions, renamed, recolored, and removed. Notes can opt into
+storage, weather, paged-note, HTTP(S) shortcut, and Globe widgets can be added, dragged,
+resized in both dimensions, renamed, recolored, and removed. Globe is also a
+full page that starts hidden; add it from Arrange. Notes can opt into
 quick editing outside layout mode. Layouts are bounded revisioned preferences
 with a local retry copy and are included in critical-state backups.
 

@@ -2,9 +2,16 @@ import { useEffect, useState } from 'preact/hooks';
 import { updateAccount } from './api';
 import type { DashboardResource } from './dashboard-model';
 import {
-  moveNavigationItem,
+  addableDashboardSections,
+  hideDashboardPage,
+  moveVisibleNavigationItem,
+  showDashboardPage,
+} from './dashboard-page-catalog';
+import {
+  defaultHiddenPages,
   primaryDashboardSections,
   refreshIntervalOptions,
+  visibleDashboardSections,
   type DashboardColors,
   type PrimaryDashboardSectionId,
   type RefreshIntervalMs,
@@ -50,6 +57,7 @@ const navigationLabels: Record<PrimaryDashboardSectionId, { label: string; icon:
   servers: { label: 'Servers', icon: 'servers' },
   hooks: { label: 'Hooks', icon: 'hooks' },
   strands: { label: 'Strands', icon: 'strands' },
+  globe: { label: 'Globe', icon: 'globe' },
 };
 
 const themeLabels: Record<ThemePreference, string> = {
@@ -634,6 +642,7 @@ export function DashboardSettingsPage({
   theme,
   refreshIntervalMs,
   navigationOrder,
+  hiddenPages,
   colors,
   serversEnabled,
   preferenceSyncStatus,
@@ -642,6 +651,7 @@ export function DashboardSettingsPage({
   onThemeChange,
   onRefreshIntervalChange,
   onNavigationOrderChange,
+  onHiddenPagesChange,
   onColorsChange,
   onServersEnabledChange,
   onAccountUpdated,
@@ -652,6 +662,7 @@ export function DashboardSettingsPage({
   theme: ThemePreference;
   refreshIntervalMs: RefreshIntervalMs;
   navigationOrder: readonly PrimaryDashboardSectionId[];
+  hiddenPages: readonly PrimaryDashboardSectionId[];
   colors: DashboardColors;
   serversEnabled: boolean;
   preferenceSyncStatus: 'loading' | 'synced' | 'saving' | 'local';
@@ -660,6 +671,7 @@ export function DashboardSettingsPage({
   onThemeChange: (theme: ThemePreference) => void;
   onRefreshIntervalChange: (value: RefreshIntervalMs) => void;
   onNavigationOrderChange: (value: PrimaryDashboardSectionId[]) => void;
+  onHiddenPagesChange: (value: PrimaryDashboardSectionId[]) => void;
   onColorsChange: (value: DashboardColors) => void;
   onServersEnabledChange: (value: boolean) => void;
   onAccountUpdated: () => void;
@@ -700,9 +712,38 @@ export function DashboardSettingsPage({
           <div class="appearance-color-center"><div><strong>Color control center</strong><span>Override individual theme colors, or leave them on Theme.</span></div><div class="appearance-color-grid">{([['accent', 'Accent', '#d7f64d'], ['text', 'Text', '#f1f0eb'], ['surface', 'Panels', '#15181d']] as const).map(([key, label, fallback]) => <label key={key}><span>{label}</span><span><input type="color" value={colors[key] || fallback} onInput={(event) => onColorsChange({ ...colors, [key]: event.currentTarget.value.toLowerCase() })} /><button type="button" disabled={colors[key].length === 0} onClick={() => onColorsChange({ ...colors, [key]: '' })}>{colors[key].length === 0 ? 'Theme' : 'Reset'}</button></span></label>)}</div><div class="appearance-accent-presets"><span>Accent presets</span>{([['#d7f64d', 'Lime'], ['#5fd7ff', 'Sky'], ['#a98bff', 'Violet'], ['#ffb454', 'Amber'], ['#ff6f91', 'Rose']] as const).map(([color, label]) => <button key={color} type="button" title={label} aria-label={`${label} accent`} style={{ background: color }} onClick={() => onColorsChange({ ...colors, accent: color })} />)}<button class="button button--quiet" type="button" disabled={colors.accent.length === 0 && colors.text.length === 0 && colors.surface.length === 0} onClick={() => onColorsChange({ accent: '', text: '', surface: '' })}>Reset all colors</button></div></div>
         </section>
         <section class="settings-card settings-card--navigation">
-          <div class="settings-card__head"><div><Icon name="menu" /><span><h2>Navigation order</h2><p>Arrange the main pages in the sidebar and mobile bar.</p></span></div><InfoTip text="Settings stays pinned at the bottom so it is always easy to find. The rest of this order follows the owner account across browsers." /></div>
-          <ol class="navigation-order-list">{navigationOrder.map((section, index) => { const item = navigationLabels[section]; return <li key={section}><span><Icon name={item.icon} size={16} /><strong>{item.label}</strong></span><div><button type="button" disabled={index === 0} onClick={() => onNavigationOrderChange(moveNavigationItem(navigationOrder, section, -1))} aria-label={`Move ${item.label} up`}><Icon name="chevron" size={14} class="icon--up" /></button><button type="button" disabled={index === navigationOrder.length - 1} onClick={() => onNavigationOrderChange(moveNavigationItem(navigationOrder, section, 1))} aria-label={`Move ${item.label} down`}><Icon name="chevron" size={14} class="icon--down" /></button></div></li>; })}</ol>
-          <div class="settings-card__foot"><span>{preferenceSyncStatus === 'local' ? 'Browser fallback active' : 'Synced through Helix'}</span><button class="button button--quiet" type="button" onClick={() => onNavigationOrderChange([...primaryDashboardSections])}>Reset order</button></div>
+          <div class="settings-card__head"><div><Icon name="menu" /><span><h2>Navigation</h2><p>Arrange, hide, or add the main pages in the sidebar and mobile bar.</p></span></div><InfoTip text="Settings stays pinned at the bottom. Globe is off the sidebar until you add it. Hidden pages keep their place in the order so Add puts them back where they were. This follows the owner account across browsers." /></div>
+          <ol class="navigation-order-list">
+            {visibleDashboardSections(navigationOrder, hiddenPages, serversEnabled).map((section, index, visible) => {
+              const item = navigationLabels[section];
+              return (
+                <li key={section}>
+                  <span><Icon name={item.icon} size={16} /><strong>{item.label}</strong></span>
+                  <div>
+                    <button type="button" disabled={index === 0} onClick={() => onNavigationOrderChange(moveVisibleNavigationItem(navigationOrder, hiddenPages, serversEnabled, section, -1))} aria-label={`Move ${item.label} up`}><Icon name="chevron" size={14} class="icon--up" /></button>
+                    <button type="button" disabled={index === visible.length - 1} onClick={() => onNavigationOrderChange(moveVisibleNavigationItem(navigationOrder, hiddenPages, serversEnabled, section, 1))} aria-label={`Move ${item.label} down`}><Icon name="chevron" size={14} class="icon--down" /></button>
+                    <button type="button" onClick={() => (section === 'servers' ? onServersEnabledChange(false) : onHiddenPagesChange(hideDashboardPage(hiddenPages, section)))} aria-label={`Hide ${item.label}`}><Icon name="trash" size={14} /></button>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+          {addableDashboardSections(navigationOrder, hiddenPages, serversEnabled).length > 0 && (
+            <div class="navigation-add-catalog">
+              <span>Add a page</span>
+              {addableDashboardSections(navigationOrder, hiddenPages, serversEnabled).map((section) => {
+                const item = navigationLabels[section];
+                return (
+                  <button type="button" key={section} onClick={() => (section === 'servers' ? onServersEnabledChange(true) : onHiddenPagesChange(showDashboardPage(hiddenPages, section)))}>
+                    <Icon name="plus" size={14} />
+                    <Icon name={item.icon} size={15} />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div class="settings-card__foot"><span>{preferenceSyncStatus === 'local' ? 'Browser fallback active' : 'Synced through Helix'}</span><button class="button button--quiet" type="button" onClick={() => { onNavigationOrderChange([...primaryDashboardSections]); onHiddenPagesChange([...defaultHiddenPages]); if (!serversEnabled) onServersEnabledChange(true); }}>Reset pages</button></div>
         </section>
         <HelixDataSettings servers={servers} csrfToken={csrfToken} canManage={user.capabilities.includes('games.manage')} onRefresh={onHostIntegrationRefresh} />
         <HostIntegrationSettings resource={hostIntegration} user={user} csrfToken={csrfToken} onRefresh={onHostIntegrationRefresh} />

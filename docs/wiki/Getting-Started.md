@@ -143,7 +143,8 @@ After the first owner exists:
 - open **Edit layout** to add shortcuts and rearrange widgets;
 - create the first native Minecraft server from **Servers → New server** (Helix
   Native stays separate from any AMP import);
-- pick a theme and navigation order in Settings.
+- pick a theme in Settings, and use **Arrange** (or Settings → Navigation) to
+  hide, add, or reorder pages. Globe starts hidden.
 
 Never post setup tokens, passwords, cookies, CSRF proofs, private addresses,
 hostnames, storage paths, server logs, or world data in an issue or screenshot.

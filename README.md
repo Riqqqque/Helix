@@ -34,7 +34,7 @@ The current private-alpha build includes:
 - live CPU, memory, swap, disk, network, service, process, Docker, and Helix-only
   resource views, plus a Security center for explained host/Helix protections;
 - multiple named Home layouts with drag-and-drop/resizable clock, host, graphs,
-  server, storage, docker, weather, paged-note, and website-shortcut widgets,
+  server, storage, docker, weather, paged-note, website-shortcut, and globe widgets,
   Homarr shortcut import, full-screen Home, per-widget color, and JSON export/import;
 - mounted-drive browsing, bounded text editing, folder/file creation, rename,
   recoverable deletion, and cancellable largest-file/folder analysis inside

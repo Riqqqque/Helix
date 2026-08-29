@@ -9,6 +9,7 @@ export const dashboardSectionIds = [
   'servers',
   'hooks',
   'strands',
+  'globe',
   'settings',
 ] as const;
 

@@ -27,7 +27,8 @@ confirmation.
 
 The Home page is deliberately modular: widgets can be added, moved, resized,
 renamed, recolored, and removed across multiple exportable layouts without
-installing an extension. Hooks connects exact host services without granting a
+installing an extension. Globe is a built-in map of this host and country-level
+connections; it stays off the sidebar until you add it. Hooks connects exact host services without granting a
 third party a runtime inside Helix. Strands are installable UI-only packages:
 drop a `.strand.zip` or paste an https zip URL, review the host calls, and
 Enable. They cannot call helix-privd or open a shell. Portable Wasm is still

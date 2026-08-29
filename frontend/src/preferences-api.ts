@@ -1,5 +1,7 @@
 import { ApiError, expectArray, expectNumber, expectRecord, requestJson } from './api';
 import {
+  defaultHiddenPages,
+  normalizeHiddenPages,
   normalizeNavigationOrder,
   normalizeRefreshInterval,
   normalizeDashboardColors,
@@ -24,6 +26,7 @@ export interface DashboardPreferences {
   activeHomeId: string;
   colors: DashboardColors;
   serversEnabled: boolean;
+  hiddenPages: PrimaryDashboardSectionId[];
 }
 
 export interface DashboardPreferencesRecord {
@@ -44,6 +47,7 @@ export function normalizeDashboardPreferences(value: DashboardPreferences): Dash
     activeHomeId,
     colors: normalizeDashboardColors(value.colors),
     serversEnabled: value.serversEnabled !== false,
+    hiddenPages: normalizeHiddenPages(value.hiddenPages),
   };
 }
 
@@ -99,6 +103,7 @@ function parsePreferences(value: unknown): DashboardPreferences {
   if (record.serversEnabled !== undefined && typeof record.serversEnabled !== 'boolean') {
     throw new ApiError('Dashboard preferences returned an invalid serversEnabled value.');
   }
+  const hiddenPages = parseHiddenPages(record.hiddenPages);
   return {
     navigationOrder,
     metricsRefreshMs,
@@ -107,7 +112,23 @@ function parsePreferences(value: unknown): DashboardPreferences {
     activeHomeId,
     colors,
     serversEnabled: record.serversEnabled !== false,
+    hiddenPages,
   };
+}
+
+function parseHiddenPages(value: unknown): PrimaryDashboardSectionId[] {
+  if (value === undefined) return [...defaultHiddenPages];
+  if (!Array.isArray(value) || value.length > primaryDashboardSections.length) {
+    throw new ApiError('Dashboard preferences returned an invalid hiddenPages value.');
+  }
+  const normalized = normalizeHiddenPages(value);
+  if (
+    normalized.length !== value.length
+    || value.some((entry, index) => entry !== normalized[index])
+  ) {
+    throw new ApiError('Dashboard preferences returned an invalid hiddenPages value.');
+  }
+  return normalized;
 }
 
 export function parseDashboardPreferencesRecord(value: unknown): DashboardPreferencesRecord {

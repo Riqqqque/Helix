@@ -10,11 +10,13 @@ server.
 
 ## Navigation and refresh
 
-Overview, Home, Storage, Network, Host, Security, Terminal, Servers, Hooks, and
-Strands are full pages. An empty URL fragment opens Home so a pinned tab lands on the
+Overview, Home, Storage, Network, Host, Security, Terminal, Servers, Hooks,
+Strands, and Globe are full pages. Globe starts hidden; add it from **Arrange**
+or Settings. An empty URL fragment opens Home so a pinned tab lands on the
 dashboard. Settings stays at the bottom of the sidebar. Choose **Arrange**
-beside Pages to move the primary pages up or down; the order follows the owner
-account.
+beside Pages to move, hide, or add primary pages; the set and order follow the
+owner account. Hidden pages keep their slot, so Add puts them back where they
+were.
 
 Host metrics refresh every second by default. Change that interval in
 **Settings → Dashboard behavior**. The top-right refresh button requests a
@@ -45,9 +47,10 @@ tablet, and mobile widths, so a layout with one widget and a layout at the
 configured maximum both stay usable.
 
 Available widgets are Clock, Host pulse, Live graphs, Servers, Storage, Docker,
-Weather, Notes, Shortcut, and Strand. Shortcuts accept only validated HTTP(S)
+Weather, Notes, Shortcut, Strand, and Globe. Shortcuts accept only validated HTTP(S)
 URLs and open in a new tab. Strand widgets embed an enabled package that
-declared `helix:ui.widget`. While editing, **Import from Homarr** reads Homarr
+declared `helix:ui.widget`. The Globe widget is the same country-level map as
+the Globe page, including an optional data-motion toggle in widget settings. While editing, **Import from Homarr** reads Homarr
 apps that already have an http(s) address. Current Homarr stores those in SQLite; older
 Homarr JSON configs still work. Helix adds the checked shortcuts onto **the Home
 you are already editing**, in Homarr's layout order as short tiles. They do not
@@ -70,6 +73,19 @@ screen from the Home page button to bring them back.
 
 Overview can show the same live graphs behind a toggle. Those samples live in
 the browser; Helix does not keep a timeseries database.
+
+## Globe
+
+Globe is off the sidebar until you add it. It draws this host from the router's
+public WAN country, then country pins for established public TCP peers. Game
+ports Helix already knows (native and AMP) count as players; everything else
+public is outbound. Loopback, LAN, CGNAT, and overlay addresses stay off the
+map. Lookup happens in helix-privd; the browser never receives remote IPs.
+
+Lines default to solid. **Data motion** is opt-in. Dots travel faster where more
+sessions or queued traffic share a country. That is not a bytes-per-second
+meter. Reduced-motion systems stay on solid lines. Country data comes from the
+public NRO whois country table (CC0); land outlines are Natural Earth 110m.
 
 ## Notes
 

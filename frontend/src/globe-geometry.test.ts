@@ -1,0 +1,43 @@
+import { describe, expect, it } from 'vitest';
+import {
+  GLOBE_HEIGHT,
+  GLOBE_WIDTH,
+  controlPoint,
+  projectLatLon,
+  quadraticPoint,
+  unwrapDestination,
+} from './globe-geometry';
+
+describe('globe projection', () => {
+  it('places the equator and prime meridian at the map center', () => {
+    const origin = projectLatLon(0, 0);
+    expect(origin.x).toBe(GLOBE_WIDTH / 2);
+    expect(origin.y).toBe(GLOBE_HEIGHT / 2);
+  });
+
+  it('keeps the Netherlands east of a US centroid and north of the equator', () => {
+    const unitedStates = projectLatLon(38.82, -96.33);
+    const netherlands = projectLatLon(52.13, 5.55);
+    expect(netherlands.x).toBeGreaterThan(unitedStates.x);
+    expect(netherlands.y).toBeLessThan(GLOBE_HEIGHT / 2);
+  });
+
+  it('unwraps a Pacific hop so the short path does not cross the map', () => {
+    const california = projectLatLon(37, -122);
+    const japan = projectLatLon(36, 138);
+    const unwrapped = unwrapDestination(california, japan);
+    expect(unwrapped.x).toBeLessThan(california.x);
+    expect(Math.abs(unwrapped.x - california.x)).toBeLessThan(Math.abs(japan.x - california.x));
+  });
+
+  it('keeps quadratic samples on the curve between two points', () => {
+    const from = { x: 100, y: 100 };
+    const to = { x: 200, y: 120 };
+    const control = controlPoint(from, to);
+    const mid = quadraticPoint(from, control, to, 0.5);
+    expect(mid.x).toBeGreaterThan(100);
+    expect(mid.x).toBeLessThan(200);
+    expect(quadraticPoint(from, control, to, 0)).toEqual(from);
+    expect(quadraticPoint(from, control, to, 1)).toEqual(to);
+  });
+});

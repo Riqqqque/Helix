@@ -1,4 +1,5 @@
 use crate::bounded_command::run_bounded_command;
+use crate::geo::{Country, ipv4_is_globally_routable, lookup_ip, lookup_ipv4};
 use crate::upnp::{ExternalAddressKind, UpnpGateway, classify_external_address};
 use helix_privd::{FirewallProtocol, FirewallRuleSpec};
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
     io::Write as _,
-    net::{Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -17,6 +18,8 @@ use uuid::Uuid;
 
 const MAX_COMMAND_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_LISTENERS: usize = 4_096;
+const MAX_GLOBE_SOCKETS: usize = 8_192;
+const MAX_GLOBE_LINKS: usize = 48;
 const MAX_PROCESSES: usize = 4_096;
 const MAX_PROCESS_FDS: usize = 65_536;
 const MAX_DOCKER_CONTAINERS: usize = 512;
@@ -486,6 +489,108 @@ impl NetworkManager {
                 "tested_from_external_network": false
             }
         }))
+    }
+
+    pub fn globe_snapshot(&self, game_ports: &[GamePortMapping]) -> Result<Value, String> {
+        let (sockets, truncated) = collect_established_sockets(&self.config.proc_root)?;
+        let game_by_port = game_ports
+            .iter()
+            .map(|mapping| (mapping.port, mapping))
+            .collect::<HashMap<_, _>>();
+        let mut groups: HashMap<(String, &'static str), GlobeLinkAccum> = HashMap::new();
+        for socket in sockets {
+            let Some(country) = lookup_ip(socket.remote) else {
+                continue;
+            };
+            let kind = if game_by_port.contains_key(&socket.local_port) {
+                "player"
+            } else {
+                "outbound"
+            };
+            let key = (country.code.clone(), kind);
+            let entry = groups.entry(key).or_insert_with(|| GlobeLinkAccum {
+                country,
+                kind,
+                peers: 0,
+                queued: 0,
+                servers: Vec::new(),
+            });
+            entry.peers = entry.peers.saturating_add(1);
+            entry.queued = entry.queued.saturating_add(socket.queued);
+            if kind == "player"
+                && let Some(mapping) = game_by_port.get(&socket.local_port)
+                && !entry.servers.iter().any(|name| name == &mapping.name)
+            {
+                entry.servers.push(mapping.name.clone());
+            }
+        }
+        let mut links = groups.into_values().collect::<Vec<_>>();
+        links.sort_by(|left, right| {
+            right
+                .peers
+                .cmp(&left.peers)
+                .then_with(|| left.country.code.cmp(&right.country.code))
+                .then_with(|| left.kind.cmp(right.kind))
+        });
+        let link_truncated = links.len() > MAX_GLOBE_LINKS;
+        links.truncate(MAX_GLOBE_LINKS);
+        let max_weight = links
+            .iter()
+            .map(GlobeLinkAccum::weight)
+            .fold(0.0_f64, f64::max)
+            .max(1.0);
+        let origin = self.globe_origin();
+        Ok(json!({
+            "schema_version": 1,
+            "collected_at_unix_ms": now_unix_ms(),
+            "origin": origin,
+            "links": links.iter().map(|link| json!({
+                "id": format!("{}:{}", link.country.code, link.kind),
+                "kind": link.kind,
+                "country": link.country.code,
+                "country_name": link.country.name,
+                "lat": link.country.lat,
+                "lon": link.country.lon,
+                "peers": link.peers,
+                "activity": (link.weight() / max_weight).clamp(0.0, 1.0),
+                "servers": link.servers
+            })).collect::<Vec<_>>(),
+            "truncated": truncated || link_truncated,
+            "note": "Pins are country-level. Helix never sends remote addresses to the browser. A Netherlands player shows as a line to the Netherlands, not a street."
+        }))
+    }
+
+    fn globe_origin(&self) -> Value {
+        match self.router_snapshot(false) {
+            Ok(gateway)
+                if classify_external_address(gateway.external_ip)
+                    == ExternalAddressKind::Public =>
+            {
+                if let Some(country) = lookup_ipv4(gateway.external_ip) {
+                    return json!({
+                        "available": true,
+                        "country": country.code,
+                        "country_name": country.name,
+                        "lat": country.lat,
+                        "lon": country.lon,
+                        "precision": "country",
+                        "label": "This host",
+                        "note": "Placed from the router's public WAN address. City-level location is not claimed."
+                    });
+                }
+            }
+            _ => {}
+        }
+        json!({
+            "available": false,
+            "country": Value::Null,
+            "country_name": Value::Null,
+            "lat": Value::Null,
+            "lon": Value::Null,
+            "precision": "unknown",
+            "label": "This host",
+            "note": "Helix could not place this host. A public WAN address is needed; private, CGNAT, and overlay addresses are skipped."
+        })
     }
 
     pub fn set_server_exposure(
@@ -1755,6 +1860,108 @@ fn valid_container_id(id: &str) -> bool {
     (12..=64).contains(&id.len()) && id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+struct GlobeLinkAccum {
+    country: Country,
+    kind: &'static str,
+    peers: u32,
+    queued: u64,
+    servers: Vec<String>,
+}
+
+impl GlobeLinkAccum {
+    fn weight(&self) -> f64 {
+        f64::from(self.peers) + (self.queued as f64 + 1.0).ln()
+    }
+}
+
+struct EstablishedSocket {
+    remote: IpAddr,
+    local_port: u16,
+    queued: u64,
+}
+
+fn collect_established_sockets(proc_root: &Path) -> Result<(Vec<EstablishedSocket>, bool), String> {
+    let mut sockets = Vec::new();
+    let mut truncated = false;
+    for (relative, family) in [("net/tcp", "ipv4"), ("net/tcp6", "ipv6")] {
+        let path = proc_root.join(relative);
+        let Ok(body) = fs::read_to_string(path) else {
+            continue;
+        };
+        for line in body.lines().skip(1) {
+            if sockets.len() >= MAX_GLOBE_SOCKETS {
+                truncated = true;
+                break;
+            }
+            if let Some(socket) = parse_proc_established_line(line, family) {
+                sockets.push(socket);
+            }
+        }
+    }
+    Ok((sockets, truncated))
+}
+
+fn parse_proc_established_line(line: &str, family: &'static str) -> Option<EstablishedSocket> {
+    let fields = line.split_whitespace().collect::<Vec<_>>();
+    if fields.len() < 5 || fields[3] != "01" {
+        return None;
+    }
+    let (_, local_port_hex) = fields[1].split_once(':')?;
+    let (remote_hex, _) = fields[2].split_once(':')?;
+    let local_port = u16::from_str_radix(local_port_hex, 16).ok()?;
+    if local_port == 0 {
+        return None;
+    }
+    let remote = if family == "ipv4" {
+        IpAddr::V4(parse_proc_ipv4_addr(remote_hex)?)
+    } else {
+        parse_proc_ipv6_addr(remote_hex)?
+    };
+    if !match remote {
+        IpAddr::V4(address) => ipv4_is_globally_routable(address),
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .is_some_and(ipv4_is_globally_routable),
+    } {
+        return None;
+    }
+    let queued = fields[4]
+        .split_once(':')
+        .and_then(|(tx, rx)| {
+            Some(
+                u64::from(u32::from_str_radix(tx, 16).ok()?)
+                    .saturating_add(u64::from(u32::from_str_radix(rx, 16).ok()?)),
+            )
+        })
+        .unwrap_or(0);
+    Some(EstablishedSocket {
+        remote,
+        local_port,
+        queued,
+    })
+}
+
+fn parse_proc_ipv4_addr(value: &str) -> Option<Ipv4Addr> {
+    let raw = u32::from_str_radix(value, 16).ok()?;
+    Some(Ipv4Addr::from(raw.to_le_bytes()))
+}
+
+fn parse_proc_ipv6_addr(value: &str) -> Option<IpAddr> {
+    if value.len() != 32 {
+        return None;
+    }
+    let mut bytes = [0_u8; 16];
+    for index in 0..4 {
+        let start = index * 8;
+        let chunk = &value.as_bytes()[start..start + 8];
+        let text = std::str::from_utf8(chunk).ok()?;
+        let word = u32::from_str_radix(text, 16).ok()?;
+        bytes[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    let address = Ipv6Addr::from(bytes);
+    address.to_ipv4_mapped().map(IpAddr::V4)
+}
+
 fn collect_listeners(proc_root: &Path) -> Result<(Vec<ListenerRecord>, bool), String> {
     let mut listeners = Vec::new();
     for (relative, protocol, family, state) in [
@@ -2394,6 +2601,21 @@ mod tests {
         assert_eq!(listener.port, 25_565);
         assert_eq!(listener.inode, 4242);
         assert!(parse_proc_socket_line(line, "tcp", "ipv4", "01").is_none());
+    }
+
+    #[test]
+    fn established_parser_keeps_public_remotes_and_drops_listen_rows() {
+        let listen = "0: 00000000:63DD 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 4242 1";
+        assert!(parse_proc_established_line(listen, "ipv4").is_none());
+        let established =
+            "1: 00000000:63DD 08080808:3039 01 00000010:00000020 00:00000000 00000000 1000 0 99 1";
+        let socket = parse_proc_established_line(established, "ipv4").expect("public peer");
+        assert_eq!(socket.local_port, 25_565);
+        assert_eq!(socket.remote, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
+        assert_eq!(socket.queued, 48);
+        let lan =
+            "2: 00000000:63DD 1401A8C0:3039 01 00000000:00000000 00:00000000 00000000 1000 0 100 1";
+        assert!(parse_proc_established_line(lan, "ipv4").is_none());
     }
 
     #[test]

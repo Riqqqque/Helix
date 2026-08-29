@@ -303,6 +303,9 @@ img.helix-mark::after {
 .nav-item-wrap .nav-item {
   padding-right: 58px;
 }
+.nav-item-wrap.is-arranging .nav-item {
+  padding-right: 92px;
+}
 .nav-item:hover {
   color: var(--text);
   background: var(--surface);
@@ -341,6 +344,40 @@ img.helix-mark::after {
 .nav-item-order button:disabled {
   opacity: 0.3;
   cursor: default;
+}
+.sidebar-nav__catalog {
+  display: grid;
+  gap: 4px;
+  margin: 8px 4px 10px;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+.sidebar-nav__catalog > span {
+  padding: 0 4px 2px;
+  color: var(--quiet);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+.sidebar-nav__catalog button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sidebar-nav__catalog button:hover {
+  background: var(--surface);
+  color: var(--text);
 }
 .nav-item--settings {
   margin-top: auto;
@@ -5877,6 +5914,39 @@ textarea:focus {
 .navigation-order-list button:disabled {
   opacity: 0.3;
   cursor: default;
+}
+.navigation-add-catalog {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px 8px;
+}
+.navigation-add-catalog > span {
+  width: 100%;
+  color: var(--quiet);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.navigation-add-catalog button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.navigation-add-catalog button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
 }
 .settings-card__foot {
   min-height: 54px;

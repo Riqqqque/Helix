@@ -11,6 +11,7 @@ export const primaryDashboardSections = [
   'servers',
   'hooks',
   'strands',
+  'globe',
 ] as const satisfies ReadonlyArray<DashboardSectionId>;
 
 export type PrimaryDashboardSectionId = (typeof primaryDashboardSections)[number];
@@ -26,7 +27,10 @@ export interface DashboardColors {
 
 export const defaultDashboardColors: DashboardColors = { accent: '', text: '', surface: '' };
 
+export const defaultHiddenPages: readonly PrimaryDashboardSectionId[] = ['globe'];
+
 const NAVIGATION_STORAGE_KEY = 'helix.dashboard.navigation';
+const HIDDEN_PAGES_STORAGE_KEY = 'helix.dashboard.hidden-pages';
 const REFRESH_STORAGE_KEY = 'helix.dashboard.refresh-interval';
 const COLORS_STORAGE_KEY = 'helix.dashboard.colors';
 const SERVERS_ENABLED_STORAGE_KEY = 'helix.dashboard.servers-enabled';
@@ -82,6 +86,55 @@ export function saveNavigationOrder(order: readonly PrimaryDashboardSectionId[])
     // Browser storage is a convenience; the dashboard remains usable without it.
   }
   announcePreferenceChange();
+}
+
+export function normalizeHiddenPages(value: unknown): PrimaryDashboardSectionId[] {
+  if (!Array.isArray(value)) return [...defaultHiddenPages];
+  const allowed = new Set<string>(primaryDashboardSections);
+  const seen = new Set<string>();
+  const pages: PrimaryDashboardSectionId[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !allowed.has(item) || seen.has(item)) continue;
+    seen.add(item);
+    pages.push(item as PrimaryDashboardSectionId);
+  }
+  return pages;
+}
+
+export function readHiddenPages(): PrimaryDashboardSectionId[] {
+  try {
+    if (!canStore()) return [...defaultHiddenPages];
+    const stored = globalThis.localStorage.getItem(HIDDEN_PAGES_STORAGE_KEY);
+    if (stored === null) return [...defaultHiddenPages];
+    return normalizeHiddenPages(JSON.parse(stored));
+  } catch {
+    return [...defaultHiddenPages];
+  }
+}
+
+export function saveHiddenPages(pages: readonly PrimaryDashboardSectionId[]): void {
+  try {
+    if (canStore()) {
+      globalThis.localStorage.setItem(
+        HIDDEN_PAGES_STORAGE_KEY,
+        JSON.stringify(normalizeHiddenPages(pages)),
+      );
+    }
+  } catch {
+    // Browser storage is a convenience; the dashboard remains usable without it.
+  }
+  announcePreferenceChange();
+}
+
+export function visibleDashboardSections(
+  order: readonly PrimaryDashboardSectionId[],
+  hiddenPages: readonly PrimaryDashboardSectionId[],
+  serversEnabled: boolean,
+): PrimaryDashboardSectionId[] {
+  const hidden = new Set(hiddenPages);
+  return normalizeNavigationOrder(order).filter(
+    (id) => !hidden.has(id) && (id !== 'servers' || serversEnabled),
+  );
 }
 
 export function normalizeRefreshInterval(value: unknown): RefreshIntervalMs {
