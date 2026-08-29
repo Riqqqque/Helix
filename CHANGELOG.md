@@ -24,6 +24,14 @@ release, not a public-internet support promise.
 ### Changed
 
 - HTTPS calls Helix makes as itself now send `Helix/1.0.0` in the User-Agent.
+- Settings → Helix data is a full-width card with real padding, stacked server
+  rows, and plain-language copy for start-after-boot and dismissed notices.
+  Create-server and the server page use the same start-after-boot wording.
+
+### Fixed
+
+- Open in Settings → Helix data now jumps to that server, not just the Servers
+  list. Show them again also refreshes the bell menu in the same tab.
 
 ## 1.0.0 - 2026-08-29
 

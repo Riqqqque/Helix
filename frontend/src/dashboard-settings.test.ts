@@ -1,6 +1,7 @@
 import { h } from 'preact';
 import render from 'preact-render-to-string';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ManagedServer } from './control-api';
 import { DashboardSettingsPage, validateHostReboot, validateRecurringHostReboot } from './dashboard-settings';
 import type { HostIntegration, HostRebootPreflight } from './host-api';
 
@@ -66,5 +67,95 @@ describe('whole-host reboot confirmation', () => {
     expect(markup).toContain('Helix data');
     expect(markup).toContain('Save account changes');
     expect(markup).toContain('Current password');
+  });
+});
+
+const nativeServer: ManagedServer = {
+  id: 'helix:018f8fcb-b7af-7f13-9f56-0559788b2c56',
+  name: 'Helix native smoke Minecraft server',
+  instanceName: 'helix-game-018f8fcb-b7af-7f13-9f56-0559788b2c56',
+  software: 'Paper',
+  version: '1.21.8',
+  status: 'offline',
+  panelRunning: false,
+  startOnBoot: false,
+  playersOnline: 0,
+  playerCountVerified: true,
+  maxPlayers: 20,
+  cpuPercent: 0,
+  memoryUsedMb: 0,
+  memoryLimitMb: 4_096,
+  tps: null,
+  managerPanelPort: 0,
+  panelPort: 0,
+  gamePort: 25_565,
+  path: '/srv/helix/servers/smoke',
+  warnings: [],
+  manager: 'helix',
+  executionBackend: 'docker',
+  appearance: { kind: 'default', revision: 0 },
+  kind: 'minecraft',
+};
+
+const settingsProps = {
+  user: { id: '019c7714-3b77-44d1-9866-e1f484aae2ab', loginName: 'rique.owner', displayName: 'Rique', capabilities: ['system.view', 'games.manage'] as const },
+  csrfToken: 'csrf',
+  theme: 'oled' as const,
+  refreshIntervalMs: 1_000 as const,
+  navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands', 'globe'] as const,
+  hiddenPages: ['globe'] as const,
+  colors: { accent: '', text: '', surface: '' },
+  serversEnabled: true,
+  preferenceSyncStatus: 'synced' as const,
+  hostIntegration: { data: null, phase: 'loading' as const, error: null },
+  servers: [] as ManagedServer[],
+  onThemeChange: vi.fn(),
+  onRefreshIntervalChange: vi.fn(),
+  onNavigationOrderChange: vi.fn(),
+  onHiddenPagesChange: vi.fn(),
+  onColorsChange: vi.fn(),
+  onServersEnabledChange: vi.fn(),
+  onAccountUpdated: vi.fn(),
+  onHostIntegrationRefresh: vi.fn(async () => undefined),
+};
+
+describe('Helix data', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('explains start after boot, dismissed notices, and opens that server', () => {
+    const values = new Map<string, string>([
+      ['helix.dismissed.v1', JSON.stringify({ 'capacity:/': 1, 'storage-space-intro': 1 })],
+    ]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
+    });
+    vi.stubGlobal('dispatchEvent', () => true);
+    const markup = render(h(DashboardSettingsPage, {
+      ...settingsProps,
+      user: { ...settingsProps.user, capabilities: [...settingsProps.user.capabilities] },
+      navigationOrder: [...settingsProps.navigationOrder],
+      hiddenPages: [...settingsProps.hiddenPages],
+      servers: [nativeServer],
+    }));
+    expect(markup).toContain('Helix data');
+    expect(markup).toContain('Start after the host boots');
+    expect(markup).toContain('does not start or stop the server right now');
+    expect(markup).toContain('this browser only');
+    expect(markup).toContain('Show them again');
+    expect(markup).toContain('Full-disk warning for /');
+    expect(markup).toContain('Storage space-analyzer intro');
+    expect(markup).toContain('Helix native smoke Minecraft server');
+    expect(markup).toContain('#servers/helix%3A018f8fcb-b7af-7f13-9f56-0559788b2c56');
+    expect(markup).toContain('Open in Servers');
+    expect(markup).not.toContain('>Boot<');
+    expect(markup).not.toContain('>Manual<');
   });
 });

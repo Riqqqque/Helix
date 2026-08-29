@@ -1,5 +1,5 @@
 import render from 'preact-render-to-string';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ManagedServer } from './control-api';
 import type { DashboardData } from './dashboard-model';
 import {
@@ -56,12 +56,36 @@ const data: DashboardData = {
 };
 
 describe('Servers route', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('retains the native creation entry point after code splitting', () => {
     const markup = render(<ServersPage data={data} csrfToken="csrf" canManageServers canManageBackups canManageNetwork onSessionExpired={() => undefined} />);
 
     expect(markup).toContain('New server');
     expect(markup).toContain('Native game hosting');
     expect(markup).toContain('external managers remain separate');
+  });
+
+  it('opens a native server from the URL fragment', () => {
+    vi.stubGlobal('window', {
+      location: { hash: '#servers/server-1' },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    const markup = render(
+      <ServersPage
+        data={{ ...data, servers: { data: [nativeServer], phase: 'ready', error: null } }}
+        csrfToken="csrf"
+        canManageServers
+        canManageBackups
+        canManageNetwork
+        onSessionExpired={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('Opening Survival');
   });
 
   it('shows Minecraft and V Rising marks in the new-server chooser', () => {

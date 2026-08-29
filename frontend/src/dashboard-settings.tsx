@@ -41,10 +41,20 @@ import {
   getTrashedNativeServers,
   restoreTrashedNativeServer,
   setNativeStartOnBoot,
+  serverStatusLabel,
   trashNativeServer,
 } from './control-api';
-import { clearDismissals, dismissedCount } from './dismissals';
+import {
+  clearDismissals,
+  DISMISSALS_CHANGED_EVENT,
+  listDismissedIds,
+} from './dismissals';
 import { GameMark, gameMarkForSoftware } from './game-marks';
+import { serverDetailHash } from './server-hash';
+import {
+  START_WITH_HOST_DETAIL,
+  START_WITH_HOST_TITLE,
+} from './start-with-host';
 
 const navigationLabels: Record<PrimaryDashboardSectionId, { label: string; icon: IconName }> = {
   overview: { label: 'Overview', icon: 'overview' },
@@ -477,7 +487,7 @@ function HostIntegrationSettings({
         {integration === null ? <div class="host-integration-empty"><Icon name="refresh" class={resource.phase === 'loading' ? 'is-spinning' : undefined} /><span>{resource.phase === 'loading' ? 'Reading Linux and Docker state…' : 'Host integration data is unavailable.'}</span></div> : <>
           <div class="host-integration-list">{serviceRow('Docker', integration.services.docker)}{serviceRow('Helix broker', integration.services.helixPrivd)}</div>
           <div class="host-container-policies">{([['Dashboard', integration.containers.dashboard], ['Gateway', integration.containers.gateway]] as const).map(([label, container]) => <div key={label}><span><i class={`status-dot status-dot--${container?.running === true ? 'good' : 'idle'}`} /><strong>{label}</strong></span><span>{container === null ? 'Not found' : container.running ? container.health ?? 'Running' : 'Stopped'}</span><small>Restart policy: <code>{container?.restartPolicy ?? 'unavailable'}</code></small></div>)}</div>
-          <div class="host-boot-control"><div><span>Helix starts after boot</span><strong>{busy && optimisticStartOnBoot !== null ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : integration.startOnBoot.state === 'unavailable' ? 'Unavailable' : displayedStartOnBoot === true ? 'Enabled' : displayedStartOnBoot === false ? 'Disabled' : 'Mixed policies'}</strong><small>This changes restart policy only. It does not start or stop containers now.</small></div><button class="switch-button" role="switch" aria-checked={displayedStartOnBoot ?? 'mixed'} aria-busy={busy} type="button" disabled={busy || !canWrite || integration.startOnBoot.state === 'unavailable'} onClick={() => void toggle()}><i /><span>{busy ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : displayedStartOnBoot === true ? 'On' : 'Off'}</span></button></div>
+          <div class="host-boot-control"><div><span>Helix dashboard after boot</span><strong>{busy && optimisticStartOnBoot !== null ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : integration.startOnBoot.state === 'unavailable' ? 'Unavailable' : displayedStartOnBoot === true ? 'Enabled' : displayedStartOnBoot === false ? 'Disabled' : 'Mixed policies'}</strong><small>This is the Helix dashboard and gateway only, not Minecraft or other game servers. It only changes what Docker does after Linux restarts. It does not start or stop anything right now.</small></div><button class="switch-button" role="switch" aria-checked={displayedStartOnBoot ?? 'mixed'} aria-busy={busy} type="button" disabled={busy || !canWrite || integration.startOnBoot.state === 'unavailable'} onClick={() => void toggle()}><i /><span>{busy ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : displayedStartOnBoot === true ? 'On' : 'Off'}</span></button></div>
           <div class="host-policy-caveat"><Icon name="info" size={15} /><span>{integration.startOnBoot.note ?? 'Docker restart policy is the source of truth.'} Container recreation or a future Compose change may reapply a different policy.</span></div>
           {notice !== null && <div class="host-integration-notice" role="status"><Icon name="check" size={14} />{notice}</div>}
           {!canWrite && <div class="host-integration-notice"><Icon name="info" size={14} />This account can view integration state but cannot change it.</div>}
@@ -493,6 +503,12 @@ function HostIntegrationSettings({
       {recurringRebootOpen && integration !== null && <RecurringHostRebootDialog integration={integration} csrfToken={csrfToken} onClose={() => setRecurringRebootOpen(false)} onChanged={onRefresh} />}
     </>
   );
+}
+
+function dismissedNoticeLabel(id: string): string {
+  if (id === 'storage-space-intro') return 'Storage space-analyzer intro';
+  if (id.startsWith('capacity:')) return `Full-disk warning for ${id.slice('capacity:'.length)}`;
+  return 'A dashboard notice';
 }
 
 function HelixDataSettings({
@@ -513,7 +529,13 @@ function HelixDataSettings({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pendingTrash, setPendingTrash] = useState<ManagedServer | null>(null);
   const [confirmName, setConfirmName] = useState('');
-  const [noticeCount, setNoticeCount] = useState(dismissedCount);
+  const [dismissedIds, setDismissedIds] = useState(listDismissedIds);
+
+  useEffect(() => {
+    const refreshNotices = (): void => setDismissedIds(listDismissedIds());
+    window.addEventListener(DISMISSALS_CHANGED_EVENT, refreshNotices);
+    return () => window.removeEventListener(DISMISSALS_CHANGED_EVENT, refreshNotices);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -572,56 +594,159 @@ function HelixDataSettings({
     }
   };
 
+  const showNoticesAgain = (): void => {
+    clearDismissals();
+    setDismissedIds([]);
+  };
+
   return (
     <section class="settings-card settings-card--helix-data">
-      <div class="settings-card__head"><div><Icon name="folder" /><span><h2>Helix data</h2><p>Native servers, recoverable trash, and this browser’s dismissed notices.</p></span></div><InfoTip text="Imported AMP or other connections stay owned by those managers. Removing a native server moves its files into recoverable trash; it is not an off-host backup." /></div>
-      <div class="helix-data-summary">
-        <div><strong>{helixServers.length}</strong><span>native servers</span></div>
-        <div><strong>{imported.length}</strong><span>imported connections</span></div>
-        <div><strong>{removed?.servers.length ?? '—'}</strong><span>in recoverable trash</span></div>
-      </div>
-      {helixServers.length === 0 ? <p class="helix-data-empty">No native Helix servers yet. Create one from Servers.</p> : (
-        <ul class="helix-data-list">
-          {helixServers.map((server) => (
-            <li key={server.id}>
-              <GameMark game={gameMarkForSoftware(server.software, server.kind) ?? 'minecraft'} size={22} />
-              <div>
-                <strong>{server.name}</strong>
-                <small>{server.software} · {server.status} · port {server.gamePort || '—'}</small>
-              </div>
-              <button class="switch-button" role="switch" type="button" disabled={!canManage || busyId !== null} aria-checked={server.startOnBoot} onClick={() => void toggleBoot(server)}>
-                <i />
-                <span>{server.startOnBoot ? 'Boot' : 'Manual'}</span>
-              </button>
-              <a class="button button--quiet" href={`#servers`}>Open</a>
-              <button class="button button--quiet" type="button" disabled={!canManage || busyId !== null} onClick={() => { setPendingTrash(server); setConfirmName(''); }}>Remove</button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {(removed?.servers.length ?? 0) > 0 && (
-        <div class="helix-data-trash">
-          <strong>Recoverable trash</strong>
-          <ul>
-            {removed?.servers.map((item) => (
-              <li key={item.trashId}>
-                <span>{item.name}<small>{item.software} · {formatTimestamp(item.trashedAtUnixMs)}</small></span>
-                <button class="button button--quiet" type="button" disabled={!canManage || busyId !== null} onClick={() => void restore(item.trashId)}>Restore</button>
-              </li>
-            ))}
-          </ul>
-          <p>{removed?.policy.note}</p>
-        </div>
-      )}
-      <div class="helix-data-notices">
+      <div class="settings-card__head">
         <div>
-          <strong>Dismissed notices</strong>
-          <small>{noticeCount === 0 ? 'No capacity or storage notices are hidden in this browser.' : `${noticeCount} hidden in this browser.`}</small>
+          <Icon name="folder" />
+          <span>
+            <h2>Helix data</h2>
+            <p>Native servers Helix owns, recoverable trash, and notices this browser has hidden.</p>
+          </span>
         </div>
-        <button class="button button--quiet" type="button" disabled={noticeCount === 0} onClick={() => { clearDismissals(); setNoticeCount(0); }}>Show them again</button>
+        <InfoTip text="Imported AMP or other connections stay owned by those managers. Removing a native server moves its files into recoverable trash; it is not an off-host backup. Start after the host boots is also on the Servers page when you create a server." />
       </div>
-      <InlineError message={error} />
-      {!canManage && <div class="host-integration-notice"><Icon name="info" size={14} />This account can view Helix data but cannot remove or restore servers.</div>}
+      <div class="helix-data-body">
+        <div class="helix-data-summary">
+          <div>
+            <strong>{helixServers.length}</strong>
+            <span>Native servers</span>
+            <small>Created and owned by Helix</small>
+          </div>
+          <div>
+            <strong>{imported.length}</strong>
+            <span>Imported connections</span>
+            <small>AMP or other managers Helix can see. Helix does not own those files.</small>
+          </div>
+          <div>
+            <strong>{removed?.servers.length ?? '—'}</strong>
+            <span>Recoverable trash</span>
+            <small>Removed native servers you can still restore</small>
+          </div>
+        </div>
+
+        <div class="helix-data-section">
+          <h3>Native servers</h3>
+          <p>
+            Each native server can come back by itself after Linux or Docker restarts. That choice is on when you create a server, and you can change it here or on the Servers page. It does not start or stop the server right now.
+          </p>
+          {helixServers.length === 0 ? (
+            <p class="helix-data-empty">No native Helix servers yet. Create one from Servers → New server. Start after the host boots is on by default there.</p>
+          ) : (
+            <ul class="helix-data-list">
+              {helixServers.map((server) => {
+                const bootCopyId = `helix-data-boot-${server.id.replace(/[^a-zA-Z0-9_-]+/g, '-')}`;
+                const saving = busyId === server.id;
+                return (
+                  <li key={server.id} class="helix-data-server">
+                    <header>
+                      <GameMark game={gameMarkForSoftware(server.software, server.kind) ?? 'minecraft'} size={28} />
+                      <div>
+                        <strong>{server.name}</strong>
+                        <small>
+                          {server.software} · {serverStatusLabel(server.status)} · port {server.gamePort || '—'}
+                        </small>
+                      </div>
+                    </header>
+                    <div class="helix-data-boot">
+                      <div>
+                        <span>{START_WITH_HOST_TITLE}</span>
+                        <strong>{server.startOnBoot ? 'On' : 'Off'}</strong>
+                        <small id={bootCopyId}>{START_WITH_HOST_DETAIL}</small>
+                      </div>
+                      <button
+                        class="switch-button"
+                        role="switch"
+                        type="button"
+                        disabled={!canManage || busyId !== null}
+                        aria-checked={server.startOnBoot}
+                        aria-describedby={bootCopyId}
+                        aria-label={`${START_WITH_HOST_TITLE} for ${server.name}`}
+                        onClick={() => void toggleBoot(server)}
+                      >
+                        <i />
+                        <span>{saving ? 'Saving…' : server.startOnBoot ? 'On' : 'Off'}</span>
+                      </button>
+                    </div>
+                    <div class="helix-data-server-actions">
+                      <a class="button button--quiet" href={serverDetailHash(server.id)}>Open in Servers</a>
+                      <button
+                        class="button button--quiet"
+                        type="button"
+                        disabled={!canManage || busyId !== null}
+                        onClick={() => {
+                          setPendingTrash(server);
+                          setConfirmName('');
+                        }}
+                      >
+                        Remove…
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {(removed?.servers.length ?? 0) > 0 && (
+          <div class="helix-data-section helix-data-trash">
+            <h3>Recoverable trash</h3>
+            <p>These native servers were removed from Helix. Restore brings the files back onto the Servers page. This is not an off-host backup.</p>
+            <ul>
+              {removed?.servers.map((item) => (
+                <li key={item.trashId}>
+                  <span>
+                    {item.name}
+                    <small>{item.software} · {formatTimestamp(item.trashedAtUnixMs)}</small>
+                  </span>
+                  <button class="button button--quiet" type="button" disabled={!canManage || busyId !== null} onClick={() => void restore(item.trashId)}>
+                    Restore
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {removed?.policy.note !== undefined && removed.policy.note.length > 0 && <p>{removed.policy.note}</p>}
+          </div>
+        )}
+
+        <div class="helix-data-section">
+          <h3>Dismissed notices</h3>
+          <p>
+            If you closed a full-disk warning on Overview, a notice in the bell menu, or the Storage space-analyzer intro, Helix remembers that in this browser only. Other browsers and other people on this dashboard still see those banners. Show them again brings them back.
+          </p>
+          <div class="helix-data-notices">
+            <div>
+              <strong>{dismissedIds.length === 0 ? 'Nothing hidden' : `${dismissedIds.length} hidden in this browser`}</strong>
+              {dismissedIds.length === 0 ? (
+                <small>No Overview, storage, or bell notices are hidden here.</small>
+              ) : (
+                <ul>
+                  {dismissedIds.map((id) => (
+                    <li key={id}>{dismissedNoticeLabel(id)}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <button class="button button--quiet" type="button" disabled={dismissedIds.length === 0} onClick={showNoticesAgain}>
+              Show them again
+            </button>
+          </div>
+        </div>
+
+        <InlineError message={error} />
+        {!canManage && (
+          <div class="host-integration-notice">
+            <Icon name="info" size={14} />
+            This account can view Helix data but cannot remove or restore servers.
+          </div>
+        )}
+      </div>
       {pendingTrash !== null && (
         <Dialog title={`Remove ${pendingTrash.name}?`} onClose={() => setPendingTrash(null)}>
           <p class="dialog-intro">This moves the native server into recoverable trash. Type the exact server name to confirm.</p>

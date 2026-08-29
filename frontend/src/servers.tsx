@@ -82,6 +82,12 @@ import {
 import { GameMark } from "./game-marks";
 import { Icon, type IconName } from "./icons";
 import { InfoTip } from "./info-tip";
+import { serverDetailHash, serverIdFromHash } from "./server-hash";
+import {
+  START_WITH_HOST_CREATE_DETAIL,
+  START_WITH_HOST_DETAIL,
+  START_WITH_HOST_TITLE,
+} from "./start-with-host";
 import { useJobPolling } from "./job-polling";
 import {
   getNetworkInventory,
@@ -2018,11 +2024,8 @@ function CreateServerDialog({
               onChange={(event) => setStartOnBoot(event.currentTarget.checked)}
             />
             <span>
-              <strong>Start with the host</strong>
-              <small>
-                Helix will restore this workload after Docker or the host
-                restarts.
-              </small>
+              <strong>{START_WITH_HOST_TITLE}</strong>
+              <small>{START_WITH_HOST_CREATE_DETAIL}</small>
             </span>
           </label>
           <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
@@ -4959,10 +4962,8 @@ function NativeServerPage({
                     onChange={(event) => void updateStartOnBoot(event.currentTarget.checked)}
                   />
                   <span>
-                    <strong>Start with the host</strong>
-                    <small>
-                      Docker restart policy unless-stopped. Survives host reboot without starting or stopping the server now.
-                    </small>
+                    <strong>{START_WITH_HOST_TITLE}</strong>
+                    <small>{START_WITH_HOST_DETAIL}</small>
                   </span>
                 </label>
                 <InlineError message={bootError} />
@@ -5497,7 +5498,7 @@ function ImportedServerPage({
             </div>
             <div>
               <dt>Startup</dt>
-              <dd>{server.startOnBoot ? "Automatic" : "Manual"}</dd>
+              <dd>{server.startOnBoot ? "After host boot" : "Start yourself"}</dd>
             </div>
           </dl>
         </section>
@@ -5817,8 +5818,8 @@ function CreateVRisingDialog({
           <label class="check-row">
             <input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} />
             <span>
-              <strong>Start with the host</strong>
-              <small>Docker restart policy unless-stopped. Survives host reboot without starting the server now.</small>
+              <strong>{START_WITH_HOST_TITLE}</strong>
+              <small>{START_WITH_HOST_CREATE_DETAIL}</small>
             </span>
           </label>
           <ServerFault
@@ -5935,7 +5936,7 @@ function CreateValheimDialog({
             <label class="field field--wide"><span>Ports</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Valheim pool</option><option value="manual">Specific UDP game port (uses +1 and +2 too)</option></select></label>
             {portMode === "manual" && <label class="field"><span>Game UDP</span><input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} /></label>}
           </div>
-          <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>Start with the host</strong><small>Docker restart policy unless-stopped.</small></span></label>
+          <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>{START_WITH_HOST_TITLE}</strong><small>{START_WITH_HOST_CREATE_DETAIL}</small></span></label>
           <ServerFault
             message={error ?? (job?.error ?? null)}
             csrfToken={csrfToken}
@@ -6052,7 +6053,7 @@ function CreateTerrariaDialog({
             <label class="field field--wide"><span>Port</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Terraria pool</option><option value="manual">Specific TCP port</option></select></label>
             {portMode === "manual" && <label class="field"><span>Game TCP</span><input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} /></label>}
           </div>
-          <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>Start with the host</strong><small>Docker restart policy unless-stopped.</small></span></label>
+          <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>{START_WITH_HOST_TITLE}</strong><small>{START_WITH_HOST_CREATE_DETAIL}</small></span></label>
           <ServerFault
             message={error ?? (job?.error ?? null)}
             csrfToken={csrfToken}
@@ -6091,7 +6092,9 @@ export function ServersPage({
   const [creatingValheim, setCreatingValheim] = useState(false);
   const [creatingTerraria, setCreatingTerraria] = useState(false);
   const [portPoolOpen, setPortPoolOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : serverIdFromHash(window.location.hash),
+  );
   const [filter, setFilter] = useState<ServerFilter>("all");
   const [hiddenImported, setHiddenImported] = useState<string[]>(
     readHiddenImportedServers,
@@ -6101,6 +6104,13 @@ export function ServersPage({
   );
   const [removedError, setRemovedError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
+  useEffect(() => {
+    const apply = (): void => {
+      setSelectedId(serverIdFromHash(window.location.hash));
+    };
+    window.addEventListener("hashchange", apply);
+    return () => window.removeEventListener("hashchange", apply);
+  }, []);
   const allServers = data.servers.data ?? [];
   const servers = allServers.filter(
     (server) => !hiddenImported.includes(server.id),
@@ -6129,7 +6139,7 @@ export function ServersPage({
     const next = [...new Set([...hiddenImported, id])];
     setHiddenImported(next);
     saveHiddenImportedServers(next);
-    setSelectedId(null);
+    if (selectedId === id) window.location.hash = "#servers";
   };
   const showImportedServer = (id: string): void => {
     const next = hiddenImported.filter((item) => item !== id);
@@ -6161,7 +6171,9 @@ export function ServersPage({
         canManageBackups={canManageBackups}
         canManageNetwork={canManageNetwork}
         hostInventory={data.inventory.data}
-        onBack={() => setSelectedId(null)}
+        onBack={() => {
+          window.location.hash = "#servers";
+        }}
         onRefresh={data.refresh}
         onSessionExpired={onSessionExpired}
         refreshIntervalMs={data.refreshIntervalMs}
@@ -6171,7 +6183,9 @@ export function ServersPage({
         server={selected}
         csrfToken={csrfToken}
         canManageServers={canManageServers}
-        onBack={() => setSelectedId(null)}
+        onBack={() => {
+          window.location.hash = "#servers";
+        }}
         onRefresh={data.refresh}
         onHide={() => hideImportedServer(selected.id)}
         onSessionExpired={onSessionExpired}
@@ -6327,7 +6341,9 @@ export function ServersPage({
             csrfToken={csrfToken}
             canManageServers={canManageServers}
             onRefresh={data.refresh}
-            onOpen={() => setSelectedId(server.id)}
+            onOpen={() => {
+              window.location.hash = serverDetailHash(server.id);
+            }}
             onSessionExpired={onSessionExpired}
           />
         ))}

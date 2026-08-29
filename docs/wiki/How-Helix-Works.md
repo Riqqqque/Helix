@@ -12,8 +12,8 @@ restart to you. Console capture and game containers do not depend on the dashboa
 being open. Minecraft RCON is loopback-only (127.0.0.1 on this host, not a player
 port). Console history is bounded and rotates; it is persistent, not unlimited.
 Native Stop waits for a clean shutdown; Kill is a confirmed SIGKILL for when that
-stop hangs. AMP instances do not get Kill. Native servers can opt into Docker
-start-on-boot. Owner setup can skip the Servers page and Settings can restore it
+stop hangs. AMP instances do not get Kill. Native servers can opt into coming back after the host boots. That choice is on
+by default when you create a server. Owner setup can skip the Servers page and Settings can restore it
 later.
 
 V Rising installs the official dedicated server into an isolated Helix
