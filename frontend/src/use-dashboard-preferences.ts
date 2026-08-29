@@ -32,6 +32,7 @@ import {
 } from './home-layout';
 import {
   getDashboardPreferences,
+  normalizeDashboardPreferences,
   putDashboardPreferences,
   type DashboardPreferences,
   type DashboardPreferencesRecord,
@@ -106,22 +107,107 @@ export function mergePreferenceChanges(
   };
 }
 
+const UNSYNCED_STORAGE_KEY = 'helix.dashboard.unsynced';
+const dashboardPreferenceKeys: readonly PreferenceKey[] = [
+  'navigationOrder',
+  'metricsRefreshMs',
+  'homeWidgets',
+  'homeTemplates',
+  'activeHomeId',
+  'colors',
+  'serversEnabled',
+  'hiddenPages',
+];
+
+export interface UnsyncedDashboardPreferences {
+  dirty: PreferenceKey[];
+  preferences: DashboardPreferences;
+}
+
+function parseUnsyncedDirty(value: unknown): PreferenceKey[] {
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set<string>(dashboardPreferenceKeys);
+  const dirty: PreferenceKey[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !allowed.has(item) || dirty.includes(item as PreferenceKey)) continue;
+    dirty.push(item as PreferenceKey);
+  }
+  return dirty;
+}
+
+export function readUnsyncedDashboardPreferences(): UnsyncedDashboardPreferences | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(UNSYNCED_STORAGE_KEY);
+    if (raw === null || raw === undefined || raw.length === 0) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    const dirty = parseUnsyncedDirty(record.dirty);
+    if (dirty.length === 0) return null;
+    if (typeof record.preferences !== 'object' || record.preferences === null || Array.isArray(record.preferences)) {
+      return null;
+    }
+    return {
+      dirty,
+      preferences: normalizeDashboardPreferences(record.preferences as DashboardPreferences),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function writeUnsyncedDashboardPreferences(
+  dirty: ReadonlySet<PreferenceKey>,
+  preferences: DashboardPreferences,
+): void {
+  try {
+    if (dirty.size === 0) {
+      globalThis.localStorage?.removeItem(UNSYNCED_STORAGE_KEY);
+      return;
+    }
+    globalThis.localStorage?.setItem(
+      UNSYNCED_STORAGE_KEY,
+      JSON.stringify({
+        dirty: dashboardPreferenceKeys.filter((key) => dirty.has(key)),
+        preferences: normalizeDashboardPreferences(preferences),
+      }),
+    );
+  } catch {
+    // Browser storage is a convenience; the in-memory copy still applies.
+  }
+}
+
+export function clearUnsyncedDashboardPreferences(): void {
+  try {
+    globalThis.localStorage?.removeItem(UNSYNCED_STORAGE_KEY);
+  } catch {
+    // Ignoring storage failures keeps the dashboard usable.
+  }
+}
+
+function readStoredDashboardPreferences(): DashboardPreferences {
+  const homeTemplates = readHomeTemplates();
+  const activeHomeId = readActiveHomeId(homeTemplates);
+  return {
+    navigationOrder: readNavigationOrder(),
+    metricsRefreshMs: readRefreshInterval(),
+    homeTemplates,
+    activeHomeId,
+    homeWidgets: homeTemplates.find((template) => template.id === activeHomeId)?.widgets ?? [],
+    colors: readDashboardColors(),
+    serversEnabled: readServersEnabled(),
+    hiddenPages: readHiddenPages(),
+  };
+}
+
 export function useDashboardPreferences(
   csrfToken: string,
   onSessionExpired: () => void,
 ): DashboardPreferenceState {
-  const localTemplates = useRef(readHomeTemplates());
-  const localActiveHomeId = useRef(readActiveHomeId(localTemplates.current));
-  const localInitial = useRef<DashboardPreferences>({
-    navigationOrder: readNavigationOrder(),
-    metricsRefreshMs: readRefreshInterval(),
-    homeTemplates: localTemplates.current,
-    activeHomeId: localActiveHomeId.current,
-    homeWidgets: localTemplates.current.find((template) => template.id === localActiveHomeId.current)?.widgets ?? [],
-    colors: readDashboardColors(),
-    serversEnabled: readServersEnabled(),
-    hiddenPages: readHiddenPages(),
-  });
+  const startup = useRef(readUnsyncedDashboardPreferences());
+  const localInitial = useRef<DashboardPreferences>(
+    startup.current?.preferences ?? readStoredDashboardPreferences(),
+  );
   const [preferences, setPreferences] = useState<DashboardPreferences>(localInitial.current);
   const [syncStatus, setSyncStatus] = useState<PreferenceSyncStatus>('loading');
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -131,7 +217,7 @@ export function useDashboardPreferences(
   const initializedRef = useRef(false);
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
-  const dirtyRef = useRef(new Set<PreferenceKey>());
+  const dirtyRef = useRef(new Set<PreferenceKey>(startup.current?.dirty ?? []));
   const generationsRef = useRef<Record<PreferenceKey, number>>({
     navigationOrder: 0,
     metricsRefreshMs: 0,
@@ -148,6 +234,8 @@ export function useDashboardPreferences(
     stateRef.current = next;
     setPreferences(next);
     cachePreferences(next);
+    if (dirtyRef.current.size === 0) clearUnsyncedDashboardPreferences();
+    else writeUnsyncedDashboardPreferences(dirtyRef.current, next);
   }, []);
 
   const change = useCallback(<Key extends PreferenceKey>(
@@ -191,14 +279,8 @@ export function useDashboardPreferences(
         initializedRef.current = true;
 
         if (shouldMigrateLocalPreferences(record.revision, stateRef.current)) {
-          dirtyRef.current.add('navigationOrder');
-          dirtyRef.current.add('metricsRefreshMs');
-          dirtyRef.current.add('homeWidgets');
-          dirtyRef.current.add('homeTemplates');
-          dirtyRef.current.add('activeHomeId');
-          dirtyRef.current.add('colors');
-          dirtyRef.current.add('serversEnabled');
-          dirtyRef.current.add('hiddenPages');
+          for (const key of dashboardPreferenceKeys) dirtyRef.current.add(key);
+          commitLocal(stateRef.current);
           setSyncStatus('saving');
           setSyncTick((current) => current + 1);
           return;
@@ -229,61 +311,79 @@ export function useDashboardPreferences(
     };
   }, [commitLocal, csrfToken, loadAttempt, onSessionExpired]);
 
+  const flushPendingPreferences = useCallback(async (): Promise<void> => {
+    if (!initializedRef.current || revisionRef.current === null || dirtyRef.current.size === 0) return;
+    if (inFlightRef.current) {
+      setSyncTick((current) => current + 1);
+      return;
+    }
+    inFlightRef.current = true;
+    setSyncStatus('saving');
+    const dirty = new Set(dirtyRef.current);
+    const generations = { ...generationsRef.current };
+    const desired = stateRef.current;
+    try {
+      let accepted: DashboardPreferencesRecord;
+      try {
+        accepted = await putDashboardPreferences(revisionRef.current, desired, csrfToken);
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 409) throw error;
+        const current = await getDashboardPreferences(csrfToken);
+        revisionRef.current = current.revision;
+        accepted = await putDashboardPreferences(
+          current.revision,
+          mergePreferenceChanges(current.preferences, desired, dirty),
+          csrfToken,
+        );
+      }
+      if (!mountedRef.current) return;
+      revisionRef.current = accepted.revision;
+      for (const key of dirty) {
+        if (generationsRef.current[key] === generations[key]) dirtyRef.current.delete(key);
+      }
+      const next = mergePreferenceChanges(accepted.preferences, stateRef.current, dirtyRef.current);
+      commitLocal(next);
+      setSyncStatus(dirtyRef.current.size === 0 ? 'synced' : 'saving');
+      if (dirtyRef.current.size > 0) setSyncTick((current) => current + 1);
+    } catch (error) {
+      if (!mountedRef.current) return;
+      if (error instanceof ApiError && error.status === 401) {
+        onSessionExpired();
+      } else {
+        setSyncStatus('local');
+        retryTimerRef.current = window.setTimeout(
+          () => setSyncTick((current) => current + 1),
+          RETRY_DELAY_MS,
+        );
+      }
+    } finally {
+      inFlightRef.current = false;
+    }
+  }, [commitLocal, csrfToken, onSessionExpired]);
+
   useEffect(() => {
     if (!initializedRef.current || revisionRef.current === null || dirtyRef.current.size === 0) return;
     const timer = window.setTimeout(() => {
-      const flush = async (): Promise<void> => {
-        if (inFlightRef.current || revisionRef.current === null) {
-          setSyncTick((current) => current + 1);
-          return;
-        }
-        inFlightRef.current = true;
-        setSyncStatus('saving');
-        const dirty = new Set(dirtyRef.current);
-        const generations = { ...generationsRef.current };
-        const desired = stateRef.current;
-        let accepted: DashboardPreferencesRecord;
-        try {
-          try {
-            accepted = await putDashboardPreferences(revisionRef.current, desired, csrfToken);
-          } catch (error) {
-            if (!(error instanceof ApiError) || error.status !== 409) throw error;
-            const current = await getDashboardPreferences(csrfToken);
-            revisionRef.current = current.revision;
-            accepted = await putDashboardPreferences(
-              current.revision,
-              mergePreferenceChanges(current.preferences, desired, dirty),
-              csrfToken,
-            );
-          }
-          if (!mountedRef.current) return;
-          revisionRef.current = accepted.revision;
-          for (const key of dirty) {
-            if (generationsRef.current[key] === generations[key]) dirtyRef.current.delete(key);
-          }
-          const next = mergePreferenceChanges(accepted.preferences, stateRef.current, dirtyRef.current);
-          commitLocal(next);
-          setSyncStatus(dirtyRef.current.size === 0 ? 'synced' : 'saving');
-          if (dirtyRef.current.size > 0) setSyncTick((current) => current + 1);
-        } catch (error) {
-          if (!mountedRef.current) return;
-          if (error instanceof ApiError && error.status === 401) {
-            onSessionExpired();
-          } else {
-            setSyncStatus('local');
-            retryTimerRef.current = window.setTimeout(
-              () => setSyncTick((current) => current + 1),
-              RETRY_DELAY_MS,
-            );
-          }
-        } finally {
-          inFlightRef.current = false;
-        }
-      };
-      void flush();
+      void flushPendingPreferences();
     }, SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [commitLocal, csrfToken, onSessionExpired, syncTick]);
+  }, [flushPendingPreferences, syncTick]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const flushNow = (): void => {
+      void flushPendingPreferences();
+    };
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') flushNow();
+    };
+    window.addEventListener('pagehide', flushNow);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', flushNow);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [flushPendingPreferences]);
 
   useEffect(() => () => {
     mountedRef.current = false;
