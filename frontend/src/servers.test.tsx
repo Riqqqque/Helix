@@ -100,6 +100,7 @@ describe('Servers route', () => {
     );
 
     expect(markup).toContain('Minecraft: Java Edition');
+    expect(markup).toContain('dialog-body');
     expect(markup).toContain('V Rising');
     expect(markup).toContain('Valheim');
     expect(markup).toContain('Terraria');

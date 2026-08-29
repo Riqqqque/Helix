@@ -1925,7 +1925,7 @@ main {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
-  padding: 20px;
+  padding: 0;
 }
 .game-create-grid > button,
 .game-create-grid > article {
@@ -1965,7 +1965,7 @@ main {
 }
 .game-create-grid small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
 }
 .game-create-grid em {
@@ -2028,13 +2028,13 @@ main {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  margin: 0 20px 18px;
-  padding: 12px;
+  margin: 0;
+  padding: 14px;
   border: 1px solid color-mix(in srgb, var(--warning) 27%, var(--line));
   border-radius: 6px;
   background: color-mix(in srgb, var(--warning) 5%, var(--surface));
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.55;
 }
 .server-platform-note svg {
@@ -2430,6 +2430,7 @@ main {
   background: rgb(0 0 0 / 70%);
 }
 .dialog {
+  --dialog-inset: 24px;
   width: min(460px, 100%);
   max-height: min(820px, calc(100vh - 44px));
   overflow: auto;
@@ -2449,18 +2450,46 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 17px 0 20px;
+  gap: 12px;
+  padding: 16px 14px 16px var(--dialog-inset);
   background: var(--surface-raised);
   border-bottom: 1px solid var(--line);
 }
 .dialog h2 {
   margin: 0;
+  padding-right: 8px;
   font-size: 15px;
   letter-spacing: -0.02em;
 }
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px var(--dialog-inset) 22px;
+}
+.dialog-body > p,
+.dialog-body > ul,
+.dialog-body > h3 {
+  margin: 0;
+}
+.dialog-body > p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.dialog-body > h3 {
+  font-size: 12px;
+}
+.dialog-body > ul {
+  padding-left: 1.2em;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
 .dialog-form,
 .server-form {
-  padding: 20px;
+  padding: 0;
 }
 .dialog-form > label,
 .field {
@@ -2501,15 +2530,16 @@ textarea:focus {
   align-items: center;
   justify-content: flex-end;
   gap: 7px;
-  padding: 16px 20px;
+  padding: 16px var(--dialog-inset, 24px) 22px;
   border-top: 1px solid var(--line);
 }
+.dialog-body > .dialog-actions,
 .dialog-form .dialog-actions,
 .server-form .dialog-actions {
-  margin: 20px -20px -20px;
+  margin: 4px calc(-1 * var(--dialog-inset, 24px)) -22px;
 }
 .dialog-copy {
-  padding: 20px;
+  padding: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.65;
@@ -2542,7 +2572,8 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 15px 20px;
+  margin: -18px calc(-1 * var(--dialog-inset, 24px)) 0;
+  padding: 15px var(--dialog-inset, 24px);
   border-bottom: 1px solid var(--line);
   color: var(--quiet);
   font-size: 9px;
@@ -2685,7 +2716,7 @@ textarea:focus {
 .port-pool-game-tabs {
   display: flex;
   gap: 6px;
-  padding: 14px 20px 0;
+  padding: 0;
 }
 .port-pool-game-tabs button {
   min-height: 31px;
@@ -2722,19 +2753,18 @@ textarea:focus {
 .port-pool-summary span { color: var(--quiet); font-size: 8px; text-transform: uppercase; }
 .dialog-intro {
   margin: 0;
-  padding: 15px 20px 0;
+  padding: 0;
   color: var(--muted);
-  font-size: 9px;
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.5;
 }
 .dialog .form-grid {
-  padding-left: 20px;
-  padding-right: 20px;
-  padding-bottom: 4px;
+  padding: 0;
 }
 .dialog .check-row {
   margin: 0;
-  padding: 14px 24px 16px;
+  padding: 4px 0 2px;
+  border-bottom: 0;
 }
 .creation-network-result {
   width: 100%;
@@ -3159,7 +3189,7 @@ textarea:focus {
 }
 .check-row small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.45;
 }
 .check-row a {
@@ -3185,16 +3215,18 @@ textarea:focus {
   flex: 0 0 auto;
 }
 .server-review .dialog-actions {
-  margin: 20px -20px 0;
+  margin: 4px calc(-1 * var(--dialog-inset, 24px)) -22px;
 }
 .job-progress {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 28px 25px 20px;
+  width: 100%;
+  padding: 10px 4px 6px;
   text-align: center;
 }
 .job-icon {
+  position: relative;
   width: 52px;
   height: 52px;
   display: grid;
@@ -3204,27 +3236,91 @@ textarea:focus {
   border-radius: 50%;
   color: var(--accent);
 }
+.job-icon--queued::before,
+.job-icon--running::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border: 2px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.job-icon:has(.job-spinner)::before {
+  content: none;
+}
+.job-icon--busy {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+}
+.job-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
 .job-icon--failed {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
 }
 .job-progress strong {
-  font-size: 14px;
+  font-size: 15px;
+  line-height: 1.35;
 }
 .job-progress > span {
-  max-width: 360px;
-  margin: 7px 0 18px;
+  max-width: 420px;
+  margin: 8px 0 16px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.55;
 }
 .job-progress .progress {
   width: 100%;
+  display: block;
+  height: 8px;
 }
+.job-progress:has(.job-spinner) .progress i,
+.job-icon--queued ~ .progress i,
+.job-icon--running ~ .progress i {
+  min-width: 12%;
+  animation: progress-pulse 1.6s ease-in-out infinite;
+}
+@keyframes progress-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.job-progress-meta {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+.job-progress-meta b {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+.job-progress-meta small,
 .job-progress small {
-  margin-top: 7px;
+  margin-top: 0;
   color: var(--quiet);
-  font-size: 9px;
+  font-size: 11px;
+}
+.job-progress .modpack-create-result,
+.job-progress .creation-network-result {
+  width: 100%;
+  text-align: left;
+}
+.dialog-body > .hook-install-progress {
+  padding: 8px 4px;
 }
 
 /* Native server workspace */
@@ -6510,17 +6606,17 @@ textarea:focus {
   gap: 8px;
 }
 .reboot-dialog-copy {
-  padding: 15px 20px;
-  border-bottom: 1px solid var(--line);
+  padding: 0 0 4px;
+  border-bottom: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.55;
 }
 .reboot-dialog-copy p {
   margin: 0;
 }
 .reboot-preflight {
-  margin: 16px 20px 0;
+  margin: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
   border-radius: 5px;
@@ -6595,7 +6691,7 @@ textarea:focus {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  padding: 16px 20px;
+  padding: 0;
 }
 .reboot-confirmation-grid > label {
   min-width: 0;
@@ -6637,7 +6733,7 @@ textarea:focus {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  margin: 0 20px 16px;
+  margin: 0;
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
   border-radius: 5px;
@@ -6686,7 +6782,7 @@ textarea:focus {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  margin: 0 18px 16px;
+  margin: 0;
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
   border-radius: 5px;
@@ -7574,7 +7670,7 @@ textarea:focus {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
-  margin: 0 20px;
+  margin: 0;
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -7740,8 +7836,9 @@ textarea:focus {
   gap: 4px;
 }
 .docker-confirm {
-  margin: 0 0 14px;
+  margin: 0;
   color: var(--muted);
+  font-size: 12px;
   line-height: 1.5;
 }
 .home-widget-catalog.home-homarr-catalog {

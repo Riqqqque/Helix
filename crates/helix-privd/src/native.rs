@@ -2839,7 +2839,7 @@ impl NativeManager {
             self.wait_until_ready(&manifest, Duration::from_secs(45 * 60), |elapsed| {
                 let percent = 62_u64.saturating_add((elapsed / 40).min(35));
                 progress(
-                    "First install downloads the dedicated server (this can take a while)",
+                    "Downloading V Rising and waiting for first boot",
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
@@ -2962,7 +2962,7 @@ impl NativeManager {
             self.wait_until_ready(&manifest, Duration::from_secs(45 * 60), |elapsed| {
                 let percent = 62_u64.saturating_add((elapsed / 40).min(35));
                 progress(
-                    "First install downloads the dedicated server (this can take a while)",
+                    "Downloading Valheim and waiting for first boot",
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
@@ -3097,7 +3097,7 @@ impl NativeManager {
             self.wait_until_ready(&manifest, Duration::from_secs(30 * 60), |elapsed| {
                 let percent = 62_u64.saturating_add((elapsed / 40).min(35));
                 progress(
-                    "First install downloads the dedicated server (this can take a while)",
+                    "Downloading Terraria and waiting for first boot",
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
