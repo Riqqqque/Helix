@@ -50,6 +50,9 @@ release, not a public-internet support promise.
 
 ### Fixed
 
+- Forge and NeoForge `--installServer` now chowns the instance directory to
+  the isolated runtime user first. The installer container could not read
+  `/data/server.jar` while that folder was still root-owned.
 - Modpack downloads no longer abort with curl's "Maximum file size exceeded"
   when the CDN Content-Length is bigger than the size in the pack index, or
   when a CurseForge file omits `fileLength`. Helix caps curl at the safety
