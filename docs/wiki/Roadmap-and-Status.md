@@ -27,7 +27,8 @@ Broad/unattended Package Apply and package rollback are
 unavailable. Exact selected APT candidates can be applied after strict preflight
 and explicit confirmation. Helix can apply a digest-pinned GitHub release to
 itself. Public exposure is not supported. Modpack create is a server-safe subset from
-Modrinth or CurseForge catalogs (CurseForge needs an owner API key), not a full client copy. Unknown loaders
+Modrinth or CurseForge catalogs (CurseForge needs an owner API key and a normal
+ISP exit on this host), not a full client copy. Unknown loaders
 and every upstream pack remain unclaimed.
 
 Owners can install UI-only Strands from a zip or https zip URL after reviewing

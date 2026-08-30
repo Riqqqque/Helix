@@ -270,7 +270,7 @@ function CatalogsSettings({
 
   return (
     <section class="settings-card">
-      <div class="settings-card__head"><div><Icon name="search" /><span><h2>Catalogs</h2><p>CurseForge downloads need your own API key. Modrinth stays public.</p></span></div><InfoTip text="Helix stores the key only on this host, never in the browser or the dashboard database, and never shows it again. If CurseForge's network blocks this server, the key is still kept." /></div>
+      <div class="settings-card__head"><div><Icon name="search" /><span><h2>Catalogs</h2><p>CurseForge downloads need your own API key. If you use CurseForge, this host needs a normal ISP IP. VPS and VPN exits are often blocked. Modrinth stays public.</p></span></div><InfoTip text="Helix stores the key only on this host, never in the browser or the dashboard database, and never shows it again. If CurseForge's network blocks this server, the key is still kept." /></div>
       <div class="host-boot-control">
         <div>
           <span>CurseForge API key</span>

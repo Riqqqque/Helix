@@ -68,7 +68,9 @@ by default. Direct Connect to a public IP still needs the UDP game and query
 ports. The manager provides creation, lifecycle actions,
 settings where they exist, files, performance, console or logs, updates,
 backups, restore, a start-after-boot choice, and compatible
-Modrinth or CurseForge content where the selected software supports it. Each server can use a
+Modrinth or CurseForge content where the selected software supports it. If you
+use CurseForge, this host needs a normal ISP IP; VPS and VPN exits are often
+blocked. Each server can use a
 compact preset, a game mark, or a validated same-origin uploaded PNG/JPEG icon.
 
 “Start with a modpack” is a separate narrow creation path. Search can explain

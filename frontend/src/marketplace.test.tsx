@@ -37,6 +37,8 @@ describe('Marketplace panel', () => {
     expect(markup).toContain('CurseForge');
     expect(markup).toContain('Search plugins by name');
     expect(markup).toContain('Settings → Catalogs');
+    expect(markup).toContain('If you use CurseForge');
+    expect(markup).toContain('normal ISP IP');
     expect(markup).not.toContain('without an API key');
     expect(markup).not.toContain('<img');
   });

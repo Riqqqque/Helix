@@ -395,7 +395,9 @@ every upstream pack matrix remain unclaimed. CurseForge marketplace and modpack
 downloads use the official `api.curseforge.com` catalog with an owner-supplied
 API key stored only in helix-privd (`{state_root}/curseforge-api-key`, mode
 0600). The key is never returned to the browser or stored in helixd SQLite.
-Helix does not ship a CurseForge secret.
+Helix does not ship a CurseForge secret. If you use CurseForge, this host must
+reach `api.curseforge.com` on a normal ISP address; VPS and VPN exits are often
+blocked even with a valid key.
 
 TLS and declared hashes protect specific transport/integrity properties; they
 do not prove an artifact is safe. Download size, provenance evidence,
