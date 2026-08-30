@@ -20,6 +20,9 @@ describe('CurseForge catalog key', () => {
     expect(normalizeCurseforgeApiKey('$$2a$$10$$abcdefghijklmnopqrstuvwx')).toBe(key);
     expect(normalizeCurseforgeApiKey(`${key.slice(0, 16)}\n${key.slice(16)}`)).toBe(key);
     expect(normalizeCurseforgeApiKey('$2a$10$abc/defGHIJK.lmnopqrstuv')).toBe('$2a$10$abc/defGHIJK.lmnopqrstuv');
+    expect(normalizeCurseforgeApiKey(`CF_API_KEY=$$2a$$10$$${key.slice('$2a$10$'.length)}\u200b`)).toBe(key);
+    expect(normalizeCurseforgeApiKey(`Copy this: ${key} please\u00a0`)).toBe(key);
+    expect(normalizeCurseforgeApiKey('\uFF042a\uFF0410\uFF04abcdefghijklmnopqrstuvwx')).toBe(key);
   });
 
   it('parses a configured status without returning the key', async () => {

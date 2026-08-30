@@ -51,9 +51,8 @@ release, not a public-internet support promise.
 - Saving a CurseForge key no longer treats an empty CloudFront 403 as a bad
   paste. That response never reached CurseForge. Helix keeps a structurally
   valid key and says the CDN blocked this host.
-- CurseForge keys from the console (the `$2a$10$…` form, including `/`) are
-  stored after stripping quotes, line wraps, and docker `$$` escaping, then sent
-  as-is. Saving no longer rejects a valid pasted key.
+- CurseForge console pastes can include hidden unicode, fullwidth `$`, page
+  text, or docker `$$` wrapping. Helix pulls out the `$2a$` key and stores that.
 - Home Globe fills the widget instead of sitting in a letterboxed 2:1 box. The
   Globe page still shows the whole world.
 - Checking for Linux updates no longer dies on APT's HTTPS helper (`seteuid 42`
