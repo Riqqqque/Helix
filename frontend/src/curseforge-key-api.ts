@@ -12,6 +12,20 @@ export function isCurseforgeKeyRequired(message: string): boolean {
   return message.includes(CURSEFORGE_KEY_REQUIRED_HINT) || message.includes('console.curseforge.com');
 }
 
+export function normalizeCurseforgeApiKey(value: string): string {
+  let key = value.replace(/[\u00AD\u200B-\u200D\u2060\uFEFF]/gu, '').replace(/\u00A0/gu, ' ').trim();
+  if (
+    (key.startsWith('"') && key.endsWith('"'))
+    || (key.startsWith("'") && key.endsWith("'"))
+    || (key.startsWith('\u201c') && key.endsWith('\u201d'))
+    || (key.startsWith('\u2018') && key.endsWith('\u2019'))
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+  if (key.startsWith('$$2')) key = key.replaceAll('$$', '$');
+  return key.replace(/\s+/gu, '');
+}
+
 function parseCurseforgeKeyStatus(value: unknown): CurseforgeKeyStatus {
   const root = expectRecord(value, 'CurseForge catalog');
   if (root.schema_version !== 1) throw new ApiError('CurseForge catalog returned an unsupported schema.');

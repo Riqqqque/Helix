@@ -49,6 +49,7 @@ import {
   CURSEFORGE_CONSOLE_URL,
   clearCurseforgeApiKey,
   getCurseforgeKeyStatus,
+  normalizeCurseforgeApiKey,
   setCurseforgeApiKey,
 } from './curseforge-key-api';
 import './catalogs-settings.css';
@@ -225,7 +226,7 @@ function CatalogsSettings({
   const save = async (event: Event): Promise<void> => {
     event.preventDefault();
     if (!canManage || busy) return;
-    const trimmed = key.trim();
+    const trimmed = normalizeCurseforgeApiKey(key);
     if (trimmed.length < 24 || trimmed.length > 256) {
       setError('CurseForge API keys are 24–256 characters.');
       return;
@@ -277,13 +278,13 @@ function CatalogsSettings({
               type="password"
               value={key}
               minLength={24}
-              maxLength={256}
+              maxLength={512}
               autoComplete="off"
               spellcheck={false}
               placeholder={configured === true ? 'Paste a replacement key' : 'Paste the key from console.curseforge.com'}
               onInput={(event) => setKey(event.currentTarget.value)}
             />
-            <small>Helix checks the key against CurseForge, then keeps it in a private file on this host. It is never returned to this page.</small>
+            <small>Paste the console key as-is. Quotes and extra line breaks are stripped. Helix checks it against CurseForge, then keeps it in a private file on this host. It is never returned to this page.</small>
           </label>
           {error !== null && <div class="settings-form-error" role="alert"><Icon name="warning" size={15} />{error}</div>}
           <div class="settings-form-actions">

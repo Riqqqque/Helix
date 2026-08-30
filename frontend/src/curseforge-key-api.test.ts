@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isCurseforgeKeyRequired, getCurseforgeKeyStatus } from './curseforge-key-api';
+import { isCurseforgeKeyRequired, getCurseforgeKeyStatus, normalizeCurseforgeApiKey } from './curseforge-key-api';
 
 describe('CurseForge catalog key', () => {
   afterEach(() => {
@@ -10,6 +10,15 @@ describe('CurseForge catalog key', () => {
   it('recognizes the Settings Catalogs setup message', () => {
     expect(isCurseforgeKeyRequired('CurseForge needs an API key. Open Settings → Catalogs, paste a key from console.curseforge.com, then search again.')).toBe(true);
     expect(isCurseforgeKeyRequired('CurseForge catalog was unreachable.')).toBe(false);
+  });
+
+  it('unwraps quotes, docker dollar escaping, and wrapped lines from a console key', () => {
+    const key = '$2a$10$abcdefghijklmnopqrstuvwx';
+    expect(normalizeCurseforgeApiKey(`  '${key}'  `)).toBe(key);
+    expect(normalizeCurseforgeApiKey(`"${key}"`)).toBe(key);
+    expect(normalizeCurseforgeApiKey('$$2a$$10$$abcdefghijklmnopqrstuvwx')).toBe(key);
+    expect(normalizeCurseforgeApiKey(`${key.slice(0, 16)}\n${key.slice(16)}`)).toBe(key);
+    expect(normalizeCurseforgeApiKey('$2a$10$abc/defGHIJK.lmnopqrstuv')).toBe('$2a$10$abc/defGHIJK.lmnopqrstuv');
   });
 
   it('parses a configured status without returning the key', async () => {
