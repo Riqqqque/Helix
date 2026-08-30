@@ -221,10 +221,11 @@ path.
 Forge, NeoForge, Quilt, and Pufferfish are default create choices. Forge uses
 the official installer for Minecraft 1.17+. Pufferfish uses the publisher CI
 over HTTPS without a checksum pin. “Start with a modpack” can search Modrinth,
-or CurseForge after saving an API key in Settings → Catalogs. Modrinth
-packs verify declared hashes. CurseForge packs use `manifest.json` plus
-forgecdn files through the official API. Both pin a matching loader and start
-an isolated server. The
+or CurseForge after saving an API key in Settings → Catalogs. If you use
+CurseForge, this Helix host needs a normal ISP IP; VPS and VPN exits are often
+blocked. Modrinth packs verify declared hashes. CurseForge packs use
+`manifest.json` plus forgecdn files through the official API. Both pin a
+matching loader and start an isolated server. The
 result is a server-safe subset, not byte-for-byte pack parity. The
 archive/parser/API/frontend paths have portable tests; the complete Linux
 extraction/resolver/Docker lifecycle, upstream, and real-pack matrix remains a

@@ -6,7 +6,8 @@ and Terraria. It can create and operate instances, retain bounded console
 history, manage settings and backups, and install compatible Modrinth content
 for the supported plugin/mod profiles. “Start with a modpack” additionally
 creates a server-safe subset from Modrinth `.mrpack` or CurseForge
-`manifest.json` packs (owner API key in Settings → Catalogs); it does not promise client/full-pack parity. AMP remains a
+`manifest.json` packs (owner API key in Settings → Catalogs; CurseForge also
+needs this host on a normal ISP IP); it does not promise client/full-pack parity. AMP remains a
 separate optional manager.
 
 That does not produce a universal player limit. Helix sits outside Minecraft's

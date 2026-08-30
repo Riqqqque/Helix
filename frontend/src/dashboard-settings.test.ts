@@ -150,6 +150,8 @@ describe('Helix data', () => {
     expect(markup).toContain('Catalogs');
     expect(markup).toContain('Save key');
     expect(markup).toContain('console.curseforge.com');
+    expect(markup).toContain('If you use CurseForge');
+    expect(markup).toContain('normal ISP IP');
     expect(markup).toContain('Start after the host boots');
     expect(markup).toContain('does not start or stop the server right now');
     expect(markup).toContain('this browser only');

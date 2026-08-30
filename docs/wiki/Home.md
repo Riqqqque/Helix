@@ -85,10 +85,11 @@ Debian/Ubuntu hosts, but it does not authenticate the tailnet or widen network
 trust.
 
 Modpack creation searches Modrinth, and CurseForge when an owner API key is
-saved in Settings → Catalogs. It pins a supported loader (Fabric, Forge,
-NeoForge, or Quilt),
-and starts an isolated server. The result is a server-safe subset, not a full
-client copy. Broad pack matrices and every upstream failure mode stay open.
+saved in Settings → Catalogs. If you use CurseForge, this host needs a normal
+ISP IP; VPS and VPN exits are often blocked. Create pins a supported loader
+(Fabric, Forge, NeoForge, or Quilt) and starts an isolated server. The result is
+a server-safe subset, not a full client copy. Broad pack matrices and every
+upstream failure mode stay open.
 
 The authoritative implementation ledger is
 [`PROGRESS.md`](https://github.com/Riqqqque/Helix/blob/main/PROGRESS.md).

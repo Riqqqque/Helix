@@ -185,7 +185,7 @@ function SearchResults({
       <div class="marketplace-state" role="status">
         <Icon name="search" />
         <strong>CurseForge needs an API key</strong>
-        <span>Paste a key from console.curseforge.com in Settings → Catalogs. Helix stores it only on this host and never shows it again.</span>
+        <span>Paste a key from console.curseforge.com in Settings → Catalogs. Helix stores it only on this host and never shows it again. If you use CurseForge, this host needs a normal ISP IP. VPS and VPN exits are often blocked.</span>
         <a class="button button--primary" href="#settings">Open Settings</a>
       </div>
     );
@@ -580,7 +580,7 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
         <div>
           <span class="eyebrow">SERVER MARKETPLACE</span>
           <h2>{profile.contentKind === 'plugin' ? 'Plugin marketplace' : 'Mod marketplace'} <InfoTip text="Helix filters this catalog to this server’s loader and Minecraft version. Install copies the JAR into plugins/ or mods/ and leaves the server running. Restart when you want the files loaded." /></h2>
-          <p>Browse Modrinth and CurseForge for plugins, Bukkit addons, mods, and modpacks that match this loader. List Install picks a compatible release; open the project if you want a different build.</p>
+          <p>Browse Modrinth and CurseForge for plugins, Bukkit addons, mods, and modpacks that match this loader. List Install picks a compatible release; open the project if you want a different build. If you use CurseForge, this host needs a normal ISP IP. VPS and VPN exits are often blocked.</p>
         </div>
         <div class="marketplace-source-toggle" role="group" aria-label="Marketplace catalog">
           <button type="button" class={provider === 'modrinth' ? 'is-active' : undefined} onClick={() => { setProvider('modrinth'); setCatalog('content'); setOffset(0); setPage(null); }}>Modrinth</button>
@@ -599,7 +599,7 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
       <InlineError message={listInstallError} />
       <SearchResults page={page} loading={searching} error={searchError} canManageServers={canManageServers} installingId={listInstallingId} onOpen={loadProject} onInstall={(hit) => void installFromList(hit)} onRetry={() => setSearchRevision((value) => value + 1)} />
       {page !== null && page.totalHits > 0 && <nav class="marketplace-pagination" aria-label="Marketplace result pages"><button class="button button--quiet" type="button" disabled={searching || page.offset === 0} onClick={() => { setOffset(Math.max(0, page.offset - page.limit)); searchTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}><Icon name="back" size={14} />Previous</button><span>Showing {firstResult}–{lastResult}</span><button class="button button--quiet" type="button" disabled={searching || !canGoNext} onClick={() => { setOffset(page.offset + page.limit); searchTop.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Next<Icon name="chevron" size={14} /></button></nav>}
-      <footer class="marketplace-attribution">Results come from {provider === 'curseforge' ? <a href="https://www.curseforge.com" target="_blank" rel="noreferrer">CurseForge <Icon name="external" size={12} /></a> : <a href="https://modrinth.com" target="_blank" rel="noreferrer">Modrinth <Icon name="external" size={12} /></a>}. Artwork is fetched through Helix’s bounded image proxy. CurseForge uses the official catalog and the API key saved in Settings → Catalogs.</footer>
+      <footer class="marketplace-attribution">Results come from {provider === 'curseforge' ? <a href="https://www.curseforge.com" target="_blank" rel="noreferrer">CurseForge <Icon name="external" size={12} /></a> : <a href="https://modrinth.com" target="_blank" rel="noreferrer">Modrinth <Icon name="external" size={12} /></a>}. Artwork is fetched through Helix’s bounded image proxy. {provider === 'curseforge' ? 'CurseForge uses the official catalog and the API key saved in Settings → Catalogs. If you use CurseForge, this host needs a normal ISP IP. VPS and VPN exits are often blocked.' : 'CurseForge uses the official catalog and the API key saved in Settings → Catalogs.'}</footer>
     </section>
   );
 }

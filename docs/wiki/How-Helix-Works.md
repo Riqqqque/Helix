@@ -50,7 +50,8 @@ public internet exposure, and independently signed Helix keys are not current
 features. Native
 Minecraft create includes Paper, Purpur, Folia, Leaves, Fabric, Forge, NeoForge,
 Quilt, Pufferfish, and Vanilla. Modpack create can use Modrinth `.mrpack` or
-CurseForge `manifest.json` packs (owner API key in Settings → Catalogs) as a
+CurseForge `manifest.json` packs (owner API key in Settings → Catalogs; CurseForge
+also needs this host on a normal ISP IP) as a
 server-safe subset, not a full
 client copy. Valheim and Terraria have native create with file-drop mods.
 Exact selected APT candidates have a guarded explicit path with no rollback

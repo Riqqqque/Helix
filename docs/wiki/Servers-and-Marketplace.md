@@ -174,11 +174,11 @@ avatars go through `/api/v1/marketplace/curseforge/image`. Both still require
 `games.view`, validate the exact CDN path, bound the response, and derive the
 media type from image bytes.
 
-Toggle **Modrinth** or **CurseForge**. CurseForge needs an API key in
-**Settings → Catalogs** (from [console.curseforge.com](https://console.curseforge.com/)).
-If save says CurseForge blocked this host's public IP, the key is stored. CurseForge
-search needs this machine to use a normal ISP address, not a VPS/VPN exit.
-Modrinth still works.
+Toggle **Modrinth** or **CurseForge**. If you use CurseForge, paste an API key in
+**Settings → Catalogs** (from [console.curseforge.com](https://console.curseforge.com/))
+and keep this Helix host on a normal ISP IP. VPS and VPN exits are often blocked
+(empty CloudFront 403). The key is still stored when save reports that. Modrinth
+does not need a key and still works from those exits.
 Paper-family servers get plugins (CurseForge
 lists those as Bukkit plugins / addons). Fabric, Forge, NeoForge, and Quilt get
 mods, and on CurseForge they can also browse **Modpacks**. A modpack JAR is not
@@ -205,8 +205,9 @@ list button; open the project if you want a different build. Restart the server
 yourself when you want the files loaded. Helix does not take a world backup for
 this path. Optional dependencies are never added silently.
 
-“Start with a modpack” can search Modrinth without an extra key. CurseForge
-needs an API key in Settings → Catalogs (`api.curseforge.com`). Modrinth packs
+“Start with a modpack” can search Modrinth without an extra key. If you use
+CurseForge, you need an API key in Settings → Catalogs (`api.curseforge.com`)
+and a normal ISP exit on this host. Modrinth packs
 use `.mrpack` hash checks. CurseForge packs use `manifest.json` plus forgecdn
 files. Both pin a
 matching loader and start an isolated server. The result is a server-safe

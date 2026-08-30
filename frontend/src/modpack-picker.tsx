@@ -192,7 +192,7 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
   return (
     <section class="modpack-browser">
       <div class="modpack-browser__intro">
-        <div><strong>Start with a modpack</strong><span>Browse server-capable packs without leaving Helix. CurseForge needs an API key in Settings → Catalogs.</span></div>
+        <div><strong>Start with a modpack</strong><span>Browse server-capable packs without leaving Helix. CurseForge needs an API key in Settings → Catalogs. If you use CurseForge, this host needs a normal ISP IP. VPS and VPN exits are often blocked.</span></div>
         <a href={provider === 'curseforge' ? 'https://www.curseforge.com/minecraft/modpacks' : 'https://modrinth.com/modpacks'} target="_blank" rel="noreferrer">{provider === 'curseforge' ? 'CurseForge catalog' : 'Modrinth catalog'} <Icon name="external" size={12} /></a>
       </div>
       <div class="modpack-provider-tabs" role="tablist" aria-label="Modpack catalog">
@@ -204,7 +204,7 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
       {error !== null && isCurseforgeKeyRequired(error) && (
         <div class="modpack-state" role="status">
           <Icon name="search" />
-          <span>CurseForge needs an API key. Paste one in Settings → Catalogs, then search again.</span>
+          <span>CurseForge needs an API key. Paste one in Settings → Catalogs, then search again. If you use CurseForge, this host needs a normal ISP IP. VPS and VPN exits are often blocked.</span>
           <a class="button button--primary" href="#settings">Open Settings</a>
         </div>
       )}

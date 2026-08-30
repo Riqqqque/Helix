@@ -39,6 +39,8 @@ release, not a public-internet support promise.
 - Marketplace search retries a failed catalog call and keeps the last good
   results on screen. CurseForge now uses the official API with the key from
   Settings → Catalogs instead of scraping the public website.
+- Catalogs, marketplace, and “Start with a modpack” say up front that CurseForge
+  needs this host on a normal ISP IP. VPS and VPN exits are often blocked.
 - Copy on join addresses, Terminal, and Home tiles flips to Copied so you can
   tell it landed.
 - HTTPS calls Helix makes as itself now send `Helix/1.0.0` in the User-Agent.
