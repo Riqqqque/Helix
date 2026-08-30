@@ -32,6 +32,9 @@ release, not a public-internet support promise.
 
 ### Changed
 
+- Home shortcuts are Homarr-style squares (big icon and name) instead of wide
+  rows. Compact is a square, Wide is larger, Full is extra large. Hover still
+  shows the hostname.
 - Globe and Join copy treat game-port lines as pings and join attempts, and say
   scanners can find an open public port without anyone sharing the IP.
 

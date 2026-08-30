@@ -56,7 +56,7 @@ declared `helix:ui.widget`. The Globe widget is the same country-level map as
 the Globe page, including an optional data-motion toggle in widget settings. While editing, **Import from Homarr** reads Homarr
 apps that already have an http(s) address. Current Homarr stores those in SQLite; older
 Homarr JSON configs still work. Helix adds the checked shortcuts onto **the Home
-you are already editing**, in Homarr's layout order as short tiles. They do not
+you are already editing**, in Homarr's layout order as square tiles. They do not
 create a separate Homarr Home. Those tiles are normal widgets: rename them,
 resize them, recolor them, or copy them onto any other Home. Re-import skips
 shortcuts that are already on that Home. On a plain HTTP dashboard, Paste uses Helix's
