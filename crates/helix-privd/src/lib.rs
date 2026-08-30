@@ -325,18 +325,59 @@ pub enum BrokerRequest {
 pub const CURSEFORGE_API_KEY_REQUIRED: &str = "CurseForge needs an API key. Open Settings → Catalogs, paste a key from console.curseforge.com, then search again.";
 
 pub fn validate_curseforge_api_key(value: &str) -> Result<String, String> {
-    let trimmed = value.trim();
-    if trimmed.len() < 24 || trimmed.len() > 256 {
+    let mut key = strip_curseforge_key_noise(value);
+    let unquoted = strip_wrapping_quotes(key.trim());
+    key = unquoted.to_owned();
+    if key.starts_with("$$2") {
+        key = key.replace("$$", "$");
+    }
+    key.retain(|character| !character.is_whitespace());
+    if key.len() < 24 || key.len() > 256 {
         return Err("CurseForge API keys are 24–256 characters".to_owned());
     }
-    if trimmed.contains(['"', '\\', '\'', ' ', '\t', '\r', '\n'])
-        || !trimmed
-            .chars()
-            .all(|character| character.is_ascii_graphic())
-    {
+    if !key.chars().all(|character| character.is_ascii_graphic()) {
         return Err("that CurseForge API key contains characters Helix will not store".to_owned());
     }
-    Ok(trimmed.to_owned())
+    Ok(key)
+}
+
+fn strip_curseforge_key_noise(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| {
+            !matches!(
+                character,
+                '\u{00ad}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}' | '\u{feff}'
+            )
+        })
+        .map(|character| {
+            if character == '\u{00a0}' {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+fn strip_wrapping_quotes(value: &str) -> &str {
+    let value = value.trim();
+    let mut characters = value.chars();
+    let Some(first) = characters.next() else {
+        return value;
+    };
+    let Some(last) = characters.next_back() else {
+        return value;
+    };
+    if matches!(
+        (first, last),
+        ('"', '"') | ('\'', '\'') | ('\u{201c}', '\u{201d}') | ('\u{2018}', '\u{2019}')
+    ) {
+        let start = first.len_utf8();
+        &value[start..value.len() - last.len_utf8()]
+    } else {
+        value
+    }
 }
 
 pub fn curl_extra_header_file(headers: &[(&str, &str)]) -> Result<String, String> {
@@ -1588,10 +1629,29 @@ mod tests {
     #[test]
     fn curseforge_api_key_is_bounded_printable_ascii() {
         assert!(validate_curseforge_api_key("short").is_err());
-        assert!(validate_curseforge_api_key("has a space in the middle of this keyvalue").is_err());
+        assert!(
+            validate_curseforge_api_key("not-ascii-\u{043a}\u{043b}\u{044e}\u{0447}-xxxxxxxx")
+                .is_err()
+        );
         let key = "$2a$10$abcdefghijklmnopqrstuvwx";
         assert_eq!(
-            validate_curseforge_api_key(&format!("  {key}  ")).unwrap(),
+            validate_curseforge_api_key(&format!("  '{key}'  ")).unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key(&format!("\"{key}\"")).unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key("$$2a$$10$$abcdefghijklmnopqrstuvwx").unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key("$2a$10$abc/defGHIJK.lmnopqrstuv").unwrap(),
+            "$2a$10$abc/defGHIJK.lmnopqrstuv"
+        );
+        assert_eq!(
+            validate_curseforge_api_key(&format!("{}\n{}", &key[..16], &key[16..])).unwrap(),
             key
         );
         let header_file = curl_extra_header_file(&[("x-api-key", key)]).expect("header file");
