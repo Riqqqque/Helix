@@ -176,6 +176,8 @@ media type from image bytes.
 
 Toggle **Modrinth** or **CurseForge**. CurseForge needs an API key in
 **Settings → Catalogs** (from [console.curseforge.com](https://console.curseforge.com/)).
+If save says CurseForge's CDN blocked this host, the paste is fine and Modrinth
+still works.
 Paper-family servers get plugins (CurseForge
 lists those as Bukkit plugins / addons). Fabric, Forge, NeoForge, and Quilt get
 mods, and on CurseForge they can also browse **Modpacks**. A modpack JAR is not

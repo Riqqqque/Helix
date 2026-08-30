@@ -3,9 +3,12 @@ import { ApiError, expectRecord, expectString, requestJson } from './api';
 export const CURSEFORGE_CONSOLE_URL = 'https://console.curseforge.com/';
 export const CURSEFORGE_KEY_REQUIRED_HINT = 'Settings → Catalogs';
 
+export type CurseforgeProbe = 'ok' | 'cdn_blocked' | 'unreachable';
+
 export interface CurseforgeKeyStatus {
   configured: boolean;
   catalog: 'api.curseforge.com';
+  probe?: CurseforgeProbe;
 }
 
 export function isCurseforgeKeyRequired(message: string): boolean {
@@ -32,7 +35,14 @@ function parseCurseforgeKeyStatus(value: unknown): CurseforgeKeyStatus {
   if (typeof root.configured !== 'boolean') throw new ApiError('CurseForge catalog returned an invalid configured value.');
   const catalog = expectString(root, 'catalog', 'CurseForge catalog');
   if (catalog !== 'api.curseforge.com') throw new ApiError('CurseForge catalog returned an unexpected host.');
-  return { configured: root.configured, catalog };
+  const status: CurseforgeKeyStatus = { configured: root.configured, catalog };
+  if (root.probe !== undefined) {
+    if (root.probe !== 'ok' && root.probe !== 'cdn_blocked' && root.probe !== 'unreachable') {
+      throw new ApiError('CurseForge catalog returned an invalid probe.');
+    }
+    status.probe = root.probe;
+  }
+  return status;
 }
 
 export function getCurseforgeKeyStatus(csrfToken: string, signal?: AbortSignal): Promise<CurseforgeKeyStatus> {

@@ -4,12 +4,14 @@ use crate::files::{
     prune_uploads, upload_lock_error, validate_name,
 };
 use helix_privd::{
-    CURSEFORGE_API_KEY_REQUIRED, FileUploadPurpose, GameKind, GamePortPolicySpec,
-    GamePortRangeSpec, MAX_CONCURRENT_FILE_UPLOADS, MAX_CUSTOM_JAR_UPLOAD_BYTES,
-    MAX_FILE_UPLOAD_CHUNK_BYTES, MAX_MINECRAFT_VERSION_CATALOG, MinecraftCreateSpec,
-    MinecraftDifficulty, MinecraftGameMode, MinecraftModpackCreateSpec, MinecraftSettingsPatch,
-    MinecraftSoftware, ServerAction, TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec,
-    ValheimCreateSpec, curl_extra_header_file, validate_curseforge_api_key,
+    CURSEFORGE_API_KEY_REQUIRED, CURSEFORGE_CDN_BLOCKED, CURSEFORGE_KEY_REJECTED,
+    CURSEFORGE_RATE_LIMITED, FileUploadPurpose, GameKind, GamePortPolicySpec, GamePortRangeSpec,
+    MAX_CONCURRENT_FILE_UPLOADS, MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES,
+    MAX_MINECRAFT_VERSION_CATALOG, MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode,
+    MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, ServerAction,
+    TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec,
+    catalog_fetch_is_non_retryable, classify_curseforge_curl_error, curl_extra_header_file,
+    validate_curseforge_api_key,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -4287,7 +4289,10 @@ impl NativeManager {
                 Ok(value) => return Ok(value),
                 Err(error) => {
                     last_error = error;
-                    if attempt == 2 || started.elapsed() >= attempt_budget {
+                    if attempt == 2
+                        || started.elapsed() >= attempt_budget
+                        || catalog_fetch_is_non_retryable(&last_error)
+                    {
                         break;
                     }
                     thread::sleep(Duration::from_millis(250 * u64::from(attempt + 1)));
@@ -4353,11 +4358,21 @@ impl NativeManager {
     }
 
     pub fn curseforge_key_status(&self) -> Result<Value, String> {
-        Ok(json!({
+        self.curseforge_key_status_with_probe(None)
+    }
+
+    fn curseforge_key_status_with_probe(&self, probe: Option<&str>) -> Result<Value, String> {
+        let mut status = json!({
             "schema_version": 1,
             "configured": self.read_curseforge_api_key()?.is_some(),
             "catalog": "api.curseforge.com",
-        }))
+        });
+        if let Some(probe) = probe {
+            if let Some(object) = status.as_object_mut() {
+                object.insert("probe".to_owned(), json!(probe));
+            }
+        }
+        Ok(status)
     }
 
     pub fn set_curseforge_api_key(&self, key: &str) -> Result<Value, String> {
@@ -4365,18 +4380,24 @@ impl NativeManager {
         let path = self.curseforge_key_path();
         let previous = fs::read(&path).ok();
         write_replaced_secret_file(&path, key.as_bytes())?;
-        if let Err(error) = self.probe_curseforge_api_key() {
-            match previous {
-                Some(bytes) => {
-                    let _ = write_replaced_secret_file(&path, &bytes);
+        match self.probe_curseforge_api_key() {
+            Ok(()) => self.curseforge_key_status_with_probe(Some("ok")),
+            Err(error) if error == CURSEFORGE_KEY_REJECTED => {
+                match previous {
+                    Some(bytes) => {
+                        let _ = write_replaced_secret_file(&path, &bytes);
+                    }
+                    None => {
+                        let _ = fs::remove_file(&path);
+                    }
                 }
-                None => {
-                    let _ = fs::remove_file(&path);
-                }
+                Err(error)
             }
-            return Err(error);
+            Err(error) if error == CURSEFORGE_CDN_BLOCKED => {
+                self.curseforge_key_status_with_probe(Some("cdn_blocked"))
+            }
+            Err(_) => self.curseforge_key_status_with_probe(Some("unreachable")),
         }
-        self.curseforge_key_status()
     }
 
     pub fn clear_curseforge_api_key(&self) -> Result<Value, String> {
@@ -4411,12 +4432,19 @@ impl NativeManager {
             12,
         )
         .map_err(|error| {
-            let lower = error.to_ascii_lowercase();
-            if lower.contains("401") || lower.contains("403") {
-                "CurseForge rejected the saved API key. Replace it in Settings → Catalogs."
-                    .to_owned()
+            if error == CURSEFORGE_CDN_BLOCKED
+                || error == CURSEFORGE_KEY_REJECTED
+                || error == CURSEFORGE_RATE_LIMITED
+                || error.starts_with("CurseForge catalog was unreachable.")
+            {
+                error
             } else {
-                format!("CurseForge catalog was unreachable. {error}")
+                let lower = error.to_ascii_lowercase();
+                if lower.contains("401") || lower.contains("403") {
+                    CURSEFORGE_CDN_BLOCKED.to_owned()
+                } else {
+                    format!("CurseForge catalog was unreachable. {error}")
+                }
             }
         })
     }
@@ -5679,9 +5707,18 @@ impl NativeManager {
             write_replaced_secret_file(&path, body.as_bytes())?;
             Some(path)
         };
+        let dump_path = if extra_headers.is_empty() {
+            None
+        } else {
+            Some(cache.join(format!("curl-{}.dmp", Uuid::new_v4())))
+        };
         let mut args = vec![
             "--disable".to_owned(),
-            "--fail".to_owned(),
+            if extra_headers.is_empty() {
+                "--fail".to_owned()
+            } else {
+                "--fail-with-body".to_owned()
+            },
             "--silent".to_owned(),
             "--show-error".to_owned(),
             "--proto".to_owned(),
@@ -5702,6 +5739,10 @@ impl NativeManager {
             args.push("--header".to_owned());
             args.push(format!("@{}", path.display()));
         }
+        if let Some(path) = &dump_path {
+            args.push("--dump-header".to_owned());
+            args.push(path.to_string_lossy().into_owned());
+        }
         args.push("--output".to_owned());
         args.push(destination.to_string_lossy().into_owned());
         args.push(url.to_owned());
@@ -5709,12 +5750,27 @@ impl NativeManager {
             Path::new("/usr/bin/curl"),
             &args,
             maximum_seconds.saturating_add(15),
-        )
-        .map(|_| ());
+        );
         if let Some(path) = header_path {
             let _ = fs::remove_file(path);
         }
-        result
+        let classified = if extra_headers.is_empty() {
+            result.map(|_| ())
+        } else {
+            let dump = dump_path
+                .as_ref()
+                .and_then(|path| fs::read_to_string(path).ok())
+                .unwrap_or_default();
+            let body = fs::read(destination).unwrap_or_default();
+            match result {
+                Ok(_) => Ok(()),
+                Err(error) => Err(classify_curseforge_curl_error(&error, &dump, &body)),
+            }
+        };
+        if let Some(path) = dump_path {
+            let _ = fs::remove_file(path);
+        }
+        classified
     }
 
     fn file_sha1(&self, path: &Path) -> Result<String, String> {
