@@ -4546,6 +4546,7 @@ impl NativeManager {
         if !installer.is_file() {
             return Err("the loader installer was not downloaded".to_owned());
         }
+        self.chown_instance(data_path, run_uid)?;
         let mount = format!("type=bind,src={},dst=/data", data_path.display());
         let user = format!("{run_uid}:{run_uid}");
         let args = vec![
@@ -4566,7 +4567,17 @@ impl NativeManager {
             "/data/server.jar".to_owned(),
             "--installServer".to_owned(),
         ];
-        self.docker_owned(&args, 15 * 60)?;
+        self.docker_owned(&args, 15 * 60).map_err(|error| {
+            let detail = error
+                .strip_prefix("the Helix execution backend failed: ")
+                .unwrap_or(error.as_str());
+            if detail.contains("Unable to access jarfile") {
+                "the loader installer could not read server.jar in the instance directory"
+                    .to_owned()
+            } else {
+                format!("the loader installer failed: {detail}")
+            }
+        })?;
         find_unix_args(data_path)
             .ok_or_else(|| {
                 format!(

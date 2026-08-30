@@ -88,7 +88,9 @@ start-after-boot choice, and EULA acknowledgement. While create runs, that
 window shows a spinner, percent, and elapsed time. Paper, Purpur, Folia,
 Leaves, Fabric, Forge, NeoForge, Quilt, Pufferfish, and Vanilla are default
 create choices. Forge uses the official installer for Minecraft 1.17 and newer
-and launches with generated `unix_args`. Pufferfish comes from the publisher
+and launches with generated `unix_args`. The installer container runs as that
+server's isolated user, so Helix gives that user the instance directory before
+`--installServer`. Pufferfish comes from the publisher
 CI over HTTPS without a checksum pin, same honesty as Purpur.
 
 After creation, a native server has Overview, Console, Settings, Files,
