@@ -50,6 +50,9 @@ release, not a public-internet support promise.
 
 ### Fixed
 
+- Creating a server from a Modrinth pack no longer dies on a messy pack
+  summary (newlines, padding, or a blurb longer than 2 KB). Helix keeps a
+  cleaned copy and still installs.
 - Catalogs no longer says a CurseForge CDN block will "clear." That response is
   this host's public IP getting refused, usually a VPS or VPN exit.
 - CurseForge console pastes can include hidden unicode, fullwidth `$`, page

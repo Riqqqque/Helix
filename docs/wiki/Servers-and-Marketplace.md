@@ -208,7 +208,9 @@ this path. Optional dependencies are never added silently.
 “Start with a modpack” can search Modrinth without an extra key. If you use
 CurseForge, you need an API key in Settings → Catalogs (`api.curseforge.com`)
 and a normal ISP exit on this host. Modrinth packs
-use `.mrpack` hash checks. CurseForge packs use `manifest.json` plus forgecdn
+use `.mrpack` hash checks. A messy pack summary (newlines, padding, a long
+blurb) is cleaned instead of failing the create. CurseForge packs use
+`manifest.json` plus forgecdn
 files. Both pin a
 matching loader and start an isolated server. The result is a server-safe
 subset, not a full client copy. Long titles and descriptions are clipped in the

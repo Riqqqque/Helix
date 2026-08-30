@@ -355,9 +355,7 @@ fn validate_index(
     }
     validate_label(&index.name, "modpack name", 256)?;
     validate_label(&index.version_id, "modpack version", 128)?;
-    if let Some(summary) = index.summary.as_deref() {
-        validate_label(summary, "modpack summary", 2_048)?;
-    }
+    let summary = sanitize_summary(index.summary.as_deref(), 2_048);
     let minecraft_version =
         required_dependency(index.dependencies.minecraft.as_deref(), "Minecraft version")?;
     if let Some(dependency) = index.dependencies.unsupported.keys().next() {
@@ -472,7 +470,7 @@ fn validate_index(
     Ok(MrpackPlan {
         name: index.name,
         version_id: index.version_id,
-        summary: index.summary,
+        summary,
         minecraft_version: minecraft_version.to_owned(),
         loader,
         fabric_loader_version: loader_version.to_owned(),
@@ -874,6 +872,29 @@ fn validate_label(value: &str, label: &str, maximum_bytes: usize) -> Result<(), 
     Ok(())
 }
 
+fn sanitize_summary(value: Option<&str>, maximum_bytes: usize) -> Option<String> {
+    let value = value?;
+    let mut cleaned = String::new();
+    for character in value.chars() {
+        if character.is_control() && !matches!(character, '\n' | '\r' | '\t') {
+            continue;
+        }
+        let encoded = character.len_utf8();
+        if cleaned.len().saturating_add(encoded) > maximum_bytes {
+            break;
+        }
+        cleaned.push(character);
+    }
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else if trimmed.len() == cleaned.len() {
+        Some(cleaned)
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
 fn validate_hex(value: &str, length: usize, label: &str) -> Result<(), String> {
     if value.len() != length || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(format!("the modpack contains an invalid {label} checksum"));
@@ -1171,6 +1192,75 @@ mod tests {
             .expect_err("unknown loader must fail closed");
         assert!(error.contains("future-loader"));
         assert!(error.contains("not supported"), "{error}");
+    }
+
+    #[test]
+    fn messy_pack_summaries_are_cleaned_instead_of_rejecting_the_install() {
+        let temp = TempDir::new().expect("tempdir");
+        let payload = b"server mod";
+        let (sha1, sha512) = checksums(payload);
+        let cases = [
+            ("  padded blurb  ", Some("padded blurb")),
+            ("line one\nline two\r\n", Some("line one\nline two")),
+            ("", None),
+            ("\n\t  \r", None),
+        ];
+        for (raw, expected) in cases {
+            let archive = temp.path().join(format!("summary-{}.mrpack", raw.len()));
+            let index = serde_json::to_vec(&serde_json::json!({
+                "formatVersion": 1,
+                "game": "minecraft",
+                "versionId": "1.0.0",
+                "name": "Summary fixture",
+                "summary": raw,
+                "files": [{
+                    "path": "mods/server.jar",
+                    "hashes": {"sha1": sha1, "sha512": sha512},
+                    "env": {"client": "required", "server": "required"},
+                    "downloads": ["https://cdn.modrinth.com/data/p/v/server.jar"],
+                    "fileSize": payload.len(),
+                }],
+                "dependencies": {"minecraft": "1.21.1", "fabric-loader": "0.16.14"},
+            }))
+            .expect("serialize fixture");
+            write_pack(&archive, &index, &[]);
+            let plan = inspect_mrpack(&archive, &MrpackLimits::default(), deadline())
+                .unwrap_or_else(|error| panic!("summary {raw:?} should install: {error}"));
+            assert_eq!(plan.summary.as_deref(), expected, "summary {raw:?}");
+            assert_eq!(plan.files.len(), 1);
+        }
+
+        let long = "a".repeat(2_100);
+        let archive = temp.path().join("long-summary.mrpack");
+        let index = serde_json::to_vec(&serde_json::json!({
+            "formatVersion": 1,
+            "game": "minecraft",
+            "versionId": "1.0.0",
+            "name": "Summary fixture",
+            "summary": long,
+            "files": [{
+                "path": "mods/server.jar",
+                "hashes": {"sha1": sha1, "sha512": sha512},
+                "env": {"client": "required", "server": "required"},
+                "downloads": ["https://cdn.modrinth.com/data/p/v/server.jar"],
+                "fileSize": payload.len(),
+            }],
+            "dependencies": {"minecraft": "1.21.1", "fabric-loader": "0.16.14"},
+        }))
+        .expect("serialize fixture");
+        write_pack(&archive, &index, &[]);
+        let plan = inspect_mrpack(&archive, &MrpackLimits::default(), deadline())
+            .expect("long summary should truncate");
+        assert_eq!(plan.summary.as_deref().map(str::len), Some(2_048));
+    }
+
+    #[test]
+    fn sanitize_summary_strips_non_text_controls() {
+        assert_eq!(
+            sanitize_summary(Some("ok\u{0000} pack\u{007f}"), 2_048).as_deref(),
+            Some("ok pack")
+        );
+        assert_eq!(sanitize_summary(None, 2_048), None);
     }
 
     #[test]
