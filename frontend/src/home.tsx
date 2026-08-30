@@ -100,7 +100,7 @@ function makeWidget(kind: HomeWidgetKind): HomeWidget {
     storage: { size: 'wide', height: 'medium', title: 'Storage', content: '', url: '', color: '', icon: '' },
     weather: { size: 'wide', height: 'medium', title: 'Weather', content: '', url: '', color: '', icon: '' },
     note: { size: 'compact', height: 'medium', title: 'Notes', content: '', url: '', color: '', icon: '' },
-    shortcut: { size: 'compact', height: 'medium', title: 'Shortcut', content: '', url: '', color: '', icon: '' },
+    shortcut: { size: 'compact', height: 'short', title: 'Shortcut', content: '', url: '', color: '', icon: '' },
     graphs: { size: 'wide', height: 'medium', title: 'Live graphs', content: '', url: '', color: '', icon: '' },
     docker: { size: 'wide', height: 'tall', title: 'Docker', content: '', url: '', color: '', icon: '' },
     strand: { size: 'wide', height: 'tall', title: 'Strand', content: '', url: '', color: '', icon: '' },
@@ -169,9 +169,11 @@ function WidgetControls({
       <button type="button" onClick={onResize} title="Cycle widget width">
         {widget.size}
       </button>
-      <button type="button" onClick={onHeight} title="Cycle widget height">
-        {widget.height}
-      </button>
+      {widget.kind !== 'shortcut' && (
+        <button type="button" onClick={onHeight} title="Cycle widget height">
+          {widget.height}
+        </button>
+      )}
       <button type="button" class={copied ? 'is-copied' : undefined} onClick={onCopy} aria-label={copied ? 'Copied' : `Copy ${widget.title}`} title={copied ? 'Copied' : 'Copy widget'}>
         {copied ? <Icon name="check" size={14} /> : <CopyGlyph size={14} />}
       </button>
@@ -564,9 +566,16 @@ function WidgetBody({ widget, editing, onChange, data, csrfToken, canManageDocke
       </div>
     );
   }
-  return href.length === 0
-    ? <div class="home-widget__empty">Turn on edit mode to add this shortcut’s address.</div>
-    : <a class="home-shortcut" href={href} target="_blank" rel="noopener noreferrer"><ShortcutMark name={widget.title} url={href} icon={widget.icon} size={35} /><span><strong>{widget.title}</strong><small>{new URL(href).hostname}</small></span></a>;
+  if (href.length === 0) {
+    return <div class="home-widget__empty">Turn on edit mode to add this shortcut’s address.</div>;
+  }
+  const hostname = new URL(href).hostname;
+  return (
+    <a class="home-shortcut" href={href} target="_blank" rel="noopener noreferrer" title={hostname} aria-label={`${widget.title} (${hostname})`}>
+      <ShortcutMark name={widget.title} url={href} icon={widget.icon} size={64} />
+      <span><strong>{widget.title}</strong></span>
+    </a>
+  );
 }
 
 function WidgetSettings({ widget, otherHomes, onChange, onCopyToHome, onClose }: {
@@ -581,8 +590,34 @@ function WidgetSettings({ widget, otherHomes, onChange, onCopyToHome, onClose }:
     <div class="home-widget-settings" role="group" aria-label={`${widget.title} settings`}>
       <div class="home-widget-settings__head"><strong>Widget settings</strong><button type="button" onClick={onClose} aria-label="Close widget settings"><Icon name="close" size={14} /></button></div>
       <div class="home-widget-settings__grid">
-        <label><span>Width</span><select value={widget.size} onChange={(event) => onChange({ size: event.currentTarget.value as HomeWidget['size'] })}><option value="compact">Compact</option><option value="wide">Wide</option><option value="full">Full row</option></select></label>
-        <label><span>Height</span><select value={widget.height} onChange={(event) => onChange({ height: event.currentTarget.value as HomeWidget['height'] })}><option value="short">Short</option><option value="medium">Medium</option><option value="tall">Tall</option></select></label>
+        <label>
+          <span>Width</span>
+          <select value={widget.size} onChange={(event) => onChange({ size: event.currentTarget.value as HomeWidget['size'] })}>
+            {widget.kind === 'shortcut' ? (
+              <>
+                <option value="compact">Square</option>
+                <option value="wide">Large</option>
+                <option value="full">Extra large</option>
+              </>
+            ) : (
+              <>
+                <option value="compact">Compact</option>
+                <option value="wide">Wide</option>
+                <option value="full">Full row</option>
+              </>
+            )}
+          </select>
+        </label>
+        {widget.kind !== 'shortcut' && (
+          <label>
+            <span>Height</span>
+            <select value={widget.height} onChange={(event) => onChange({ height: event.currentTarget.value as HomeWidget['height'] })}>
+              <option value="short">Short</option>
+              <option value="medium">Medium</option>
+              <option value="tall">Tall</option>
+            </select>
+          </label>
+        )}
         <label><span>Accent</span><span class="home-color-control"><input type="color" value={widget.color || '#d7f64d'} onInput={(event) => onChange({ color: event.currentTarget.value.toLowerCase() })} /><button type="button" onClick={() => onChange({ color: '' })}>Use Home color</button></span></label>
         {otherHomes.length > 0 && (
           <label>
@@ -840,7 +875,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
     const shortcuts = additions.map((widget, index) => ({
       id: newHomeWidgetId('shortcut', index.toString(36)),
       kind: 'shortcut' as const,
-      size: homarrShortcutSize(widget.width),
+      size: homarrShortcutSize(),
       height: 'short' as const,
       title: widget.name.slice(0, 80),
       content: '',

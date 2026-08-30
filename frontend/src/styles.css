@@ -5006,38 +5006,54 @@ textarea:focus {
   flex-direction: column;
   overflow: hidden;
 }
-.home-widget--kind-shortcut.home-widget--height-short {
-  min-height: 118px;
+.home-widget.home-widget--kind-shortcut {
+  min-height: 0;
+  border-radius: 12px;
 }
-.home-widget--kind-shortcut.home-widget--height-short > :last-child {
-  min-height: 52px;
+.home-widget--kind-shortcut.home-widget--compact {
+  grid-column: span 2;
+}
+.home-widget--kind-shortcut.home-widget--wide {
+  grid-column: span 3;
+}
+.home-widget--kind-shortcut.home-widget--full {
+  grid-column: span 4;
+}
+.home-grid.is-editing .home-widget--kind-shortcut {
+  min-height: 168px;
+}
+.home-grid:not(.is-editing) .home-widget--kind-shortcut {
+  align-self: start;
+  width: 100%;
+  height: auto;
+  min-height: 0;
   overflow: hidden;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
 }
-.home-widget--kind-shortcut.home-widget--height-short .home-shortcut {
-  min-height: 52px;
-  padding: 10px 14px;
-  gap: 10px;
-}
-.home-grid:not(.is-editing) .home-widget--kind-shortcut.home-widget--height-short > header {
+.home-grid:not(.is-editing) .home-widget--kind-shortcut > header {
   display: none;
 }
-.home-grid:not(.is-editing) .home-widget--kind-shortcut.home-widget--height-short > :last-child {
-  min-height: 118px;
+.home-grid:not(.is-editing) .home-widget--kind-shortcut > :last-child,
+.home-grid:not(.is-editing) .home-widget--kind-shortcut .home-shortcut {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
 }
-.home-grid:not(.is-editing) .home-widget--kind-shortcut.home-widget--height-short .home-shortcut {
-  min-height: 118px;
+.home-grid:not(.is-editing) .home-widget--kind-shortcut .home-shortcut {
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  gap: 8px;
-  padding: 12px 14px 10px;
+  gap: 10px;
+  padding: 16px 12px 14px;
   text-align: center;
 }
-.home-grid:not(.is-editing) .home-widget--kind-shortcut.home-widget--height-short .home-shortcut > span {
+.home-grid:not(.is-editing) .home-widget--kind-shortcut .home-shortcut > span {
   width: 100%;
   align-items: stretch;
 }
-.home-grid:not(.is-editing) .home-widget--kind-shortcut.home-widget--height-short .home-shortcut strong {
+.home-grid:not(.is-editing) .home-widget--kind-shortcut .home-shortcut strong {
   display: -webkit-box;
   width: 100%;
   -webkit-line-clamp: 2;
@@ -5046,6 +5062,11 @@ textarea:focus {
   overflow-wrap: anywhere;
   word-break: break-word;
   line-height: 1.25;
+}
+.home-widget--kind-shortcut .home-widget__empty {
+  min-height: 0;
+  height: 100%;
+  padding: 12px;
 }
 .home-widget > header {
   min-width: 0;
@@ -5432,11 +5453,11 @@ textarea:focus {
   flex: 1;
 }
 .home-shortcut-editor {
-  min-height: 164px;
+  min-height: 0;
   display: grid;
   align-content: center;
   gap: 9px;
-  padding: 14px;
+  padding: 10px;
 }
 .home-shortcut-editor label {
   display: grid;
@@ -5459,11 +5480,12 @@ textarea:focus {
 .home-shortcut {
   min-width: 0;
   max-width: 100%;
-  min-height: 164px;
+  min-height: 0;
   display: flex;
   align-items: center;
-  gap: 13px;
-  padding: 18px;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 12px;
   overflow: hidden;
   text-decoration: none;
 }
@@ -5473,31 +5495,34 @@ textarea:focus {
 .home-shortcut > svg,
 .home-shortcut .home-shortcut-icon,
 .home-shortcut .home-shortcut-badge {
-  width: 35px;
-  height: 35px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
+  width: clamp(44px, 36%, 72px);
+  height: clamp(44px, 36%, 72px);
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
   color: var(--accent);
   flex: 0 0 auto;
 }
 .home-shortcut .home-shortcut-icon {
-  padding: 4px;
   object-fit: contain;
-  background: color-mix(in srgb, var(--text) 6%, transparent);
+  background: transparent;
 }
 .home-shortcut .home-shortcut-badge {
   display: grid;
   place-items: center;
-  font-size: 14px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  font-size: 18px;
   font-weight: 700;
   letter-spacing: 0;
 }
 .home-shortcut > span {
   min-width: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 2px;
 }
 .home-shortcut strong,
 .home-shortcut small {
@@ -5507,11 +5532,11 @@ textarea:focus {
   white-space: nowrap;
 }
 .home-shortcut strong {
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 650;
 }
 .home-shortcut small {
-  color: var(--muted);
-  font-size: 9px;
+  display: none;
 }
 .home-weather-editor {
   min-height: 164px;
@@ -7157,6 +7182,15 @@ textarea:focus {
   .home-widget--wide {
     grid-column: span 6;
   }
+  .home-widget--kind-shortcut.home-widget--compact {
+    grid-column: span 3;
+  }
+  .home-widget--kind-shortcut.home-widget--wide {
+    grid-column: span 4;
+  }
+  .home-widget--kind-shortcut.home-widget--full {
+    grid-column: span 6;
+  }
   .home-template-editor {
     grid-template-columns: 1fr 120px;
   }
@@ -7299,6 +7333,13 @@ textarea:focus {
   }
   .home-widget--compact,
   .home-widget--wide {
+    grid-column: span 6;
+  }
+  .home-widget--kind-shortcut.home-widget--compact,
+  .home-widget--kind-shortcut.home-widget--wide {
+    grid-column: span 4;
+  }
+  .home-widget--kind-shortcut.home-widget--full {
     grid-column: span 6;
   }
   .server-icon-editor {
@@ -7621,6 +7662,11 @@ textarea:focus {
   .home-widget--wide,
   .home-widget--full {
     grid-column: 1 / -1;
+  }
+  .home-widget--kind-shortcut.home-widget--compact,
+  .home-widget--kind-shortcut.home-widget--wide,
+  .home-widget--kind-shortcut.home-widget--full {
+    grid-column: span 6;
   }
   .home-template-editor {
     grid-template-columns: 1fr;

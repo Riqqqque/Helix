@@ -451,10 +451,7 @@ export function newHomarrShortcuts<T extends { url: string }>(
   return selected;
 }
 
-export function homarrShortcutSize(width: number | undefined): HomeWidgetSize {
-  if (width === undefined) return 'compact';
-  if (width >= 8) return 'full';
-  if (width >= 3) return 'wide';
+export function homarrShortcutSize(): HomeWidgetSize {
   return 'compact';
 }
 
