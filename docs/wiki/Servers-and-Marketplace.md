@@ -209,7 +209,9 @@ this path. Optional dependencies are never added silently.
 CurseForge, you need an API key in Settings → Catalogs (`api.curseforge.com`)
 and a normal ISP exit on this host. Modrinth packs
 use `.mrpack` hash checks. A messy pack summary (newlines, padding, a long
-blurb) is cleaned instead of failing the create. CurseForge packs use
+blurb) is cleaned instead of failing the create. Downloads use the declared
+hashes and a 768 MiB safety cap; a CDN Content-Length that doesn't match the
+index size is not a hard fail. CurseForge packs use
 `manifest.json` plus forgecdn
 files. Both pin a
 matching loader and start an isolated server. The result is a server-safe
