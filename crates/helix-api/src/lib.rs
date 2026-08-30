@@ -4001,6 +4001,7 @@ mod tests {
         let body = response_json(response).await;
         assert_eq!(body["user"]["loginName"], "owner");
         assert_eq!(body["user"]["displayName"], "Riqué");
+        assert_eq!(body["sessionExpires"], true);
         AuthClient {
             cookie,
             csrf: body["csrfToken"].as_str().expect("CSRF token").to_owned(),
@@ -4302,6 +4303,7 @@ mod tests {
                 .is_some_and(|items| items.iter().any(|item| item == "system.view"))
         );
         assert!(me["expiresAtUnixMs"].as_i64().is_some());
+        assert_eq!(me["sessionExpires"], true);
 
         for route in [
             "/api/v1/health",
@@ -4457,6 +4459,96 @@ mod tests {
                 .is_some_and(|items| items.iter().any(|item| item == "system.view"))
         );
         assert!(login["csrfToken"].as_str().is_some());
+        assert_eq!(login["sessionExpires"], true);
+    }
+
+    #[tokio::test]
+    async fn session_expiry_toggle_updates_cookie_max_age() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let bootstrap = install_bootstrap(&context);
+        let client = claim_owner(&context, &bootstrap).await;
+
+        let disabled = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    put_json(
+                        "/api/v1/auth/session-expiry",
+                        &json!({ "expires": false }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("disable expiry");
+        assert_eq!(disabled.status(), StatusCode::OK);
+        let set_cookie = disabled
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("session cookie")
+            .to_str()
+            .expect("cookie text")
+            .to_owned();
+        assert!(set_cookie.contains("Max-Age=34560000"));
+        let body = response_json(disabled).await;
+        assert_eq!(body["expires"], false);
+        assert!(body["expiresAtUnixMs"].as_i64().is_some());
+
+        let me = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(get("/api/v1/auth/me"), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .expect("me after disable");
+        assert_eq!(me.status(), StatusCode::OK);
+        let me = response_json(me).await;
+        assert_eq!(me["sessionExpires"], false);
+
+        let current = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(get("/api/v1/auth/session-expiry"), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .expect("get expiry");
+        assert_eq!(current.status(), StatusCode::OK);
+        let current = response_json(current).await;
+        assert_eq!(current["expires"], false);
+
+        let enabled = context
+            .app
+            .oneshot(with_csrf(
+                with_cookie(
+                    put_json(
+                        "/api/v1/auth/session-expiry",
+                        &json!({ "expires": true }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("enable expiry");
+        assert_eq!(enabled.status(), StatusCode::OK);
+        let set_cookie = enabled
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("session cookie")
+            .to_str()
+            .expect("cookie text")
+            .to_owned();
+        assert!(set_cookie.contains("Max-Age=28800"));
+        let body = response_json(enabled).await;
+        assert_eq!(body["expires"], true);
     }
 
     #[tokio::test]

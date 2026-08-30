@@ -13,7 +13,8 @@ errors name the directory Helix refused, instead of a generic ownership line.
 The current owner flow uses:
 
 - a random, single-use, short-lived local setup token;
-- Argon2id password hashing and revocable bounded sessions;
+- Argon2id password hashing and revocable sessions (30 minutes idle and eight
+  hours by default; Settings can turn that expiry off);
 - `HttpOnly`, host-only, `SameSite=Strict` cookies;
 - a session-bound CSRF proof required for protected reads and writes;
 - exact capabilities enforced by the API; and

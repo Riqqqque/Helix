@@ -10,6 +10,7 @@ const OWNER_ROLE_ID: &str = "00000000-0000-0000-0000-000000000001";
 const BOOTSTRAP_MAX_LIFETIME_MS: i64 = 15 * 60 * 1_000;
 const SESSION_IDLE_LIFETIME_MS: i64 = 30 * 60 * 1_000;
 const SESSION_ABSOLUTE_LIFETIME_MS: i64 = 8 * 60 * 60 * 1_000;
+const SESSION_PERSISTENT_LIFETIME_MS: i64 = 400 * 24 * 60 * 60 * 1_000;
 const SESSION_TOUCH_INTERVAL_MS: i64 = 60 * 1_000;
 const SESSION_ROW_RETENTION_MS: i64 = 24 * 60 * 60 * 1_000;
 const SESSION_PRUNE_BATCH: i64 = 256;
@@ -399,6 +400,45 @@ VALUES (
 );
 "#;
 
+const SECURITY_MIGRATION_9: &str = r#"
+ALTER TABLE security_state
+ADD COLUMN session_expiry_enabled INTEGER NOT NULL DEFAULT 1
+CHECK (session_expiry_enabled IN (0, 1));
+
+CREATE TABLE sessions_new (
+    id TEXT PRIMARY KEY CHECK (length(id) = 36),
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash BLOB NOT NULL UNIQUE CHECK (length(token_hash) = 32),
+    csrf_hash BLOB NOT NULL CHECK (length(csrf_hash) = 32),
+    auth_version INTEGER NOT NULL CHECK (auth_version >= 1),
+    created_at_unix_ms INTEGER NOT NULL CHECK (created_at_unix_ms >= 0),
+    last_seen_at_unix_ms INTEGER NOT NULL,
+    absolute_expires_at_unix_ms INTEGER NOT NULL,
+    revoked_at_unix_ms INTEGER,
+    CHECK (last_seen_at_unix_ms >= created_at_unix_ms),
+    CHECK (
+        absolute_expires_at_unix_ms > created_at_unix_ms
+        AND absolute_expires_at_unix_ms - created_at_unix_ms <= 34560000000
+    ),
+    CHECK (last_seen_at_unix_ms <= absolute_expires_at_unix_ms),
+    CHECK (revoked_at_unix_ms IS NULL OR revoked_at_unix_ms >= created_at_unix_ms)
+) STRICT;
+
+INSERT INTO sessions_new
+SELECT id, user_id, token_hash, csrf_hash, auth_version,
+       created_at_unix_ms, last_seen_at_unix_ms,
+       absolute_expires_at_unix_ms, revoked_at_unix_ms
+FROM sessions;
+
+DROP TABLE sessions;
+ALTER TABLE sessions_new RENAME TO sessions;
+
+CREATE INDEX sessions_user_active_idx
+    ON sessions (user_id, revoked_at_unix_ms, absolute_expires_at_unix_ms);
+CREATE INDEX sessions_expiry_idx
+    ON sessions (absolute_expires_at_unix_ms, revoked_at_unix_ms);
+"#;
+
 macro_rules! digest_type {
     ($name:ident) => {
         #[derive(Clone, Eq, Hash, PartialEq)]
@@ -613,6 +653,13 @@ pub struct AuthenticatedSession {
     pub auth_version: i64,
     pub absolute_expires_at_unix_ms: i64,
     pub last_seen_touched: bool,
+    pub session_expires: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionExpiryUpdateOutcome {
+    pub expires: bool,
+    pub absolute_expires_at_unix_ms: i64,
 }
 
 #[derive(Clone, Copy)]
@@ -672,6 +719,17 @@ pub(super) fn migrate_terminal_capability(
     connection: &mut rusqlite::Connection,
 ) -> Result<(), StateError> {
     apply_migration(connection, 7, "terminal-capability", SECURITY_MIGRATION_7)
+}
+
+pub(super) fn migrate_session_expiry(
+    connection: &mut rusqlite::Connection,
+) -> Result<(), StateError> {
+    apply_migration(
+        connection,
+        9,
+        "optional-session-expiry",
+        SECURITY_MIGRATION_9,
+    )
 }
 
 impl StateDatabase {
@@ -876,9 +934,10 @@ impl StateDatabase {
             |row| row.get::<_, i64>(0),
         )?;
         let session_id = random_uuid_v4()?.to_string();
+        let session_expires = session_expiry_enabled_in(&transaction)?;
         let absolute_expiry = checked_deadline(
             input.now_unix_ms,
-            SESSION_ABSOLUTE_LIFETIME_MS,
+            session_lifetime_ms(session_expires),
             "session absolute expiry overflowed",
         )?;
         transaction.execute(
@@ -1855,9 +1914,10 @@ impl StateDatabase {
         }
 
         let session_id = random_uuid_v4()?.to_string();
+        let session_expires = session_expiry_enabled_in(&transaction)?;
         let absolute_expiry = checked_deadline(
             input.now_unix_ms,
-            SESSION_ABSOLUTE_LIFETIME_MS,
+            session_lifetime_ms(session_expires),
             "session absolute expiry overflowed",
         )?;
         transaction.execute(
@@ -2030,7 +2090,8 @@ impl StateDatabase {
             transaction.commit()?;
             return Ok(None);
         };
-        if !session_is_current(&session, input.now_unix_ms)
+        let session_expires = session_expiry_enabled_in(&transaction)?;
+        if !session_is_current(&session, input.now_unix_ms, session_expires)
             || !csrf_matches(&session.csrf_hash, input.csrf)
         {
             transaction.commit()?;
@@ -2075,6 +2136,7 @@ impl StateDatabase {
             auth_version: session.user_auth_version,
             absolute_expires_at_unix_ms: session.absolute_expires_at_unix_ms,
             last_seen_touched: touched,
+            session_expires,
         }))
     }
 
@@ -2091,8 +2153,9 @@ impl StateDatabase {
         require_nonnegative_time(now_unix_ms)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
+        let session_expires = session_expiry_enabled_in(&transaction)?;
         let current = lookup_session_for_lifecycle(&transaction, session_hash)?
-            .is_some_and(|session| session_is_current(&session, now_unix_ms));
+            .is_some_and(|session| session_is_current(&session, now_unix_ms, session_expires));
         transaction.commit()?;
         Ok(current)
     }
@@ -2112,7 +2175,8 @@ impl StateDatabase {
             transaction.commit()?;
             return Ok(false);
         };
-        if !session_is_current(&session, now_unix_ms) {
+        let session_expires = session_expiry_enabled_in(&transaction)?;
+        if !session_is_current(&session, now_unix_ms, session_expires) {
             transaction.commit()?;
             return Ok(false);
         }
@@ -2140,6 +2204,83 @@ impl StateDatabase {
         }
         transaction.commit()?;
         Ok(rotated)
+    }
+
+    pub fn set_session_expiry(
+        &self,
+        session_hash: &SessionTokenHash,
+        expires: bool,
+        now_unix_ms: i64,
+    ) -> Result<Option<SessionExpiryUpdateOutcome>, StateError> {
+        require_nonnegative_time(now_unix_ms)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = lookup_session_for_lifecycle(&transaction, session_hash)?;
+        let Some(session) = current else {
+            transaction.commit()?;
+            return Ok(None);
+        };
+        let current_expires = session_expiry_enabled_in(&transaction)?;
+        if !session_is_current(&session, now_unix_ms, current_expires) {
+            transaction.commit()?;
+            return Ok(None);
+        }
+        transaction.execute(
+            "UPDATE security_state SET session_expiry_enabled = ?1 WHERE singleton = 1",
+            [i64::from(expires)],
+        )?;
+        if expires {
+            transaction.execute(
+                "UPDATE sessions
+                 SET last_seen_at_unix_ms = CASE
+                         WHEN ?1 < created_at_unix_ms THEN created_at_unix_ms
+                         ELSE ?1
+                     END,
+                     absolute_expires_at_unix_ms = min(
+                         CASE
+                             WHEN ?1 < created_at_unix_ms THEN created_at_unix_ms
+                             ELSE ?1
+                         END + ?2,
+                         created_at_unix_ms + ?3
+                     )
+                 WHERE revoked_at_unix_ms IS NULL",
+                params![
+                    now_unix_ms,
+                    SESSION_ABSOLUTE_LIFETIME_MS,
+                    SESSION_PERSISTENT_LIFETIME_MS
+                ],
+            )?;
+        } else {
+            transaction.execute(
+                "UPDATE sessions
+                 SET absolute_expires_at_unix_ms = created_at_unix_ms + ?1
+                 WHERE revoked_at_unix_ms IS NULL",
+                [SESSION_PERSISTENT_LIFETIME_MS],
+            )?;
+        }
+        let updated_absolute = transaction.query_row(
+            "SELECT absolute_expires_at_unix_ms FROM sessions WHERE id = ?1",
+            [&session.session_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        append_audit(
+            &transaction,
+            now_unix_ms,
+            Some(&session.user_id),
+            if expires {
+                "session.expiry.enabled"
+            } else {
+                "session.expiry.disabled"
+            },
+            Some("session"),
+            Some(&session.session_id),
+            "success",
+        )?;
+        transaction.commit()?;
+        Ok(Some(SessionExpiryUpdateOutcome {
+            expires,
+            absolute_expires_at_unix_ms: updated_absolute,
+        }))
     }
 
     pub fn revoke_session(
@@ -2237,20 +2378,38 @@ fn lookup_session_for_lifecycle(
         .optional()?)
 }
 
-fn session_is_current(session: &SessionRow, now_unix_ms: i64) -> bool {
-    let Some(idle_expiry) = session
-        .last_seen_at_unix_ms
-        .checked_add(SESSION_IDLE_LIFETIME_MS)
-    else {
-        return false;
+fn session_is_current(session: &SessionRow, now_unix_ms: i64, session_expires: bool) -> bool {
+    let idle_ok = if session_expires {
+        session
+            .last_seen_at_unix_ms
+            .checked_add(SESSION_IDLE_LIFETIME_MS)
+            .is_some_and(|idle_expiry| now_unix_ms < idle_expiry)
+    } else {
+        now_unix_ms >= session.last_seen_at_unix_ms
     };
     session.revoked_at_unix_ms.is_none()
         && session.user_status == "active"
         && session.session_auth_version == session.user_auth_version
         && now_unix_ms >= session.created_at_unix_ms
         && now_unix_ms >= session.last_seen_at_unix_ms
-        && now_unix_ms < idle_expiry
+        && idle_ok
         && now_unix_ms < session.absolute_expires_at_unix_ms
+}
+
+fn session_expiry_enabled_in(connection: &rusqlite::Connection) -> Result<bool, StateError> {
+    Ok(connection.query_row(
+        "SELECT session_expiry_enabled FROM security_state WHERE singleton = 1",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
+fn session_lifetime_ms(expires: bool) -> i64 {
+    if expires {
+        SESSION_ABSOLUTE_LIFETIME_MS
+    } else {
+        SESSION_PERSISTENT_LIFETIME_MS
+    }
 }
 
 fn prune_stale_sessions_in(
@@ -3676,6 +3835,7 @@ mod tests {
             authenticated.absolute_expires_at_unix_ms,
             NOW + SESSION_ABSOLUTE_LIFETIME_MS
         );
+        assert!(authenticated.session_expires);
         for capability in ["missing.view", "INVALID"] {
             assert!(
                 databases
@@ -3797,6 +3957,86 @@ mod tests {
                 .expect("move last seen near absolute expiry");
         }
         assert!(authenticate_at(NOW + SESSION_ABSOLUTE_LIFETIME_MS).is_none());
+    }
+
+    #[test]
+    fn disabled_session_expiry_skips_idle_and_eight_hour_caps() {
+        let (_temp, databases) = open_databases();
+        let fixture = claim_owner(databases.state(), NOW);
+        let state = databases.state();
+        let updated = state
+            .set_session_expiry(&fixture.session_hash, false, NOW + 1)
+            .expect("disable expiry")
+            .expect("current session");
+        assert!(!updated.expires);
+        assert_eq!(
+            updated.absolute_expires_at_unix_ms,
+            NOW + SESSION_PERSISTENT_LIFETIME_MS
+        );
+
+        let authenticate_at = |now| {
+            state
+                .authenticate_session(SessionAuthenticationInput {
+                    session_hash: &fixture.session_hash,
+                    authorization: SessionAuthorization::RequireCapability("system.view"),
+                    csrf: CsrfRequirement::NotRequired,
+                    now_unix_ms: now,
+                })
+                .expect("authenticate")
+        };
+        let idle =
+            authenticate_at(NOW + SESSION_IDLE_LIFETIME_MS + 60_000).expect("idle must not expire");
+        assert!(!idle.session_expires);
+        let later = authenticate_at(NOW + SESSION_ABSOLUTE_LIFETIME_MS + 60_000)
+            .expect("eight hours must not expire");
+        assert!(!later.session_expires);
+        assert!(authenticate_at(NOW + SESSION_PERSISTENT_LIFETIME_MS).is_none());
+
+        let restored = state
+            .set_session_expiry(
+                &fixture.session_hash,
+                true,
+                NOW + SESSION_ABSOLUTE_LIFETIME_MS + 120_000,
+            )
+            .expect("enable expiry")
+            .expect("current session");
+        assert!(restored.expires);
+        assert!(
+            authenticate_at(
+                NOW + SESSION_ABSOLUTE_LIFETIME_MS + 120_000 + SESSION_IDLE_LIFETIME_MS
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn session_rows_accept_the_persistent_lifetime_bound() {
+        let (_temp, databases) = open_databases();
+        let fixture = claim_owner(databases.state(), NOW);
+        databases
+            .state()
+            .lock()
+            .expect("state lock")
+            .execute(
+                "UPDATE sessions SET absolute_expires_at_unix_ms = created_at_unix_ms + ?1
+                 WHERE token_hash = ?2",
+                params![
+                    SESSION_PERSISTENT_LIFETIME_MS,
+                    fixture.session_hash.as_bytes()
+                ],
+            )
+            .expect("apply persistent bound");
+        let enabled: bool = databases
+            .state()
+            .lock()
+            .expect("state lock")
+            .query_row(
+                "SELECT session_expiry_enabled FROM security_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("flag");
+        assert!(enabled);
     }
 
     #[test]

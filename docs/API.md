@@ -29,7 +29,11 @@ Frontend assets are separately cacheable by their hashed names.
 
 The first owner is created with a short-lived one-time local bootstrap token.
 Login establishes an opaque `HttpOnly`, host-only session cookie and returns a
-session-bound CSRF proof held in frontend memory.
+session-bound CSRF proof held in frontend memory. Login and `/auth/me` include
+`sessionExpires`. By default a session dies after 30 minutes idle and eight
+hours at most. `PUT /api/v1/auth/session-expiry` with `{ "expires": false }`
+keeps that cookie until logout or a password change, up to 400 days. Reloading
+the page still requires a new CSRF proof.
 
 Except for liveness, setup status, owner claim, and login, current API routes
 require both:
@@ -57,6 +61,8 @@ malformed, stale, or wrong proof returns `403` with code `csrf_rejected`.
 | `POST` | `/api/v1/auth/login` | Password login |
 | `GET` | `/api/v1/auth/me` | Current protected user/session state |
 | `POST` | `/api/v1/auth/csrf` | Compare-and-swap CSRF rotation |
+| `GET` | `/api/v1/auth/session-expiry` | Current idle/absolute expiry setting |
+| `PUT` | `/api/v1/auth/session-expiry` | Turn idle/absolute session expiry on or off; requires `users.manage` |
 | `POST` | `/api/v1/auth/account` | Change owner login/display name and optionally password; requires `users.manage` |
 | `POST` | `/api/v1/auth/logout` | Revoke the current session and clear its cookie |
 

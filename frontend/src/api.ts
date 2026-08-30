@@ -55,7 +55,7 @@ export function expectString(record: JsonRecord, key: string, context: string): 
   return value;
 }
 
-function expectBoolean(record: JsonRecord, key: string, context: string): boolean {
+export function expectBoolean(record: JsonRecord, key: string, context: string): boolean {
   const value = record[key];
   if (typeof value !== 'boolean') {
     throw new ApiError(`${context} returned an invalid ${key} value.`);

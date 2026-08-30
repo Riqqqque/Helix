@@ -32,9 +32,10 @@ flowchart LR
 
 1. `helixd` starts as an unprivileged process, opens its local state, and serves
    the compiled frontend and versioned API.
-2. Login creates a bounded revocable session. Protected requests require the
-   session cookie, an in-memory session-bound CSRF proof, and the capability for
-   that operation.
+2. Login creates a revocable session. By default it expires after 30 minutes
+   idle and eight hours; Settings can turn that off. Protected requests require
+   the session cookie, an in-memory session-bound CSRF proof, and the capability
+   for that operation.
 3. Read-only adapters collect bounded host data. The browser never reads the
    host directly.
 4. Root-required work is serialized into a closed `BrokerRequest` enum and sent

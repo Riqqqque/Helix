@@ -110,8 +110,11 @@ release work.
 
 Sessions use opaque random bearer tokens; only a cryptographic hash is stored.
 The browser cookie is `HttpOnly`, host-only, `SameSite=Strict`, and scoped to
-`/`. A reviewed HTTPS deployment must add the appropriate Secure/host-prefix
-policy.
+`/`. By default Helix enforces a 30-minute idle deadline and an eight-hour
+absolute deadline. Settings can turn that expiry off so the same cookie lasts
+until logout or a password change (capped at 400 days). CSRF pairing, reload
+login, and credential-change revocation stay required. A reviewed HTTPS
+deployment must add the appropriate Secure/host-prefix policy.
 
 Every protected route requires the session cookie and the current session-bound
 `X-Helix-CSRF` proof. The frontend keeps that proof in memory, so a reload

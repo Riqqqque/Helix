@@ -46,15 +46,16 @@ pub use security::{
     CredentialRecord, CsrfRequirement, CsrfTokenHash, LoginDelayState, OwnerAccountUpdateInput,
     OwnerAccountUpdateOutcome, OwnerClaimInput, OwnerClaimOutcome, OwnerClaimRejection,
     PasswordPhc, PasswordRehash, SessionAuthenticationInput, SessionAuthorization,
-    SessionCreateInput, SessionCreateOutcome, SessionTokenHash, SetupStatus, TerminalAuditEvent,
-    UserPreferencesRecord, UserPreferencesUpdateInput, UserPreferencesUpdateOutcome, UserStatus,
+    SessionCreateInput, SessionCreateOutcome, SessionExpiryUpdateOutcome, SessionTokenHash,
+    SetupStatus, TerminalAuditEvent, UserPreferencesRecord, UserPreferencesUpdateInput,
+    UserPreferencesUpdateOutcome, UserStatus,
 };
 pub use strands::{
     MAX_STRAND_KV_KEYS, MAX_STRAND_KV_TOTAL_BYTES, MAX_STRAND_PACKAGE_BYTES, MAX_STRAND_PACKAGES,
     StrandInstallInput, StrandKvEntry, StrandOrigin, StrandPackageRecord, StrandPackageSummary,
 };
 
-pub const STATE_SCHEMA_VERSION: i64 = 8;
+pub const STATE_SCHEMA_VERSION: i64 = 9;
 pub const METRICS_SCHEMA_VERSION: i64 = 1;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DAEMON_LEASE_FILE: &str = ".helixd.lock";
@@ -723,6 +724,9 @@ fn migrate_state(
     }
     if current < 8 {
         strands::migrate_strands(connection)?;
+    }
+    if current < 9 {
+        security::migrate_session_expiry(connection)?;
     }
     Ok(())
 }
@@ -1506,6 +1510,17 @@ fn validate_state_semantics(
             (7, "terminal-capability".to_owned()),
             (8, "installable-ui-strands".to_owned()),
         ],
+        9 => vec![
+            (1, "foundational-state".to_owned()),
+            (2, "owner-authentication".to_owned()),
+            (3, "recoverable-secret-storage".to_owned()),
+            (4, "bounded-authentication-audit-retention".to_owned()),
+            (5, "dashboard-preferences-and-owner-capabilities".to_owned()),
+            (6, "server-appearance-customization".to_owned()),
+            (7, "terminal-capability".to_owned()),
+            (8, "installable-ui-strands".to_owned()),
+            (9, "optional-session-expiry".to_owned()),
+        ],
         _ => {
             return Err(StateError::UnsupportedSchema {
                 database,
@@ -1685,6 +1700,36 @@ fn validate_state_semantics(
         )?;
         if !owner_has_terminal {
             failures.push("owner capability terminal.open is missing".to_owned());
+        }
+    }
+    if expected_schema_version >= 9 {
+        let expiry_flag = connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM security_state
+                    WHERE singleton = 1 AND session_expiry_enabled IN (0, 1)
+                 )",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !expiry_flag {
+            failures.push("session expiry flag is missing".to_owned());
+        }
+        let sessions_sql: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'sessions'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match sessions_sql {
+            Some(sql) if sql.contains("34560000000") => {}
+            Some(_) => failures.push(
+                "sessions table still uses the eight-hour absolute lifetime bound".to_owned(),
+            ),
+            None => failures.push("sessions table is missing".to_owned()),
         }
     }
 
