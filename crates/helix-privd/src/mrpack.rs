@@ -6,6 +6,7 @@
 //! can be assembled inside a fresh staging directory.
 
 use serde::Deserialize;
+use serde_json::Value;
 use sha1::Sha1;
 use sha2::{Digest as _, Sha512};
 use std::{
@@ -42,11 +43,11 @@ pub struct MrpackLimits {
 impl Default for MrpackLimits {
     fn default() -> Self {
         Self {
-            maximum_archive_bytes: 256 * 1024 * 1024,
+            maximum_archive_bytes: 768 * 1024 * 1024,
             maximum_index_bytes: 4 * 1024 * 1024,
             maximum_archive_entries: 8_192,
             maximum_files: 4_096,
-            maximum_file_bytes: 512 * 1024 * 1024,
+            maximum_file_bytes: 768 * 1024 * 1024,
             maximum_download_bytes: 8 * 1024 * 1024 * 1024,
             maximum_override_bytes: 2 * 1024 * 1024 * 1024,
             maximum_unpacked_bytes: 10 * 1024 * 1024 * 1024,
@@ -575,9 +576,9 @@ pub fn verify_download(path: &Path, expected: &MrpackDownload) -> Result<(), Str
             expected.path
         ));
     }
-    if metadata.len() != expected.size {
+    if metadata.len() == 0 || metadata.len() > MrpackLimits::default().maximum_file_bytes {
         return Err(format!(
-            "{} did not match its declared file size",
+            "{} is outside Helix file size limits",
             expected.path
         ));
     }
@@ -872,6 +873,18 @@ fn validate_label(value: &str, label: &str, maximum_bytes: usize) -> Result<(), 
     Ok(())
 }
 
+pub fn json_u64(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number.as_u64().or_else(|| {
+            number
+                .as_i64()
+                .and_then(|signed| u64::try_from(signed).ok())
+        }),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
 fn sanitize_summary(value: Option<&str>, maximum_bytes: usize) -> Option<String> {
     let value = value?;
     let mut cleaned = String::new();
@@ -1020,6 +1033,10 @@ mod tests {
         let downloaded = temp.path().join("example.jar");
         fs::write(&downloaded, payload).expect("download fixture");
         verify_download(&downloaded, &plan.files[0]).expect("verify both hashes");
+        let mut mismatched_size = plan.files[0].clone();
+        mismatched_size.size = 1;
+        verify_download(&downloaded, &mismatched_size)
+            .expect("declared size is not the integrity check");
         fs::write(&downloaded, b"wrong size").expect("corrupt fixture");
         assert!(verify_download(&downloaded, &plan.files[0]).is_err());
     }
@@ -1252,6 +1269,15 @@ mod tests {
         let plan = inspect_mrpack(&archive, &MrpackLimits::default(), deadline())
             .expect("long summary should truncate");
         assert_eq!(plan.summary.as_deref().map(str::len), Some(2_048));
+    }
+
+    #[test]
+    fn json_u64_reads_numbers_and_decimal_strings() {
+        assert_eq!(json_u64(&serde_json::json!(4096)), Some(4096));
+        assert_eq!(json_u64(&serde_json::json!("8192")), Some(8192));
+        assert_eq!(json_u64(&serde_json::json!(" 12 ")), Some(12));
+        assert_eq!(json_u64(&serde_json::json!(-1)), None);
+        assert_eq!(json_u64(&serde_json::json!("nope")), None);
     }
 
     #[test]

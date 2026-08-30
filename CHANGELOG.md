@@ -50,6 +50,10 @@ release, not a public-internet support promise.
 
 ### Fixed
 
+- Modpack downloads no longer abort with curl's "Maximum file size exceeded"
+  when the CDN Content-Length is bigger than the size in the pack index, or
+  when a CurseForge file omits `fileLength`. Helix caps curl at the safety
+  limit and checks hashes.
 - Creating a server from a Modrinth pack no longer dies on a messy pack
   summary (newlines, padding, or a blurb longer than 2 KB). Helix keeps a
   cleaned copy and still installs.

@@ -5755,7 +5755,7 @@ impl NativeManager {
             let _ = fs::remove_file(path);
         }
         let classified = if extra_headers.is_empty() {
-            result.map(|_| ())
+            result.map(|_| ()).map_err(map_download_curl_error)
         } else {
             let dump = dump_path
                 .as_ref()
@@ -8411,6 +8411,14 @@ fn run_program_combined(
     } else {
         detail
     })
+}
+
+fn map_download_curl_error(error: String) -> String {
+    if error.contains("Maximum file size exceeded") {
+        "the download is larger than Helix allows for this file".to_owned()
+    } else {
+        error
+    }
 }
 
 fn run_program(program: &Path, args: &[String], timeout_seconds: u64) -> Result<String, String> {

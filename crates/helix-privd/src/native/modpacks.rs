@@ -7,7 +7,7 @@ use super::{
     write_new_file,
 };
 use helix_privd::mrpack::{
-    MrpackLimits, extract_overrides, inspect_mrpack, prepare_download_path,
+    MrpackLimits, extract_overrides, inspect_mrpack, json_u64, prepare_download_path,
     require_exact_https_host, validate_relative_path, verify_download, verify_sha512,
 };
 use serde_json::{Value, json};
@@ -180,7 +180,7 @@ impl NativeManager {
                 "compatibility_reason": reason,
                 "mrpack_file": json!({
                     "filename": optional_text(file, "fileName", 256),
-                    "size": file.get("fileLength").and_then(Value::as_u64).unwrap_or(0),
+                    "size": file.get("fileLength").and_then(json_u64).unwrap_or(0),
                     "modrinth_declared_sha512_available": false,
                 }),
             }));
@@ -362,19 +362,21 @@ impl NativeManager {
 
             progress("Downloading the Modrinth-hosted .mrpack", 14);
             require_exact_https_host(&resolved.file_url, MODRINTH_CDN_HOST)?;
+            let limits = MrpackLimits::default();
             self.curl_no_redirect(
                 &resolved.file_url,
                 &archive_path,
-                resolved.file_size,
+                limits.maximum_archive_bytes,
                 remaining_download_seconds(deadline)?,
             )?;
             let archive_metadata = fs::symlink_metadata(&archive_path)
                 .map_err(|_| "the downloaded modpack archive is unavailable".to_owned())?;
             if !archive_metadata.file_type().is_file()
-                || archive_metadata.len() != resolved.file_size
+                || archive_metadata.len() == 0
+                || archive_metadata.len() > limits.maximum_archive_bytes
             {
                 return Err(
-                    "the downloaded modpack archive did not match its declared size".to_owned(),
+                    "the downloaded modpack archive is outside Helix size limits".to_owned(),
                 );
             }
             verify_sha512(&archive_path, &resolved.file_sha512, "the modpack archive")?;
@@ -383,7 +385,6 @@ impl NativeManager {
                 "Validating paths, hashes, loader pins, and safety bounds",
                 22,
             );
-            let limits = MrpackLimits::default();
             let plan = inspect_mrpack(&archive_path, &limits, deadline)?;
             if !resolved
                 .game_versions
@@ -445,7 +446,7 @@ impl NativeManager {
                 self.curl_no_redirect(
                     &file.url,
                     &output,
-                    file.size,
+                    limits.maximum_file_bytes,
                     remaining_download_seconds(deadline)?,
                 )?;
                 verify_download(&output, file)?;
@@ -643,7 +644,7 @@ impl NativeManager {
             let file = self.curseforge_v1(&format!("mods/{project_id}/files/{file_id}"))?;
             let file = file.get("data").cloned().unwrap_or(file);
             let file_name = required_text(&file, "fileName", 256)?;
-            let file_size = file.get("fileLength").and_then(Value::as_u64).unwrap_or(0);
+            let file_size = file.get("fileLength").and_then(json_u64).unwrap_or(0);
             if file_size == 0 || file_size > MAX_SERVER_JAR_BYTES {
                 return Err("the CurseForge file size is outside Helix safety limits".to_owned());
             }
@@ -658,7 +659,7 @@ impl NativeManager {
             self.curl_no_redirect(
                 &url,
                 &archive_path,
-                file_size.max(64 * 1024),
+                MAX_SERVER_JAR_BYTES,
                 remaining_download_seconds(deadline)?,
             )?;
             progress("Reading the CurseForge manifest", 24);
@@ -675,7 +676,7 @@ impl NativeManager {
                 ))?;
                 let meta = meta.get("data").cloned().unwrap_or(meta);
                 let name = required_text(&meta, "fileName", 256)?;
-                let size = meta.get("fileLength").and_then(Value::as_u64).unwrap_or(0);
+                let size = meta.get("fileLength").and_then(json_u64).unwrap_or(0);
                 let download =
                     self.resolve_curseforge_download_url(&entry.project_id.to_string(), &meta)?;
                 require_forgecdn_host(&download)?;
@@ -683,10 +684,15 @@ impl NativeManager {
                 if destination.exists() {
                     continue;
                 }
+                if size > MAX_SERVER_JAR_BYTES {
+                    return Err(format!(
+                        "{name} is larger than Helix allows for a pack file"
+                    ));
+                }
                 self.curl_no_redirect(
                     &download,
                     &destination,
-                    size.clamp(16 * 1024, MAX_SERVER_JAR_BYTES),
+                    MAX_SERVER_JAR_BYTES,
                     remaining_download_seconds(deadline)?,
                 )?;
                 let scaled = index
@@ -1172,7 +1178,7 @@ fn select_mrpack_file(version: &Value) -> Result<ModpackFile, String> {
     let limits = MrpackLimits::default();
     let size = selected
         .get("size")
-        .and_then(Value::as_u64)
+        .and_then(json_u64)
         .filter(|size| *size > 0 && *size <= limits.maximum_archive_bytes)
         .ok_or_else(|| "The .mrpack archive size is outside Helix safety limits".to_owned())?;
     let sha512 = selected
