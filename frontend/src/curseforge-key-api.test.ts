@@ -10,6 +10,7 @@ describe('CurseForge catalog key', () => {
   it('recognizes the Settings Catalogs setup message', () => {
     expect(isCurseforgeKeyRequired('CurseForge needs an API key. Open Settings → Catalogs, paste a key from console.curseforge.com, then search again.')).toBe(true);
     expect(isCurseforgeKeyRequired('CurseForge catalog was unreachable.')).toBe(false);
+    expect(isCurseforgeKeyRequired("CurseForge's CDN blocked this host before it could check the key. That is not a bad paste.")).toBe(false);
   });
 
   it('unwraps quotes, docker dollar escaping, and wrapped lines from a console key', () => {
@@ -30,6 +31,20 @@ describe('CurseForge catalog key', () => {
     await expect(getCurseforgeKeyStatus('csrf')).resolves.toEqual({
       configured: true,
       catalog: 'api.curseforge.com',
+    });
+  });
+
+  it('parses a CDN-blocked probe after save', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      schema_version: 1,
+      configured: true,
+      catalog: 'api.curseforge.com',
+      probe: 'cdn_blocked',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    await expect(getCurseforgeKeyStatus('csrf')).resolves.toEqual({
+      configured: true,
+      catalog: 'api.curseforge.com',
+      probe: 'cdn_blocked',
     });
   });
 });

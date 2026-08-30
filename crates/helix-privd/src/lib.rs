@@ -323,6 +323,12 @@ pub enum BrokerRequest {
 }
 
 pub const CURSEFORGE_API_KEY_REQUIRED: &str = "CurseForge needs an API key. Open Settings → Catalogs, paste a key from console.curseforge.com, then search again.";
+pub const CURSEFORGE_KEY_REJECTED: &str =
+    "CurseForge rejected the saved API key. Replace it in Settings → Catalogs.";
+pub const CURSEFORGE_CDN_BLOCKED: &str =
+    "CurseForge's CDN blocked this host before it could check the key. That is not a bad paste.";
+pub const CURSEFORGE_RATE_LIMITED: &str =
+    "CurseForge rate-limited this host. Wait a bit and try again.";
 
 pub fn validate_curseforge_api_key(value: &str) -> Result<String, String> {
     let mut key = strip_curseforge_key_noise(value);
@@ -397,6 +403,58 @@ pub fn curl_extra_header_file(headers: &[(&str, &str)]) -> Result<String, String
         body.push('\n');
     }
     Ok(body)
+}
+
+pub fn http_dump_status(dump: &str) -> Option<u16> {
+    dump.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line
+                .strip_prefix("HTTP/1.0 ")
+                .or_else(|| line.strip_prefix("HTTP/1.1 "))
+                .or_else(|| line.strip_prefix("HTTP/2 "))
+                .or_else(|| line.strip_prefix("HTTP/3 "))?;
+            rest.split_whitespace().next()?.parse().ok()
+        })
+        .last()
+}
+
+pub fn http_status_from_curl_stderr(stderr: &str) -> Option<u16> {
+    let marker = "returned error: ";
+    let idx = stderr.rfind(marker)?;
+    stderr[idx + marker.len()..]
+        .split(|character: char| !character.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+}
+
+pub fn classify_curseforge_curl_error(stderr: &str, header_dump: &str, body: &[u8]) -> String {
+    let status = http_dump_status(header_dump).or_else(|| http_status_from_curl_stderr(stderr));
+    let body_text = String::from_utf8_lossy(body).to_ascii_lowercase();
+    let dump = header_dump.to_ascii_lowercase();
+    let cloudfront = dump.contains("cloudfront");
+    let key_text = body_text.contains("api key")
+        || body_text.contains("unauthorized")
+        || body_text.contains("missing or invalid");
+    match status {
+        Some(429) => CURSEFORGE_RATE_LIMITED.to_owned(),
+        Some(401 | 403) if key_text => CURSEFORGE_KEY_REJECTED.to_owned(),
+        Some(401 | 403) if body.is_empty() || cloudfront => CURSEFORGE_CDN_BLOCKED.to_owned(),
+        Some(401 | 403) => CURSEFORGE_KEY_REJECTED.to_owned(),
+        Some(code) if (500..600).contains(&code) => {
+            format!("CurseForge catalog was unreachable. HTTP {code}")
+        }
+        _ => format!("CurseForge catalog was unreachable. {stderr}"),
+    }
+}
+
+pub fn catalog_fetch_is_non_retryable(error: &str) -> bool {
+    error == CURSEFORGE_CDN_BLOCKED
+        || error == CURSEFORGE_KEY_REJECTED
+        || error == CURSEFORGE_RATE_LIMITED
+        || error.contains("returned error: 4")
+        || error.contains("HTTP 4")
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1658,6 +1716,33 @@ mod tests {
         assert_eq!(header_file, format!("x-api-key: {key}\n"));
         assert!(!header_file.contains("$$"));
         assert!(curl_extra_header_file(&[("x-api-key", "line\nbreak")]).is_err());
+        let cloudfront_dump = "HTTP/2 403 \r\ncontent-length: 0\r\nx-cache: Error from cloudfront\r\nvia: 1.1 edge.cloudfront.net (CloudFront)\r\n";
+        assert_eq!(http_dump_status(cloudfront_dump), Some(403));
+        assert_eq!(
+            classify_curseforge_curl_error(
+                "The requested URL returned error: 403",
+                cloudfront_dump,
+                b""
+            ),
+            CURSEFORGE_CDN_BLOCKED
+        );
+        assert_eq!(
+            classify_curseforge_curl_error(
+                "The requested URL returned error: 403",
+                "HTTP/1.1 403 Forbidden\r\nserver: Kestrel\r\n",
+                b"Forbidden: API Key missing or invalid"
+            ),
+            CURSEFORGE_KEY_REJECTED
+        );
+        assert_eq!(
+            classify_curseforge_curl_error(
+                "The requested URL returned error: 429",
+                "HTTP/2 429 \r\n",
+                b""
+            ),
+            CURSEFORGE_RATE_LIMITED
+        );
+        assert!(catalog_fetch_is_non_retryable(CURSEFORGE_CDN_BLOCKED));
         let status = serde_json::to_value(BrokerRequest::CurseforgeKeyStatus {})
             .expect("serialize curseforge status");
         assert_eq!(status["operation"], "curseforge_key_status");

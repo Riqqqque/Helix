@@ -398,7 +398,7 @@ optional/client-only files and `full_pack_parity: false`.
 | `GET` | `/api/v1/marketplace/modrinth/image?path=...` | `games.view` | Same-origin, session-authenticated, exact-CDN-path image proxy for marketplace and modpack artwork |
 | `GET` | `/api/v1/marketplace/curseforge/image?path=...` | `games.view` | Same for CurseForge `media.forgecdn.net` avatars |
 | `GET` | `/api/v1/marketplace/curseforge/key` | `games.view` | Whether a CurseForge API key is saved on this host (`configured`, `catalog`); the key itself is never returned |
-| `PUT` | `/api/v1/marketplace/curseforge/key` | `games.manage` | Save a 24–256 character CurseForge API key after a live probe of `api.curseforge.com` |
+| `PUT` | `/api/v1/marketplace/curseforge/key` | `games.manage` | Save a 24–256 character CurseForge API key. A live probe of `api.curseforge.com` may return `probe=ok`, `cdn_blocked`, or `unreachable`; only an origin key rejection rolls the save back |
 | `DELETE` | `/api/v1/marketplace/curseforge/key` | `games.manage` | Remove the saved CurseForge API key |
 | `GET` | `/api/v1/servers/{instance_id}/backups` | `games.view` | Active backups, recoverable trash, trash note, and keep-count/keep-days policy |
 | `PUT` | `/api/v1/servers/{instance_id}/backup-policy` | `games.backups.manage` | Set keep-count (0–50) and keep-days (0–365); 0 means no limit; extras move to trash |

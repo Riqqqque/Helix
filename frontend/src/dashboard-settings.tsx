@@ -203,6 +203,7 @@ function CatalogsSettings({
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [key, setKey] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -212,6 +213,7 @@ function CatalogsSettings({
       .then((status) => {
         setConfigured(status.configured);
         setError(null);
+        setNotice(null);
       })
       .catch((requestError: unknown) => {
         if (controller.signal.aborted) return;
@@ -233,10 +235,16 @@ function CatalogsSettings({
     }
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const status = await setCurseforgeApiKey(trimmed, csrfToken);
       setKey('');
       setConfigured(status.configured);
+      if (status.probe === 'cdn_blocked') {
+        setNotice("Saved. CurseForge's CDN blocked this host, so CurseForge search will fail until that clears.");
+      } else if (status.probe === 'unreachable') {
+        setNotice('Saved. Helix could not reach CurseForge to verify the key.');
+      }
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Helix could not save the CurseForge API key.');
     } finally {
@@ -248,6 +256,7 @@ function CatalogsSettings({
     if (!canManage || busy || configured !== true) return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const status = await clearCurseforgeApiKey(csrfToken);
       setKey('');
@@ -261,7 +270,7 @@ function CatalogsSettings({
 
   return (
     <section class="settings-card">
-      <div class="settings-card__head"><div><Icon name="search" /><span><h2>Catalogs</h2><p>CurseForge downloads need your own API key. Modrinth stays public.</p></span></div><InfoTip text="Helix stores the key only on this host, never in the browser or the dashboard database, and never shows it again. Saving asks CurseForge if the key works before it is kept." /></div>
+      <div class="settings-card__head"><div><Icon name="search" /><span><h2>Catalogs</h2><p>CurseForge downloads need your own API key. Modrinth stays public.</p></span></div><InfoTip text="Helix stores the key only on this host, never in the browser or the dashboard database, and never shows it again. If CurseForge's network blocks this server, the key is still kept." /></div>
       <div class="host-boot-control">
         <div>
           <span>CurseForge API key</span>
@@ -286,6 +295,7 @@ function CatalogsSettings({
             />
             <small>Paste the console key as-is. Quotes and extra line breaks are stripped. Helix checks it against CurseForge, then keeps it in a private file on this host. It is never returned to this page.</small>
           </label>
+          {notice !== null && <div class="settings-form-error" role="status"><Icon name="warning" size={15} />{notice}</div>}
           {error !== null && <div class="settings-form-error" role="alert"><Icon name="warning" size={15} />{error}</div>}
           <div class="settings-form-actions">
             <span>Removing the key stops new CurseForge downloads until another is saved.</span>
