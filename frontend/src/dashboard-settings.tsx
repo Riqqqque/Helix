@@ -69,6 +69,7 @@ import {
   START_WITH_HOST_DETAIL,
   START_WITH_HOST_TITLE,
 } from './start-with-host';
+import { getSessionExpiry, setSessionExpiry } from './session-expiry-api';
 
 const navigationLabels: Record<PrimaryDashboardSectionId, { label: string; icon: IconName }> = {
   overview: { label: 'Overview', icon: 'overview' },
@@ -189,6 +190,82 @@ function AccountSettings({
       </form>
     </section>
   );
+}
+
+function SessionExpirySettings({
+  csrfToken,
+  canManage,
+}: {
+  csrfToken: string;
+  canManage: boolean;
+}) {
+  const [expires, setExpires] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [optimistic, setOptimistic] = useState<boolean | null>(null);
+  const displayed = optimistic ?? expires ?? true;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getSessionExpiry(csrfToken, controller.signal)
+      .then((state) => {
+        setExpires(state.expires);
+        setError(null);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        setError(requestError instanceof Error ? requestError.message : 'Helix could not read session expiry.');
+      });
+    return () => controller.abort();
+  }, [csrfToken]);
+
+  const toggle = async (): Promise<void> => {
+    if (!canManage || busy || expires === null) return;
+    const next = !displayed;
+    setBusy(true);
+    setError(null);
+    setOptimistic(next);
+    try {
+      const updated = await setSessionExpiry(next, csrfToken);
+      setExpires(updated.expires);
+      setOptimistic(null);
+    } catch (requestError) {
+      setOptimistic(null);
+      setError(requestError instanceof Error ? requestError.message : 'Helix could not change session expiry.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section class="settings-card">
+      <div class="settings-card__head"><div><Icon name="clock" /><span><h2>Signed-in session</h2><p>Choose whether Helix signs you out after sitting idle.</p></span></div><InfoTip text="Turning this off keeps this browser signed in until you sign out or change the password. Reloading the page still asks you to sign in, because the extra proof lives only in this tab. CSRF pairing stays on." /></div>
+      <div class="host-boot-control">
+        <div>
+          <span>Expire this sign-in</span>
+          <strong>{expires === null && error === null ? 'Checking…' : busy && optimistic !== null ? nextLabel(optimistic) : displayed ? 'On' : 'Off'}</strong>
+          <small>{displayed ? 'Helix signs you out after 30 minutes idle, or after eight hours even if you stay on the page.' : 'Stay signed in on this browser until you sign out or change the password.'}</small>
+        </div>
+        <button
+          class="switch-button"
+          role="switch"
+          aria-checked={displayed}
+          aria-busy={busy || expires === null}
+          type="button"
+          disabled={busy || !canManage || expires === null}
+          onClick={() => void toggle()}
+        >
+          <i />
+          <span>{busy ? 'Saving…' : displayed ? 'On' : 'Off'}</span>
+        </button>
+      </div>
+      {error !== null && <InlineError message={error} />}
+    </section>
+  );
+}
+
+function nextLabel(expires: boolean): string {
+  return expires ? 'Enabling…' : 'Disabling…';
 }
 
 function CatalogsSettings({
@@ -1075,6 +1152,7 @@ export function DashboardSettingsPage({
         </section>
         <HelixDataSettings servers={servers} csrfToken={csrfToken} canManage={user.capabilities.includes('games.manage')} onRefresh={onHostIntegrationRefresh} />
         <HostIntegrationSettings resource={hostIntegration} user={user} csrfToken={csrfToken} onRefresh={onHostIntegrationRefresh} />
+        <SessionExpirySettings csrfToken={csrfToken} canManage={user.capabilities.includes('users.manage')} />
         <AccountSettings user={user} csrfToken={csrfToken} onAccountUpdated={onAccountUpdated} />
       </div>
     </div>

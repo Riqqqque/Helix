@@ -148,6 +148,9 @@ After the first owner exists:
 - pick a theme in Settings, and use **Arrange** (or Settings → Navigation) to
   hide, add, or reorder pages. Globe starts hidden. That layout stays after a
   refresh; Helix saves it to this host.
+- Settings → Signed-in session can turn off the 30-minute idle / eight-hour
+  cap if you want this browser to stay signed in until you sign out or change
+  the password. Reloading the page still asks you to sign in.
 
 Never post setup tokens, passwords, cookies, CSRF proofs, private addresses,
 hostnames, storage paths, server logs, or world data in an issue or screenshot.

@@ -67,6 +67,7 @@ describe('whole-host reboot confirmation', () => {
     expect(markup).toContain('Helix data');
     expect(markup).toContain('Save account changes');
     expect(markup).toContain('Current password');
+    expect(markup).toContain('Expire this sign-in');
     expect(markup).not.toContain('>Catalogs<');
   });
 });

@@ -30,7 +30,8 @@ use std::{
 use zeroize::Zeroize;
 
 const SESSION_COOKIE_NAME: &str = "helix_session";
-const SESSION_COOKIE_MAX_AGE_SECONDS: i64 = 8 * 60 * 60;
+const SESSION_COOKIE_EXPIRING_MAX_AGE_SECONDS: i64 = 8 * 60 * 60;
+const SESSION_COOKIE_PERSISTENT_MAX_AGE_SECONDS: i64 = 400 * 24 * 60 * 60;
 const CSRF_HEADER: &str = "x-helix-csrf";
 const PASSWORD_WORKERS: usize = 2;
 const RATE_LIMIT_MAX_ENTRIES: usize = 2_048;
@@ -61,6 +62,10 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/auth/csrf", post(rotate_csrf))
         .route("/auth/me", get(me))
         .route("/auth/account", post(update_account))
+        .route(
+            "/auth/session-expiry",
+            get(session_expiry).put(update_session_expiry),
+        )
         .route("/auth/logout", post(logout))
 }
 
@@ -614,12 +619,27 @@ struct AuthSuccessResponse<'a> {
     user: AuthUser,
     csrf_token: &'a str,
     expires_at_unix_ms: i64,
+    session_expires: bool,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MeResponse {
     user: AuthUser,
+    expires_at_unix_ms: i64,
+    session_expires: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SessionExpiryUpdateRequest {
+    expires: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionExpiryUpdateResponse {
+    expires: bool,
     expires_at_unix_ms: i64,
 }
 
@@ -1027,11 +1047,13 @@ async fn me(
     let authenticated =
         authenticate(&state, &headers, SessionAuthorization::Authenticated, true).await?;
     let expires_at_unix_ms = authenticated.absolute_expires_at_unix_ms;
+    let session_expires = authenticated.session_expires;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(MeResponse {
             user: authenticated.into(),
             expires_at_unix_ms,
+            session_expires,
         }),
     ))
 }
@@ -1206,6 +1228,55 @@ fn perform_account_update(
             AccountWorkerOutcome::CredentialChangedOrUnavailable
         }
     })
+}
+
+async fn session_expiry(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let authenticated =
+        authenticate(&state, &headers, SessionAuthorization::Authenticated, true).await?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(SessionExpiryUpdateResponse {
+            expires: authenticated.session_expires,
+            expires_at_unix_ms: authenticated.absolute_expires_at_unix_ms,
+        }),
+    ))
+}
+
+async fn update_session_expiry(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<SessionExpiryUpdateRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    validate_post_headers(&headers)?;
+    let _authenticated = require_capability(&state, &headers, "users.manage").await?;
+    let Json(request) = body.map_err(map_json_rejection)?;
+    let encoded = parse_session_cookie(&headers)?;
+    let session_hash = session_hash_from_headers(&headers)?;
+    let databases = Arc::clone(&state.databases);
+    let now = now_unix_ms();
+    let outcome = run_blocking_state(&state.blocking_tasks, move || {
+        databases
+            .state()
+            .set_session_expiry(&session_hash, request.expires, now)
+    })
+    .await?;
+    let Some(outcome) = outcome else {
+        return Err(ApiError::AuthenticationRequired);
+    };
+    let mut response = (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(SessionExpiryUpdateResponse {
+            expires: outcome.expires,
+            expires_at_unix_ms: outcome.absolute_expires_at_unix_ms,
+        }),
+    )
+        .into_response();
+    let cookie = session_cookie(encoded, outcome.expires)?;
+    response.headers_mut().insert(header::SET_COOKIE, cookie);
+    Ok(response)
 }
 
 async fn rotate_csrf(
@@ -1645,13 +1716,15 @@ fn session_issue_response(status: StatusCode, issue: SessionIssue) -> Result<Res
     let session = issue.session_token.encode();
     let csrf = issue.csrf_token.encode();
     let expires_at_unix_ms = issue.authenticated.absolute_expires_at_unix_ms;
+    let session_expires = issue.authenticated.session_expires;
     let payload = AuthSuccessResponse {
         user: issue.authenticated.into(),
         csrf_token: csrf.expose_secret(),
         expires_at_unix_ms,
+        session_expires,
     };
     let mut response = (status, Json(payload)).into_response();
-    let cookie = session_cookie(session.expose_secret())?;
+    let cookie = session_cookie(session.expose_secret(), session_expires)?;
     response.headers_mut().insert(header::SET_COOKIE, cookie);
     response
         .headers_mut()
@@ -1659,11 +1732,20 @@ fn session_issue_response(status: StatusCode, issue: SessionIssue) -> Result<Res
     Ok(response)
 }
 
-fn session_cookie(encoded: &str) -> Result<HeaderValue, ApiError> {
+fn session_cookie_max_age_seconds(expires: bool) -> i64 {
+    if expires {
+        SESSION_COOKIE_EXPIRING_MAX_AGE_SECONDS
+    } else {
+        SESSION_COOKIE_PERSISTENT_MAX_AGE_SECONDS
+    }
+}
+
+fn session_cookie(encoded: &str, expires: bool) -> Result<HeaderValue, ApiError> {
     // Helix currently serves loopback HTTP only. `Secure` must be added when a
     // reviewed HTTPS boundary exists; no Domain attribute keeps this host-only.
+    let max_age = session_cookie_max_age_seconds(expires);
     HeaderValue::from_str(&format!(
-        "{SESSION_COOKIE_NAME}={encoded}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_COOKIE_MAX_AGE_SECONDS}"
+        "{SESSION_COOKIE_NAME}={encoded}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}"
     ))
     .map_err(|_| ApiError::ServiceUnavailable)
 }
