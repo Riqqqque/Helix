@@ -48,6 +48,8 @@ release, not a public-internet support promise.
 
 ### Fixed
 
+- CurseForge keys from the console (the `$2a$10$…` form) are sent as-is. Saving
+  no longer looks like CurseForge rejected a valid key.
 - Home Globe fills the widget instead of sitting in a letterboxed 2:1 box. The
   Globe page still shows the whole world.
 - Checking for Linux updates no longer dies on APT's HTTPS helper (`seteuid 42`

@@ -339,6 +339,25 @@ pub fn validate_curseforge_api_key(value: &str) -> Result<String, String> {
     Ok(trimmed.to_owned())
 }
 
+pub fn curl_extra_header_file(headers: &[(&str, &str)]) -> Result<String, String> {
+    let mut body = String::new();
+    for (name, value) in headers {
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || value.contains(['\r', '\n'])
+        {
+            return Err("the catalog request used an invalid header".to_owned());
+        }
+        body.push_str(name);
+        body.push_str(": ");
+        body.push_str(value);
+        body.push('\n');
+    }
+    Ok(body)
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FirewallProtocol {
@@ -1575,6 +1594,10 @@ mod tests {
             validate_curseforge_api_key(&format!("  {key}  ")).unwrap(),
             key
         );
+        let header_file = curl_extra_header_file(&[("x-api-key", key)]).expect("header file");
+        assert_eq!(header_file, format!("x-api-key: {key}\n"));
+        assert!(!header_file.contains("$$"));
+        assert!(curl_extra_header_file(&[("x-api-key", "line\nbreak")]).is_err());
         let status = serde_json::to_value(BrokerRequest::CurseforgeKeyStatus {})
             .expect("serialize curseforge status");
         assert_eq!(status["operation"], "curseforge_key_status");
