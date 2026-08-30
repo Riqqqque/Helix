@@ -241,7 +241,7 @@ function CatalogsSettings({
       setKey('');
       setConfigured(status.configured);
       if (status.probe === 'cdn_blocked') {
-        setNotice("Saved. CurseForge's CDN blocked this host, so CurseForge search will fail until that clears.");
+        setNotice("Saved. CurseForge blocked this server's public IP. The key is fine. Search works once this host exits on a normal ISP address instead of a VPS/VPN.");
       } else if (status.probe === 'unreachable') {
         setNotice('Saved. Helix could not reach CurseForge to verify the key.');
       }

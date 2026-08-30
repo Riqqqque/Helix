@@ -326,8 +326,7 @@ pub enum BrokerRequest {
 pub const CURSEFORGE_API_KEY_REQUIRED: &str = "CurseForge needs an API key. Open Settings → Catalogs, paste a key from console.curseforge.com, then search again.";
 pub const CURSEFORGE_KEY_REJECTED: &str =
     "CurseForge rejected the saved API key. Replace it in Settings → Catalogs.";
-pub const CURSEFORGE_CDN_BLOCKED: &str =
-    "CurseForge's CDN blocked this host before it could check the key. That is not a bad paste.";
+pub const CURSEFORGE_CDN_BLOCKED: &str = "CurseForge's CDN blocked this host's public IP. That is not a bad key. Search needs this host to reach the internet without a VPS or VPN exit they block.";
 pub const CURSEFORGE_RATE_LIMITED: &str =
     "CurseForge rate-limited this host. Wait a bit and try again.";
 

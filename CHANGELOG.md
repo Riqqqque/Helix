@@ -48,9 +48,8 @@ release, not a public-internet support promise.
 
 ### Fixed
 
-- Saving a CurseForge key no longer treats an empty CloudFront 403 as a bad
-  paste. That response never reached CurseForge. Helix keeps a structurally
-  valid key and says the CDN blocked this host.
+- Catalogs no longer says a CurseForge CDN block will "clear." That response is
+  this host's public IP getting refused, usually a VPS or VPN exit.
 - CurseForge console pastes can include hidden unicode, fullwidth `$`, page
   text, or docker `$$` wrapping. Helix pulls out the `$2a$` key and stores that.
 - Home Globe fills the widget instead of sitting in a letterboxed 2:1 box. The
