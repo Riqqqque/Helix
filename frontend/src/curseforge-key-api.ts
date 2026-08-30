@@ -16,17 +16,68 @@ export function isCurseforgeKeyRequired(message: string): boolean {
 }
 
 export function normalizeCurseforgeApiKey(value: string): string {
-  let key = value.replace(/[\u00AD\u200B-\u200D\u2060\uFEFF]/gu, '').replace(/\u00A0/gu, ' ').trim();
+  let key = '';
+  for (const character of value.normalize('NFKC')) {
+    const mapped = mapCurseforgeKeyCharacter(character);
+    if (mapped !== null) key += mapped;
+  }
+  key = key.trim();
+  for (let pass = 0; pass < 3; pass += 1) {
+    const unquoted = stripWrappingQuotes(key);
+    if (unquoted === key) break;
+    key = unquoted;
+  }
+  if (key.includes('$$2')) key = key.replaceAll('$$', '$');
+  return extractCurseforgeConsoleKey(key) ?? [...key].filter((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code >= 0x21 && code <= 0x7e;
+  }).join('');
+}
+
+function mapCurseforgeKeyCharacter(character: string): string | null {
+  const code = character.codePointAt(0) ?? 0;
+  if (code <= 0x1f || code === 0x7f) return null;
+  if (
+    code === 0xad || code === 0x34f || code === 0x61c || code === 0x180e
+    || (code >= 0x200b && code <= 0x200f) || (code >= 0x202a && code <= 0x202e)
+    || (code >= 0x2060 && code <= 0x2064) || (code >= 0x2066 && code <= 0x206f)
+    || code === 0xfeff || (code >= 0xfff9 && code <= 0xfffb)
+  ) {
+    return null;
+  }
+  if (code === 0xa0 || code === 0x202f || (code >= 0x2007 && code <= 0x200a)) return ' ';
+  if (code === 0x2018 || code === 0x2019 || code === 0x201a || code === 0x201b) return "'";
+  if (code === 0x201c || code === 0x201d || code === 0x201e || code === 0x201f) return '"';
+  if ((code >= 0x2010 && code <= 0x2015) || code === 0x2212) return '-';
+  return character;
+}
+
+function stripWrappingQuotes(value: string): string {
+  const key = value.trim();
   if (
     (key.startsWith('"') && key.endsWith('"'))
     || (key.startsWith("'") && key.endsWith("'"))
     || (key.startsWith('\u201c') && key.endsWith('\u201d'))
     || (key.startsWith('\u2018') && key.endsWith('\u2019'))
   ) {
-    key = key.slice(1, -1).trim();
+    return key.slice(1, -1).trim();
   }
-  if (key.startsWith('$$2')) key = key.replaceAll('$$', '$');
-  return key.replace(/\s+/gu, '');
+  return key;
+}
+
+function extractCurseforgeConsoleKey(value: string): string | null {
+  const start = value.indexOf('$2');
+  if (start < 0) return null;
+  let token = '';
+  for (const character of value.slice(start)) {
+    if (character === '$' || character === '/' || character === '.' || /[A-Za-z0-9]/u.test(character)) {
+      token += character;
+      if (token.length >= 256) break;
+    } else {
+      break;
+    }
+  }
+  return token.length >= 24 ? token : null;
 }
 
 function parseCurseforgeKeyStatus(value: unknown): CurseforgeKeyStatus {

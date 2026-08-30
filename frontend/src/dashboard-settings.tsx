@@ -286,14 +286,14 @@ function CatalogsSettings({
             <input
               type="password"
               value={key}
-              minLength={24}
               maxLength={512}
               autoComplete="off"
               spellcheck={false}
+              autocapitalize="none"
               placeholder={configured === true ? 'Paste a replacement key' : 'Paste the key from console.curseforge.com'}
               onInput={(event) => setKey(event.currentTarget.value)}
             />
-            <small>Paste the console key as-is. Quotes and extra line breaks are stripped. Helix checks it against CurseForge, then keeps it in a private file on this host. It is never returned to this page.</small>
+            <small>Paste from the console. Hidden characters, quotes, and docker $$ wrapping are stripped. Helix keeps the key in a private file on this host and never shows it again.</small>
           </label>
           {notice !== null && <div class="settings-form-error" role="status"><Icon name="warning" size={15} />{notice}</div>}
           {error !== null && <div class="settings-form-error" role="alert"><Icon name="warning" size={15} />{error}</div>}

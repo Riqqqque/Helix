@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{io, path::PathBuf};
 use thiserror::Error;
+use unicode_normalization::UnicodeNormalization;
 
 pub const MAX_REQUEST_BYTES: usize = 5 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
@@ -332,12 +333,22 @@ pub const CURSEFORGE_RATE_LIMITED: &str =
 
 pub fn validate_curseforge_api_key(value: &str) -> Result<String, String> {
     let mut key = strip_curseforge_key_noise(value);
-    let unquoted = strip_wrapping_quotes(key.trim());
-    key = unquoted.to_owned();
-    if key.starts_with("$$2") {
+    for _ in 0..3 {
+        let unquoted = strip_wrapping_quotes(key.trim());
+        if unquoted.len() == key.trim().len() {
+            break;
+        }
+        key = unquoted.to_owned();
+    }
+    key = key.trim().to_owned();
+    if key.contains("$$2") {
         key = key.replace("$$", "$");
     }
-    key.retain(|character| !character.is_whitespace());
+    if let Some(token) = extract_curseforge_console_key(&key) {
+        key = token;
+    } else {
+        key.retain(|character| character.is_ascii_graphic());
+    }
     if key.len() < 24 || key.len() > 256 {
         return Err("CurseForge API keys are 24–256 characters".to_owned());
     }
@@ -349,21 +360,61 @@ pub fn validate_curseforge_api_key(value: &str) -> Result<String, String> {
 
 fn strip_curseforge_key_noise(value: &str) -> String {
     value
-        .chars()
-        .filter(|character| {
-            !matches!(
-                character,
-                '\u{00ad}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}' | '\u{feff}'
-            )
-        })
-        .map(|character| {
-            if character == '\u{00a0}' {
-                ' '
-            } else {
-                character
-            }
-        })
+        .nfkc()
+        .filter(|character| !curseforge_key_ignorable(*character))
+        .map(map_curseforge_key_punctuation)
         .collect()
+}
+
+fn curseforge_key_ignorable(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{00ad}'
+                | '\u{034f}'
+                | '\u{061c}'
+                | '\u{180e}'
+                | '\u{200b}'
+                | '\u{200c}'
+                | '\u{200d}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{202a}'
+                | '\u{202b}'
+                | '\u{202c}'
+                | '\u{202d}'
+                | '\u{202e}'
+                | '\u{2060}'
+                | '\u{2061}'
+                | '\u{2062}'
+                | '\u{2063}'
+                | '\u{2064}'
+                | '\u{2066}'
+                | '\u{2067}'
+                | '\u{2068}'
+                | '\u{2069}'
+                | '\u{206a}'
+                | '\u{206b}'
+                | '\u{206c}'
+                | '\u{206d}'
+                | '\u{206e}'
+                | '\u{206f}'
+                | '\u{feff}'
+                | '\u{fff9}'
+                | '\u{fffa}'
+                | '\u{fffb}'
+        )
+}
+
+fn map_curseforge_key_punctuation(character: char) -> char {
+    match character {
+        '\u{00a0}' | '\u{202f}' | '\u{2007}' | '\u{2008}' | '\u{2009}' | '\u{200a}' => ' ',
+        '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' => '\'',
+        '\u{201c}' | '\u{201d}' | '\u{201e}' | '\u{201f}' => '"',
+        '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+        | '\u{2212}' => '-',
+        other => other,
+    }
 }
 
 fn strip_wrapping_quotes(value: &str) -> &str {
@@ -384,6 +435,26 @@ fn strip_wrapping_quotes(value: &str) -> &str {
     } else {
         value
     }
+}
+
+fn extract_curseforge_console_key(value: &str) -> Option<String> {
+    let start = value.find("$2")?;
+    let mut token = String::new();
+    for character in value[start..].chars() {
+        if character == '$'
+            || character == '/'
+            || character == '.'
+            || character.is_ascii_alphanumeric()
+        {
+            token.push(character);
+            if token.len() >= 256 {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    (token.len() >= 24).then_some(token)
 }
 
 pub fn curl_extra_header_file(headers: &[(&str, &str)]) -> Result<String, String> {
@@ -1710,6 +1781,23 @@ mod tests {
         );
         assert_eq!(
             validate_curseforge_api_key(&format!("{}\n{}", &key[..16], &key[16..])).unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key(&format!(
+                "CF_API_KEY=$$2a$$10$${}\u{200b}",
+                &key["$2a$10$".len()..]
+            ))
+            .unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key(&format!("Copy this: {key} please\u{00a0}")).unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key("\u{ff04}2a\u{ff04}10\u{ff04}abcdefghijklmnopqrstuvwx")
+                .unwrap(),
             key
         );
         let header_file = curl_extra_header_file(&[("x-api-key", key)]).expect("header file");
