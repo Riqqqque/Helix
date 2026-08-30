@@ -9,7 +9,7 @@ use helix_privd::{
     MAX_FILE_UPLOAD_CHUNK_BYTES, MAX_MINECRAFT_VERSION_CATALOG, MinecraftCreateSpec,
     MinecraftDifficulty, MinecraftGameMode, MinecraftModpackCreateSpec, MinecraftSettingsPatch,
     MinecraftSoftware, ServerAction, TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec,
-    ValheimCreateSpec, validate_curseforge_api_key,
+    ValheimCreateSpec, curl_extra_header_file, validate_curseforge_api_key,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -5671,22 +5671,16 @@ impl NativeManager {
     ) -> Result<(), String> {
         let cache = self.state_root.join("metadata");
         fs::create_dir_all(&cache).map_err(|_| "could not create the metadata cache".to_owned())?;
-        let config_path = if extra_headers.is_empty() {
+        let header_path = if extra_headers.is_empty() {
             None
         } else {
-            let mut config = String::new();
-            for (name, value) in extra_headers {
-                if !header_name_ok(name) || value.contains(['\r', '\n', '"', '\\']) {
-                    return Err("the catalog request used an invalid header".to_owned());
-                }
-                let escaped = value.replace('$', "$$");
-                let _ = writeln!(config, "header = \"{name}: {escaped}\"");
-            }
-            let path = cache.join(format!("curl-{}.cfg", Uuid::new_v4()));
-            write_replaced_secret_file(&path, config.as_bytes())?;
+            let body = curl_extra_header_file(extra_headers)?;
+            let path = cache.join(format!("curl-{}.hdr", Uuid::new_v4()));
+            write_replaced_secret_file(&path, body.as_bytes())?;
             Some(path)
         };
         let mut args = vec![
+            "--disable".to_owned(),
             "--fail".to_owned(),
             "--silent".to_owned(),
             "--show-error".to_owned(),
@@ -5704,9 +5698,9 @@ impl NativeManager {
             "--header".to_owned(),
             "Accept: application/json, application/octet-stream".to_owned(),
         ];
-        if let Some(path) = &config_path {
-            args.push("--config".to_owned());
-            args.push(path.to_string_lossy().into_owned());
+        if let Some(path) = &header_path {
+            args.push("--header".to_owned());
+            args.push(format!("@{}", path.display()));
         }
         args.push("--output".to_owned());
         args.push(destination.to_string_lossy().into_owned());
@@ -5717,7 +5711,7 @@ impl NativeManager {
             maximum_seconds.saturating_add(15),
         )
         .map(|_| ());
-        if let Some(path) = config_path {
+        if let Some(path) = header_path {
             let _ = fs::remove_file(path);
         }
         result
@@ -7474,13 +7468,6 @@ fn file_sha256(path: &Path) -> Result<String, String> {
         let _ = write!(output, "{byte:02x}");
     }
     Ok(output)
-}
-
-fn header_name_ok(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 fn write_replaced_secret_file(path: &Path, content: &[u8]) -> Result<(), String> {
