@@ -1,4 +1,4 @@
-use helix_privd::ServerAction;
+use helix_privd::{ServerAction, migrate_plan};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -614,10 +614,7 @@ impl AmpClient {
             let server = self
                 .map_server(instance)
                 .map_err(|error| error.message.to_owned())?;
-            let running = matches!(
-                server.status,
-                "online" | "idle" | "starting" | "stopping"
-            );
+            let running = migrate_plan::source_looks_live(&server.status);
             return Ok(AmpMigrateHandle {
                 id: server.id,
                 name: server.name,

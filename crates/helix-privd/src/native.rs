@@ -2800,7 +2800,7 @@ impl NativeManager {
                 max_players: spec.max_players,
                 game_port,
                 rcon_port,
-                rcon_password,
+                rcon_password: rcon_password.clone(),
                 start_on_boot: spec.start_on_boot,
                 run_uid,
                 created_at_unix_ms: now_unix_ms(),
@@ -2977,25 +2977,17 @@ impl NativeManager {
                     .join("save")
                     .join("Settings")
                     .join("ServerHostSettings.json");
-                let save_name = fs::read_to_string(&settings_path)
-                    .ok()
-                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-                    .and_then(|value| {
-                        value
-                            .get("SaveName")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    });
-                let mut settings = vrising::host_settings_json(
-                    spec.name.trim(),
-                    game_port,
-                    query_port,
-                    spec.max_players,
-                    spec.list_on_browser,
+                let source_settings = fs::read_to_string(&settings_path).unwrap_or_default();
+                let settings = migrate_plan::merge_vrising_host_settings(
+                    vrising::host_settings_json(
+                        spec.name.trim(),
+                        game_port,
+                        query_port,
+                        spec.max_players,
+                        spec.list_on_browser,
+                    ),
+                    &source_settings,
                 );
-                if let Some(save_name) = save_name {
-                    settings["SaveName"] = json!(save_name);
-                }
                 fs::write(
                     &settings_path,
                     serde_json::to_vec_pretty(&settings)
@@ -5749,12 +5741,21 @@ impl NativeManager {
                 )?;
             }
             GameKind::Valheim => {
-                let _ = migrate_plan::ensure_named_save(
-                    &data_path.join("worlds"),
+                if migrate_plan::ensure_named_save(
+                    &data_path.join("worlds_local"),
                     "Dedicated",
                     "fwl",
                     &["db", "db.old"],
-                )?;
+                )?
+                .is_none()
+                {
+                    let _ = migrate_plan::ensure_named_save(
+                        &data_path.join("worlds"),
+                        "Dedicated",
+                        "fwl",
+                        &["db", "db.old"],
+                    )?;
+                }
             }
             GameKind::Minecraft | GameKind::VRising => {}
         }

@@ -1700,7 +1700,10 @@ impl BrokerContext {
         let resolved = self.resolve_migrate_source(&source)?;
         let mapped = if resolved.game == GameKind::Minecraft {
             Some(if resolved.source_kind == "amp" {
-                migrate_plan::map_amp_minecraft_software(&resolved.software_raw)?
+                migrate_plan::resolve_minecraft_software(
+                    &resolved.software_raw,
+                    &resolved.game_root,
+                )?
             } else {
                 migrate_plan::detect_minecraft_software_from_root(&resolved.game_root)?
             })
@@ -1993,7 +1996,7 @@ impl BrokerContext {
                 warning: None,
             }
         } else {
-            migrate_plan::map_amp_minecraft_software(&resolved.software_raw)?
+            migrate_plan::resolve_minecraft_software(&resolved.software_raw, overlay)?
         };
         let version = spec
             .version
