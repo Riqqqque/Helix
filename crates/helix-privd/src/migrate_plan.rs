@@ -5,6 +5,7 @@
 //! `server.properties` onto Helix-owned ports and RCON.
 
 use crate::{GameKind, MinecraftSoftware, TerrariaSoftware};
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
@@ -138,6 +139,37 @@ pub fn map_amp_minecraft_software(raw: &str) -> Result<MappedMinecraftSoftware, 
 }
 
 #[must_use]
+pub fn amp_software_is_known_hybrid(raw: &str) -> bool {
+    let normalized = raw.trim().to_ascii_lowercase().replace([' ', '-', '.'], "_");
+    matches!(
+        normalized.as_str(),
+        "mohist" | "magma" | "arclight" | "banner" | "catserver" | "custom" | "unknown"
+    )
+}
+
+pub fn resolve_minecraft_software(
+    raw: &str,
+    root: &Path,
+) -> Result<MappedMinecraftSoftware, String> {
+    let mapped = map_amp_minecraft_software(raw)?;
+    if mapped.copy_server_jar && !amp_software_is_known_hybrid(raw) {
+        let detected = detect_minecraft_software_from_root(root)?;
+        if !detected.copy_server_jar {
+            return Ok(detected);
+        }
+    }
+    Ok(mapped)
+}
+
+#[must_use]
+pub fn source_looks_live(status: &str) -> bool {
+    matches!(
+        status,
+        "online" | "idle" | "starting" | "stopping" | "updating"
+    )
+}
+
+#[must_use]
 pub fn minecraft_version_for_create(raw: &str) -> MinecraftVersionChoice {
     let trimmed = raw.trim();
     if trimmed.is_empty()
@@ -204,11 +236,26 @@ pub fn looks_like_vrising_root(names: &[impl AsRef<str>]) -> bool {
     names.iter().any(|name| {
         let lower = name.as_ref().to_ascii_lowercase();
         lower == "serverhostsettings.json"
-            || lower == "vrising"
-            || lower.starts_with("vrising")
             || lower == "save-data"
+            || lower == "savedata"
             || lower == "saves"
+            || lower.ends_with(".sav")
     })
+}
+
+#[must_use]
+pub fn looks_like_bedrock_root(names: &[impl AsRef<str>]) -> bool {
+    let lower: Vec<String> = names
+        .iter()
+        .map(|name| name.as_ref().to_ascii_lowercase())
+        .collect();
+    let has = |needle: &str| lower.iter().any(|name| name == needle);
+    let contains = |needle: &str| lower.iter().any(|name| name.contains(needle));
+    contains("bedrock_server")
+        || contains("pocketmine")
+        || contains("nukkit")
+        || has("permissions.json")
+        || (has("allowlist.json") && !has("plugins") && !has("mods"))
 }
 
 #[must_use]
@@ -236,6 +283,9 @@ pub fn looks_like_terraria_root(names: &[impl AsRef<str>]) -> bool {
 
 #[must_use]
 pub fn detect_game_from_names(names: &[impl AsRef<str>]) -> Option<GameKind> {
+    if looks_like_bedrock_root(names) {
+        return None;
+    }
     if looks_like_minecraft_root(names) {
         return Some(GameKind::Minecraft);
     }
@@ -564,7 +614,16 @@ pub fn overlay_relative_for_game(game: GameKind, relative: &str) -> Option<Strin
             {
                 return None;
             }
-            if lower == "save" || lower == "saves" || lower == "save-data" {
+            if lower == "save" {
+                return Some(normalized);
+            }
+            if lower == "saves" {
+                return Some(match normalized.split_once('/') {
+                    Some((_, rest)) => format!("save/Saves/{rest}"),
+                    None => "save/Saves".to_owned(),
+                });
+            }
+            if lower == "save-data" || lower == "savedata" {
                 return Some(match normalized.split_once('/') {
                     Some((_, rest)) => format!("save/{rest}"),
                     None => "save".to_owned(),
@@ -593,10 +652,7 @@ pub fn overlay_relative_for_game(game: GameKind, relative: &str) -> Option<Strin
                 return None;
             }
             if lower == "worlds" || lower == "worlds_local" {
-                return Some(match normalized.split_once('/') {
-                    Some((_, rest)) => format!("worlds/{rest}"),
-                    None => "worlds".to_owned(),
-                });
+                return Some(normalized);
             }
             if lower == "plugins" {
                 return Some(normalized);
@@ -681,6 +737,25 @@ pub fn merge_server_properties(
     body
 }
 
+#[must_use]
+pub fn merge_vrising_host_settings(helix: Value, source_json: &str) -> Value {
+    let Ok(Value::Object(source)) = serde_json::from_str::<Value>(source_json) else {
+        return helix;
+    };
+    let mut out = helix;
+    for key in ["SaveName", "Password", "Description", "GameSettingsPreset"] {
+        if let Some(Value::String(text)) = source.get(key)
+            && text.len() <= 256
+            && !text.contains('\0')
+            && !text.contains('\n')
+            && !text.contains('\r')
+        {
+            out[key] = json!(text);
+        }
+    }
+    out
+}
+
 fn sanitize_property_value(value: &str) -> String {
     value
         .chars()
@@ -698,18 +773,50 @@ pub struct OverlayReport {
     pub skips: Vec<String>,
 }
 
-#[must_use]
+const NESTED_GAME_ROOTS: &[&str] = &[
+    "Minecraft",
+    "minecraft",
+    "server",
+    "data",
+    "SaveData",
+    "save-data",
+    "saves",
+    "Saves",
+    "VRising",
+    "vrising",
+    "Valheim",
+    "valheim",
+    "Terraria",
+    "terraria",
+    "tModLoader",
+    "Worlds",
+    "worlds",
+    "worlds_local",
+];
+
 pub fn find_game_root(start: &Path) -> Result<(GameKind, PathBuf), String> {
     let start_names = directory_names(start)?;
+    if looks_like_bedrock_root(&start_names) {
+        return Err(
+            "Helix native Minecraft is Java Edition only. Bedrock/PocketMine stays in AMP or Pterodactyl."
+                .to_owned(),
+        );
+    }
     if let Some(kind) = detect_game_from_names(&start_names) {
         return Ok((kind, start.to_path_buf()));
     }
-    for child in ["Minecraft", "minecraft", "server", "data", "SaveData", "saves"] {
+    for child in NESTED_GAME_ROOTS {
         let path = start.join(child);
         if !is_real_dir(&path) {
             continue;
         }
         let names = directory_names(&path)?;
+        if looks_like_bedrock_root(&names) {
+            return Err(
+                "Helix native Minecraft is Java Edition only. Bedrock/PocketMine stays in AMP or Pterodactyl."
+                    .to_owned(),
+            );
+        }
         if let Some(kind) = detect_game_from_names(&names) {
             return Ok((kind, path));
         }
@@ -724,6 +831,9 @@ pub fn find_game_root(start: &Path) -> Result<(GameKind, PathBuf), String> {
             continue;
         }
         let names = directory_names(&entry).unwrap_or_default();
+        if looks_like_bedrock_root(&names) {
+            continue;
+        }
         if let Some(kind) = detect_game_from_names(&names) {
             return Ok((kind, entry));
         }
@@ -1015,6 +1125,10 @@ mod tests {
         assert!(map_amp_minecraft_software("Spigot").unwrap().warning.is_some());
         assert!(map_amp_minecraft_software("Mohist").unwrap().copy_server_jar);
         assert!(map_amp_minecraft_software("Bedrock").is_err());
+        assert!(source_looks_live("online"));
+        assert!(source_looks_live("updating"));
+        assert!(!source_looks_live("offline"));
+        assert!(!source_looks_live("manager_stopped"));
     }
 
     #[test]
@@ -1112,15 +1226,28 @@ mod tests {
     fn maps_non_minecraft_saves_into_helix_layout() {
         assert_eq!(
             overlay_relative_for_game(GameKind::VRising, "saves").as_deref(),
-            Some("save")
+            Some("save/Saves")
         );
         assert_eq!(
             overlay_relative_for_game(GameKind::VRising, "saves/world1/Session.sav").as_deref(),
-            Some("save/world1/Session.sav")
+            Some("save/Saves/world1/Session.sav")
+        );
+        assert_eq!(
+            overlay_relative_for_game(GameKind::VRising, "save-data/Saves/world1/Session.sav")
+                .as_deref(),
+            Some("save/Saves/world1/Session.sav")
+        );
+        assert_eq!(
+            overlay_relative_for_game(GameKind::VRising, "save/Saves/world1/Session.sav").as_deref(),
+            Some("save/Saves/world1/Session.sav")
         );
         assert_eq!(
             overlay_relative_for_game(GameKind::Valheim, "worlds/Midgard.fwl").as_deref(),
             Some("worlds/Midgard.fwl")
+        );
+        assert_eq!(
+            overlay_relative_for_game(GameKind::Valheim, "worlds_local/Midgard.fwl").as_deref(),
+            Some("worlds_local/Midgard.fwl")
         );
         assert_eq!(
             overlay_relative_for_game(GameKind::Terraria, "MyWorld.wld").as_deref(),
@@ -1191,5 +1318,74 @@ mod tests {
         assert!(ensure_named_save(dir.path(), "world", "wld", &["wld.bak"])
             .expect("second")
             .is_none());
+    }
+
+    #[test]
+    fn unknown_amp_type_uses_the_folder_loader_when_it_is_obvious() {
+        let root = tempfile::tempdir().expect("temp");
+        fs::create_dir_all(root.path().join("plugins")).unwrap();
+        fs::write(root.path().join("paper.yml"), "settings: {}\n").unwrap();
+        let mapped = resolve_minecraft_software("Minecraft", root.path()).expect("detect");
+        assert_eq!(mapped.software, MinecraftSoftware::Paper);
+        assert!(!mapped.copy_server_jar);
+        let hybrid = resolve_minecraft_software("Mohist", root.path()).expect("hybrid");
+        assert!(hybrid.copy_server_jar);
+    }
+
+    #[test]
+    fn amp_vrising_instance_root_is_not_treated_as_the_save_folder() {
+        let root = tempfile::tempdir().expect("temp");
+        let wine = root.path().join("wine");
+        let game = root.path().join("VRising");
+        fs::create_dir_all(wine.join("drive_c")).unwrap();
+        fs::create_dir_all(game.join("save-data").join("Saves").join("world1")).unwrap();
+        fs::create_dir_all(game.join("save-data").join("Settings")).unwrap();
+        fs::write(
+            game.join("save-data")
+                .join("Settings")
+                .join("ServerHostSettings.json"),
+            r#"{"SaveName":"world1","Password":"secret"}"#,
+        )
+        .unwrap();
+        fs::write(
+            game.join("save-data").join("Saves").join("world1").join("Session.sav"),
+            b"save",
+        )
+        .unwrap();
+        let (kind, found) = find_game_root(root.path()).expect("detect");
+        assert_eq!(kind, GameKind::VRising);
+        assert_eq!(found, game);
+        let dest = tempfile::tempdir().expect("dest");
+        fs::create_dir_all(dest.path().join("save").join("Settings")).unwrap();
+        apply_overlay(kind, &found, dest.path(), false).expect("copy");
+        assert!(dest
+            .path()
+            .join("save")
+            .join("Saves")
+            .join("world1")
+            .join("Session.sav")
+            .is_file());
+        assert!(!dest.path().join("wine").exists());
+        let merged = merge_vrising_host_settings(
+            json!({"Name":"Helix","Port":9876,"SaveName":"world1","Password":""}),
+            r#"{"SaveName":"castle","Password":"keep-me","Port":9871}"#,
+        );
+        assert_eq!(merged["SaveName"], "castle");
+        assert_eq!(merged["Password"], "keep-me");
+        assert_eq!(merged["Port"], 9876);
+        assert_eq!(merged["Name"], "Helix");
+    }
+
+    #[test]
+    fn bedrock_folders_are_refused() {
+        let root = tempfile::tempdir().expect("temp");
+        fs::write(root.path().join("server.properties"), "server-name=Bedrock\n").unwrap();
+        fs::write(root.path().join("permissions.json"), "[]").unwrap();
+        fs::write(root.path().join("bedrock_server"), b"bin").unwrap();
+        assert!(find_game_root(root.path()).is_err());
+        assert_eq!(
+            detect_game_from_names(&["server.properties", "permissions.json", "bedrock_server"]),
+            None
+        );
     }
 }

@@ -22,7 +22,8 @@ Stop the source first. A live copy can miss chunks or lock files.
 Helix reads AMP’s Paper/Fabric/Forge type from the instance. Spigot/Bukkit
 becomes Paper. Hybrid loaders (Mohist and friends) copy the existing JAR as a
 custom server — type the exact Minecraft version, not latest. Bedrock stays in
-AMP.
+AMP. If AMP is updating or still starting, Helix treats that as running and
+refuses the copy.
 
 ## Folder path (Pterodactyl, AMP V Rising / Valheim / Terraria, manual)
 
@@ -44,8 +45,8 @@ SteamCMD trees are skipped; Helix installs those games itself.
 | Game | Copied | Left behind |
 | --- | --- | --- |
 | Minecraft | Worlds, plugins, mods, configs. `server.properties` motd/world/whitelist merge onto Helix ports and RCON | AMP kvp, Java, logs, crash reports, backups, Helix then installs its own loader JAR |
-| V Rising | Saves and host settings (`SaveName` kept). Helix rewrites ports and listing | Wine prefix, SteamCMD, dedicated binaries |
-| Valheim | Worlds and BepInEx plugins. A copy named `Dedicated` is kept if the world used another name | SteamCMD, server binaries |
+| V Rising | Saves and host settings (`SaveName`, password, description kept). Helix rewrites ports, listing, and the Helix server name. AMP `save-data/Saves` lands in Helix `save/Saves`. | Wine prefix, SteamCMD, dedicated binaries |
+| Valheim | Worlds (`worlds` and `worlds_local`) and BepInEx plugins. A copy named `Dedicated` is kept if the world used another name | SteamCMD, server binaries |
 | Terraria | Worlds and `.tmod` files. A copy named `world.wld` is kept if the world used another name | SteamCMD, server binaries |
 
 Limits: 128 GiB, 250,000 files, depth 24, no symbolic links.
@@ -64,7 +65,8 @@ Content-Type: application/json
 {"kind":"amp","instance_id":"amp:11111111-1111-4111-8111-111111111111"}
 ```
 
-Inspect a Pterodactyl volume:
+Inspect a Pterodactyl volume or AMP V Rising / Valheim / Terraria instance
+folder:
 
 ```http
 POST /api/v1/servers/migrate/preflight
@@ -72,6 +74,10 @@ Content-Type: application/json
 
 {"kind":"folder","path":"/var/lib/pterodactyl/volumes/11111111-1111-4111-8111-111111111111"}
 ```
+
+AMP non-Minecraft instances use the instance folder, for example
+`/home/amp/.ampdata/instances/VRising01`. That parent must be in helix-privd
+`managed_roots`.
 
 Preflight returns the detected game, software, file count, byte size, copy
 list, notes, and **blockers**. Do not start a copy while `running` is true or
