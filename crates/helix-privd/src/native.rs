@@ -5,13 +5,14 @@ use crate::files::{
 };
 use helix_privd::{
     CURSEFORGE_API_KEY_REQUIRED, CURSEFORGE_CDN_BLOCKED, CURSEFORGE_KEY_REJECTED,
-    CURSEFORGE_RATE_LIMITED, FileUploadPurpose, GameKind, GamePortPolicySpec, GamePortRangeSpec,
+    CURSEFORGE_RATE_LIMITED, CustomMinecraftJarSpec, FileUploadPurpose, GameKind,
+    GamePortPolicySpec, GamePortRangeSpec,
     MAX_CONCURRENT_FILE_UPLOADS, MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES,
     MAX_MINECRAFT_VERSION_CATALOG, MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode,
     MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, ServerAction,
     TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec,
     catalog_fetch_is_non_retryable, classify_curseforge_curl_error, curl_extra_header_file,
-    validate_curseforge_api_key,
+    migrate_plan, validate_curseforge_api_key,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1317,6 +1318,7 @@ impl NativeManager {
             "local_custom_jar_import",
             "minecraft_version_catalog",
             "bounded_file_upload",
+            "server_migrate",
         ];
         Ok(json!({
             "schema_version": 1,
@@ -2696,6 +2698,7 @@ impl NativeManager {
     pub fn create_minecraft<F>(
         &self,
         spec: &MinecraftCreateSpec,
+        overlay: Option<&Path>,
         mut progress: F,
     ) -> Result<Value, String>
     where
@@ -2810,6 +2813,32 @@ impl NativeManager {
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
             self.protect_instance_artifacts(&data_path, run_uid)?;
+            if let Some(source) = overlay {
+                progress("Copying world, plugins, and configs", 56);
+                self.overlay_migrated_game(
+                    GameKind::Minecraft,
+                    source,
+                    &data_path,
+                    matches!(spec.software, MinecraftSoftware::Custom),
+                    run_uid,
+                )?;
+                if let Some(source_properties) = migrate_plan::read_source_properties(source) {
+                    let properties_path = data_path.join("server.properties");
+                    let current = fs::read_to_string(&properties_path).unwrap_or_default();
+                    let merged = migrate_plan::merge_server_properties(
+                        &current,
+                        &source_properties,
+                        game_port,
+                        rcon_port,
+                        &rcon_password,
+                        spec.max_players,
+                    );
+                    fs::write(&properties_path, merged)
+                        .map_err(|_| "could not merge server.properties".to_owned())?;
+                    self.chown_instance(&data_path, run_uid)?;
+                    self.protect_instance_artifacts(&data_path, run_uid)?;
+                }
+            }
 
             progress("Creating the Helix workload", 62);
             container_create_attempted = true;
@@ -2858,6 +2887,7 @@ impl NativeManager {
     pub fn create_vrising<F>(
         &self,
         spec: &VRisingCreateSpec,
+        overlay: Option<&Path>,
         mut progress: F,
     ) -> Result<Value, String>
     where
@@ -2940,6 +2970,40 @@ impl NativeManager {
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
+            if let Some(source) = overlay {
+                progress("Copying V Rising saves", 48);
+                self.overlay_migrated_game(GameKind::VRising, source, &data_path, false, run_uid)?;
+                let settings_path = data_path
+                    .join("save")
+                    .join("Settings")
+                    .join("ServerHostSettings.json");
+                let save_name = fs::read_to_string(&settings_path)
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                    .and_then(|value| {
+                        value
+                            .get("SaveName")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    });
+                let mut settings = vrising::host_settings_json(
+                    spec.name.trim(),
+                    game_port,
+                    query_port,
+                    spec.max_players,
+                    spec.list_on_browser,
+                );
+                if let Some(save_name) = save_name {
+                    settings["SaveName"] = json!(save_name);
+                }
+                fs::write(
+                    &settings_path,
+                    serde_json::to_vec_pretty(&settings)
+                        .map_err(|_| "could not write V Rising host settings".to_owned())?,
+                )
+                .map_err(|_| "could not write V Rising host settings".to_owned())?;
+                self.chown_instance(&data_path, run_uid)?;
+            }
 
             progress("Creating the isolated V Rising container", 52);
             container_create_attempted = true;
@@ -2995,6 +3059,7 @@ impl NativeManager {
     pub fn create_valheim<F>(
         &self,
         spec: &ValheimCreateSpec,
+        overlay: Option<&Path>,
         mut progress: F,
     ) -> Result<Value, String>
     where
@@ -3064,6 +3129,10 @@ impl NativeManager {
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
+            if let Some(source) = overlay {
+                progress("Copying Valheim worlds", 48);
+                self.overlay_migrated_game(GameKind::Valheim, source, &data_path, false, run_uid)?;
+            }
 
             progress("Creating the isolated Valheim container", 52);
             container_create_attempted = true;
@@ -3120,6 +3189,7 @@ impl NativeManager {
     pub fn create_terraria<F>(
         &self,
         spec: &TerrariaCreateSpec,
+        overlay: Option<&Path>,
         mut progress: F,
     ) -> Result<Value, String>
     where
@@ -3203,6 +3273,10 @@ impl NativeManager {
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
+            if let Some(source) = overlay {
+                progress("Copying Terraria worlds and mods", 48);
+                self.overlay_migrated_game(GameKind::Terraria, source, &data_path, false, run_uid)?;
+            }
 
             progress("Creating the isolated Terraria container", 52);
             container_create_attempted = true;
@@ -5654,6 +5728,57 @@ impl NativeManager {
     fn console_archive_path(&self, id: &str) -> Result<PathBuf, String> {
         validate_id(id)?;
         Ok(self.state_root.join("console").join(id))
+    }
+
+    fn overlay_migrated_game(
+        &self,
+        kind: GameKind,
+        source: &Path,
+        data_path: &Path,
+        copy_server_jar: bool,
+        run_uid: u32,
+    ) -> Result<migrate_plan::OverlayReport, String> {
+        let report = migrate_plan::apply_overlay(kind, source, data_path, copy_server_jar)?;
+        match kind {
+            GameKind::Terraria => {
+                let _ = migrate_plan::ensure_named_save(
+                    &data_path.join("worlds"),
+                    "world",
+                    "wld",
+                    &["wld.bak"],
+                )?;
+            }
+            GameKind::Valheim => {
+                let _ = migrate_plan::ensure_named_save(
+                    &data_path.join("worlds"),
+                    "Dedicated",
+                    "fwl",
+                    &["db", "db.old"],
+                )?;
+            }
+            GameKind::Minecraft | GameKind::VRising => {}
+        }
+        self.chown_instance(data_path, run_uid)?;
+        Ok(report)
+    }
+
+    pub(crate) fn stage_migrate_jar(&self, source_jar: &Path) -> Result<CustomMinecraftJarSpec, String> {
+        let metadata = fs::symlink_metadata(source_jar)
+            .map_err(|_| "the source server JAR is unavailable".to_owned())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("the source server JAR must be a regular file".to_owned());
+        }
+        if metadata.len() == 0 || metadata.len() > MAX_SERVER_JAR_BYTES {
+            return Err("the source server JAR is empty or larger than 768 MiB".to_owned());
+        }
+        let name = format!("migrate-{}.jar", Uuid::new_v4().simple());
+        let destination = self.custom_import_root.join(name);
+        fs::copy(source_jar, &destination)
+            .map_err(|_| "could not stage the source server JAR".to_owned())?;
+        Ok(CustomMinecraftJarSpec {
+            source_path: destination.to_string_lossy().into_owned(),
+            java_version: 21,
+        })
     }
 
     fn chown_instance(&self, path: &Path, uid: u32) -> Result<(), String> {

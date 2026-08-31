@@ -103,7 +103,9 @@ lifecycle semantics. Helix will not rewrite AMP instance files or steal a live
 AMP game port; it names the instance and the AMP clicks to change the port, or
 it can delete a leftover AMP-described UPnP mapping after an exact confirmation
 when no instance still lists that number. An unavailable or ambiguous AMP
-response fails closed.
+response fails closed. A separate copy job can read a stopped AMP world and
+write a new Helix server; that does not turn the AMP instance into a native
+one.
 
 ## Host, storage, network, and updates
 

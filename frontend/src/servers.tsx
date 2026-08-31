@@ -83,7 +83,7 @@ import {
   formatPercent,
   formatTimestamp,
 } from "./format";
-import { CreateJobProgress, steamCreateJobCopy } from "./create-job-progress";
+import { CreateJobProgress, migrateCreateJobCopy, steamCreateJobCopy } from "./create-job-progress";
 import { GameMark } from "./game-marks";
 import { Icon, type IconName } from "./icons";
 import { InfoTip } from "./info-tip";
@@ -127,6 +127,13 @@ import {
 } from "./port-policy-api";
 import { Dialog } from "./modal";
 import { purgeTrashedNativeServer } from "./native-server-trash-api";
+import {
+  migrateServer,
+  migrateServerPreflight,
+  type MigrateGame,
+  type ServerMigratePreflight,
+  type ServerMigrateSource,
+} from "./server-migrate-api";
 import { CopyButton } from "./copy-button";
 import {
   cpuLimitOptions,
@@ -5658,6 +5665,7 @@ function ImportedServerPage({
   onBack,
   onRefresh,
   onHide,
+  onCopyIntoHelix,
   onSessionExpired,
 }: {
   server: ManagedServer;
@@ -5666,6 +5674,7 @@ function ImportedServerPage({
   onBack: () => void;
   onRefresh: () => Promise<void>;
   onHide: () => void;
+  onCopyIntoHelix: () => void;
   onSessionExpired: () => void;
 }) {
   const [pending, setPending] = useState<ServerAction | null>(null);
@@ -5733,6 +5742,16 @@ function ImportedServerPage({
                 </a>
               )}
               <button
+                class="button button--quiet"
+                type="button"
+                disabled={!canManageServers}
+                title={manageTitle}
+                onClick={onCopyIntoHelix}
+              >
+                <Icon name="folder" size={15} />
+                Copy into Helix
+              </button>
+              <button
                 class="button button--danger-quiet"
                 type="button"
                 disabled={!canManageServers}
@@ -5768,6 +5787,16 @@ function ImportedServerPage({
                   <Icon name="external" size={14} />
                 </a>
               )}
+              <button
+                class="button button--quiet"
+                type="button"
+                disabled={!canManageServers}
+                title={manageTitle}
+                onClick={onCopyIntoHelix}
+              >
+                <Icon name="folder" size={15} />
+                Copy into Helix
+              </button>
               {server.panelRunning && (
                 <button
                   class="button button--danger-quiet"
@@ -5802,8 +5831,9 @@ function ImportedServerPage({
             Helix reads AMP's real instance state, including idle/sleep, and
             offers basic lifecycle shortcuts so the host is visible in one
             place. Idle means the game is sleeping; AMP's manager is often still
-            running. It does not pretend this is a Helix-managed server. New
-            servers use Helix’s own manager and receive the full toolset.
+            running. It does not pretend this is a Helix-managed server.{" "}
+            <strong>Copy into Helix</strong> makes a new native server from a
+            stopped world and leaves AMP's files alone.
           </p>
         </div>
       </section>
@@ -5952,17 +5982,574 @@ function isTerrariaServer(server: ManagedServer): boolean {
   return server.kind === "terraria" || /terraria|tmodloader/iu.test(server.software);
 }
 
+function migrateGameLabel(game: MigrateGame): string {
+  switch (game) {
+    case "minecraft":
+      return "Minecraft";
+    case "vrising":
+      return "V Rising";
+    case "valheim":
+      return "Valheim";
+    case "terraria":
+      return "Terraria";
+  }
+}
+
+function migratePlayerMax(game: MigrateGame): number {
+  switch (game) {
+    case "minecraft":
+      return 10_000;
+    case "vrising":
+      return 128;
+    case "valheim":
+      return 64;
+    case "terraria":
+      return 255;
+  }
+}
+
+function MigrateServerDialog({
+  csrfToken,
+  servers,
+  canManageNetwork,
+  logicalCores,
+  initialAmpId,
+  onClose,
+  onComplete,
+  onSessionExpired,
+}: {
+  csrfToken: string;
+  servers: ManagedServer[];
+  canManageNetwork: boolean;
+  logicalCores: number;
+  initialAmpId: string | null;
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const ampServers = servers.filter((server) => server.manager === "amp_import");
+  const [sourceMode, setSourceMode] = useState<"amp" | "folder">(
+    initialAmpId !== null || ampServers.length > 0 ? "amp" : "folder",
+  );
+  const [ampId, setAmpId] = useState(
+    initialAmpId ?? ampServers[0]?.id ?? "",
+  );
+  const [folderPath, setFolderPath] = useState("");
+  const [preflight, setPreflight] = useState<ServerMigratePreflight | null>(null);
+  const [name, setName] = useState("");
+  const [software, setSoftware] = useState<MinecraftSoftware>("paper");
+  const [version, setVersion] = useState("latest");
+  const [memory, setMemory] = useState(4_096);
+  const [cpuMillis, setCpuMillis] = useState(0);
+  const [players, setPlayers] = useState(20);
+  const [publicAccess, setPublicAccess] = useState(false);
+  const [startOnBoot, setStartOnBoot] = useState(true);
+  const [listOnBrowser, setListOnBrowser] = useState(true);
+  const [eula, setEula] = useState(false);
+  const [sourceStopped, setSourceStopped] = useState(false);
+  const [copyAcknowledged, setCopyAcknowledged] = useState(false);
+  const [inspecting, setInspecting] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [job, setJob] = useState<BrokerJob | null>(null);
+
+  const source = (): ServerMigrateSource | null => {
+    if (sourceMode === "amp") {
+      const id = ampId.trim();
+      return id.length === 0 ? null : { kind: "amp", instance_id: id };
+    }
+    const path = folderPath.trim();
+    return path.length === 0 ? null : { kind: "folder", path };
+  };
+
+  const inspect = async (): Promise<void> => {
+    const next = source();
+    if (next === null || inspecting) return;
+    setInspecting(true);
+    setError(null);
+    try {
+      const result = await migrateServerPreflight(next, csrfToken);
+      setPreflight(result);
+      setName((current) => (current.trim().length === 0 ? result.sourceName : current));
+      setMemory(result.memoryMb);
+      setPlayers(result.maxPlayers);
+      if (result.software !== null) setSoftware(result.software);
+      setVersion(
+        result.copyServerJar && result.versionUsedLatest ? "" : result.version,
+      );
+      if (!result.running) setSourceStopped(true);
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setInspecting(false);
+    }
+  };
+
+  const autoInspected = useRef(false);
+  useEffect(() => {
+    if (initialAmpId === null || autoInspected.current) return;
+    autoInspected.current = true;
+    void inspect();
+  }, [initialAmpId]);
+
+  const polling = useJobPolling({
+    job,
+    csrfToken,
+    onJob: setJob,
+    onComplete,
+    onSessionExpired,
+  });
+
+  const stopSource = async (): Promise<void> => {
+    if (sourceMode !== "amp" || ampId.trim().length === 0 || stopping) return;
+    setStopping(true);
+    setError(null);
+    try {
+      await runServerAction(ampId, "stop", csrfToken);
+      await inspect();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const submit = async (): Promise<void> => {
+    const next = source();
+    if (next === null || submitting || preflight === null) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const payload: Parameters<typeof migrateServer>[0] = {
+        source: next,
+        name: name.trim(),
+        game: preflight.game,
+        memory_mb: memory,
+        max_players: players,
+        network_exposure: publicAccess ? "public" : "private",
+        start_on_boot: startOnBoot,
+        eula_accepted: preflight.game === "minecraft" ? eula : false,
+        source_stopped: sourceStopped,
+        copy_acknowledged: copyAcknowledged,
+        ...cpuMillisFields(cpuMillis),
+      };
+      if (preflight.game === "minecraft") {
+        payload.software = software;
+        payload.version = version.trim();
+      }
+      if (preflight.game === "vrising") {
+        payload.list_on_browser = listOnBrowser;
+      }
+      const result = await migrateServer(payload, csrfToken);
+      setJob({
+        id: result.jobId,
+        kind: "server_migrate",
+        status: "queued",
+        stage: "Queued",
+        progressPercent: 0,
+        createdAtUnixMs: Date.now(),
+        updatedAtUnixMs: Date.now(),
+        result: null,
+        error: null,
+      });
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const installing = job !== null && (job.status === "queued" || job.status === "running");
+  const busy = submitting || inspecting || stopping || installing;
+  const blocked = preflight !== null && preflight.blockers.length > 0;
+  const needsExactVersion =
+    preflight?.game === "minecraft" &&
+    (software === "custom" || Boolean(preflight.copyServerJar));
+  const canCopy =
+    preflight !== null &&
+    !blocked &&
+    name.trim().length > 0 &&
+    copyAcknowledged &&
+    sourceStopped &&
+    (preflight.game !== "minecraft" || eula) &&
+    (!needsExactVersion || (version.trim().length > 0 && version.trim().toLowerCase() !== "latest"));
+
+  return (
+    <Dialog
+      title={
+        job === null || job.status === "failed"
+          ? "Copy an existing server"
+          : job.status === "complete"
+            ? "Server ready"
+            : `Copying ${preflight === null ? "server" : migrateGameLabel(preflight.game)}`
+      }
+      onClose={() => !installing && onClose()}
+      wide
+    >
+      {job !== null && job.status !== "failed" ? (
+        <>
+          <CreateJobProgress
+            job={job}
+            copy={migrateCreateJobCopy(
+              preflight === null ? "server" : migrateGameLabel(preflight.game),
+              job,
+            )}
+          />
+          {polling.error !== null && (
+            <ServerFault
+              message={polling.error}
+              csrfToken={csrfToken}
+              servers={servers}
+              canManageNetwork={canManageNetwork}
+              onSessionExpired={onSessionExpired}
+            />
+          )}
+          <div class="dialog-actions">
+            {polling.paused && (
+              <button class="button button--quiet" type="button" onClick={polling.resume}>
+                Resume status check
+              </button>
+            )}
+            <button
+              class="button button--primary"
+              type="button"
+              disabled={installing && !polling.paused}
+              onClick={onClose}
+            >
+              {job.status === "complete" ? "View servers" : "Close"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p>
+            Helix copies worlds, plugins, mods, and saves into a <strong>new native server</strong>.
+            AMP and Pterodactyl keep their files. The new server gets a free Helix port, so the old
+            instance can keep running on its number until you retire it.
+          </p>
+          <div class="form-grid">
+            <label class="field">
+              <span>Source</span>
+              <select
+                value={sourceMode}
+                disabled={busy}
+                onChange={(event) => {
+                  setSourceMode(event.currentTarget.value === "folder" ? "folder" : "amp");
+                  setPreflight(null);
+                }}
+              >
+                <option value="amp" disabled={ampServers.length === 0}>
+                  Imported AMP connection
+                </option>
+                <option value="folder">Folder on this host</option>
+              </select>
+            </label>
+            {sourceMode === "amp" ? (
+              <label class="field">
+                <span>AMP server</span>
+                <select
+                  value={ampId}
+                  disabled={busy || ampServers.length === 0}
+                  onChange={(event) => {
+                    setAmpId(event.currentTarget.value);
+                    setPreflight(null);
+                  }}
+                >
+                  {ampServers.length === 0 && <option value="">No AMP connections</option>}
+                  {ampServers.map((server) => (
+                    <option key={server.id} value={server.id}>
+                      {server.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label class="field field--wide">
+                <span>Absolute folder</span>
+                <input
+                  type="text"
+                  value={folderPath}
+                  disabled={busy}
+                  spellcheck={false}
+                  placeholder="/var/lib/pterodactyl/volumes/…"
+                  onInput={(event) => {
+                    setFolderPath(event.currentTarget.value);
+                    setPreflight(null);
+                  }}
+                />
+              </label>
+            )}
+          </div>
+          <p>
+            AMP Minecraft can use the imported connection. Pterodactyl volumes and AMP V Rising,
+            Valheim, or Terraria need a folder under Storage — usually{" "}
+            <code>/var/lib/pterodactyl/volumes/&lt;uuid&gt;</code> or{" "}
+            <code>/home/amp/.ampdata/instances/Name</code>. Add that parent to helix-privd{" "}
+            <code>managed_roots</code> if Inspect says the folder is outside Storage.
+          </p>
+          <div class="dialog-actions">
+            <button
+              class="button button--quiet"
+              type="button"
+              disabled={busy || source() === null}
+              onClick={() => void inspect()}
+            >
+              {inspecting ? "Inspecting…" : "Inspect"}
+            </button>
+          </div>
+          {preflight !== null && (
+            <>
+              <section class="imported-notice">
+                <Icon name="info" />
+                <div>
+                  <strong>
+                    {migrateGameLabel(preflight.game)}
+                    {preflight.software !== null ? ` · ${preflight.software}` : ""}
+                    {preflight.terrariaSoftware === "tmodloader" ? " · tModLoader" : ""}
+                    {` · ${preflight.files} files · ${formatBytes(preflight.bytes)}`}
+                  </strong>
+                  <p>
+                    From {preflight.gameRoot}. Helix will skip AMP kvp, Java, logs, and backups.
+                    {preflight.running ? " This source is still running." : " Helix does not see this source as running."}
+                  </p>
+                </div>
+              </section>
+              {preflight.notes.map((note) => (
+                <p key={note}>{note}</p>
+              ))}
+              {preflight.warning !== null && <p>{preflight.warning}</p>}
+              {preflight.blockers.map((blocker) => (
+                <InlineError key={blocker} message={blocker} />
+              ))}
+              {preflight.copies.length > 0 && (
+                <p>Will copy: {preflight.copies.join(", ")}</p>
+              )}
+              {preflight.running && sourceMode === "amp" && (
+                <div class="dialog-actions">
+                  <button
+                    class="button button--danger-quiet"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void stopSource()}
+                  >
+                    {stopping ? "Stopping…" : "Stop in AMP"}
+                  </button>
+                </div>
+              )}
+              <label class="field">
+                <span>New Helix name</span>
+                <input
+                  type="text"
+                  value={name}
+                  disabled={busy}
+                  maxlength={80}
+                  onInput={(event) => setName(event.currentTarget.value)}
+                />
+              </label>
+              <div class="form-grid">
+                {preflight.game === "minecraft" && (
+                  <>
+                    <label class="field">
+                      <span>Software</span>
+                      <select
+                        value={software}
+                        disabled={busy}
+                        onChange={(event) =>
+                          setSoftware(event.currentTarget.value as MinecraftSoftware)
+                        }
+                      >
+                        {minecraftCreateSoftwareOptions.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.name}
+                          </option>
+                        ))}
+                        <option value="custom">Custom JAR from the source folder</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Minecraft version</span>
+                      <input
+                        type="text"
+                        value={version}
+                        disabled={busy}
+                        placeholder={needsExactVersion ? "1.21.8" : "latest"}
+                        onInput={(event) => setVersion(event.currentTarget.value)}
+                      />
+                    </label>
+                  </>
+                )}
+                <label class="field">
+                  <span>Memory</span>
+                  <select
+                    value={memory}
+                    disabled={busy}
+                    onChange={(event) => setMemory(Number(event.currentTarget.value))}
+                  >
+                    {allocatedMemoryOptions(migrateMemoryKind(preflight.game), memory).map(
+                      (value) => (
+                        <option key={value} value={value}>
+                          {value >= 1024 ? `${value / 1024} GiB` : `${value} MiB`}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </label>
+                <CpuCapField
+                  value={cpuMillis}
+                  onChange={setCpuMillis}
+                  logicalCores={logicalCores}
+                  disabled={busy}
+                />
+                <label class="field">
+                  <span>Players</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={migratePlayerMax(preflight.game)}
+                    value={players}
+                    disabled={busy}
+                    onInput={(event) => setPlayers(Number(event.currentTarget.value))}
+                  />
+                </label>
+              </div>
+              {preflight.game === "vrising" && (
+                <label class="check-row">
+                  <input
+                    class="toggle-input"
+                    type="checkbox"
+                    checked={listOnBrowser}
+                    disabled={busy}
+                    onChange={(event) => setListOnBrowser(event.currentTarget.checked)}
+                  />
+                  <span>
+                    <strong>Show on the V Rising server list</strong>
+                    <small>Turns on EOS and Steam listing. Direct Connect to a public IP is separate.</small>
+                  </span>
+                </label>
+              )}
+              <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
+                <input
+                  class="toggle-input"
+                  type="checkbox"
+                  checked={publicAccess}
+                  disabled={busy || !canManageNetwork}
+                  onChange={(event) => setPublicAccess(event.currentTarget.checked)}
+                />
+                <span>
+                  <strong>
+                    {publicAccessCopy(migrateMemoryKind(preflight.game), canManageNetwork).title}
+                  </strong>
+                  <small>
+                    {publicAccessCopy(migrateMemoryKind(preflight.game), canManageNetwork).detail}
+                  </small>
+                </span>
+              </label>
+              <label class="check-row">
+                <input
+                  class="toggle-input"
+                  type="checkbox"
+                  checked={startOnBoot}
+                  disabled={busy}
+                  onChange={(event) => setStartOnBoot(event.currentTarget.checked)}
+                />
+                <span>
+                  <strong>{START_WITH_HOST_TITLE}</strong>
+                  <small>{START_WITH_HOST_CREATE_DETAIL}</small>
+                </span>
+              </label>
+              {preflight.game === "minecraft" && (
+                <label class="check-row">
+                  <input
+                    class="toggle-input"
+                    type="checkbox"
+                    checked={eula}
+                    disabled={busy}
+                    onChange={(event) => setEula(event.currentTarget.checked)}
+                  />
+                  <span>
+                    <strong>Minecraft EULA</strong>
+                    <small>
+                      I accept the{" "}
+                      <a href="https://www.minecraft.net/eula" target="_blank" rel="noreferrer">
+                        Minecraft EULA
+                      </a>
+                    </small>
+                  </span>
+                </label>
+              )}
+              <label class="check-row">
+                <input
+                  class="toggle-input"
+                  type="checkbox"
+                  checked={sourceStopped}
+                  disabled={busy}
+                  onChange={(event) => setSourceStopped(event.currentTarget.checked)}
+                />
+                <span>
+                  <strong>The source server is stopped</strong>
+                  <small>Do not copy a live world. Stop AMP or Pterodactyl first.</small>
+                </span>
+              </label>
+              <label class="check-row">
+                <input
+                  class="toggle-input"
+                  type="checkbox"
+                  checked={copyAcknowledged}
+                  disabled={busy}
+                  onChange={(event) => setCopyAcknowledged(event.currentTarget.checked)}
+                />
+                <span>
+                  <strong>Copy into a new Helix server</strong>
+                  <small>AMP and Pterodactyl files stay put. Helix will not delete the old instance.</small>
+                </span>
+              </label>
+            </>
+          )}
+          {error !== null && (
+            <ServerFault
+              message={error}
+              csrfToken={csrfToken}
+              servers={servers}
+              canManageNetwork={canManageNetwork}
+              onSessionExpired={onSessionExpired}
+            />
+          )}
+          <div class="dialog-actions">
+            <button class="button button--quiet" type="button" disabled={installing} onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              class="button button--primary"
+              type="button"
+              disabled={busy || !canCopy}
+              onClick={() => void submit()}
+            >
+              {submitting ? "Starting…" : "Copy into Helix"}
+            </button>
+          </div>
+        </>
+      )}
+    </Dialog>
+  );
+}
+
 export function NewServerChooser({
   onMinecraft,
   onVRising,
   onValheim,
   onTerraria,
+  onMigrate,
   onClose,
 }: {
   onMinecraft: () => void;
   onVRising: () => void;
   onValheim: () => void;
   onTerraria: () => void;
+  onMigrate: () => void;
   onClose: () => void;
 }) {
   return (
@@ -6015,6 +6602,18 @@ export function NewServerChooser({
             </small>
           </span>
           <em>Click to install</em>
+        </button>
+        <button type="button" onClick={onMigrate}>
+          <span class="game-create-icon">
+            <Icon name="folder" size={32} />
+          </span>
+          <span>
+            <strong>Copy an existing server</strong>
+            <small>
+              Bring a stopped AMP or Pterodactyl world into a new Helix server. The old files stay put.
+            </small>
+          </span>
+          <em>Copy into Helix</em>
         </button>
       </div>
       <div class="server-platform-note">
@@ -6615,6 +7214,8 @@ export function ServersPage({
   const [creatingVRising, setCreatingVRising] = useState(false);
   const [creatingValheim, setCreatingValheim] = useState(false);
   const [creatingTerraria, setCreatingTerraria] = useState(false);
+  const [creatingMigrate, setCreatingMigrate] = useState(false);
+  const [migrateAmpId, setMigrateAmpId] = useState<string | null>(null);
   const [portPoolOpen, setPortPoolOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     typeof window === "undefined" ? null : serverIdFromHash(window.location.hash),
@@ -6704,36 +7305,64 @@ export function ServersPage({
     if (selectedId === id) window.location.hash = "#servers";
   };
 
+  const migrateDialog = creatingMigrate ? (
+    <MigrateServerDialog
+      csrfToken={csrfToken}
+      servers={servers}
+      canManageNetwork={canManageNetwork}
+      logicalCores={logicalCores}
+      initialAmpId={migrateAmpId}
+      onClose={() => {
+        setCreatingMigrate(false);
+        setMigrateAmpId(null);
+      }}
+      onComplete={async () => {
+        await data.refresh();
+        await loadRemoved();
+      }}
+      onSessionExpired={onSessionExpired}
+    />
+  ) : null;
+
   if (selected !== null) {
-    return selected.manager === "helix" ? (
-      <NativeServerPage
-        server={selected}
-        servers={servers}
-        csrfToken={csrfToken}
-        canManageServers={canManageServers}
-        canManageBackups={canManageBackups}
-        canManageNetwork={canManageNetwork}
-        hostInventory={data.inventory.data}
-        logicalCores={logicalCores}
-        onBack={() => {
-          window.location.hash = "#servers";
-        }}
-        onRefresh={data.refresh}
-        onSessionExpired={onSessionExpired}
-        refreshIntervalMs={data.refreshIntervalMs}
-      />
-    ) : (
-      <ImportedServerPage
-        server={selected}
-        csrfToken={csrfToken}
-        canManageServers={canManageServers}
-        onBack={() => {
-          window.location.hash = "#servers";
-        }}
-        onRefresh={data.refresh}
-        onHide={() => hideImportedServer(selected.id)}
-        onSessionExpired={onSessionExpired}
-      />
+    return (
+      <>
+        {selected.manager === "helix" ? (
+          <NativeServerPage
+            server={selected}
+            servers={servers}
+            csrfToken={csrfToken}
+            canManageServers={canManageServers}
+            canManageBackups={canManageBackups}
+            canManageNetwork={canManageNetwork}
+            hostInventory={data.inventory.data}
+            logicalCores={logicalCores}
+            onBack={() => {
+              window.location.hash = "#servers";
+            }}
+            onRefresh={data.refresh}
+            onSessionExpired={onSessionExpired}
+            refreshIntervalMs={data.refreshIntervalMs}
+          />
+        ) : (
+          <ImportedServerPage
+            server={selected}
+            csrfToken={csrfToken}
+            canManageServers={canManageServers}
+            onBack={() => {
+              window.location.hash = "#servers";
+            }}
+            onRefresh={data.refresh}
+            onHide={() => hideImportedServer(selected.id)}
+            onCopyIntoHelix={() => {
+              setMigrateAmpId(selected.id);
+              setCreatingMigrate(true);
+            }}
+            onSessionExpired={onSessionExpired}
+          />
+        )}
+        {migrateDialog}
+      </>
     );
   }
 
@@ -7013,6 +7642,11 @@ export function ServersPage({
             setChooseGame(false);
             setCreatingTerraria(true);
           }}
+          onMigrate={() => {
+            setChooseGame(false);
+            setMigrateAmpId(null);
+            setCreatingMigrate(true);
+          }}
         />
       )}
       {creatingMinecraft && (
@@ -7071,6 +7705,7 @@ export function ServersPage({
           onSessionExpired={onSessionExpired}
         />
       )}
+      {migrateDialog}
       {portPoolOpen && (
         <PortPoolDialog
           csrfToken={csrfToken}

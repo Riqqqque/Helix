@@ -521,6 +521,29 @@ impl FileManager {
             .iter()
             .find(|root| path.starts_with(root))
     }
+
+    pub fn existing_managed_directory(&self, path: &str) -> Result<PathBuf, String> {
+        let input = Path::new(path);
+        if !input.is_absolute() {
+            return Err("the folder path must be absolute".to_owned());
+        }
+        let metadata = fs::symlink_metadata(input).map_err(file_error)?;
+        if metadata.file_type().is_symlink() {
+            return Err("symbolic links cannot be copied from Helix".to_owned());
+        }
+        if !metadata.is_dir() {
+            return Err("the selected path is not a directory".to_owned());
+        }
+        let canonical = canonical_existing(path)?;
+        ensure_visible(&canonical)?;
+        if self.managed_root_for(&canonical).is_none() {
+            return Err(
+                "that folder is outside Storage. Add the Pterodactyl volume or AMP instance directory to helix-privd managed_roots, or copy AMP Minecraft from the AMP connection."
+                    .to_owned(),
+            );
+        }
+        Ok(canonical)
+    }
 }
 
 #[derive(Debug, Serialize)]

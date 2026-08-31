@@ -62,6 +62,7 @@ deployment guide. Nothing ships with a demo city or demo server.
 - [Dashboard and Home](https://github.com/Riqqqque/Helix/wiki/Dashboard-and-Home)
 - [Storage and Files](https://github.com/Riqqqque/Helix/wiki/Storage-and-Files)
 - [Servers and Marketplace](https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace)
+- [Copy a server into Helix](https://github.com/Riqqqque/Helix/wiki/Server-Migration)
 - [Network, Host, and Updates](https://github.com/Riqqqque/Helix/wiki/Network-Host-and-Updates)
 - [Hooks and Terminal](https://github.com/Riqqqque/Helix/wiki/Hooks-and-Terminal)
 - [Architecture](https://github.com/Riqqqque/Helix/wiki/Architecture)

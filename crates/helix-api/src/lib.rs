@@ -27,8 +27,8 @@ use helix_privd::{
     FileUploadTarget, FirewallRuleSpec, GameKind, GamePortPolicySpec, HookServiceAction,
     MarketplaceCatalog, MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch,
     MinecraftSoftware, ModpackProvider, PackageUpdateCandidate, RecurringRebootSpec, ServerAction,
-    ServerNetworkExposure, StorageAnalysisMode, TerrariaCreateSpec, VRisingCreateSpec,
-    ValheimCreateSpec,
+    ServerMigrateSource, ServerMigrateSpec, ServerNetworkExposure, StorageAnalysisMode,
+    TerrariaCreateSpec, VRisingCreateSpec, ValheimCreateSpec,
 };
 use helix_state::{
     DatabaseSet, ServerAppearanceUpdateOutcome, UserPreferencesRecord, UserPreferencesUpdateInput,
@@ -378,6 +378,8 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/servers/vrising", post(create_vrising))
         .route("/servers/valheim", post(create_valheim))
         .route("/servers/terraria", post(create_terraria))
+        .route("/servers/migrate/preflight", post(migrate_server_preflight))
+        .route("/servers/migrate", post(migrate_server))
         .route("/servers/{instance_id}", get(server_detail))
         .route(
             "/servers/{instance_id}/appearance",
@@ -3121,6 +3123,33 @@ async fn create_terraria(
         auth::require_capability(&state, &headers, "network.firewall.write").await?;
     }
     broker_json(&state, BrokerRequest::CreateTerraria { spec }).await
+}
+
+async fn migrate_server_preflight(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<ServerMigrateSource>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(source) = body.map_err(auth::map_json_rejection)?;
+    broker_json(&state, BrokerRequest::MigrateServerPreflight { source }).await
+}
+
+async fn migrate_server(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<ServerMigrateSpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(mut spec) = body.map_err(auth::map_json_rejection)?;
+    spec.wine_runtime_acknowledged = true;
+    spec.validate().map_err(ApiError::BrokerRejected)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
+    broker_json(&state, BrokerRequest::MigrateServer { spec }).await
 }
 
 async fn set_native_start_on_boot(
@@ -6696,6 +6725,8 @@ mod tests {
             "/api/v1/servers/example/settings",
             "/api/v1/servers/example/actions",
             "/api/v1/servers/minecraft",
+            "/api/v1/servers/migrate/preflight",
+            "/api/v1/servers/migrate",
         ];
         for (index, path) in paths.iter().enumerate() {
             let response = context
