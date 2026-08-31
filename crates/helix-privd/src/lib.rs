@@ -1,5 +1,6 @@
 //! Narrow protocol shared by the unprivileged dashboard and `helix-privd`.
 
+pub mod migrate_plan;
 pub mod mrpack;
 
 use serde::{Deserialize, Serialize};
@@ -312,6 +313,12 @@ pub enum BrokerRequest {
     },
     ListMinecraftVersions {
         software: MinecraftSoftware,
+    },
+    MigrateServerPreflight {
+        source: ServerMigrateSource,
+    },
+    MigrateServer {
+        spec: ServerMigrateSpec,
     },
     JobStatus {
         job_id: String,
@@ -721,6 +728,119 @@ pub struct CustomMinecraftJarSpec {
     pub java_version: u16,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ServerMigrateSource {
+    Amp { instance_id: String },
+    Folder { path: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerMigrateSpec {
+    pub source: ServerMigrateSource,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<GameKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub software: Option<MinecraftSoftware>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
+    pub max_players: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_port: Option<u16>,
+    #[serde(default)]
+    pub network_exposure: ServerNetworkExposure,
+    pub start_on_boot: bool,
+    pub eula_accepted: bool,
+    pub source_stopped: bool,
+    pub copy_acknowledged: bool,
+    #[serde(default = "default_true")]
+    pub list_on_browser: bool,
+    #[serde(default)]
+    pub wine_runtime_acknowledged: bool,
+}
+
+impl ServerMigrateSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_dedicated_name(&self.name)?;
+        if !self.copy_acknowledged {
+            return Err(
+                "confirm that Helix will copy into a new native server and leave the source manager alone"
+                    .to_owned(),
+            );
+        }
+        if !self.source_stopped {
+            return Err("confirm the source server is stopped before copying".to_owned());
+        }
+        validate_cpu_millis(self.cpu_millis)?;
+        if self.game_port.is_some_and(|port| port < 1_024) {
+            return Err("game port must be at least 1024".to_owned());
+        }
+        if self.query_port.is_some_and(|port| port < 1_024) {
+            return Err("query port must be at least 1024".to_owned());
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_game(&self, game: GameKind) -> Result<(), String> {
+        self.validate()?;
+        match game {
+            GameKind::Minecraft => {
+                if !self.eula_accepted {
+                    return Err("the Minecraft EULA must be explicitly accepted".to_owned());
+                }
+                if !(1_024..=24_576).contains(&self.memory_mb) {
+                    return Err("memory must be between 1 and 24 GiB".to_owned());
+                }
+                if !(1..=10_000).contains(&self.max_players) {
+                    return Err("player limit must be between 1 and 10,000".to_owned());
+                }
+                Ok(())
+            }
+            GameKind::VRising => VRisingCreateSpec {
+                name: self.name.clone(),
+                memory_mb: self.memory_mb,
+                cpu_millis: self.cpu_millis,
+                max_players: self.max_players,
+                game_port: self.game_port,
+                query_port: self.query_port,
+                network_exposure: self.network_exposure,
+                list_on_browser: self.list_on_browser,
+                start_on_boot: self.start_on_boot,
+                wine_runtime_acknowledged: self.wine_runtime_acknowledged,
+            }
+            .validate(),
+            GameKind::Valheim => ValheimCreateSpec {
+                name: self.name.clone(),
+                memory_mb: self.memory_mb,
+                cpu_millis: self.cpu_millis,
+                max_players: self.max_players,
+                game_port: self.game_port,
+                network_exposure: self.network_exposure,
+                start_on_boot: self.start_on_boot,
+            }
+            .validate(),
+            GameKind::Terraria => TerrariaCreateSpec {
+                name: self.name.clone(),
+                software: TerrariaSoftware::Vanilla,
+                memory_mb: self.memory_mb,
+                cpu_millis: self.cpu_millis,
+                max_players: self.max_players,
+                game_port: self.game_port,
+                network_exposure: self.network_exposure,
+                start_on_boot: self.start_on_boot,
+            }
+            .validate(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct VRisingCreateSpec {
@@ -904,7 +1024,7 @@ pub fn validate_cpu_millis(cpu_millis: u32) -> Result<(), String> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MinecraftSoftware {
     Custom,
@@ -1174,6 +1294,35 @@ mod tests {
         assert!(encoded["spec"].get("custom_jar").is_none());
         assert!(encoded["spec"].get("cpu_millis").is_none());
 
+        let migrate = serde_json::to_value(BrokerRequest::MigrateServer {
+            spec: ServerMigrateSpec {
+                source: ServerMigrateSource::Amp {
+                    instance_id: "amp:12345678-1234-4234-8234-123456789abc".to_owned(),
+                },
+                name: "Survival".to_owned(),
+                game: Some(GameKind::Minecraft),
+                software: Some(MinecraftSoftware::Paper),
+                version: Some("1.21.8".to_owned()),
+                memory_mb: 4_096,
+                cpu_millis: 0,
+                max_players: 20,
+                game_port: None,
+                query_port: None,
+                network_exposure: ServerNetworkExposure::Private,
+                start_on_boot: true,
+                eula_accepted: true,
+                source_stopped: true,
+                copy_acknowledged: true,
+                list_on_browser: true,
+                wine_runtime_acknowledged: false,
+            },
+        })
+        .expect("serialize migrate request");
+        assert_eq!(migrate["operation"], "migrate_server");
+        assert_eq!(migrate["spec"]["source"]["kind"], "amp");
+        assert!(migrate["spec"].get("cpu_millis").is_none());
+        assert!(migrate["spec"].get("start_after").is_none());
+
         let vrising = serde_json::to_value(BrokerRequest::CreateVRising {
             spec: VRisingCreateSpec {
                 name: "Castle".to_owned(),
@@ -1290,6 +1439,47 @@ mod tests {
         };
         assert_eq!(spec.game_port, None);
         assert_eq!(spec.network_exposure, ServerNetworkExposure::Public);
+    }
+
+    #[test]
+    fn migrate_spec_requires_stop_and_copy_acknowledgement() {
+        let mut spec = ServerMigrateSpec {
+            source: ServerMigrateSource::Folder {
+                path: "/srv/storage/pterodactyl/world".to_owned(),
+            },
+            name: "Copied".to_owned(),
+            game: Some(GameKind::Minecraft),
+            software: Some(MinecraftSoftware::Paper),
+            version: Some("latest".to_owned()),
+            memory_mb: 4_096,
+            cpu_millis: 0,
+            max_players: 20,
+            game_port: None,
+            query_port: None,
+            network_exposure: ServerNetworkExposure::Private,
+            start_on_boot: true,
+            eula_accepted: true,
+            source_stopped: true,
+            copy_acknowledged: true,
+            list_on_browser: true,
+            wine_runtime_acknowledged: false,
+        };
+        spec.validate_for_game(GameKind::Minecraft).expect("valid copy");
+        spec.copy_acknowledged = false;
+        assert!(spec.validate().is_err());
+        spec.copy_acknowledged = true;
+        spec.source_stopped = false;
+        assert!(spec.validate().is_err());
+        spec.source_stopped = true;
+        spec.eula_accepted = false;
+        assert!(spec.validate_for_game(GameKind::Minecraft).is_err());
+        spec.eula_accepted = true;
+        spec.memory_mb = 1_024;
+        spec.wine_runtime_acknowledged = false;
+        assert!(spec.validate_for_game(GameKind::VRising).is_err());
+        spec.memory_mb = 4_096;
+        spec.wine_runtime_acknowledged = true;
+        spec.validate_for_game(GameKind::VRising).expect("V Rising copy");
     }
 
     #[test]

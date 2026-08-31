@@ -1,6 +1,6 @@
 # Helix Progress
 
-Last updated: 2026-08-29
+Last updated: 2026-08-30
 
 This is the implementation ledger. [ROADMAP.md](ROADMAP.md) describes intended
 ordering; it is not evidence that a feature works.
@@ -39,6 +39,7 @@ review remain open. Public-internet release status is **BLOCKED**.
 | Native Terraria manager | IMPLEMENTED — UNVALIDATED | Helix builds `helix-terraria-runtime:1` locally. Vanilla uses the publisher dedicated zip; tModLoader uses Steam app 1281930. `.tmod` files in `/data/mods` apply after restart. Public UPnP is not the default pool behavior. Live-host create/start remains open. |
 | Servers dashboard module | TESTED | Owner setup asks whether to include the Servers page (default yes). Existing owners stay enabled. Settings can hide or restore the page later without stopping running game containers. Navigation order still stores every section. |
 | AMP bridge | IMPLEMENTED — UNVALIDATED | AMP is an optional separate manager reached through a loopback-only credentialed integration. Helix can inventory AMP instances and issue bounded supported actions without adopting their files or identity as native instances. AMP outages and ambiguous responses fail closed. Broader live AMP-version testing remains open. |
+| Copy into Helix | IMPLEMENTED — UNVALIDATED | Preflight plus a copy job create a new native server from a stopped AMP Minecraft instance or a folder under `managed_roots` (Pterodactyl volumes, AMP V Rising/Valheim/Terraria). AMP/Pterodactyl files are not rewritten. Overlay rules, software mapping, and folder scans have lib tests. Live AMP/Pterodactyl copy on the LAN remains open. |
 | Persistent console history | IMPLEMENTED — UNVALIDATED | Native console output is captured to bounded protected rotating files independent of the browser. History pages return at most 500 entries with retained boot/session metadata where available; the legacy tail response remains stable. Retention and restart logic have focused tests, while long-running disk/failure testing remains open. |
 | Native backups | IMPLEMENTED — UNVALIDATED | Backup creation/restore exists. Delete moves exact native backup artifacts into protected recoverable trash with opaque IDs and expiry metadata; Undo restores only matching records. Full interrupted-backup, disk-full, restore-to-clean-host, and retention-purge matrices remain open. |
 | Settings restart metadata | TESTED | Server settings expose which fields require restart and save responses report pending restart state instead of implying immediate application. Settings writes use revisions and preserve a rollback copy. Game-version-specific behavior still needs broad live coverage. |

@@ -1,7 +1,7 @@
 import render from 'preact-render-to-string';
 import { describe, expect, it } from 'vitest';
 import type { BrokerJob } from './control-api';
-import { CreateJobProgress, createJobTimingLabel, steamCreateJobCopy } from './create-job-progress';
+import { CreateJobProgress, createJobTimingLabel, migrateCreateJobCopy, steamCreateJobCopy } from './create-job-progress';
 
 function job(overrides: Partial<BrokerJob>): BrokerJob {
   return {
@@ -46,5 +46,13 @@ describe('create job progress', () => {
     expect(markup).toContain('Finished in 2m 5s');
     expect(markup).toContain('V Rising is online.');
     expect(createJobTimingLabel(finished, 999_999)).toBe('Finished in 2m 5s');
+  });
+
+  it('says a copy leaves the source manager alone', () => {
+    const running = job({ kind: 'server_migrate', stage: 'Copying world, plugins, and configs' });
+    expect(migrateCreateJobCopy('Minecraft', running)).toContain('source AMP or Pterodactyl files stay untouched');
+    expect(migrateCreateJobCopy('Minecraft', { ...running, status: 'complete', progressPercent: 100 })).toContain(
+      'The old manager still has the original files',
+    );
   });
 });

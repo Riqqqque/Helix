@@ -99,6 +99,20 @@ pub struct AmpServer {
     pub execution_backend: &'static str,
 }
 
+#[derive(Debug)]
+pub(crate) struct AmpMigrateHandle {
+    pub id: String,
+    pub name: String,
+    pub instance_name: String,
+    pub path: PathBuf,
+    pub running: bool,
+    pub status: String,
+    pub software: String,
+    pub version: String,
+    pub memory_mb: u32,
+    pub max_players: u16,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AmpInventoryIssue {
     pub code: &'static str,
@@ -585,6 +599,72 @@ impl AmpClient {
             warnings,
             manager: "amp_import",
             execution_backend: "external",
+        })
+    }
+
+    pub(crate) fn migrate_handle(&self, instance_id: &str) -> Result<AmpMigrateHandle, String> {
+        let instance_id = instance_id.strip_prefix("amp:").unwrap_or(instance_id);
+        let instances = self.local_instances()?;
+        let instance = instances
+            .iter()
+            .find(|instance| text(instance, "InstanceID").as_deref() == Some(instance_id))
+            .ok_or_else(|| "that AMP instance is not on this host".to_owned())?;
+        let module = text(instance, "Module").unwrap_or_default();
+        if module == "Minecraft" {
+            let server = self
+                .map_server(instance)
+                .map_err(|error| error.message.to_owned())?;
+            let running = matches!(
+                server.status,
+                "online" | "idle" | "starting" | "stopping"
+            );
+            return Ok(AmpMigrateHandle {
+                id: server.id,
+                name: server.name,
+                instance_name: server.instance_name,
+                path: PathBuf::from(server.path),
+                running,
+                status: server.status,
+                software: server.software,
+                version: server.version,
+                memory_mb: if (1_024..=24_576).contains(&server.memory_limit_mb) {
+                    u32::try_from(server.memory_limit_mb).unwrap_or(4_096)
+                } else {
+                    4_096
+                },
+                max_players: u16::try_from(server.max_players.clamp(1, 10_000)).unwrap_or(20),
+            });
+        }
+        let instance_name = text(instance, "InstanceName").ok_or_else(|| {
+            "that AMP instance has no usable folder name".to_owned()
+        })?;
+        validate_instance_name(&instance_name)
+            .map_err(|_| "that AMP instance folder name is not usable".to_owned())?;
+        let name = text(instance, "FriendlyName").unwrap_or_else(|| instance_name.clone());
+        let panel_running = boolean(instance, "Running");
+        let path = self.instance_root.join(&instance_name);
+        if !path.is_dir() {
+            return Err("Helix cannot see that AMP instance folder on this host".to_owned());
+        }
+        Ok(AmpMigrateHandle {
+            id: format!("amp:{instance_id}"),
+            name,
+            instance_name,
+            path,
+            running: panel_running,
+            status: if panel_running {
+                "online".to_owned()
+            } else {
+                "offline".to_owned()
+            },
+            software: if module.is_empty() {
+                "Generic".to_owned()
+            } else {
+                module
+            },
+            version: "latest".to_owned(),
+            memory_mb: 4_096,
+            max_players: 20,
         })
     }
 

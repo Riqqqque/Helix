@@ -11,6 +11,9 @@ release, not a public-internet support promise.
 - Settings → Catalogs stores an owner CurseForge API key on the host so marketplace
   search and “Start with a modpack” can use `api.curseforge.com`. Helix never
   ships a CurseForge secret and never shows the saved key again.
+- Servers can copy a stopped AMP or Pterodactyl world into a **new** native
+  Helix server (Minecraft first, then V Rising, Valheim, Terraria). AMP and
+  Pterodactyl files stay put. The new server gets a free Helix port.
 - Settings → Signed-in session can turn off idle and eight-hour expiry so this
   browser stays signed in until you sign out or change the password. Reloading
   the page still asks you to sign in. The default stays 30 minutes idle and

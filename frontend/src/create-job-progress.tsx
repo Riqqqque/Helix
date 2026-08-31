@@ -67,3 +67,11 @@ export function steamCreateJobCopy(game: string, job: BrokerJob): string {
   if (job.status === 'complete') return `${game} is online.`;
   return job.error ?? 'Helix stopped this create and rolled back the incomplete server.';
 }
+
+export function migrateCreateJobCopy(game: string, job: BrokerJob): string {
+  if (job.status === 'queued' || job.status === 'running') {
+    return `Helix is creating a new ${game} server and copying the world, plugins, mods, or saves into it. The source AMP or Pterodactyl files stay untouched. First Steam installs can take 10–30 minutes.`;
+  }
+  if (job.status === 'complete') return `${game} is online on a new Helix server. The old manager still has the original files.`;
+  return job.error ?? 'Helix stopped this copy and rolled back the incomplete server. The source was not changed.';
+}

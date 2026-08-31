@@ -7,6 +7,12 @@ Terraria all run in isolated Helix containers. Nothing is installed on the host
 OS. The chooser uses original Helix marks, not publisher artwork. Create lets
 you set RAM and an optional CPU cap; Helix applies those as Docker limits.
 
+**Copy an existing server** copies a stopped AMP or Pterodactyl world into a
+new native Helix server. AMP Minecraft can use the imported connection. Other
+games and Pterodactyl use an absolute folder under Storage. Helix does not
+edit or delete the old manager. See
+[Copy a server into Helix](https://github.com/Riqqqque/Helix/wiki/Server-Migration).
+
 The server list can be filtered to **Helix** (native servers only), Minecraft,
 V Rising, Valheim, Terraria, or imported Connections. Helix-native and imported
 servers keep visibly different ownership labels.

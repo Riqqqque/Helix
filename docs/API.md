@@ -313,6 +313,8 @@ or output. Disconnect ends the PTY.
 | `POST` | `/api/v1/servers/vrising` | `games.manage` | Start a native V Rising creation job |
 | `POST` | `/api/v1/servers/valheim` | `games.manage` | Start a native Valheim creation job |
 | `POST` | `/api/v1/servers/terraria` | `games.manage` | Start a native Terraria creation job |
+| `POST` | `/api/v1/servers/migrate/preflight` | `games.manage` | Inspect an AMP instance or managed folder before copying into a new native server |
+| `POST` | `/api/v1/servers/migrate` | `games.manage` | Start a copy job into a new native server; public exposure also needs `network.firewall.write` |
 | `GET` | `/api/v1/servers/minecraft/modpacks/search` | `games.view` | Search Modrinth or CurseForge modpack previews (`provider=modrinth` or `curseforge`) |
 | `GET` | `/api/v1/servers/minecraft/modpacks/projects/{project_id}` | `games.view` | Read bounded project/version compatibility detail |
 | `POST` | `/api/v1/servers/minecraft/modpacks` | `games.manage` | Start a server-safe modpack creation job |
@@ -374,7 +376,18 @@ instances stay under AMP.
 Minecraft creation accepts either one explicit port or no port, which allocates
 the first genuinely free candidate from the stored Minecraft policy while the
 creation lock is held. Priority ports are tried before ordered ranges; the
-policy is bounded to 4,096 unique candidates. Modpack creation accepts opaque
+policy is bounded to 4,096 unique candidates.
+
+`POST /api/v1/servers/migrate/preflight` inspects an AMP instance (`kind=amp`)
+or a folder under `managed_roots` (`kind=folder`). It does not write the source.
+`POST /api/v1/servers/migrate` copies into a new native server after
+`source_stopped` and `copy_acknowledged`. Live AMP instances are refused. The
+new server allocates a free Helix port and starts when the copy and first boot
+finish. AMP and Pterodactyl files are not edited or deleted. Custom Minecraft
+JARs need an explicit version. Public `network_exposure` also needs
+`network.firewall.write`. Poll `GET /api/v1/jobs/{job_id}`.
+
+Modpack creation accepts opaque
 project/version IDs, optional `provider` (`modrinth` default, or `curseforge`),
 and the ordinary server name, RAM, optional CPU cap (`cpu_millis`, `0` omitted),
 player, optional port, network-exposure,

@@ -222,8 +222,11 @@ off-host backups or prove restore after disk loss.
 
 AMP credentials must be root-owned/private, and the AMP endpoint must remain on
 loopback. AMP responses are bounded and strictly interpreted. An unavailable or
-ambiguous AMP action fails; Helix does not adopt or rewrite AMP instances during
-discovery.
+ambiguous AMP action fails. Helix does not adopt AMP or Pterodactyl instances
+as native servers. A separate copy job can read a stopped source and write a
+new Helix instance; AMP kvp, `server.properties`, worlds, and Pterodactyl
+volumes are not rewritten or deleted. Discovery still does not turn an imported
+connection into a `helix:` server.
 
 ## Host power and start on boot
 
