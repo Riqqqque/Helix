@@ -6008,6 +6008,12 @@ function migratePlayerMax(game: MigrateGame): number {
   }
 }
 
+function migrateMemoryKind(
+  game: MigrateGame,
+): "minecraft" | "vrising" | "valheim" | "terraria" {
+  return game;
+}
+
 function MigrateServerDialog({
   csrfToken,
   servers,
