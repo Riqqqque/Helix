@@ -6,13 +6,13 @@ use crate::files::{
 use helix_privd::{
     CURSEFORGE_API_KEY_REQUIRED, CURSEFORGE_CDN_BLOCKED, CURSEFORGE_KEY_REJECTED,
     CURSEFORGE_RATE_LIMITED, CustomMinecraftJarSpec, FileUploadPurpose, GameKind,
-    GamePortPolicySpec, GamePortRangeSpec,
-    MAX_CONCURRENT_FILE_UPLOADS, MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES,
-    MAX_MINECRAFT_VERSION_CATALOG, MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode,
-    MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, ServerAction,
-    TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec,
-    catalog_fetch_is_non_retryable, classify_curseforge_curl_error, curl_extra_header_file,
-    migrate_plan, validate_curseforge_api_key,
+    GamePortPolicySpec, GamePortRangeSpec, MAX_CONCURRENT_FILE_UPLOADS,
+    MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES, MAX_MINECRAFT_VERSION_CATALOG,
+    MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode, MinecraftModpackCreateSpec,
+    MinecraftSettingsPatch, MinecraftSoftware, ModpackProvider, ServerAction, TerrariaCreateSpec,
+    TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec, catalog_fetch_is_non_retryable,
+    classify_curseforge_curl_error, curl_extra_header_file, migrate_plan,
+    validate_curseforge_api_key,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -37,6 +37,7 @@ use uuid::Uuid;
 
 mod marketplace;
 mod modpacks;
+mod pumpkin;
 mod terraria;
 mod valheim;
 mod vrising;
@@ -52,6 +53,8 @@ const MAX_RCON_PACKET_BYTES: usize = 1024 * 1024;
 const MAX_CONSOLE_LINE_BYTES: usize = 1024 * 1024;
 const MAX_CONSOLE_HISTORY_PAGE_TEXT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_NATIVE_COMMAND_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const MODPACK_LOCK_FILE: &str = ".helix-modpack.lock.json";
+const MAX_MODPACK_LOCK_BYTES: u64 = 4 * 1024 * 1024;
 const MIN_CONSOLE_HISTORY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_CONSOLE_HISTORY_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_BACKUP_CATALOG_ENTRIES: usize = 2_048;
@@ -154,9 +157,63 @@ struct InstanceManifest {
     backup_keep_count: u16,
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     backup_keep_days: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    modpack: Option<InstalledModpack>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct InstalledModpack {
+    schema_version: u32,
+    provider: ModpackProvider,
+    project_id: String,
+    project_title: String,
+    version_id: String,
+    version_name: String,
+    version_number: String,
+    minecraft_version: String,
+    loader: String,
+    loader_version: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ModpackLock {
+    schema_version: u32,
+    provider: ModpackProvider,
+    project_id: String,
+    version_id: String,
+    managed_files: Vec<ManagedModpackFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedModpackFile {
+    path: String,
+    sha256: String,
 }
 
 impl InstanceManifest {
+    fn is_pumpkin(&self) -> bool {
+        matches!(self.software, MinecraftSoftware::Pumpkin) && self.is_minecraft()
+    }
+
+    fn artifact_name(&self) -> &'static str {
+        if self.is_pumpkin() {
+            "pumpkin"
+        } else {
+            "server.jar"
+        }
+    }
+
+    fn settings_name(&self) -> &'static str {
+        if self.is_pumpkin() {
+            "pumpkin.toml"
+        } else {
+            "server.properties"
+        }
+    }
+
     fn is_minecraft(&self) -> bool {
         matches!(self.kind, GameKind::Minecraft)
     }
@@ -232,6 +289,15 @@ struct RuntimeState {
     running: bool,
     cpu_percent: f64,
     memory_used_mb: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ContainerStartupState {
+    running: bool,
+    restarting: bool,
+    oom_killed: bool,
+    exit_code: i32,
+    restart_count: u64,
 }
 
 struct MinecraftStatus {
@@ -645,7 +711,7 @@ impl NativeManager {
             let status = statuses.remove(&manifest.id);
             let data_path = self.instance_path(&manifest.id)?;
             let mut warnings = Vec::new();
-            if manifest.is_minecraft() && !data_path.join("server.jar").is_file() {
+            if manifest.is_minecraft() && !data_path.join(manifest.artifact_name()).is_file() {
                 warnings.push("Server executable is missing".to_owned());
             }
             if manifest.is_vrising()
@@ -1283,6 +1349,7 @@ impl NativeManager {
             return Err("the Helix execution backend did not report a version".to_owned());
         }
         let supported_software = [
+            "pumpkin",
             "paper",
             "purpur",
             "folia",
@@ -1342,6 +1409,7 @@ impl NativeManager {
 
     pub fn list_minecraft_versions(&self, software: MinecraftSoftware) -> Result<Value, String> {
         let (allows_latest, versions) = match software {
+            MinecraftSoftware::Pumpkin => (true, self.pumpkin_versions()?),
             MinecraftSoftware::Paper => (
                 true,
                 self.fill_installable_versions(MinecraftSoftware::Paper, "paper")?,
@@ -1568,6 +1636,7 @@ impl NativeManager {
             "java_version": manifest.java_version,
             "runtime_image": manifest.runtime_image,
             "artifact_sha256": manifest.artifact_sha256,
+            "modpack": manifest.modpack,
             "memory_limit_mb": manifest.memory_mb,
             "cpu_limit_millis": manifest.cpu_millis,
             "game_port": manifest.game_port,
@@ -1835,7 +1904,9 @@ impl NativeManager {
             ));
         }
         let _operation = self.begin_instance_operation(&manifest.id, "settings update")?;
-        let path = self.instance_path(&manifest.id)?.join("server.properties");
+        let path = self
+            .instance_path(&manifest.id)?
+            .join(manifest.settings_name());
         let original = read_small_regular_file(&path, MAX_PROPERTIES_BYTES, "server settings")?;
         let revision = file_sha256(&path)?;
         if revision != settings.expected_revision {
@@ -1845,14 +1916,26 @@ impl NativeManager {
             );
         }
         let changed_fields = {
-            let mut fields = changed_setting_fields(&parse_properties(&original), settings);
+            let properties = if manifest.is_pumpkin() {
+                pumpkin::properties(&original)?
+            } else {
+                parse_properties(&original)
+            };
+            let mut fields = changed_setting_fields(&properties, settings);
             if settings.memory_mb != manifest.memory_mb {
                 fields.push("memory_mb");
             }
             fields
         };
-        let updated = update_properties(&original, settings);
+        let updated = if manifest.is_pumpkin() {
+            pumpkin::update_config(&original, settings)?
+        } else {
+            update_properties(&original, settings)
+        };
         let port_changed = settings.game_port != manifest.game_port;
+        if manifest.is_pumpkin() && settings.game_port == manifest.query_port {
+            return Err("Java and Bedrock require separate TCP ports".to_owned());
+        }
         let memory_changed = settings.memory_mb != manifest.memory_mb;
         if port_changed {
             self.ensure_replacement_game_port(&manifest, settings.game_port)?;
@@ -1870,7 +1953,15 @@ impl NativeManager {
                 "settings": self.server_settings_for(&manifest)?
             }));
         }
-        let backup = path.with_extension(format!("properties.{}.bak", now_unix_ms()));
+        let backup = path.with_extension(format!(
+            "{}.{}.bak",
+            if manifest.is_pumpkin() {
+                "toml"
+            } else {
+                "properties"
+            },
+            now_unix_ms()
+        ));
         let previous = manifest.clone();
         let data_path = self.instance_path(&manifest.id)?;
         if updated != original {
@@ -2509,9 +2600,15 @@ impl NativeManager {
     }
 
     fn server_settings_for(&self, manifest: &InstanceManifest) -> Result<Value, String> {
-        let path = self.instance_path(&manifest.id)?.join("server.properties");
+        let path = self
+            .instance_path(&manifest.id)?
+            .join(manifest.settings_name());
         let content = read_small_regular_file(&path, MAX_PROPERTIES_BYTES, "server settings")?;
-        let properties = parse_properties(&content);
+        let properties = if manifest.is_pumpkin() {
+            pumpkin::properties(&content)?
+        } else {
+            parse_properties(&content)
+        };
         Ok(json!({
             "expected_revision": file_sha256(&path)?,
             "motd": property_text(&properties, "motd", &manifest.name),
@@ -2597,6 +2694,16 @@ impl NativeManager {
                 })
             }
             ServerAction::Update => {
+                if manifest.modpack.is_some() {
+                    return self.update_minecraft_modpack(manifest).map(|detail| {
+                        json!({
+                            "instance_id": format!("helix:{}", manifest.id),
+                            "action": action,
+                            "accepted": true,
+                            "detail": detail
+                        })
+                    });
+                }
                 let changed = self.update(manifest)?;
                 json!({
                     "updated": changed,
@@ -2705,6 +2812,9 @@ impl NativeManager {
         F: FnMut(&str, u8),
     {
         validate_create_spec(spec)?;
+        if matches!(spec.software, MinecraftSoftware::Pumpkin) && overlay.is_some() {
+            return Err("Pumpkin world and plugin conversion is not a safe automatic migration; create a separate server and import only verified compatible data from a backup".to_owned());
+        }
         let _operation = self.begin_creation_operation()?;
         progress("Checking ports, names, and storage", 6);
         let manifests = self.load_manifests()?;
@@ -2718,7 +2828,14 @@ impl NativeManager {
             self.resolve_game_port(GameKind::Minecraft, spec.game_port, &manifests)?;
         let mut resolved_spec = spec.clone();
         resolved_spec.game_port = Some(game_port);
-        let rcon_port = allocate_rcon_port(&manifests, &self.amp_occupied_ports())?;
+        let bedrock_port = if matches!(spec.software, MinecraftSoftware::Pumpkin) {
+            self.resolve_pumpkin_bedrock_port(game_port, spec.pumpkin_bedrock_port, &manifests)?
+        } else {
+            0
+        };
+        let mut reserved_ports = self.amp_occupied_ports();
+        reserved_ports.extend([game_port, bedrock_port]);
+        let rcon_port = allocate_rcon_port(&manifests, &reserved_ports)?;
         let id = Uuid::new_v4().to_string();
         let instance_name = instance_name(spec.name.trim(), &id);
         let container_name = format!("helix-game-{id}");
@@ -2741,7 +2858,9 @@ impl NativeManager {
             } else {
                 self.resolve_artifact(resolved_spec.software, resolved_spec.version.trim())?
             };
-            if artifact.java_version < 17 || artifact.java_version > 25 {
+            if !matches!(artifact.software, MinecraftSoftware::Pumpkin)
+                && (artifact.java_version < 17 || artifact.java_version > 25)
+            {
                 return Err(format!(
                     "Minecraft {} requires Java {}, which this Helix release does not manage yet",
                     artifact.version, artifact.java_version
@@ -2762,20 +2881,45 @@ impl NativeManager {
                 },
                 30,
             );
-            let jar_path = data_path.join("server.jar");
+            let pumpkin = matches!(artifact.software, MinecraftSoftware::Pumpkin);
+            let jar_path = data_path.join(if pumpkin { "pumpkin" } else { "server.jar" });
             let artifact_sha256 = self.download_artifact(&artifact, &jar_path)?;
             write_new_file(&data_path.join("eula.txt"), b"eula=true\n", 0o640)?;
             let rcon_password = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-            let properties =
-                server_properties(&resolved_spec, game_port, rcon_port, &rcon_password);
+            let properties = if pumpkin {
+                pumpkin::initial_config(
+                    &resolved_spec,
+                    game_port,
+                    bedrock_port,
+                    rcon_port,
+                    &rcon_password,
+                )?
+            } else {
+                server_properties(&resolved_spec, game_port, rcon_port, &rcon_password)
+            };
             write_new_file(
-                &data_path.join("server.properties"),
+                &data_path.join(if pumpkin {
+                    "pumpkin.toml"
+                } else {
+                    "server.properties"
+                }),
                 properties.as_bytes(),
                 0o640,
             )?;
 
-            progress("Pinning the Java runtime", 48);
-            let runtime_image = self.resolve_runtime_image(artifact.java_version)?;
+            progress(
+                if pumpkin {
+                    "Pinning the native Pumpkin runtime (no Java)"
+                } else {
+                    "Pinning the Java runtime"
+                },
+                48,
+            );
+            let runtime_image = if pumpkin {
+                self.pumpkin_runtime()?
+            } else {
+                self.resolve_runtime_image(artifact.java_version)?
+            };
             let unix_args = if artifact.install_server {
                 progress("Running the official loader installer", 52);
                 Some(self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?)
@@ -2805,10 +2949,11 @@ impl NativeManager {
                 run_uid,
                 created_at_unix_ms: now_unix_ms(),
                 kind: GameKind::Minecraft,
-                query_port: 0,
+                query_port: bedrock_port,
                 unix_args,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                modpack: None,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -2842,7 +2987,7 @@ impl NativeManager {
 
             progress("Creating the Helix workload", 62);
             container_create_attempted = true;
-            self.create_container(&manifest, &data_path)?;
+            self.create_validation_container(&manifest, &data_path)?;
 
             progress("Starting Minecraft", 76);
             self.docker(["start", manifest.container_name.as_str()], 90)?;
@@ -2853,6 +2998,7 @@ impl NativeManager {
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
+            self.finalize_container_restart_policy(&manifest)?;
             self.ensure_console_archiver(&manifest)?;
             progress("Online", 100);
             Ok(json!({
@@ -2860,6 +3006,8 @@ impl NativeManager {
                 "instance_name": instance_name,
                 "game_port": game_port,
                 "port_allocated_automatically": allocated_automatically,
+                "software": spec.software,
+                "query_port": if pumpkin { json!(bedrock_port) } else { Value::Null },
                 "manager": "helix",
                 "execution_backend": "docker"
             }))
@@ -2967,6 +3115,7 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                modpack: None,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -2999,7 +3148,7 @@ impl NativeManager {
 
             progress("Creating the isolated V Rising container", 52);
             container_create_attempted = true;
-            self.create_container(&manifest, &data_path)?;
+            self.create_validation_container(&manifest, &data_path)?;
 
             progress(
                 "Downloading V Rising through SteamCMD and starting the runtime",
@@ -3014,6 +3163,7 @@ impl NativeManager {
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
+            self.finalize_container_restart_policy(&manifest)?;
             self.ensure_console_archiver(&manifest)?;
             progress("Online", 100);
             Ok(json!({
@@ -3118,6 +3268,7 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                modpack: None,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -3128,7 +3279,7 @@ impl NativeManager {
 
             progress("Creating the isolated Valheim container", 52);
             container_create_attempted = true;
-            self.create_container(&manifest, &data_path)?;
+            self.create_validation_container(&manifest, &data_path)?;
 
             progress(
                 "Downloading Valheim through SteamCMD and starting the runtime",
@@ -3143,6 +3294,7 @@ impl NativeManager {
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
+            self.finalize_container_restart_policy(&manifest)?;
             self.ensure_console_archiver(&manifest)?;
             progress("Online", 100);
             Ok(json!({
@@ -3262,6 +3414,7 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                modpack: None,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -3272,7 +3425,7 @@ impl NativeManager {
 
             progress("Creating the isolated Terraria container", 52);
             container_create_attempted = true;
-            self.create_container(&manifest, &data_path)?;
+            self.create_validation_container(&manifest, &data_path)?;
 
             progress("Downloading Terraria and starting the runtime", 62);
             self.clear_ready_marker(&manifest)?;
@@ -3284,6 +3437,7 @@ impl NativeManager {
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
+            self.finalize_container_restart_policy(&manifest)?;
             self.ensure_console_archiver(&manifest)?;
             progress("Online", 100);
             Ok(json!({
@@ -3505,6 +3659,7 @@ impl NativeManager {
         requested_version: &str,
     ) -> Result<Artifact, String> {
         match software {
+            MinecraftSoftware::Pumpkin => self.resolve_pumpkin(requested_version),
             MinecraftSoftware::Custom => {
                 Err("custom JAR servers use the local artifact import flow".to_owned())
             }
@@ -4521,10 +4676,10 @@ impl NativeManager {
         file: &Value,
     ) -> Result<String, String> {
         if let Some(candidate) = file.get("downloadUrl").and_then(Value::as_str) {
-            if candidate.len() <= 4_096
-                && require_https_host(candidate, FORGECDN_DOWNLOAD_HOSTS).is_ok()
-            {
-                return Ok(candidate.to_owned());
+            if candidate.len() <= 4_096 {
+                if let Ok(direct) = marketplace::direct_forgecdn_download_url(candidate) {
+                    return Ok(direct);
+                }
             }
         }
         let file_id = file
@@ -4535,8 +4690,8 @@ impl NativeManager {
             self.curseforge_v1(&format!("mods/{project_id}/files/{file_id}/download-url"))
         {
             if let Some(url) = response.get("data").and_then(Value::as_str) {
-                if require_https_host(url, FORGECDN_DOWNLOAD_HOSTS).is_ok() {
-                    return Ok(url.to_owned());
+                if let Ok(direct) = marketplace::direct_forgecdn_download_url(url) {
+                    return Ok(direct);
                 }
             }
         }
@@ -4550,6 +4705,9 @@ impl NativeManager {
     }
 
     fn download_artifact(&self, artifact: &Artifact, destination: &Path) -> Result<String, String> {
+        if matches!(artifact.software, MinecraftSoftware::Pumpkin) {
+            return self.download_pumpkin(artifact, destination);
+        }
         if let Some(source) = &artifact.local_source {
             return self.import_local_artifact(source, destination);
         }
@@ -4742,7 +4900,11 @@ impl NativeManager {
         } else {
             "no"
         };
-        let memory_limit = u64::from(manifest.memory_mb).saturating_add(1024);
+        let memory_limit = u64::from(manifest.memory_mb).saturating_add(if manifest.is_pumpkin() {
+            0
+        } else {
+            1024
+        });
         let minimum_heap = manifest.memory_mb.min(1024);
         let game_tcp = format!("0.0.0.0:{0}:{0}/tcp", manifest.game_port);
         let game_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port);
@@ -4807,9 +4969,28 @@ impl NativeManager {
             "-XX:+UseG1GC".to_owned(),
             "-XX:+ParallelRefProcEnabled".to_owned(),
             "-XX:+DisableExplicitGC".to_owned(),
-            "-XX:+AlwaysPreTouch".to_owned(),
         ];
-        if let Some(unix_args) = &manifest.unix_args {
+        if manifest.is_pumpkin() {
+            let unused_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port);
+            if let Some(index) = args.iter().position(|arg| arg == &unused_udp) {
+                args.drain(index - 1..=index);
+            }
+            let entry = args
+                .iter()
+                .position(|arg| arg == "--entrypoint")
+                .ok_or("Missing runtime entrypoint")?;
+            args.truncate(entry + 1);
+            args.pop();
+            args.extend([
+                "--publish".to_owned(),
+                format!("0.0.0.0:{0}:{0}/tcp", manifest.query_port),
+                "--publish".to_owned(),
+                format!("0.0.0.0:{0}:{0}/udp", manifest.query_port),
+                "--entrypoint".to_owned(),
+            ]);
+            args.push("/data/pumpkin".to_owned());
+            args.push(manifest.runtime_image.clone());
+        } else if let Some(unix_args) = &manifest.unix_args {
             args.push(format!("@{unix_args}"));
             args.push("nogui".to_owned());
         } else {
@@ -4819,6 +5000,40 @@ impl NativeManager {
         }
         insert_cpu_limit(&mut args, manifest.cpu_millis);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
+        Ok(())
+    }
+
+    fn create_validation_container(
+        &self,
+        manifest: &InstanceManifest,
+        data_path: &Path,
+    ) -> Result<(), String> {
+        let mut validation_manifest = manifest.clone();
+        validation_manifest.start_on_boot = false;
+        self.create_container(&validation_manifest, data_path)
+    }
+
+    fn finalize_container_restart_policy(&self, manifest: &InstanceManifest) -> Result<(), String> {
+        let desired = if manifest.start_on_boot {
+            "unless-stopped"
+        } else {
+            "no"
+        };
+        if self.container_restart_policy(&manifest.container_name)? == desired {
+            return Ok(());
+        }
+        self.docker(
+            [
+                "update",
+                "--restart",
+                desired,
+                manifest.container_name.as_str(),
+            ],
+            20,
+        )?;
+        if self.container_restart_policy(&manifest.container_name)? != desired {
+            return Err("Docker did not persist the server's restart policy".to_owned());
+        }
         Ok(())
     }
 
@@ -5062,7 +5277,7 @@ impl NativeManager {
     }
 
     fn ready_timeout(&self, manifest: &InstanceManifest) -> Duration {
-        if manifest.uses_ready_marker() {
+        if manifest.uses_ready_marker() || manifest.modpack.is_some() {
             Duration::from_secs(20 * 60)
         } else {
             Duration::from_secs(6 * 60)
@@ -5132,30 +5347,99 @@ impl NativeManager {
     {
         let started = Instant::now();
         let deadline = started + timeout;
+        let initial_state = self.container_startup_state(&manifest.container_name)?;
         while Instant::now() < deadline {
-            if minecraft_status(manifest.game_port, Duration::from_secs(2)).is_ok() {
+            if minecraft_status(manifest.game_port, Duration::from_secs(2)).is_ok()
+                && (!manifest.is_pumpkin() || pumpkin::bedrock_ready(manifest.query_port))
+            {
                 return Ok(());
             }
-            if !self.container_running(&manifest.container_name) {
-                let logs = self
-                    .docker(
-                        ["logs", "--tail", "25", manifest.container_name.as_str()],
-                        20,
-                    )
-                    .unwrap_or_default();
-                return Err(if logs.trim().is_empty() {
-                    "Minecraft stopped before it became ready".to_owned()
-                } else {
-                    format!(
-                        "Minecraft stopped before it became ready: {}",
-                        one_line_tail(&logs, 600)
-                    )
-                });
+            let state = self.container_startup_state(&manifest.container_name)?;
+            if state.restarting || state.restart_count > initial_state.restart_count {
+                return Err(self.minecraft_startup_failure(
+                    manifest,
+                    state,
+                    "Minecraft restarted unexpectedly during its first boot",
+                ));
+            }
+            if !state.running {
+                return Err(self.minecraft_startup_failure(
+                    manifest,
+                    state,
+                    &format!(
+                        "Minecraft exited with code {} before it became ready",
+                        state.exit_code
+                    ),
+                ));
             }
             progress(Instant::now().saturating_duration_since(started).as_secs());
             thread::sleep(Duration::from_secs(3));
         }
-        Err("Minecraft did not become reachable before the startup deadline".to_owned())
+        let logs = self
+            .docker(
+                ["logs", "--tail", "80", manifest.container_name.as_str()],
+                20,
+            )
+            .unwrap_or_default();
+        let elapsed = Instant::now().saturating_duration_since(started).as_secs();
+        Err(if logs.trim().is_empty() {
+            format!(
+                "Minecraft kept running but did not open port {} within {elapsed} seconds",
+                manifest.game_port
+            )
+        } else {
+            format!(
+                "Minecraft kept running but did not open port {} within {elapsed} seconds. Latest startup output: {}",
+                manifest.game_port,
+                startup_failure_summary(&logs, 1_800)
+            )
+        })
+    }
+
+    fn container_startup_state(&self, name: &str) -> Result<ContainerStartupState, String> {
+        let output = self.docker(
+            [
+                "inspect",
+                "--format",
+                "{{.State.Running}}|{{.State.Restarting}}|{{.State.OOMKilled}}|{{.State.ExitCode}}|{{.RestartCount}}",
+                name,
+            ],
+            20,
+        )?;
+        parse_container_startup_state(&output)
+    }
+
+    fn minecraft_startup_failure(
+        &self,
+        manifest: &InstanceManifest,
+        state: ContainerStartupState,
+        reason: &str,
+    ) -> String {
+        let logs = self
+            .docker(
+                ["logs", "--tail", "500", manifest.container_name.as_str()],
+                20,
+            )
+            .unwrap_or_default();
+        let normalized = logs.to_ascii_lowercase();
+        let memory_exhausted = state.oom_killed
+            || normalized.contains("outofmemoryerror")
+            || normalized.contains("java heap space")
+            || normalized.contains("gc overhead limit exceeded");
+        let cause = if memory_exhausted {
+            format!(
+                "The {} MiB memory allocation was exhausted. Increase the server memory and try again",
+                manifest.memory_mb
+            )
+        } else {
+            reason.to_owned()
+        };
+        let summary = startup_failure_summary(&logs, 1_800);
+        if summary.is_empty() {
+            cause
+        } else {
+            format!("{cause}. Relevant startup output: {summary}")
+        }
     }
 
     fn backup(&self, manifest: &InstanceManifest) -> Result<PathBuf, String> {
@@ -5232,6 +5516,16 @@ impl NativeManager {
             let _ = fs::remove_file(&partial);
             return Err(error);
         }
+        if let Err(error) = run_program(
+            Path::new("/usr/bin/gzip"),
+            &["--test".to_owned(), partial.to_string_lossy().into_owned()],
+            30 * 60,
+        ) {
+            let _ = fs::remove_file(&partial);
+            return Err(format!(
+                "the completed backup failed its integrity check: {error}"
+            ));
+        }
         fs::set_permissions(&partial, fs::Permissions::from_mode(0o600))
             .map_err(|_| "could not protect the completed backup".to_owned())?;
         fs::rename(&partial, &destination)
@@ -5247,7 +5541,17 @@ impl NativeManager {
         if manifest.uses_ready_marker() {
             return self.update_ready_marker_game(manifest);
         }
-        let artifact = self.resolve_artifact(manifest.software, &manifest.minecraft_version)?;
+        let artifact = self.resolve_artifact(
+            manifest.software,
+            if manifest.is_pumpkin() {
+                "latest"
+            } else {
+                &manifest.minecraft_version
+            },
+        )?;
+        if manifest.is_pumpkin() && artifact.version != manifest.minecraft_version {
+            return Err("The latest Pumpkin release changes Minecraft client/world versions. Keep this server pinned and test the new release in a separate server before migrating a backup.".to_owned());
+        }
         if artifact.java_version != manifest.java_version {
             return Err(format!(
                 "this update changes the Java requirement from {} to {}; use the guided version upgrade flow",
@@ -5282,8 +5586,8 @@ impl NativeManager {
                 ),
             });
         }
-        let jar = data_path.join("server.jar");
-        let rollback = data_path.join("server.jar.rollback");
+        let jar = data_path.join(manifest.artifact_name());
+        let rollback = data_path.join(format!("{}.rollback", manifest.artifact_name()));
         if rollback.exists() {
             let restart = self.restart_if_previously_running(manifest, running);
             let _ = fs::remove_file(&update_path);
@@ -5763,7 +6067,10 @@ impl NativeManager {
         Ok(report)
     }
 
-    pub(crate) fn stage_migrate_jar(&self, source_jar: &Path) -> Result<CustomMinecraftJarSpec, String> {
+    pub(crate) fn stage_migrate_jar(
+        &self,
+        source_jar: &Path,
+    ) -> Result<CustomMinecraftJarSpec, String> {
         let metadata = fs::symlink_metadata(source_jar)
             .map_err(|_| "the source server JAR is unavailable".to_owned())?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -5797,9 +6104,12 @@ impl NativeManager {
 
     fn protect_instance_artifacts(&self, path: &Path, uid: u32) -> Result<(), String> {
         for (name, mode) in [
+            ("pumpkin", 0o550),
+            ("pumpkin.toml", 0o660),
             ("server.jar", 0o440),
             ("server.properties", 0o660),
             ("eula.txt", 0o440),
+            (MODPACK_LOCK_FILE, 0o440),
         ] {
             let artifact = path.join(name);
             if !artifact.is_file() {
@@ -6826,6 +7136,9 @@ fn validate_binary(path: &Path, label: &str) -> Result<(), String> {
 }
 
 fn validate_create_spec(spec: &MinecraftCreateSpec) -> Result<(), String> {
+    if spec.pumpkin_bedrock_port.is_some() && !matches!(spec.software, MinecraftSoftware::Pumpkin) {
+        return Err("A Bedrock port is only accepted for Pumpkin".to_owned());
+    }
     let name = spec.name.trim();
     if name.is_empty()
         || name.len() > 80
@@ -6842,7 +7155,11 @@ fn validate_create_spec(spec: &MinecraftCreateSpec) -> Result<(), String> {
         return Err("custom JAR details are only accepted for a custom server".to_owned());
     }
     if !spec.version.eq_ignore_ascii_case("latest") {
-        validate_version(spec.version.trim())?;
+        if matches!(spec.software, MinecraftSoftware::Pumpkin) {
+            pumpkin::release_versions(spec.version.trim())?;
+        } else {
+            validate_version(spec.version.trim())?;
+        }
     }
     if !(1_024..=24_576).contains(&spec.memory_mb) {
         return Err("memory must be between 1 and 24 GiB".to_owned());
@@ -7419,6 +7736,15 @@ fn numeric_version_parts(version: &str) -> Vec<u32> {
 
 fn minecraft_software_catalog() -> Vec<Value> {
     vec![
+        software_catalog_entry(
+            "pumpkin",
+            "Pumpkin",
+            "native_server",
+            "ready",
+            false,
+            "Native Rust Minecraft server: no Java. Java uses TCP; Bedrock NetherNet uses a separate TCP/UDP port.",
+            "Early-development server with its own plugin API. Versioned Linux x86-64/ARM64 binaries are checksum verified. Not a Paper/Fabric/Forge replacement: no automatic JAR/modpack or world conversion. Native plugins must match the build; PatchBukkit is separate and compatibility is not guaranteed.",
+        ),
         software_catalog_entry(
             "custom",
             "Custom server JAR",
@@ -8410,6 +8736,7 @@ fn backup_retention_note(keep_count: u16, keep_days: u16) -> String {
 
 fn software_name(software: MinecraftSoftware) -> &'static str {
     match software {
+        MinecraftSoftware::Pumpkin => "Pumpkin",
         MinecraftSoftware::Custom => "Custom JAR",
         MinecraftSoftware::Vanilla => "Vanilla",
         MinecraftSoftware::Paper => "Paper",
@@ -8679,6 +9006,112 @@ fn one_line_tail(value: &str, maximum: usize) -> String {
     flattened.chars().take(maximum).collect()
 }
 
+fn parse_container_startup_state(value: &str) -> Result<ContainerStartupState, String> {
+    let fields = value.trim().split('|').collect::<Vec<_>>();
+    if fields.len() != 5 {
+        return Err("Docker returned an invalid Minecraft workload state".to_owned());
+    }
+    let parse_bool = |value: &str| match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err("Docker returned an invalid Minecraft workload state".to_owned()),
+    };
+    Ok(ContainerStartupState {
+        running: parse_bool(fields[0])?,
+        restarting: parse_bool(fields[1])?,
+        oom_killed: parse_bool(fields[2])?,
+        exit_code: fields[3]
+            .parse()
+            .map_err(|_| "Docker returned an invalid Minecraft exit code".to_owned())?,
+        restart_count: fields[4]
+            .parse()
+            .map_err(|_| "Docker returned an invalid Minecraft restart count".to_owned())?,
+    })
+}
+
+fn startup_failure_summary(value: &str, maximum: usize) -> String {
+    let lines = value
+        .lines()
+        .map(strip_terminal_sequences)
+        .map(|line| line.trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let important = lines
+        .iter()
+        .filter(|line| {
+            let normalized = line.to_ascii_lowercase();
+            [
+                "error",
+                "exception",
+                "failed",
+                "failure",
+                "caused by",
+                "outofmemory",
+                "java heap space",
+                "requires",
+                "missing",
+                "incompatible",
+                "fatal",
+                "could not",
+            ]
+            .iter()
+            .any(|needle| normalized.contains(needle))
+        })
+        .rev()
+        .take(12)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut selected = if important.is_empty() {
+        lines.iter().rev().take(12).cloned().collect::<Vec<_>>()
+    } else {
+        important
+    };
+    selected.reverse();
+    let summary = selected.join(" · ");
+    if summary.chars().count() <= maximum {
+        summary
+    } else {
+        let mut truncated = summary
+            .chars()
+            .take(maximum.saturating_sub(1))
+            .collect::<String>();
+        truncated.push('…');
+        truncated
+    }
+}
+
+fn strip_terminal_sequences(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut characters = value.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\u{1b}' {
+            match characters.next() {
+                Some('[') => {
+                    for sequence in characters.by_ref() {
+                        if ('@'..='~').contains(&sequence) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    while let Some(sequence) = characters.next() {
+                        if sequence == '\u{7}' {
+                            break;
+                        }
+                        if sequence == '\u{1b}' && characters.next_if_eq(&'\\').is_some() {
+                            break;
+                        }
+                    }
+                }
+                Some(_) | None => {}
+            }
+        } else if !character.is_control() || character == '\t' {
+            result.push(character);
+        }
+    }
+    result
+}
+
 fn parse_human_bytes(value: &str) -> Option<u64> {
     let value = value.trim();
     let split = value
@@ -8807,6 +9240,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_docker_startup_state_without_guessing_at_restart_health() {
+        assert_eq!(
+            parse_container_startup_state("false|false|true|137|3\n").unwrap(),
+            ContainerStartupState {
+                running: false,
+                restarting: false,
+                oom_killed: true,
+                exit_code: 137,
+                restart_count: 3,
+            }
+        );
+        assert!(parse_container_startup_state("true|maybe|false|0|0").is_err());
+        assert!(parse_container_startup_state("true|false|false|0").is_err());
+    }
+
+    #[test]
+    fn startup_summary_prioritizes_the_cause_and_removes_terminal_sequences() {
+        let logs = "\u{1b}[32mLoading mod one\u{1b}[0m\nLoading mod two\nCaused by: java.lang.OutOfMemoryError: Java heap space\nStopping server\n";
+        let summary = startup_failure_summary(logs, 500);
+        assert_eq!(
+            summary,
+            "Caused by: java.lang.OutOfMemoryError: Java heap space"
+        );
+        assert!(!summary.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn startup_summary_falls_back_to_recent_output_and_stays_bounded() {
+        let summary = startup_failure_summary("loading alpha\nloading beta\n", 18);
+        assert_eq!(summary, "loading alpha · l…");
+        assert_eq!(summary.chars().count(), 18);
+    }
+
+    #[test]
     fn port_policy_is_deterministic_deduplicated_and_bounded() {
         let normalized = normalize_game_port_policy(GamePortPolicySpec {
             game: GameKind::Minecraft,
@@ -8888,6 +9355,7 @@ mod tests {
     #[test]
     fn automatic_create_specs_are_valid_before_a_port_is_resolved() {
         let spec = MinecraftCreateSpec {
+            pumpkin_bedrock_port: None,
             name: "Automatic".to_owned(),
             software: MinecraftSoftware::Paper,
             version: "latest".to_owned(),
@@ -8962,6 +9430,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 0,
             backup_keep_days: 0,
+            modpack: None,
         };
         let encoded = serde_json::to_value(&vrising).unwrap();
         assert_eq!(encoded["kind"], "vrising");
@@ -9095,6 +9564,7 @@ mod tests {
             amp: None,
         };
         let mut spec = MinecraftCreateSpec {
+            pumpkin_bedrock_port: None,
             name: "Private build".to_owned(),
             software: MinecraftSoftware::Custom,
             version: "1.21.8".to_owned(),
@@ -9221,6 +9691,7 @@ mod tests {
         assert_eq!(
             ready,
             HashSet::from([
+                "pumpkin",
                 "paper",
                 "purpur",
                 "folia",
@@ -9835,6 +10306,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 0,
             backup_keep_days: 0,
+            modpack: None,
         };
         write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
         let active = backup_root.join(id);
@@ -9971,6 +10443,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 2,
             backup_keep_days: 0,
+            modpack: None,
         };
         write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
         let active = backup_root.join(id);
@@ -10074,6 +10547,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 0,
             backup_keep_days: 0,
+            modpack: None,
         };
         let record_root = state_root.join("server-trash").join(trash_id);
         let data_root = instance_root.join(".trash").join(trash_id);

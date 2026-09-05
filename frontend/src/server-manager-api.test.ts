@@ -33,6 +33,28 @@ const readiness = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('native server manager readiness', () => {
+  it('accepts Pumpkin alongside the existing server choices', () => {
+    expect(parseServerManagerReadiness({
+      ...readiness,
+      supported_minecraft_software: ['paper', 'pumpkin'],
+      minecraft_software_catalog: [entry('paper', true), { ...entry('pumpkin', true), kind: 'native_server' }],
+    })).toMatchObject({ supportedMinecraftSoftware: ['paper', 'pumpkin'] });
+  });
+
+  it('keeps known choices usable when a newer broker adds software and classifications', () => {
+    expect(parseServerManagerReadiness({
+      ...readiness,
+      supported_minecraft_software: ['paper', 'future_server'],
+      minecraft_software_catalog: [...readiness.minecraft_software_catalog, { ...entry('future_server', true), kind: 'future_kind' }],
+    })).toMatchObject({ supportedMinecraftSoftware: ['paper'], minecraftSoftwareCatalog: readiness.minecraft_software_catalog });
+  });
+
+  it('still rejects invalid classifications for supported software', () => {
+    expect(() => parseServerManagerReadiness({
+      ...readiness, minecraft_software_catalog: [{ ...entry('paper', true), kind: 'invalid' }],
+    })).toThrow(/classification/);
+  });
+
   it('keeps installable software separate from explained unavailable choices', () => {
     const parsed = parseServerManagerReadiness(readiness);
     expect(parsed.availability).toBe('ready');

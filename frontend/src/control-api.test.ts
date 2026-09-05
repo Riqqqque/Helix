@@ -502,6 +502,69 @@ describe('native server API', () => {
 
     await expect(getServerDetail('helix:server-id', 'csrf')).rejects.toThrow();
   });
+
+  it('parses installed modpack provenance used by safe update checks', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        id: 'helix:server-id',
+        name: 'All the Mods',
+        instance_name: 'all-the-mods-server-id',
+        kind: 'minecraft',
+        software: 'NeoForge',
+        minecraft_version: '1.21.1',
+        build: '21.1.249',
+        java_version: 21,
+        runtime_image: 'eclipse-temurin@sha256:' + 'a'.repeat(64),
+        artifact_sha256: 'b'.repeat(64),
+        memory_limit_mb: 8192,
+        cpu_limit_millis: 0,
+        game_port: 25567,
+        query_port: null,
+        start_on_boot: false,
+        created_at_unix_ms: 1_788_500_000_000,
+        data_path: '/srv/helix/instances/server-id',
+        disk_bytes: 1_200_000_000,
+        status: 'online',
+        players_online: 0,
+        max_players: 20,
+        cpu_percent: 4.2,
+        memory_used_mb: 6400,
+        tps: 20,
+        container_state: {},
+        settings: wireSettings(),
+        console_history: {
+          persistent: true,
+          retention_bytes: 67_108_864,
+          retention_files: 8,
+          scope: 'per_server',
+        },
+        capabilities: ['console', 'backups', 'advanced'],
+        browser_listing: null,
+        modpack: {
+          schema_version: 1,
+          provider: 'curseforge',
+          project_id: '925200',
+          project_title: 'All the Mods 10',
+          version_id: '8764211',
+          version_name: 'ATM10 8.1',
+          version_number: '8.1',
+          minecraft_version: '1.21.1',
+          loader: 'neoforge',
+          loader_version: '21.1.249',
+        },
+      }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getServerDetail('helix:server-id', 'csrf')).resolves.toMatchObject({
+      modpack: {
+        provider: 'curseforge',
+        projectId: '925200',
+        versionId: '8764211',
+        loaderVersion: '21.1.249',
+      },
+    });
+  });
 });
 
 describe('server list API', () => {

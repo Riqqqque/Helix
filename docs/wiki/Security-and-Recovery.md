@@ -16,7 +16,8 @@ The current owner flow uses:
 - Argon2id password hashing and revocable sessions (30 minutes idle and eight
   hours by default; Settings can turn that expiry off);
 - `HttpOnly`, host-only, `SameSite=Strict` cookies;
-- a session-bound CSRF proof required for protected reads and writes;
+- a session-bound CSRF proof required for protected reads and writes and kept
+  only for this exact browser origin so a refresh can revalidate the session;
 - exact capabilities enforced by the API; and
 - bounded authentication work and generic failures without secret details.
 

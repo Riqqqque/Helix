@@ -259,9 +259,10 @@ export interface ManagedServer {
 }
 
 export type ServerAction = 'start' | 'stop' | 'restart' | 'kill' | 'update' | 'backup';
-export type MinecraftSoftware = 'custom' | 'vanilla' | 'paper' | 'purpur' | 'folia' | 'leaves' | 'fabric' | 'neoforge' | 'forge' | 'quilt' | 'pufferfish';
+export type MinecraftSoftware = 'custom' | 'vanilla' | 'paper' | 'purpur' | 'folia' | 'leaves' | 'fabric' | 'neoforge' | 'forge' | 'quilt' | 'pumpkin' | 'pufferfish';
 
 export interface MinecraftCreateInput {
+  pumpkin_bedrock_port?: number;
   name: string;
   software: MinecraftSoftware;
   version: string;
@@ -397,6 +398,19 @@ export interface NativeServerDetail {
   };
   capabilities: string[];
   browserListing: NativeBrowserListing | null;
+  modpack: NativeInstalledModpack | null;
+}
+
+export interface NativeInstalledModpack {
+  provider: 'modrinth' | 'curseforge';
+  projectId: string;
+  projectTitle: string;
+  versionId: string;
+  versionName: string;
+  versionNumber: string;
+  minecraftVersion: string;
+  loader: string;
+  loaderVersion: string;
 }
 
 export interface NativeBrowserListing {
@@ -909,6 +923,34 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
       return entry;
     }),
     browserListing: parseBrowserListing(root.browser_listing),
+    modpack: parseNativeInstalledModpack(root.modpack),
+  };
+}
+
+function parseNativeInstalledModpack(value: unknown): NativeInstalledModpack | null {
+  if (value === null || value === undefined) return null;
+  const root = expectRecord(value, 'installed modpack');
+  const provider = expectString(root, 'provider', 'installed modpack');
+  if (provider !== 'modrinth' && provider !== 'curseforge') {
+    throw new Error('Invalid installed modpack provider');
+  }
+  const bounded = (key: string, maximum: number): string => {
+    const text = expectString(root, key, 'installed modpack');
+    if (text.length === 0 || text.length > maximum) {
+      throw new Error(`Invalid installed modpack ${key}`);
+    }
+    return text;
+  };
+  return {
+    provider,
+    projectId: bounded('project_id', 64),
+    projectTitle: bounded('project_title', 256),
+    versionId: bounded('version_id', 64),
+    versionName: bounded('version_name', 256),
+    versionNumber: bounded('version_number', 128),
+    minecraftVersion: bounded('minecraft_version', 64),
+    loader: bounded('loader', 32),
+    loaderVersion: bounded('loader_version', 128),
   };
 }
 

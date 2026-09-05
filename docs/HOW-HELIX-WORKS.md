@@ -34,8 +34,10 @@ flowchart LR
    the compiled frontend and versioned API.
 2. Login creates a revocable session. By default it expires after 30 minutes
    idle and eight hours; Settings can turn that off. Protected requests require
-   the session cookie, an in-memory session-bound CSRF proof, and the capability
-   for that operation.
+   the session cookie, a session-bound CSRF proof, and the capability for that
+   operation. Helix saves only the proof for this exact browser origin and
+   revalidates both parts after a reload; refreshing never extends or bypasses
+   the server deadline.
 3. Read-only adapters collect bounded host data. The browser never reads the
    host directly.
 4. Root-required work is serialized into a closed `BrokerRequest` enum and sent
@@ -90,8 +92,10 @@ of trusting browser memory. History pages are cursor-based and bounded, so
 permanent or unlimited.
 
 Per-instance guards serialize incompatible work. Creation, update, backup, and
-marketplace installs expose background job status, but current job state lives
-for the broker process lifetime and is not yet a crash-persistent queue. Native
+marketplace installs expose background job status. The browser keeps only an
+opaque job receipt so a reload reattaches to status instead of submitting the
+mutation again. Current job state still lives for the broker process lifetime
+and is not yet a crash-persistent queue. Native
 kill is a confirmed SIGKILL that can run beside a hung stop or restart; it is
 not offered for AMP.
 

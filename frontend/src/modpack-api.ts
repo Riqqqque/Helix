@@ -1,6 +1,6 @@
 import { ApiError, expectArray, expectNumber, expectRecord, expectString, requestJson } from './api';
 
-export type ModpackCompatibilityStatus = 'fabric_candidate' | 'forge_candidate' | 'neoforge_candidate' | 'quilt_candidate' | 'incompatible';
+export type ModpackCompatibilityStatus = 'fabric_candidate' | 'forge_candidate' | 'neoforge_candidate' | 'quilt_candidate' | 'unverified' | 'incompatible';
 export type ModpackProvider = 'modrinth' | 'curseforge';
 
 export interface ModpackSearchResult {
@@ -23,6 +23,7 @@ export interface ModpackSearchResult {
 }
 
 export interface ModpackSearchPage {
+  provider: ModpackProvider;
   query: string;
   offset: number;
   limit: number;
@@ -66,6 +67,7 @@ export interface ModpackProject {
 }
 
 export interface ModpackProjectDetail {
+  provider: ModpackProvider;
   project: ModpackProject;
   versions: ModpackVersion[];
   compatibleVersionCount: number;
@@ -81,6 +83,7 @@ export interface ModpackSelection {
   versionName: string;
   versionNumber: string;
   minecraftVersions: string[];
+  loaders: string[];
   filename: string;
   fileSize: number;
   provider: ModpackProvider;
@@ -101,16 +104,22 @@ export interface MinecraftModpackCreateInput {
 }
 
 export interface MinecraftModpackCreateResult {
+  provider: ModpackProvider;
   projectTitle: string;
   versionNumber: string;
   minecraftVersion: string;
-  fabricLoaderVersion: string;
+  loader: string;
+  loaderVersion: string;
   installedServerFiles: number;
   excludedServerOptionalFiles: number;
   excludedClientOnlyFiles: number;
+  excludedNonJarFiles: number;
+  excludedLaunchFiles: number;
+  serverPackUsed: boolean;
+  serverPackFilename: string | null;
   serverSafeSubset: boolean;
   fullPackParity: boolean;
-  modrinthDeclaredSha512Verified: boolean;
+  catalogIntegrityVerified: boolean;
 }
 
 function optionalString(record: Record<string, unknown>, key: string, context: string): string | null {
@@ -123,6 +132,19 @@ function optionalString(record: Record<string, unknown>, key: string, context: s
 function boolean(record: Record<string, unknown>, key: string, context: string): boolean {
   if (typeof record[key] !== 'boolean') throw new ApiError(`${context} returned an invalid ${key}.`);
   return record[key];
+}
+
+function optionalBoolean(record: Record<string, unknown>, key: string, context: string): boolean | null {
+  const value = record[key];
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'boolean') throw new ApiError(`${context} returned an invalid ${key}.`);
+  return value;
+}
+
+function modpackProvider(record: Record<string, unknown>, context: string): ModpackProvider {
+  const value = expectString(record, 'provider', context);
+  if (value !== 'modrinth' && value !== 'curseforge') throw new ApiError(`${context} returned an invalid provider.`);
+  return value;
 }
 
 function stringList(record: Record<string, unknown>, key: string, context: string, maximum = 128): string[] {
@@ -146,19 +168,25 @@ function packWebUrl(record: Record<string, unknown>, key: string, context: strin
 function marketplaceImageUrl(record: Record<string, unknown>, key: string, context: string): string | null {
   const value = optionalString(record, key, context);
   if (value === null) return null;
-  if (/^https:\/\/(?:(?:www|[a-z0-9-]+)\.)?(?:curseforge|forgecdn)\.com\//iu.test(value)) return value;
   const parsed = new URL(value, 'http://helix.invalid');
   const keys = Array.from(parsed.searchParams.keys());
   const path = parsed.searchParams.get('path');
+  const origin = parsed.pathname === '/api/v1/marketplace/modrinth/image'
+    ? 'modrinth'
+    : parsed.pathname === '/api/v1/marketplace/curseforge/image'
+      ? 'curseforge'
+      : null;
+  const prefix = origin === 'modrinth' ? '/data/' : origin === 'curseforge' ? '/avatars/' : null;
   if (
-    !value.startsWith('/api/v1/marketplace/modrinth/image?')
+    origin === null
+    || prefix === null
+    || !value.startsWith(`/api/v1/marketplace/${origin}/image?`)
     || parsed.origin !== 'http://helix.invalid'
-    || parsed.pathname !== '/api/v1/marketplace/modrinth/image'
     || keys.length !== 1
     || keys[0] !== 'path'
     || path === null
     || path.length > 512
-    || !path.startsWith('/data/')
+    || !path.startsWith(prefix)
     || path.split('/').some((segment) => segment === '.' || segment === '..')
     || !/^\/[A-Za-z0-9._/-]+$/u.test(path)
     || !/\.(?:png|jpe?g|webp|gif)$/iu.test(path)
@@ -167,131 +195,156 @@ function marketplaceImageUrl(record: Record<string, unknown>, key: string, conte
 }
 
 function parseSearchResult(value: unknown): ModpackSearchResult {
-  const item = expectRecord(value, 'Modrinth search result');
-  const compatibilityStatus = expectString(item, 'compatibility_status', 'Modrinth search result');
-  if (compatibilityStatus !== 'fabric_candidate' && compatibilityStatus !== 'forge_candidate' && compatibilityStatus !== 'neoforge_candidate' && compatibilityStatus !== 'quilt_candidate' && compatibilityStatus !== 'incompatible') {
+  const item = expectRecord(value, 'Modpack search result');
+  const compatibilityStatus = expectString(item, 'compatibility_status', 'Modpack search result');
+  if (compatibilityStatus !== 'fabric_candidate' && compatibilityStatus !== 'forge_candidate' && compatibilityStatus !== 'neoforge_candidate' && compatibilityStatus !== 'quilt_candidate' && compatibilityStatus !== 'unverified' && compatibilityStatus !== 'incompatible') {
     throw new ApiError('Modpack search returned an invalid compatibility state.');
   }
   return {
-    projectId: expectString(item, 'project_id', 'Modrinth search result'),
-    slug: expectString(item, 'slug', 'Modrinth search result'),
-    title: expectString(item, 'title', 'Modrinth search result'),
-    description: optionalString(item, 'description', 'Modrinth search result'),
-    author: optionalString(item, 'author', 'Modrinth search result'),
-    downloads: expectNumber(item, 'downloads', 'Modrinth search result', { integer: true, minimum: 0 }),
-    follows: expectNumber(item, 'follows', 'Modrinth search result', { integer: true, minimum: 0 }),
-    latestVersion: optionalString(item, 'latest_version', 'Modrinth search result'),
-    minecraftVersions: stringList(item, 'minecraft_versions', 'Modrinth search result'),
-    loaders: stringList(item, 'loaders', 'Modrinth search result'),
-    serverSide: expectString(item, 'server_side', 'Modrinth search result'),
+    projectId: expectString(item, 'project_id', 'Modpack search result'),
+    slug: expectString(item, 'slug', 'Modpack search result'),
+    title: expectString(item, 'title', 'Modpack search result'),
+    description: optionalString(item, 'description', 'Modpack search result'),
+    author: optionalString(item, 'author', 'Modpack search result'),
+    downloads: expectNumber(item, 'downloads', 'Modpack search result', { integer: true, minimum: 0 }),
+    follows: expectNumber(item, 'follows', 'Modpack search result', { integer: true, minimum: 0 }),
+    latestVersion: optionalString(item, 'latest_version', 'Modpack search result'),
+    minecraftVersions: stringList(item, 'minecraft_versions', 'Modpack search result'),
+    loaders: stringList(item, 'loaders', 'Modpack search result'),
+    serverSide: expectString(item, 'server_side', 'Modpack search result'),
     compatibilityStatus,
-    compatibilityReason: expectString(item, 'compatibility_reason', 'Modrinth search result'),
-    requiresVersionCheck: boolean(item, 'requires_version_check', 'Modrinth search result'),
-    webUrl: packWebUrl(item, 'web_url', 'Modrinth search result'),
-    iconUrl: marketplaceImageUrl(item, 'icon_url', 'Modrinth search result'),
+    compatibilityReason: expectString(item, 'compatibility_reason', 'Modpack search result'),
+    requiresVersionCheck: boolean(item, 'requires_version_check', 'Modpack search result'),
+    webUrl: packWebUrl(item, 'web_url', 'Modpack search result'),
+    iconUrl: marketplaceImageUrl(item, 'icon_url', 'Modpack search result'),
   };
 }
 
 export function parseModpackSearchPage(value: unknown): ModpackSearchPage {
-  const root = expectRecord(value, 'Modrinth modpack search');
-  if (expectNumber(root, 'schema_version', 'Modrinth modpack search', { integer: true }) !== 1) throw new ApiError('Modrinth search returned an unsupported schema.');
-  if (typeof root.query !== 'string' || root.query.length > 120) throw new ApiError('Modrinth search returned an invalid query.');
+  const root = expectRecord(value, 'Modpack search');
+  const provider = modpackProvider(root, 'Modpack search');
+  const context = provider === 'curseforge' ? 'CurseForge modpack search' : 'Modrinth modpack search';
+  if (expectNumber(root, 'schema_version', context, { integer: true }) !== 1) throw new ApiError(`${provider === 'curseforge' ? 'CurseForge' : 'Modrinth'} search returned an unsupported schema.`);
+  if (typeof root.query !== 'string' || root.query.length > 120) throw new ApiError(`${provider === 'curseforge' ? 'CurseForge' : 'Modrinth'} search returned an invalid query.`);
   return {
+    provider,
     query: root.query,
-    offset: expectNumber(root, 'offset', 'Modrinth modpack search', { integer: true, minimum: 0 }),
-    limit: expectNumber(root, 'limit', 'Modrinth modpack search', { integer: true, minimum: 1, maximum: 50 }),
-    totalHits: expectNumber(root, 'total_hits', 'Modrinth modpack search', { integer: true, minimum: 0 }),
-    results: expectArray(root, 'results', 'Modrinth modpack search', 50).map(parseSearchResult),
+    offset: expectNumber(root, 'offset', context, { integer: true, minimum: 0 }),
+    limit: expectNumber(root, 'limit', context, { integer: true, minimum: 1, maximum: 50 }),
+    totalHits: expectNumber(root, 'total_hits', context, { integer: true, minimum: 0 }),
+    results: expectArray(root, 'results', context, 50).map(parseSearchResult),
   };
 }
 
-function parseModpackVersion(value: unknown): ModpackVersion {
-  const item = expectRecord(value, 'Modrinth modpack version');
+function parseModpackVersion(value: unknown, provider: ModpackProvider): ModpackVersion {
+  const catalog = provider === 'curseforge' ? 'CurseForge' : 'Modrinth';
+  const context = `${catalog} modpack version`;
+  const fileContext = `${catalog} pack file`;
+  const item = expectRecord(value, context);
   const fileValue = item.mrpack_file;
   let mrpackFile: ModpackVersion['mrpackFile'] = null;
   if (fileValue !== null && fileValue !== undefined) {
-    const file = expectRecord(fileValue, 'Modrinth .mrpack file');
+    const file = expectRecord(fileValue, fileContext);
     mrpackFile = {
-      filename: expectString(file, 'filename', 'Modrinth .mrpack file'),
-      size: expectNumber(file, 'size', 'Modrinth .mrpack file', { integer: true, minimum: 1 }),
-      modrinthDeclaredSha512Available: boolean(file, 'modrinth_declared_sha512_available', 'Modrinth .mrpack file'),
+      filename: expectString(file, 'filename', fileContext),
+      size: expectNumber(file, 'size', fileContext, { integer: true, minimum: 1 }),
+      modrinthDeclaredSha512Available: boolean(file, 'modrinth_declared_sha512_available', fileContext),
     };
   }
-  const installable = boolean(item, 'installable', 'Modrinth modpack version');
-  if (installable && mrpackFile === null) throw new ApiError('An installable Modrinth version omitted its .mrpack file.');
+  const installable = boolean(item, 'installable', context);
+  if (installable && mrpackFile === null) throw new ApiError(`An installable ${catalog} version omitted its pack file.`);
   return {
-    id: expectString(item, 'id', 'Modrinth modpack version'),
-    name: expectString(item, 'name', 'Modrinth modpack version'),
-    versionNumber: expectString(item, 'version_number', 'Modrinth modpack version'),
-    versionType: expectString(item, 'version_type', 'Modrinth modpack version'),
-    status: optionalString(item, 'status', 'Modrinth modpack version'),
-    datePublished: optionalString(item, 'date_published', 'Modrinth modpack version'),
-    downloads: expectNumber(item, 'downloads', 'Modrinth modpack version', { integer: true, minimum: 0 }),
-    gameVersions: stringList(item, 'game_versions', 'Modrinth modpack version'),
-    loaders: stringList(item, 'loaders', 'Modrinth modpack version'),
+    id: expectString(item, 'id', context),
+    name: expectString(item, 'name', context),
+    versionNumber: expectString(item, 'version_number', context),
+    versionType: expectString(item, 'version_type', context),
+    status: optionalString(item, 'status', context),
+    datePublished: optionalString(item, 'date_published', context),
+    downloads: expectNumber(item, 'downloads', context, { integer: true, minimum: 0 }),
+    gameVersions: stringList(item, 'game_versions', context),
+    loaders: stringList(item, 'loaders', context),
     installable,
-    compatibilityReason: expectString(item, 'compatibility_reason', 'Modrinth modpack version'),
+    compatibilityReason: expectString(item, 'compatibility_reason', context),
     mrpackFile,
   };
 }
 
 export function parseModpackProjectDetail(value: unknown): ModpackProjectDetail {
-  const root = expectRecord(value, 'Modrinth modpack project');
-  if (expectNumber(root, 'schema_version', 'Modrinth modpack project', { integer: true }) !== 1) throw new ApiError('Modrinth project returned an unsupported schema.');
-  const project = expectRecord(root.project, 'Modrinth modpack project');
+  const root = expectRecord(value, 'Modpack project');
+  const provider = modpackProvider(root, 'Modpack project');
+  const catalog = provider === 'curseforge' ? 'CurseForge' : 'Modrinth';
+  const context = `${catalog} modpack project`;
+  if (expectNumber(root, 'schema_version', context, { integer: true }) !== 1) throw new ApiError(`${catalog} project returned an unsupported schema.`);
+  const project = expectRecord(root.project, context);
   return {
+    provider,
     project: {
-      id: expectString(project, 'id', 'Modrinth modpack project'),
-      slug: expectString(project, 'slug', 'Modrinth modpack project'),
-      title: expectString(project, 'title', 'Modrinth modpack project'),
-      description: optionalString(project, 'description', 'Modrinth modpack project'),
-      body: optionalString(project, 'body', 'Modrinth modpack project'),
-      author: optionalString(project, 'author', 'Modrinth modpack project'),
-      downloads: expectNumber(project, 'downloads', 'Modrinth modpack project', { integer: true, minimum: 0 }),
-      followers: expectNumber(project, 'followers', 'Modrinth modpack project', { integer: true, minimum: 0 }),
-      serverSide: expectString(project, 'server_side', 'Modrinth modpack project'),
-      clientSide: optionalString(project, 'client_side', 'Modrinth modpack project'),
-      loaders: stringList(project, 'loaders', 'Modrinth modpack project', 32),
-      webUrl: packWebUrl(project, 'web_url', 'Modrinth modpack project'),
-      iconUrl: marketplaceImageUrl(project, 'icon_url', 'Modrinth modpack project'),
+      id: expectString(project, 'id', context),
+      slug: expectString(project, 'slug', context),
+      title: expectString(project, 'title', context),
+      description: optionalString(project, 'description', context),
+      body: optionalString(project, 'body', context),
+      author: optionalString(project, 'author', context),
+      downloads: expectNumber(project, 'downloads', context, { integer: true, minimum: 0 }),
+      followers: expectNumber(project, 'followers', context, { integer: true, minimum: 0 }),
+      serverSide: expectString(project, 'server_side', context),
+      clientSide: optionalString(project, 'client_side', context),
+      loaders: stringList(project, 'loaders', context, 32),
+      webUrl: packWebUrl(project, 'web_url', context),
+      iconUrl: marketplaceImageUrl(project, 'icon_url', context),
     },
-    versions: expectArray(root, 'versions', 'Modrinth modpack project', 200).map(parseModpackVersion),
-    compatibleVersionCount: expectNumber(root, 'compatible_version_count', 'Modrinth modpack project', { integer: true, minimum: 0 }),
-    versionResultsTruncated: boolean(root, 'version_results_truncated', 'Modrinth modpack project'),
+    versions: expectArray(root, 'versions', context, 200).map((version) => parseModpackVersion(version, provider)),
+    compatibleVersionCount: expectNumber(root, 'compatible_version_count', context, { integer: true, minimum: 0 }),
+    versionResultsTruncated: boolean(root, 'version_results_truncated', context),
   };
 }
 
 export function parseMinecraftModpackCreateResult(value: unknown): MinecraftModpackCreateResult {
   const root = expectRecord(value, 'modpack creation result');
   const modpack = expectRecord(root.modpack, 'modpack creation result');
-  const provider = optionalString(modpack, 'provider', 'modpack creation result');
+  const providerValue = optionalString(modpack, 'provider', 'modpack creation result') ?? 'modrinth';
+  if (providerValue !== 'modrinth' && providerValue !== 'curseforge') throw new ApiError('Modpack creation returned an invalid provider.');
+  const provider: ModpackProvider = providerValue;
   if (provider === 'curseforge') {
+    const serverPackUsed = optionalBoolean(modpack, 'server_pack_used', 'modpack creation result') ?? false;
     return {
+      provider,
       projectTitle: optionalString(modpack, 'project_title', 'modpack creation result') ?? 'CurseForge pack',
-      versionNumber: optionalString(modpack, 'version_id', 'modpack creation result') ?? expectString(modpack, 'source_filename', 'modpack creation result'),
+      versionNumber: optionalString(modpack, 'version_number', 'modpack creation result') ?? optionalString(modpack, 'version_id', 'modpack creation result') ?? expectString(modpack, 'source_filename', 'modpack creation result'),
       minecraftVersion: expectString(modpack, 'minecraft_version', 'modpack creation result'),
-      fabricLoaderVersion: optionalString(modpack, 'loader', 'modpack creation result') ?? 'unknown',
+      loader: optionalString(modpack, 'loader', 'modpack creation result') ?? 'unknown',
+      loaderVersion: optionalString(modpack, 'loader_version', 'modpack creation result') ?? 'unknown',
       installedServerFiles: expectNumber(modpack, 'installed_server_files', 'modpack creation result', { integer: true, minimum: 0 }),
       excludedServerOptionalFiles: 0,
       excludedClientOnlyFiles: 0,
-      serverSafeSubset: true,
+      excludedNonJarFiles: modpack.excluded_non_jar_files === undefined ? 0 : expectNumber(modpack, 'excluded_non_jar_files', 'modpack creation result', { integer: true, minimum: 0 }),
+      excludedLaunchFiles: modpack.excluded_launch_files === undefined ? 0 : expectNumber(modpack, 'excluded_launch_files', 'modpack creation result', { integer: true, minimum: 0 }),
+      serverPackUsed,
+      serverPackFilename: optionalString(modpack, 'server_pack_filename', 'modpack creation result'),
+      serverSafeSubset: !serverPackUsed,
       fullPackParity: false,
-      modrinthDeclaredSha512Verified: false,
+      catalogIntegrityVerified: true,
     };
   }
   const parsed = {
+    provider,
     projectTitle: expectString(modpack, 'project_title', 'modpack creation result'),
     versionNumber: expectString(modpack, 'version_number', 'modpack creation result'),
     minecraftVersion: expectString(modpack, 'minecraft_version', 'modpack creation result'),
-    fabricLoaderVersion: expectString(modpack, 'fabric_loader_version', 'modpack creation result'),
+    loader: optionalString(modpack, 'loader', 'modpack creation result') ?? 'fabric',
+    loaderVersion: optionalString(modpack, 'loader_version', 'modpack creation result') ?? expectString(modpack, 'fabric_loader_version', 'modpack creation result'),
     installedServerFiles: expectNumber(modpack, 'installed_server_files', 'modpack creation result', { integer: true, minimum: 0 }),
     excludedServerOptionalFiles: expectNumber(modpack, 'excluded_server_optional_files', 'modpack creation result', { integer: true, minimum: 0 }),
     excludedClientOnlyFiles: expectNumber(modpack, 'excluded_client_only_files', 'modpack creation result', { integer: true, minimum: 0 }),
+    excludedNonJarFiles: 0,
+    excludedLaunchFiles: 0,
+    serverPackUsed: false,
+    serverPackFilename: null,
     serverSafeSubset: boolean(modpack, 'server_safe_subset', 'modpack creation result'),
     fullPackParity: boolean(modpack, 'full_pack_parity', 'modpack creation result'),
-    modrinthDeclaredSha512Verified: boolean(root, 'modrinth_declared_sha512_verified', 'modpack creation result'),
+    catalogIntegrityVerified: boolean(root, 'modrinth_declared_sha512_verified', 'modpack creation result'),
   };
-  if (!parsed.serverSafeSubset || parsed.fullPackParity || !parsed.modrinthDeclaredSha512Verified) throw new ApiError('Modpack creation returned inconsistent safety verification.');
+  if (!parsed.serverSafeSubset || parsed.fullPackParity || !parsed.catalogIntegrityVerified) throw new ApiError('Modpack creation returned inconsistent safety verification.');
   return parsed;
 }
 
@@ -300,8 +353,9 @@ export function searchModpacks(query: string, offset: number, limit: number, csr
   return requestJson(`/api/v1/servers/minecraft/modpacks/search?${params}`, parseModpackSearchPage, { csrfToken, signal, timeoutMs: 40_000 });
 }
 
-export function getModpackProject(projectId: string, csrfToken: string, signal?: AbortSignal): Promise<ModpackProjectDetail> {
-  return requestJson(`/api/v1/servers/minecraft/modpacks/projects/${encodeURIComponent(projectId)}`, parseModpackProjectDetail, { csrfToken, signal, timeoutMs: 40_000 });
+export function getModpackProject(projectId: string, csrfToken: string, signal?: AbortSignal, provider: ModpackProvider = 'modrinth'): Promise<ModpackProjectDetail> {
+  const params = new URLSearchParams({ provider });
+  return requestJson(`/api/v1/servers/minecraft/modpacks/projects/${encodeURIComponent(projectId)}?${params}`, parseModpackProjectDetail, { csrfToken, signal, timeoutMs: 40_000 });
 }
 
 export function createMinecraftModpack(input: MinecraftModpackCreateInput, csrfToken: string): Promise<{ jobId: string }> {

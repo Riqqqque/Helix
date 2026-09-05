@@ -542,11 +542,13 @@ describe('authentication response parsing', () => {
         user: validUser,
         csrfToken: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         expiresAtUnixMs: 1_800_000_000_000,
+        sessionExpires: true,
       }),
     ).toEqual({
       user: validUser,
       csrfToken: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       expiresAtUnixMs: 1_800_000_000_000,
+      sessionExpires: true,
     });
   });
 
@@ -561,6 +563,7 @@ describe('authentication response parsing', () => {
           user,
           csrfToken: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
           expiresAtUnixMs: 1_800_000_000_000,
+          sessionExpires: true,
         }),
       ).toThrowError(ApiError);
     }
@@ -569,6 +572,7 @@ describe('authentication response parsing', () => {
         user: validUser,
         csrfToken: 'short',
         expiresAtUnixMs: 1_800_000_000_000,
+        sessionExpires: true,
       }),
     ).toThrowError(ApiError);
   });
@@ -584,6 +588,7 @@ describe('authentication requests', () => {
     },
     csrfToken: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
     expiresAtUnixMs: 1_800_000_000_000,
+    sessionExpires: true,
   };
 
   it('posts credentials only as same-origin JSON', async () => {

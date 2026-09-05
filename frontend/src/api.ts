@@ -15,6 +15,11 @@ import type {
   StorageSnapshot,
   SystemOverview,
 } from './types';
+import {
+  beginMutationRequest,
+  endMutationRequest,
+  rememberOperationDispatch,
+} from './operation-continuity';
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_STORAGE_MOUNTS = 64;
@@ -277,6 +282,7 @@ export function parseAuthSession(value: unknown): AuthSession {
       integer: true,
       minimum: 0,
     }),
+    sessionExpires: expectBoolean(record, 'sessionExpires', context),
   };
 }
 
@@ -291,6 +297,7 @@ export function parseAuthenticatedUserResponse(
       integer: true,
       minimum: 0,
     }),
+    sessionExpires: expectBoolean(record, 'sessionExpires', context),
   };
 }
 
@@ -644,6 +651,8 @@ export async function requestJson<T>(
   parser: (value: unknown) => T,
   options: JsonRequestOptions = {},
 ): Promise<T> {
+  const mutation = (options.method ?? 'GET') !== 'GET';
+  if (mutation) beginMutationRequest();
   const controller = new AbortController();
   const { signal } = options;
   const cancelRequest = (): void => controller.abort(signal?.reason);
@@ -681,7 +690,14 @@ export async function requestJson<T>(
     }
 
     try {
-      return parser(payload);
+      const dispatchCaptured = mutation
+        ? rememberOperationDispatch(path, payload)
+        : false;
+      const parsed = parser(payload);
+      if (mutation && !dispatchCaptured) {
+        rememberOperationDispatch(path, parsed);
+      }
+      return parsed;
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw new ApiError(`${path} returned data Helix could not safely understand.`);
@@ -701,6 +717,7 @@ export async function requestJson<T>(
 
     throw new ApiError(`Could not reach ${path}.`);
   } finally {
+    if (mutation) endMutationRequest();
     globalThis.clearTimeout(timeout);
     signal?.removeEventListener('abort', cancelRequest);
   }
@@ -745,6 +762,7 @@ export async function updateAccount(
   input: AccountUpdateInput,
   csrfToken: string,
 ): Promise<void> {
+  beginMutationRequest();
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -769,6 +787,7 @@ export async function updateAccount(
     if (controller.signal.aborted) throw new ApiError('The account update timed out.');
     throw new ApiError('Could not reach /api/v1/auth/account.');
   } finally {
+    endMutationRequest();
     globalThis.clearTimeout(timeout);
   }
 }

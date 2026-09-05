@@ -3251,11 +3251,15 @@ async fn minecraft_modpack_project(
     State(state): State<ApiState>,
     headers: HeaderMap,
     RoutePath(project_id): RoutePath<String>,
+    Query(query): Query<ServerMarketplaceProjectQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     auth::require_capability(&state, &headers, "games.view").await?;
     broker_json(
         &state,
-        BrokerRequest::MinecraftModpackProject { project_id },
+        BrokerRequest::MinecraftModpackProject {
+            project_id,
+            provider: query.provider,
+        },
     )
     .await
 }

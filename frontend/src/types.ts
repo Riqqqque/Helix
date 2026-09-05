@@ -23,11 +23,13 @@ export interface AuthSession {
   user: AuthenticatedUser;
   csrfToken: string;
   expiresAtUnixMs: number;
+  sessionExpires: boolean;
 }
 
 export interface AuthenticatedUserResponse {
   user: AuthenticatedUser;
   expiresAtUnixMs: number;
+  sessionExpires: boolean;
 }
 
 export interface CsrfRotation {

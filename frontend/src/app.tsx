@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { ApiError, getSystemOverview } from './api';
+import { OperationError } from './operation-error';
 import {
+  getJob,
   getHostInventory,
   getServers,
   type HostInventory,
   type ManagedServer,
 } from './control-api';
+import {
+  forgetResumableOperation,
+  OPERATION_CONTINUITY_EVENT,
+  readResumableOperations,
+  updateResumableOperation,
+  type ResumableOperation,
+} from './operation-continuity';
 import type { DashboardData, DashboardResource as Resource } from './dashboard-model';
 import {
   applyDashboardColors,
@@ -561,6 +570,98 @@ function ServersModuleDisabled({ onEnable }: { onEnable: () => void }) {
   );
 }
 
+function OperationContinuity({
+  csrfToken,
+  onRefresh,
+  onSessionExpired,
+}: {
+  csrfToken: string;
+  onRefresh: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [operations, setOperations] = useState<ResumableOperation[]>(readResumableOperations);
+  const [trackingError, setTrackingError] = useState<string | null>(null);
+  const completed = useRef(new Set<string>());
+
+  useEffect(() => {
+    const sync = (): void => setOperations(readResumableOperations());
+    window.addEventListener(OPERATION_CONTINUITY_EVENT, sync);
+    return () => window.removeEventListener(OPERATION_CONTINUITY_EVENT, sync);
+  }, []);
+
+  const activeIds = operations
+    .filter((item) => item.status === 'queued' || item.status === 'running')
+    .map((item) => item.id)
+    .join(',');
+
+  useEffect(() => {
+    if (activeIds.length === 0) return;
+    const controller = new AbortController();
+    let inFlight = false;
+    const poll = (): void => {
+      if (inFlight) return;
+      inFlight = true;
+      const ids = activeIds.split(',');
+      void Promise.allSettled(ids.map((id) => getJob(id, csrfToken, controller.signal))).then((results) => {
+        if (controller.signal.aborted) return;
+        let shouldRefresh = false;
+        let firstError: string | null = null;
+        for (const result of results) {
+          if (result.status === 'fulfilled') {
+            updateResumableOperation(result.value);
+            if ((result.value.status === 'complete' || result.value.status === 'failed') && !completed.current.has(result.value.id)) {
+              completed.current.add(result.value.id);
+              shouldRefresh = true;
+            }
+          } else if (isSessionError(result.reason)) {
+            onSessionExpired();
+            return;
+          } else if (firstError === null) {
+            firstError = describeError(result.reason);
+          }
+        }
+        setTrackingError(firstError);
+        setOperations(readResumableOperations());
+        if (shouldRefresh) void onRefresh();
+      }).finally(() => { inFlight = false; });
+    };
+    const timer = window.setInterval(poll, 1_000);
+    return () => {
+      window.clearInterval(timer);
+      controller.abort();
+    };
+  }, [activeIds, csrfToken, onRefresh, onSessionExpired]);
+
+  if (operations.length === 0) return null;
+  return (
+    <aside class="operation-continuity" aria-label="Background operations" aria-live="polite">
+      <div class="operation-continuity__head">
+        <span><Icon name="performance" size={16} /><strong>Background activity</strong></span>
+        <small>Safe to refresh</small>
+      </div>
+      {operations.map((operation) => (
+        <div class={`operation-continuity__item operation-continuity__item--${operation.status}`} key={operation.id}>
+          <div>
+            <strong>{operation.label}</strong>
+            <span>{operation.stage}</span>
+            {(operation.status === 'queued' || operation.status === 'running') && (
+              <progress max={100} value={operation.progressPercent}>{operation.progressPercent}%</progress>
+            )}
+            {operation.error !== null && <OperationError message={operation.error} />}
+          </div>
+          {(operation.status === 'complete' || operation.status === 'failed') && (
+            <button class="icon-button" type="button" aria-label={`Dismiss ${operation.label}`} onClick={() => {
+              forgetResumableOperation(operation.id);
+              setOperations(readResumableOperations());
+            }}><Icon name="close" size={14} /></button>
+          )}
+        </div>
+      ))}
+      {trackingError !== null && <small class="operation-continuity__error">Status check delayed: {trackingError} Helix will retry; the action was not repeated.</small>}
+    </aside>
+  );
+}
+
 export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated, onLogout }: DashboardProps) {
   const active = useActiveSection();
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference);
@@ -637,6 +738,7 @@ export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated,
           </main>
         </div>
       </div>
+      <OperationContinuity csrfToken={csrfToken} onRefresh={data.refresh} onSessionExpired={onSessionExpired} />
     </>
   );
 }

@@ -1,5 +1,7 @@
 # Servers and Marketplace
 
+For the native Rust server, see [Pumpkin setup, compatibility, ports, and recovery](Pumpkin).
+
 ## Choosing a game
 
 Choose **New Server** and then a game. Native Minecraft, V Rising, Valheim, and
@@ -35,8 +37,8 @@ ports. **Show on the V Rising server list** is on by default. That writes
 `ListOnEOS`, `ListOnSteam`, and `HideIPAddress` in
 `save/Settings/ServerHostSettings.json`. Friends can join from the in-game
 browser through EOS without a port-forward. Direct Connect to a public IP is
-separate: it still needs UDP game plus query forwarded, or Helix public setup
-(UPnP for both UDP ports). You can change listing later on Overview; a running
+separate: it still needs UDP game plus query forwarded in your router.
+You can change listing later on Overview; a running
 server needs a restart for that file to take effect.
 
 The create window keeps a spinner, a percent, and elapsed time while SteamCMD
@@ -57,7 +59,7 @@ This path is implemented and unvalidated. It is not publisher-supported.
 Helix builds `helix-valheim-runtime:1` and installs Steam dedicated app 896660.
 Create is private-LAN UDP by default: the game port plus the next two. The create
 window uses the same spinner, percent, and elapsed time as V Rising. Optional
-public setup requests UDP UPnP for those three ports. Allocated memory and CPU
+host setup prepares active-UFW rules for those three ports. Allocated memory and CPU
 cap can be changed later from Overview. There is no RCON console. For mods, drop a BepInEx pack zip at
 `/data/bepinex-pack.zip` and plugin files in `/data/plugins`, then restart.
 Uninstalling the last Valheim server removes that runtime image. Implemented and
@@ -69,7 +71,7 @@ Helix builds `helix-terraria-runtime:1`. Vanilla downloads the publisher
 dedicated zip. tModLoader uses Steam app 1281930. Create uses the same spinner,
 percent, and elapsed time as V Rising. Edit `serverconfig.txt` in
 Files. Drop `.tmod` files in `/data/mods` and restart. Allocated memory and CPU
-cap can be changed later from Overview. Public TCP UPnP is optional at create.
+cap can be changed later from Overview. Host TCP firewall setup is optional at create.
 Implemented and unvalidated.
 
 ## Start on boot
@@ -219,12 +221,51 @@ and a normal ISP exit on this host. Modrinth packs
 use `.mrpack` hash checks. A messy pack summary (newlines, padding, a long
 blurb) is cleaned instead of failing the create. Downloads use the declared
 hashes and a 768 MiB safety cap; a CDN Content-Length that doesn't match the
-index size is not a hard fail. CurseForge packs use
-`manifest.json` plus forgecdn
-files. Both pin a
-matching loader and start an isolated server. The result is a server-safe
-subset, not a full client copy. Long titles and descriptions are clipped in the
-browser; open the catalog or View releases for the rest.
+index size is not a hard fail. CurseForge packs use `manifest.json` plus
+forgecdn files. When the selected release declares an official server pack,
+Helix uses that archive, verifies its catalog length and SHA-1, validates the
+whole ZIP before extraction, and supplies Helix's isolated launch configuration.
+This is both faster and closer to the pack publisher's intended server layout.
+Additional-file links are also supported when they point back to the exact
+selected release. When no linked server pack exists, choose another release
+with server files. Helix does not copy a client's mod list onto a server.
+View releases shows the
+newest page returned by CurseForge and says when older files remain upstream.
+Both providers pin the matching loader and start an isolated server. Client
+content is excluded by using the publisher's dedicated server distribution.
+A large first boot can take several minutes;
+Helix waits up to 20 minutes for a modpack and includes the latest bounded
+startup-log tail if Minecraft never opens its game port. Long titles and
+descriptions are clipped in the browser; open the catalog or View releases for
+the rest.
+
+### Updating a modpack
+
+Open a Helix-native modpack server and Helix checks its original Modrinth or
+CurseForge project for a newer stable release on the same Minecraft version and
+loader. An available release appears above the server tools with **Back up and
+update**. Updates are always manual; Helix never changes a pack on a timer.
+
+Before changing a file, Helix downloads and verifies the complete candidate in
+an isolated directory, stops the server cleanly, and creates a full local
+backup. It replaces only files tracked as part of the pack. Worlds, player data,
+`server.properties`, allowlists, operator lists, server icons, logs, and locally
+edited non-executable configuration remain in place. A locally replaced mod or
+loader JAR stops the update with an explanation instead of being overwritten.
+
+Helix recreates the pinned Java/loader runtime, starts the updated server, and
+waits up to 20 minutes for a real Minecraft response. A failed startup restores
+the complete pre-update archive—including worlds and player data that the
+failed boot may have changed—plus the prior manifest, container, and
+running/stopped state. The full safety backup and failed update files remain
+available for recovery. After success, choose **View safety backup** or open the
+Backups tab. Restore creates another safety copy before applying the selected
+archive and rolls itself back if Minecraft does not recover.
+
+Cross-Minecraft-version and cross-loader changes are migrations, not routine
+updates. Create a separate server for those so the existing world is not placed
+into an unproven runtime combination. Local backups protect against an update
+mistake but not a failed disk; copy important worlds off-host too.
 
 ## AMP imports
 
@@ -249,51 +290,28 @@ dashboard.
 ## Join addresses
 
 Each native detail Overview shows a LAN address, a separately detected Tailscale
-address when present, and the public IP plus the game port when Helix can see a
-WAN address. That public row is the address people would use from the internet.
-**Copy** on those rows flips to **Copied** so you can tell it landed. Overview
-can request or remove Helix public setup (UPnP plus a matching UFW rule when
-UFW is already active). Manual port-forward still works: TCP for Minecraft and
-Terraria, UDP game plus query for V Rising, and UDP `game` through `game+2` for
-Valheim.
+address when present, and the public IP plus game port when a WAN address is
+available. **Copy** flips to **Copied** after copying the address.
 
-Minecraft, V Rising, Valheim, and Terraria create can request that same UPnP
-public access on the private IPv4 gateway and refuse to overwrite an existing
-router rule. V Rising listing on the in-game browser is separate from Direct
-Connect.
+**Prepare host firewall** adds the game's exact rules when UFW is already active.
+It does not enable UFW or touch router settings. **Remove Helix host rules** only
+removes rules owned by that server; it does not remove existing router forwards.
 
-A forwarded game port is reachable from the public internet. Scanners walk
-common game ports and will try yours without anyone handing out the IP. Helix
-does not advertise the server to Minecraft server lists. **Remove public player
-access** on Overview if you only want LAN or Tailscale. For Minecraft, Settings
-→ **Whitelist** still lets only approved accounts join even while the port is
-open.
+For players outside your network, add a forward in your router:
 
-If Helix says AMP already has a port claimed, it is refusing to steal a number
-AMP still lists. Open AMP (the error card has a link when Helix can see the
-instance), stop that instance, open **Configuration → Server Settings / Portals**,
-change the listed port to a free number, Apply, then retry. You can also leave
-AMP on that number and let Helix auto-pick from **Port pools**; automatic create
-already skips AMP numbers. Helix will not edit AMP instance files, kvp, or
-`server.properties`.
+- Minecraft and Terraria: TCP game port to the same port on the server's LAN IP.
+- V Rising: UDP game and query ports to the same ports on the server's LAN IP.
+- Valheim: UDP game port through game+2 to the same ports on the server's LAN IP.
 
-If the AMP instance is already gone and only a leftover UPnP mapping remains
-(description starts with `AMP`, no instance file still lists the port), Helix
-asks you to type `REMOVE AMP FORWARD <port>`. That deletes the leftover router
-forward only. It does not stop AMP or rewrite AMP files. Helix-owned public
-access on that port is removed from the Helix server instead.
+The Minecraft completion dialog shows the exact port and destination. Forward
+the game ports, not the Helix dashboard. Skip router forwarding for LAN-only
+play. Test from another network; host rules alone do not prove internet access,
+and CGNAT or upstream firewalls can still prevent it.
 
-Change the Helix game port in Settings if you want Helix to use a different
-number. Public setup requests the exact TCP or UDP mappings for that game,
-verifies the internal IP/port/description returned by the router, and journals
-ownership. If UFW is already active, Helix also adds matching owned rules; it
-never turns UFW on as a side effect.
-
-A router-confirmed mapping is not the same as an outside test. Helix labels it
-that way and recommends testing from cellular or another network. A CGNAT or
-private upstream WAN address is shown as a blocker because local forwarding
-cannot bypass it. Routers without compatible UPnP get a clear manual-forwarding
-explanation instead of a fabricated public address.
+If AMP already claims a port, choose a free port or change it in AMP first.
+Helix automatically skips AMP-owned ports during allocation and never changes
+AMP instance files. Old router forwards, including AMP forwards, must be changed
+in the router. For Minecraft, enable the whitelist to restrict who can join.
 
 ## Port pools
 

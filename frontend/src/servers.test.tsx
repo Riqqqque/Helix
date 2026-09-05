@@ -9,6 +9,7 @@ import {
   importedServerPanelUrl,
   joinErrorOffersPortChange,
   parseAmpPortClaim,
+  recommendedModpackMemoryMb,
   minecraftCreateSoftwareOptions,
   NewServerChooser,
   publicInternetHint,
@@ -58,6 +59,15 @@ const data: DashboardData = {
 describe('Servers route', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('gives heavyweight modpacks enough memory while keeping host headroom', () => {
+    const gib = 1024 * 1024 * 1024;
+    expect(recommendedModpackMemoryMb(['neoforge'], 20 * gib)).toBe(8_192);
+    expect(recommendedModpackMemoryMb(['Forge'], 11 * gib)).toBe(6_144);
+    expect(recommendedModpackMemoryMb(['fabric'], 20 * gib)).toBe(6_144);
+    expect(recommendedModpackMemoryMb(['neoforge'], 7 * gib)).toBe(4_096);
+    expect(recommendedModpackMemoryMb(['neoforge'], null)).toBe(8_192);
   });
 
   it('retains the native creation entry point after code splitting', () => {
@@ -177,7 +187,7 @@ describe('Servers route', () => {
 
   it('offers every currently installable native Minecraft software', () => {
     expect(minecraftCreateSoftwareOptions.map((option) => option.id)).toEqual([
-      'paper', 'purpur', 'folia', 'leaves', 'fabric', 'neoforge', 'forge', 'quilt', 'pufferfish', 'vanilla',
+      'paper', 'pumpkin', 'purpur', 'folia', 'leaves', 'fabric', 'neoforge', 'forge', 'quilt', 'pufferfish', 'vanilla',
     ]);
   });
 
@@ -338,8 +348,8 @@ describe('Servers route', () => {
     expect(publicInternetHint('terraria', 7777, null)).toContain('TCP 7777');
     expect(publicInternetHint('vrising', 9876, 9877)).toContain('UDP 9876 and 9877');
     expect(publicInternetHint('valheim', 2456, null)).toContain('UDP 2456–2458');
-    expect(publicInternetHint('vrising', 9876, 9877, true)).toContain('UPnP');
-    expect(publicInternetHint('minecraft', 25565, null, true)).toMatch(/scanners/i);
+    expect(publicInternetHint('vrising', 9876, 9877, true)).toContain('Host port setup is saved');
+    expect(publicInternetHint('minecraft', 25565, null, true)).toContain('does not configure the router');
   });
 
   it('points Join port conflicts at Settings and names AMP mappings', () => {

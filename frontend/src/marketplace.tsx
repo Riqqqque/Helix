@@ -418,7 +418,7 @@ function ProjectView({
           <label class="field"><span>Version</span><select value={selectedVersionId} onChange={(event) => onVersionChange(event.currentTarget.value)}><option value="">Select a compatible version</option>{detail.versions.map((version) => <option key={version.id} value={version.id} disabled={!version.hasPrimaryFile}>{version.versionNumber} · {version.versionType}{version.hasPrimaryFile ? '' : ' · no primary file'}</option>)}</select></label>
           {selectedVersion !== null && <VersionFacts version={selectedVersion} />}
           {metadataWarning !== null && <div class="marketplace-note marketplace-note--warning"><Icon name="warning" size={14} />{metadataWarning}</div>}
-          {detail.versionResultsTruncated && <div class="marketplace-note"><Icon name="info" size={14} />Showing the newest 100 compatible versions.</div>}
+          {detail.versionResultsTruncated && <div class="marketplace-note"><Icon name="info" size={14} />Showing the newest compatible releases returned by the catalog.</div>}
           {!detail.versions.some((version) => version.versionType === 'release' && version.hasPrimaryFile) && <div class="marketplace-note marketplace-note--warning"><Icon name="warning" size={14} />No release is available. Select a beta or alpha explicitly if you accept that channel.</div>}
           {!canManageServers && <div class="marketplace-note"><Icon name="info" size={14} />Your account can browse compatible content but cannot install it.</div>}
           <button class="button button--primary marketplace-install-button" type="button" disabled={!canManageServers || !installable} onClick={onInstall}><Icon name="plus" size={15} />Review installation</button>
