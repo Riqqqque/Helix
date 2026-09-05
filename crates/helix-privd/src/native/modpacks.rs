@@ -3510,6 +3510,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    #[ignore = "Requires root ownership changes; run by the privileged Linux CI step"]
     fn failed_boot_rollback_restores_the_complete_backup_including_world_data() {
         use std::sync::Mutex;
 

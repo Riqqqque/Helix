@@ -6,16 +6,20 @@ and Bedrock 1.26.45 (protocol 2169).
 
 ## Build gates
 
-- `npm run check` from `frontend`: ESLint, 309 Vitest tests, three asset-budget
+- `npm run check` from `frontend`: ESLint, 312 Vitest tests, three asset-budget
   tests, TypeScript, Vite, and precompression passed.
 - `docker build --target linux-test .`: release build, `cargo fmt --all -- --check`,
   `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`,
-  and `cargo test --locked --workspace --all-targets --all-features` passed.
+  and `cargo test --locked --workspace --all-targets --all-features -- --include-ignored` passed.
 - Docker `dashboard`, `gateway`, and `privd` targets built successfully.
 - `git diff --check` passed.
 
 The existing lazy-loaded terminal chunk still exceeds Vite's advisory chunk
 size threshold; the enforced initial-page transfer budgets passed.
+
+The full backup-rollback test changes Unix ownership and must run as root.
+Ordinary test runs mark it ignored; the Docker Linux gate includes it, and both
+GitHub Rust matrix jobs explicitly execute that test with elevated privileges.
 
 ## Real isolated-server checks
 
