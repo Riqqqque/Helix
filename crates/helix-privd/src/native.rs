@@ -4588,10 +4588,8 @@ impl NativeManager {
             "configured": self.read_curseforge_api_key()?.is_some(),
             "catalog": "api.curseforge.com",
         });
-        if let Some(probe) = probe {
-            if let Some(object) = status.as_object_mut() {
-                object.insert("probe".to_owned(), json!(probe));
-            }
+        if let (Some(probe), Some(object)) = (probe, status.as_object_mut()) {
+            object.insert("probe".to_owned(), json!(probe));
         }
         Ok(status)
     }
@@ -4675,25 +4673,29 @@ impl NativeManager {
         project_id: &str,
         file: &Value,
     ) -> Result<String, String> {
-        if let Some(candidate) = file.get("downloadUrl").and_then(Value::as_str) {
-            if candidate.len() <= 4_096 {
-                if let Ok(direct) = marketplace::direct_forgecdn_download_url(candidate) {
-                    return Ok(direct);
-                }
-            }
+        if let Some(direct) = file
+            .get("downloadUrl")
+            .and_then(Value::as_str)
+            .filter(|candidate| candidate.len() <= 4_096)
+            .and_then(|candidate| marketplace::direct_forgecdn_download_url(candidate).ok())
+        {
+            return Ok(direct);
         }
         let file_id = file
             .get("id")
             .and_then(Value::as_u64)
             .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
-        if let Ok(response) =
-            self.curseforge_v1(&format!("mods/{project_id}/files/{file_id}/download-url"))
+        if let Some(direct) = self
+            .curseforge_v1(&format!("mods/{project_id}/files/{file_id}/download-url"))
+            .ok()
+            .and_then(|response| {
+                response
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .and_then(|url| marketplace::direct_forgecdn_download_url(url).ok())
+            })
         {
-            if let Some(url) = response.get("data").and_then(Value::as_str) {
-                if let Ok(direct) = marketplace::direct_forgecdn_download_url(url) {
-                    return Ok(direct);
-                }
-            }
+            return Ok(direct);
         }
         let filename = file
             .get("fileName")
