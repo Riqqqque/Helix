@@ -568,11 +568,14 @@ impl BrokerContext {
                 .and_then(|native| {
                     native.minecraft_modpack_search(&query, offset, limit, provider)
                 }),
-            BrokerRequest::MinecraftModpackProject { project_id } => self
+            BrokerRequest::MinecraftModpackProject {
+                project_id,
+                provider,
+            } => self
                 .native
                 .as_deref()
                 .ok_or_else(|| "the Helix server manager is not configured".to_owned())
-                .and_then(|native| native.minecraft_modpack_project(&project_id)),
+                .and_then(|native| native.minecraft_modpack_project(&project_id, provider)),
             BrokerRequest::InstallServerMarketplaceContent {
                 instance_id,
                 project_id,
@@ -916,14 +919,14 @@ impl BrokerContext {
         else {
             return value;
         };
-        let network = if requested == ServerNetworkExposure::Public {
+        let mut network = if requested == ServerNetworkExposure::Public {
             if let Some(error) = self.explain_amp_claimed_port(port) {
                 json!({
                     "enabled": false,
                     "state": "needs_attention",
                     "server_created": true,
                     "error": error,
-                    "note": "The server is online, but automatic public access could not be confirmed. Retry from the server's Join section."
+                    "note": "The server is online, but host firewall setup needs attention. Review Network or retry from the server's Join section. Router settings were not changed."
                 })
             } else {
                 self.network
@@ -938,7 +941,7 @@ impl BrokerContext {
                             "state": "needs_attention",
                             "server_created": true,
                             "error": error,
-                            "note": "The server is online, but automatic public access could not be confirmed. Retry from the server's Join section."
+                            "note": "The server is online, but host firewall setup needs attention. Review Network or retry from the server's Join section. Router settings were not changed."
                         })
                     })
             }
@@ -949,6 +952,8 @@ impl BrokerContext {
                 "note": "The server was created for LAN or private-network access."
             })
         };
+        network["private_ipv4"] = json!(network::detect_private_ipv4());
+        network["router_changed"] = json!(false);
         if let Some(object) = value.as_object_mut() {
             object.insert("network_exposure".to_owned(), network);
         }
@@ -1710,10 +1715,9 @@ impl BrokerContext {
         } else {
             None
         };
-        let copy_server_jar = mapped
-            .as_ref()
-            .is_some_and(|mapped| mapped.copy_server_jar);
-        let report = migrate_plan::scan_overlay(resolved.game, &resolved.game_root, copy_server_jar)?;
+        let copy_server_jar = mapped.as_ref().is_some_and(|mapped| mapped.copy_server_jar);
+        let report =
+            migrate_plan::scan_overlay(resolved.game, &resolved.game_root, copy_server_jar)?;
         let version = migrate_plan::minecraft_version_for_create(&resolved.version_raw);
         let terraria_software = if resolved.game == GameKind::Terraria {
             Some(migrate_plan::detect_terraria_software(&resolved.game_root)?)
@@ -1789,7 +1793,10 @@ impl BrokerContext {
         }))
     }
 
-    fn resolve_migrate_source(&self, source: &ServerMigrateSource) -> Result<ResolvedMigrate, String> {
+    fn resolve_migrate_source(
+        &self,
+        source: &ServerMigrateSource,
+    ) -> Result<ResolvedMigrate, String> {
         match source {
             ServerMigrateSource::Amp { instance_id } => {
                 let amp = self
@@ -1838,7 +1845,8 @@ impl BrokerContext {
                     .to_owned(),
                     GameKind::VRising => "V Rising".to_owned(),
                     GameKind::Valheim => "Valheim".to_owned(),
-                    GameKind::Terraria => match migrate_plan::detect_terraria_software(&game_root)? {
+                    GameKind::Terraria => match migrate_plan::detect_terraria_software(&game_root)?
+                    {
                         TerrariaSoftware::Tmodloader => "tModLoader".to_owned(),
                         TerrariaSoftware::Vanilla => "Terraria".to_owned(),
                     },
@@ -1878,8 +1886,7 @@ impl BrokerContext {
         let resolved = self.resolve_migrate_source(&spec.source)?;
         if resolved.running {
             return Err(
-                "stop the source server first. Helix will not copy a live world."
-                    .to_owned(),
+                "stop the source server first. Helix will not copy a live world.".to_owned(),
             );
         }
         let game = spec.game.unwrap_or(resolved.game);
@@ -1968,11 +1975,7 @@ impl BrokerContext {
             })
             .is_err()
         {
-            self.finish_job(
-                &job_id,
-                Err("could not start the copy job".to_owned()),
-                "",
-            );
+            self.finish_job(&job_id, Err("could not start the copy job".to_owned()), "");
             return Err("could not start the copy job".to_owned());
         }
         Ok(json!({"job_id": job_id, "reused": false}))
@@ -2004,6 +2007,7 @@ impl BrokerContext {
             .map(migrate_plan::minecraft_version_for_create)
             .unwrap_or_else(|| migrate_plan::minecraft_version_for_create(&resolved.version_raw));
         let mut create = MinecraftCreateSpec {
+            pumpkin_bedrock_port: None,
             name: spec.name.clone(),
             software: mapped.software,
             version: version.version,
@@ -2348,7 +2352,14 @@ impl BrokerContext {
             .spawn(move || {
                 context.update_job(&worker_job_id, |job| {
                     job.status = JobState::Running;
-                    job.stage = "Resolving the selected Modrinth release".to_owned();
+                    job.stage = match spec.provider {
+                        helix_privd::ModpackProvider::Curseforge => {
+                            "Resolving the selected CurseForge release".to_owned()
+                        }
+                        helix_privd::ModpackProvider::Modrinth => {
+                            "Resolving the selected Modrinth release".to_owned()
+                        }
+                    };
                     job.progress_percent = 2;
                 });
                 let result = native
@@ -2379,10 +2390,10 @@ impl BrokerContext {
         {
             self.finish_job(
                 &job_id,
-                Err("could not start the Modrinth modpack installation job".to_owned()),
+                Err("could not start the modpack installation job".to_owned()),
                 "",
             );
-            return Err("could not start the Modrinth modpack installation job".to_owned());
+            return Err("could not start the modpack installation job".to_owned());
         }
         Ok(json!({"job_id": job_id, "reused": false}))
     }
@@ -2754,8 +2765,17 @@ fn append_game_port_mappings(mappings: &mut Vec<GamePortMapping>, servers: Vec<A
     }));
 }
 
+#[cfg(target_os = "linux")]
 fn game_port_mapping_from_server(server: &AmpServer, port: u16) -> GamePortMapping {
-    let (protocol, extra_ports) = exposure_ports(server.kind, port, server.query_port);
+    let (protocol, extra_ports) = exposure_ports(
+        if server.software.eq_ignore_ascii_case("pumpkin") {
+            "pumpkin"
+        } else {
+            server.kind
+        },
+        port,
+        server.query_port,
+    );
     GamePortMapping {
         instance_id: server.id.clone(),
         name: server.name.clone(),
@@ -2764,10 +2784,16 @@ fn game_port_mapping_from_server(server: &AmpServer, port: u16) -> GamePortMappi
         running: server.panel_running,
         extra_ports,
         protocol,
-        kind: server.kind.to_owned(),
+        kind: if server.software.eq_ignore_ascii_case("pumpkin") {
+            "pumpkin"
+        } else {
+            server.kind
+        }
+        .to_owned(),
     }
 }
 
+#[cfg(target_os = "linux")]
 fn game_port_mapping_from_create(
     instance_id: String,
     server_name: &str,
@@ -2782,7 +2808,15 @@ fn game_port_mapping_from_create(
         .get("query_port")
         .and_then(Value::as_u64)
         .and_then(|port| u16::try_from(port).ok());
-    let (protocol, extra_ports) = exposure_ports(kind, port, query_port);
+    let (protocol, extra_ports) = exposure_ports(
+        if value["software"] == "pumpkin" {
+            "pumpkin"
+        } else {
+            kind
+        },
+        port,
+        query_port,
+    );
     GamePortMapping {
         instance_id,
         name: server_name.to_owned(),
@@ -2791,7 +2825,12 @@ fn game_port_mapping_from_create(
         running: true,
         extra_ports,
         protocol,
-        kind: kind.to_owned(),
+        kind: if value["software"] == "pumpkin" {
+            "pumpkin"
+        } else {
+            kind
+        }
+        .to_owned(),
     }
 }
 
@@ -3024,7 +3063,10 @@ fn problem_code(message: &str) -> &'static str {
         || lower.contains("already in progress")
     {
         "conflict"
-    } else if lower.contains("unavailable") || lower.contains("did not become reachable") {
+    } else if lower.contains("unavailable")
+        || lower.contains("did not become reachable")
+        || lower.contains("did not open port")
+    {
         "dependency_unavailable"
     } else {
         "operation_failed"

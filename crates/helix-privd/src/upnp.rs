@@ -120,78 +120,6 @@ impl UpnpGateway {
         Ok(gateway)
     }
 
-    pub fn add_tcp_mapping(&self, port: u16, description: &str) -> Result<(), String> {
-        self.add_mapping(port, "TCP", description)
-    }
-
-    pub fn add_mapping(&self, port: u16, protocol: &str, description: &str) -> Result<(), String> {
-        if port < 1_024 || description.is_empty() || description.len() > 64 {
-            return Err("the requested router mapping is invalid".to_owned());
-        }
-        if protocol != "TCP" && protocol != "UDP" {
-            return Err("the requested router mapping protocol is invalid".to_owned());
-        }
-        let body = format!(
-            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>{protocol}</NewProtocol><NewInternalPort>{port}</NewInternalPort><NewInternalClient>{}</NewInternalClient><NewEnabled>1</NewEnabled><NewPortMappingDescription>{description}</NewPortMappingDescription><NewLeaseDuration>0</NewLeaseDuration>",
-            self.local_ip
-        );
-        self.soap("AddPortMapping", &body).map(|_| ())
-    }
-
-    pub fn tcp_mapping_description(&self, port: u16) -> Result<Option<String>, String> {
-        self.mapping_description(port, "TCP")
-    }
-
-    pub fn mapping_description(&self, port: u16, protocol: &str) -> Result<Option<String>, String> {
-        let body = format!(
-            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>{protocol}</NewProtocol>"
-        );
-        match self.soap("GetSpecificPortMappingEntry", &body) {
-            Ok(response) => Ok(Some(
-                xml_text(&response, "NewPortMappingDescription").unwrap_or_default(),
-            )),
-            Err(error) if missing_mapping_error(&error) => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-
-    pub fn verify_tcp_mapping(&self, port: u16, description: &str) -> Result<bool, String> {
-        self.verify_mapping(port, "TCP", description)
-    }
-
-    pub fn verify_mapping(
-        &self,
-        port: u16,
-        protocol: &str,
-        description: &str,
-    ) -> Result<bool, String> {
-        let body = format!(
-            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>{protocol}</NewProtocol>"
-        );
-        let response = self.soap("GetSpecificPortMappingEntry", &body)?;
-        Ok(
-            xml_text(&response, "NewInternalPort").as_deref() == Some(&port.to_string())
-                && xml_text(&response, "NewInternalClient").as_deref()
-                    == Some(&self.local_ip.to_string())
-                && matches!(
-                    xml_text(&response, "NewEnabled").as_deref(),
-                    Some("1" | "true")
-                )
-                && xml_text(&response, "NewPortMappingDescription").as_deref() == Some(description),
-        )
-    }
-
-    pub fn delete_tcp_mapping(&self, port: u16) -> Result<(), String> {
-        self.delete_mapping(port, "TCP")
-    }
-
-    pub fn delete_mapping(&self, port: u16, protocol: &str) -> Result<(), String> {
-        let body = format!(
-            "<NewRemoteHost></NewRemoteHost><NewExternalPort>{port}</NewExternalPort><NewProtocol>{protocol}</NewProtocol>"
-        );
-        self.soap("DeletePortMapping", &body).map(|_| ())
-    }
-
     fn get_external_ip(&self) -> Result<Ipv4Addr, String> {
         let response = self.soap("GetExternalIPAddress", "")?;
         let value = xml_text(&response, "NewExternalIPAddress")
@@ -315,14 +243,6 @@ impl HttpTarget {
 
 fn safe_gateway_ip(address: Ipv4Addr) -> bool {
     address.is_private() || address.is_link_local()
-}
-
-fn missing_mapping_error(error: &str) -> bool {
-    let normalized = error.to_ascii_lowercase();
-    normalized.contains("error 713")
-        || normalized.contains("error 714")
-        || normalized.contains("nosuchentry")
-        || normalized.contains("specifiedarrayindexinvalid")
 }
 
 fn http_request(
@@ -588,12 +508,6 @@ mod tests {
             .as_deref(),
             Some("714")
         );
-        assert!(missing_mapping_error(
-            "router UPnP error 713: SpecifiedArrayIndexInvalid"
-        ));
-        assert!(missing_mapping_error(
-            "router UPnP error 714: NoSuchEntryInArray"
-        ));
     }
 
     #[test]

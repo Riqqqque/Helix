@@ -1,7 +1,6 @@
-import type { ComponentChildren } from 'preact';
+import type { ComponentChildren, FunctionComponent } from 'preact';
 import { useCallback, useEffect, useState } from 'preact/hooks';
 import {
-  destinationForSetupStatus,
   accountUpdatedView,
   sessionExpiredView,
   validateSetupCandidate,
@@ -16,7 +15,7 @@ import {
   logout,
   setupOwner,
 } from './api';
-import { Dashboard } from './app';
+import type { DashboardProps } from './app';
 import { saveServersEnabled } from './dashboard-preferences';
 import { focusOnMount } from './focus';
 import { t } from './i18n';
@@ -39,6 +38,13 @@ import type { AuthSession, SetupStatus } from './types';
 // and UTF-8 byte limits before any request is sent.
 const DISPLAY_NAME_INPUT_MAX_CODE_UNITS = 512;
 const PASSWORD_INPUT_MAX_CODE_UNITS = 1_024;
+const sessionProofStorage = import('./persistent-session');
+
+function clearSavedSessionProof(): void {
+  void sessionProofStorage.then(({ clearPersistentSessionProof }) => {
+    clearPersistentSessionProof();
+  });
+}
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
@@ -447,14 +453,18 @@ function LoginView({
 export function App() {
   const [view, setView] = useState<AppView>({ kind: 'loading' });
   const [bootAttempt, setBootAttempt] = useState(0);
+  const [Dashboard, setDashboard] = useState<FunctionComponent<DashboardProps> | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     const boot = async (): Promise<void> => {
       setView({ kind: 'loading' });
       try {
-        const status = await getSetupStatus(controller.signal);
-        const destination = destinationForSetupStatus(status);
+        const destination = await (await sessionProofStorage).initialAuthView(controller.signal);
+        if (destination.kind === 'dashboard') {
+          const dashboardModule = await import('./app');
+          setDashboard(() => dashboardModule.Dashboard);
+        }
         setView(destination);
       } catch (error) {
         if (!controller.signal.aborted) {
@@ -467,18 +477,31 @@ export function App() {
   }, [bootAttempt]);
 
   const authenticated = useCallback((session: AuthSession): void => {
-    setView({ kind: 'dashboard', session });
+    setView({ kind: 'loading' });
+    void Promise.all([sessionProofStorage, import('./app')]).then(([proofStorage, dashboardModule]) => {
+      proofStorage.syncPersistentSessionProof(session.csrfToken, session.sessionExpires);
+      setDashboard(() => dashboardModule.Dashboard);
+      setView({ kind: 'dashboard', session });
+    }).catch((error: unknown) => {
+      setView({ kind: 'error', message: errorMessage(error) });
+    });
   }, []);
   const recoverSetupConflict = useCallback(async (): Promise<void> => {
     const status = await getSetupStatus();
     setView(viewAfterSetupConflict(status));
   }, []);
   const sessionExpired = useCallback(
-    (): void => setView(sessionExpiredView()),
+    (): void => {
+      clearSavedSessionProof();
+      setView(sessionExpiredView());
+    },
     [],
   );
   const accountUpdated = useCallback(
-    (): void => setView(accountUpdatedView()),
+    (): void => {
+      clearSavedSessionProof();
+      setView(accountUpdatedView());
+    },
     [],
   );
 
@@ -505,6 +528,7 @@ export function App() {
   if (view.kind === 'login') {
     return <LoginView notice={view.notice} onAuthenticated={authenticated} />;
   }
+  if (Dashboard === null) return <LoadingView />;
 
   const currentSession = view.session;
   const signOut = async (): Promise<void> => {
@@ -515,6 +539,7 @@ export function App() {
         throw error;
       }
     }
+    clearSavedSessionProof();
     setView({ kind: 'login', notice: null });
   };
   return (

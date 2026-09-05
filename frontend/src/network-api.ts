@@ -99,6 +99,7 @@ export interface GamePortMapping {
   externalReachability: {
     state:
       | "router_mapping_confirmed"
+      | "host_configured"
       | "not_requested"
       | "setup_available"
       | "carrier_grade_nat"
@@ -459,6 +460,7 @@ function parseGamePort(value: unknown): GamePortMapping {
     externalReachability: {
       state: literal(outside, "state", "game port external reachability", [
         "router_mapping_confirmed",
+        "host_configured",
         "not_requested",
         "setup_available",
         "carrier_grade_nat",

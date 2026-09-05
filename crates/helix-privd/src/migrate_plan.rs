@@ -47,9 +47,11 @@ pub struct MinecraftVersionChoice {
     pub used_latest: bool,
 }
 
-#[must_use]
 pub fn map_amp_minecraft_software(raw: &str) -> Result<MappedMinecraftSoftware, String> {
-    let normalized = raw.trim().to_ascii_lowercase().replace([' ', '-', '.'], "_");
+    let normalized = raw
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '-', '.'], "_");
     let mapped = match normalized.as_str() {
         "official" | "vanilla" => MappedMinecraftSoftware {
             software: MinecraftSoftware::Vanilla,
@@ -117,10 +119,11 @@ pub fn map_amp_minecraft_software(raw: &str) -> Result<MappedMinecraftSoftware, 
                 ),
             }
         }
-        other if other.contains("bedrock")
-            || other.contains("pocket")
-            || other.contains("nukkit")
-            || other.contains("geyser") && !other.contains("paper") =>
+        other
+            if other.contains("bedrock")
+                || other.contains("pocket")
+                || other.contains("nukkit")
+                || other.contains("geyser") && !other.contains("paper") =>
         {
             return Err(
                 "Helix native Minecraft is Java Edition only. Bedrock/PocketMine stays in AMP or Pterodactyl."
@@ -140,7 +143,10 @@ pub fn map_amp_minecraft_software(raw: &str) -> Result<MappedMinecraftSoftware, 
 
 #[must_use]
 pub fn amp_software_is_known_hybrid(raw: &str) -> bool {
-    let normalized = raw.trim().to_ascii_lowercase().replace([' ', '-', '.'], "_");
+    let normalized = raw
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '-', '.'], "_");
     matches!(
         normalized.as_str(),
         "mohist" | "magma" | "arclight" | "banner" | "catserver" | "custom" | "unknown"
@@ -304,6 +310,7 @@ pub fn detect_game_from_names(names: &[impl AsRef<str>]) -> Option<GameKind> {
 #[must_use]
 pub fn minecraft_software_label(software: MinecraftSoftware) -> &'static str {
     match software {
+        MinecraftSoftware::Pumpkin => "Pumpkin",
         MinecraftSoftware::Custom => "Custom",
         MinecraftSoftware::Vanilla => "Vanilla",
         MinecraftSoftware::Paper => "Paper",
@@ -450,7 +457,9 @@ pub fn detect_minecraft_software_from_names(names: &[impl AsRef<str>]) -> Mapped
 }
 
 pub fn detect_minecraft_software_from_root(root: &Path) -> Result<MappedMinecraftSoftware, String> {
-    Ok(detect_minecraft_software_from_names(&directory_names(root)?))
+    Ok(detect_minecraft_software_from_names(&directory_names(
+        root,
+    )?))
 }
 
 #[must_use]
@@ -630,7 +639,9 @@ pub fn overlay_relative_for_game(game: GameKind, relative: &str) -> Option<Strin
                 });
             }
             if lower == "serverhostsettings.json"
-                || normalized.to_ascii_lowercase().contains("serverhostsettings.json")
+                || normalized
+                    .to_ascii_lowercase()
+                    .contains("serverhostsettings.json")
             {
                 return Some("save/Settings/ServerHostSettings.json".to_owned());
             }
@@ -672,8 +683,7 @@ pub fn overlay_relative_for_game(game: GameKind, relative: &str) -> Option<Strin
         }
         GameKind::Terraria => {
             let lower = first.to_ascii_lowercase();
-            if matches!(lower.as_str(), "steamcmd" | "server" | "logs") || first.ends_with(".kvp")
-            {
+            if matches!(lower.as_str(), "steamcmd" | "server" | "logs") || first.ends_with(".kvp") {
                 return None;
             }
             if lower == "worlds" || lower == "mods" {
@@ -871,7 +881,12 @@ pub fn read_source_properties(root: &Path) -> Option<String> {
 }
 
 pub fn find_minecraft_server_jar(root: &Path) -> Result<PathBuf, String> {
-    for name in ["server.jar", "paper.jar", "purpur.jar", "fabric-server-launch.jar"] {
+    for name in [
+        "server.jar",
+        "paper.jar",
+        "purpur.jar",
+        "fabric-server-launch.jar",
+    ] {
         let path = root.join(name);
         if is_real_file(&path) {
             return Ok(path);
@@ -897,7 +912,8 @@ pub fn find_minecraft_server_jar(root: &Path) -> Result<PathBuf, String> {
         found = Some(entry);
     }
     found.ok_or_else(|| {
-        "Helix could not find a server JAR to copy. Put one named server.jar in that folder.".to_owned()
+        "Helix could not find a server JAR to copy. Put one named server.jar in that folder."
+            .to_owned()
     })
 }
 
@@ -1024,9 +1040,8 @@ fn walk_overlay(
                     record_skip(&mut report, &relative);
                 }
                 CopyDecision::Copy => {
-                    let mapped = overlay_relative_for_game(game, &relative).ok_or_else(|| {
-                        format!("Helix refused to copy {relative}")
-                    })?;
+                    let mapped = overlay_relative_for_game(game, &relative)
+                        .ok_or_else(|| format!("Helix refused to copy {relative}"))?;
                     report.files = report.files.saturating_add(1);
                     report.bytes = report.bytes.saturating_add(metadata.len());
                     if report.files > MAX_MIGRATE_FILES {
@@ -1122,8 +1137,17 @@ mod tests {
             map_amp_minecraft_software("Spigot").unwrap().software,
             MinecraftSoftware::Paper
         );
-        assert!(map_amp_minecraft_software("Spigot").unwrap().warning.is_some());
-        assert!(map_amp_minecraft_software("Mohist").unwrap().copy_server_jar);
+        assert!(
+            map_amp_minecraft_software("Spigot")
+                .unwrap()
+                .warning
+                .is_some()
+        );
+        assert!(
+            map_amp_minecraft_software("Mohist")
+                .unwrap()
+                .copy_server_jar
+        );
         assert!(map_amp_minecraft_software("Bedrock").is_err());
         assert!(source_looks_live("online"));
         assert!(source_looks_live("updating"));
@@ -1186,7 +1210,8 @@ mod tests {
             MinecraftSoftware::Forge
         );
         assert!(
-            detect_minecraft_software_from_names(&["plugins", "mods", "server.jar"]).copy_server_jar
+            detect_minecraft_software_from_names(&["plugins", "mods", "server.jar"])
+                .copy_server_jar
         );
         assert_eq!(
             detect_minecraft_software_from_names(&["server.properties", "world"]).software,
@@ -1238,7 +1263,8 @@ mod tests {
             Some("save/Saves/world1/Session.sav")
         );
         assert_eq!(
-            overlay_relative_for_game(GameKind::VRising, "save/Saves/world1/Session.sav").as_deref(),
+            overlay_relative_for_game(GameKind::VRising, "save/Saves/world1/Session.sav")
+                .as_deref(),
             Some("save/Saves/world1/Session.sav")
         );
         assert_eq!(
@@ -1285,11 +1311,19 @@ mod tests {
         fs::create_dir_all(game.join("world")).unwrap();
         fs::create_dir_all(game.join("plugins")).unwrap();
         fs::create_dir_all(game.join("logs")).unwrap();
-        fs::write(game.join("server.properties"), "level-name=world\nserver-port=25565\n").unwrap();
+        fs::write(
+            game.join("server.properties"),
+            "level-name=world\nserver-port=25565\n",
+        )
+        .unwrap();
         fs::write(game.join("world").join("level.dat"), b"world").unwrap();
         fs::write(game.join("plugins").join("WorldGuard.jar"), b"plugin").unwrap();
         fs::write(game.join("logs").join("latest.log"), b"log").unwrap();
-        fs::write(root.path().join("MinecraftModule.kvp"), "Minecraft.ServerType=Paper\n").unwrap();
+        fs::write(
+            root.path().join("MinecraftModule.kvp"),
+            "Minecraft.ServerType=Paper\n",
+        )
+        .unwrap();
         let (kind, found) = find_game_root(root.path()).expect("detect");
         assert_eq!(kind, GameKind::Minecraft);
         assert_eq!(found, game);
@@ -1315,9 +1349,11 @@ mod tests {
         assert!(dir.path().join("world.wld").is_file());
         assert!(dir.path().join("world.wld.bak").is_file());
         assert!(dir.path().join("Skyblock.wld").is_file());
-        assert!(ensure_named_save(dir.path(), "world", "wld", &["wld.bak"])
-            .expect("second")
-            .is_none());
+        assert!(
+            ensure_named_save(dir.path(), "world", "wld", &["wld.bak"])
+                .expect("second")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1348,7 +1384,10 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            game.join("save-data").join("Saves").join("world1").join("Session.sav"),
+            game.join("save-data")
+                .join("Saves")
+                .join("world1")
+                .join("Session.sav"),
             b"save",
         )
         .unwrap();
@@ -1358,13 +1397,14 @@ mod tests {
         let dest = tempfile::tempdir().expect("dest");
         fs::create_dir_all(dest.path().join("save").join("Settings")).unwrap();
         apply_overlay(kind, &found, dest.path(), false).expect("copy");
-        assert!(dest
-            .path()
-            .join("save")
-            .join("Saves")
-            .join("world1")
-            .join("Session.sav")
-            .is_file());
+        assert!(
+            dest.path()
+                .join("save")
+                .join("Saves")
+                .join("world1")
+                .join("Session.sav")
+                .is_file()
+        );
         assert!(!dest.path().join("wine").exists());
         let merged = merge_vrising_host_settings(
             json!({"Name":"Helix","Port":9876,"SaveName":"world1","Password":""}),
@@ -1379,7 +1419,11 @@ mod tests {
     #[test]
     fn bedrock_folders_are_refused() {
         let root = tempfile::tempdir().expect("temp");
-        fs::write(root.path().join("server.properties"), "server-name=Bedrock\n").unwrap();
+        fs::write(
+            root.path().join("server.properties"),
+            "server-name=Bedrock\n",
+        )
+        .unwrap();
         fs::write(root.path().join("permissions.json"), "[]").unwrap();
         fs::write(root.path().join("bedrock_server"), b"bin").unwrap();
         assert!(find_game_root(root.path()).is_err());

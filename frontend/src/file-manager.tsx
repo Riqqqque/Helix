@@ -76,6 +76,7 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
   const [trashTarget, setTrashTarget] = useState<FileEntry | null>(null);
   const [editor, setEditor] = useState<TextFile | null>(null);
   const [editorContent, setEditorContent] = useState('');
+  const [discardEditorOpen, setDiscardEditorOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -84,6 +85,22 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
   const fileInput = useRef<HTMLInputElement | null>(null);
   const activeLoad = useRef<AbortController | null>(null);
   const pageSizeRef = useRef(50);
+  const editorDirty = editor !== null && editorContent !== editor.content;
+
+  useEffect(() => {
+    if (!busy && !editorDirty) return;
+    const protectWork = (event: BeforeUnloadEvent): void => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', protectWork);
+    return () => window.removeEventListener('beforeunload', protectWork);
+  }, [busy, editorDirty]);
+
+  const requestEditorClose = (): void => {
+    if (editorDirty) setDiscardEditorOpen(true);
+    else setEditor(null);
+  };
 
   const load = useCallback(async (
     nextPath: string,
@@ -322,7 +339,8 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
       {createKind !== null && <Dialog title={createKind === 'directory' ? 'Create folder' : 'Create file'} onClose={() => setCreateKind(null)}><form class="dialog-form" onSubmit={(event) => { event.preventDefault(); const operation = createKind === 'directory' ? createDirectory : createFile; void mutate(() => operation(path, createName, csrfToken), () => setCreateKind(null)); }}><label><span>Name</span><input autofocus required value={createName} onInput={(event) => setCreateName(event.currentTarget.value)} /></label><div class="dialog-actions"><button class="button button--quiet" type="button" onClick={() => setCreateKind(null)}>Cancel</button><button class="button button--primary" type="submit" disabled={busy || createName.trim().length === 0}>Create</button></div></form></Dialog>}
       {renameTarget !== null && <Dialog title={`Rename ${renameTarget.name}`} onClose={() => setRenameTarget(null)}><form class="dialog-form" onSubmit={(event) => { event.preventDefault(); void mutate(() => renameFile(renameTarget.path, renameName, csrfToken), () => setRenameTarget(null)); }}><label><span>New name</span><input autofocus required value={renameName} onInput={(event) => setRenameName(event.currentTarget.value)} /></label><div class="dialog-actions"><button class="button button--quiet" type="button" onClick={() => setRenameTarget(null)}>Cancel</button><button class="button button--primary" type="submit" disabled={busy || renameName.trim().length === 0}>Rename</button></div></form></Dialog>}
       {trashTarget !== null && <Dialog title="Move to trash?" onClose={() => setTrashTarget(null)}><div class="dialog-copy"><p><strong>{trashTarget.name}</strong> will move into this drive’s protected <code>.helix-trash</code> folder. Helix never permanently deletes it from this action.</p></div><div class="dialog-actions"><button class="button button--quiet" type="button" onClick={() => setTrashTarget(null)}>Cancel</button><button class="button button--danger" type="button" disabled={busy} onClick={() => void mutate(() => trashFile(trashTarget.path, csrfToken), () => setTrashTarget(null))}>Move to trash</button></div></Dialog>}
-      {editor !== null && <Dialog title={editor.path.split('/').at(-1) ?? editor.path} onClose={() => setEditor(null)} wide flush><div class="editor-path">UTF-8 text · {editor.path} · {formatBytes(new TextEncoder().encode(editorContent).length)} / 4 MiB</div><textarea class="text-editor" spellcheck={false} value={editorContent} onInput={(event) => setEditorContent(event.currentTarget.value)} /><div class="dialog-actions"><button class="button button--quiet" type="button" onClick={() => setEditor(null)}>Close</button><button class="button button--primary" type="button" disabled={busy || editorContent === editor.content || new TextEncoder().encode(editorContent).length > MAX_TEXT_EDITOR_BYTES} onClick={() => { setBusy(true); void writeTextFile(editor, editorContent, csrfToken).then((saved) => { setEditor(saved); setEditorContent(saved.content); }).catch((requestError: unknown) => setError(describeError(requestError))).finally(() => setBusy(false)); }}>Save changes</button></div></Dialog>}
+      {editor !== null && <Dialog title={editor.path.split('/').at(-1) ?? editor.path} onClose={requestEditorClose} wide flush><div class="editor-path">UTF-8 text · {editor.path} · {formatBytes(new TextEncoder().encode(editorContent).length)} / 4 MiB</div><textarea class="text-editor" spellcheck={false} value={editorContent} onInput={(event) => setEditorContent(event.currentTarget.value)} /><div class="dialog-actions"><button class="button button--quiet" type="button" onClick={requestEditorClose}>Close</button><button class="button button--primary" type="button" disabled={busy || editorContent === editor.content || new TextEncoder().encode(editorContent).length > MAX_TEXT_EDITOR_BYTES} onClick={() => { setBusy(true); void writeTextFile(editor, editorContent, csrfToken).then((saved) => { setEditor(saved); setEditorContent(saved.content); }).catch((requestError: unknown) => setError(describeError(requestError))).finally(() => setBusy(false)); }}>Save changes</button></div></Dialog>}
+      {discardEditorOpen && editor !== null && <Dialog title="Discard unsaved changes?" onClose={() => setDiscardEditorOpen(false)}><div class="dialog-copy"><p>Your edits to <strong>{editor.path.split('/').at(-1) ?? editor.path}</strong> have not been saved.</p><p>Refresh protection stays active until you save or explicitly discard them.</p></div><div class="dialog-actions"><button class="button button--quiet" type="button" onClick={() => setDiscardEditorOpen(false)}>Keep editing</button><button class="button button--danger" type="button" onClick={() => { setDiscardEditorOpen(false); setEditor(null); }}>Discard changes</button></div></Dialog>}
     </section>
   );
 }

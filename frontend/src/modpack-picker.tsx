@@ -49,6 +49,7 @@ function candidateLabel(status: string): string {
   if (status === 'neoforge_candidate') return 'NeoForge';
   if (status === 'quilt_candidate') return 'Quilt';
   if (status === 'fabric_candidate') return 'Fabric';
+  if (status === 'unverified') return 'Check releases';
   return 'Preview';
 }
 
@@ -105,7 +106,7 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
     setDetail(null);
     setSelectedVersionId(null);
     try {
-      const next = await getModpackProject(project.projectId, csrfToken);
+      const next = await getModpackProject(project.projectId, csrfToken, undefined, provider);
       setDetail(next);
       setSelectedVersionId(next.versions.find((version) => version.installable)?.id ?? null);
     } catch (requestError) {
@@ -132,9 +133,10 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
       versionName: selectedVersion.name,
       versionNumber: selectedVersion.versionNumber,
       minecraftVersions: selectedVersion.gameVersions,
+      loaders: selectedVersion.loaders,
       filename: selectedVersion.mrpackFile.filename,
       fileSize: selectedVersion.mrpackFile.size,
-      provider,
+      provider: detail.provider,
     });
   };
 
@@ -148,7 +150,7 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
         <div class="modpack-detail__identity">
           <ModpackMark iconUrl={detail.project.iconUrl} size={24} />
           <div>
-            <small>{provider === 'curseforge' ? 'CurseForge modpack' : 'Modrinth modpack'}</small>
+            <small>{detail.provider === 'curseforge' ? 'CurseForge modpack' : 'Modrinth modpack'}</small>
             <h3>{detail.project.title}</h3>
             <p>{detail.project.description ?? 'No short description was provided.'}</p>
             <span>{compactNumber(detail.project.downloads)} downloads · {detail.compatibleVersionCount} installable {detail.compatibleVersionCount === 1 ? 'release' : 'releases'}</span>
@@ -172,6 +174,11 @@ export function ModpackPicker({ csrfToken, selection, onSelectionChange, onSessi
               </label>
             ))}
             {detail.versions.length === 0 && <div class="modpack-empty">This project has no published versions.</div>}
+            {detail.versionResultsTruncated && (
+              <div class="modpack-empty">
+                Showing the newest releases returned by the catalog. Older releases remain available upstream.
+              </div>
+            )}
           </fieldset>
           <aside class="modpack-version-summary">
             <small>Selected release</small>

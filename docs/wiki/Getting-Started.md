@@ -150,7 +150,9 @@ After the first owner exists:
   refresh; Helix saves it to this host.
 - Settings → Signed-in session can turn off the 30-minute idle / eight-hour
   cap if you want this browser to stay signed in until you sign out or change
-  the password. Reloading the page still asks you to sign in.
+  the password. That setting now survives page reloads on the same Helix URL;
+  changing the scheme, host, or port is a different browser origin and requires
+  sign-in.
 
 Never post setup tokens, passwords, cookies, CSRF proofs, private addresses,
 hostnames, storage paths, server logs, or world data in an issue or screenshot.

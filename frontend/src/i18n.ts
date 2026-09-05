@@ -70,7 +70,7 @@ const englishMessages = {
   'auth.login.password': 'Password',
   'auth.login.submit': 'Sign in',
   'auth.login.submitting': 'Signing in…',
-  'auth.login.footnote': 'Sessions expire after 30 minutes idle and eight hours at most.',
+  'auth.login.footnote': 'Refreshing this page keeps you signed in. Session length is controlled in Settings.',
   'auth.login.notice.sessionExpired':
     'Your Helix session expired or was revoked. Sign in again.',
   'auth.login.notice.setupCompleted':

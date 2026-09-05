@@ -725,8 +725,11 @@ impl NativeManager {
         let title = optional_text(&project, "name", 256).unwrap_or_else(|| slug.clone());
         let class_id = project.get("classId").and_then(Value::as_u64).unwrap_or(0);
         let project_type = curseforge_project_type(class_id, profile.kind);
-        let files = self.curseforge_v1(&format!("mods/{project_id}/files?pageSize=50"))?;
-        let files = files
+        let files_response = self.curseforge_v1(&format!("mods/{project_id}/files?pageSize=50"))?;
+        let total_files = files_response
+            .pointer("/pagination/totalCount")
+            .and_then(Value::as_u64);
+        let files = files_response
             .get("data")
             .and_then(Value::as_array)
             .cloned()
@@ -774,15 +777,15 @@ impl NativeManager {
                 "downloads": project.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
                 "followers": 0,
                 "license": Value::Null,
-                "source_url": Value::Null,
-                "issues_url": Value::Null,
-                "wiki_url": Value::Null,
+                "source_url": safe_https_url(project.pointer("/links/sourceUrl").and_then(Value::as_str)),
+                "issues_url": safe_https_url(project.pointer("/links/issuesUrl").and_then(Value::as_str)),
+                "wiki_url": safe_https_url(project.pointer("/links/wikiUrl").and_then(Value::as_str)),
                 "web_url": format!("https://www.curseforge.com/minecraft/{web_path}/{}", percent_encode(&slug)),
                 "icon_url": curseforge_icon_proxy_url(project.pointer("/logo/url").and_then(Value::as_str)),
             },
             "versions": versions,
             "version_count_returned": version_count,
-            "version_results_truncated": files.len() > 100,
+            "version_results_truncated": total_files.is_some_and(|total| total > u64::try_from(files.len()).unwrap_or(u64::MAX)),
             "installed": installed.is_some(),
             "installed_version": installed.map(|record| record.version_number.clone()),
             "body_format": body_format,
@@ -889,6 +892,7 @@ impl NativeManager {
 
 fn content_profile(software: MinecraftSoftware) -> Result<ContentProfile, String> {
     match software {
+        MinecraftSoftware::Pumpkin => Err("Pumpkin uses its own native plugin API. Paper/Bukkit JARs and Fabric/Forge mods are not native Pumpkin plugins. Install only build-compatible Pumpkin plugins through Files; PatchBukkit requires a separate, explicitly configured bridge.".to_owned()),
         MinecraftSoftware::Custom => Err(
             "Custom JAR compatibility is unknown; install add-ons manually only after checking the JAR publisher's loader and Minecraft version"
                 .to_owned(),
@@ -1589,9 +1593,21 @@ pub(super) fn forgecdn_file_url(file_id: u64, file_name: &str) -> Result<String,
         ("0", id.as_str())
     };
     Ok(format!(
-        "https://edge.forgecdn.net/files/{prefix}/{suffix}/{}",
+        "https://mediafilez.forgecdn.net/files/{prefix}/{suffix}/{}",
         percent_encode(file_name)
     ))
+}
+
+pub(super) fn direct_forgecdn_download_url(url: &str) -> Result<String, String> {
+    require_https_host(url, FORGECDN_DOWNLOAD_HOSTS)?;
+    let remainder = url
+        .strip_prefix("https://")
+        .ok_or_else(|| "the catalog returned a non-HTTPS download".to_owned())?;
+    let (authority, path) = remainder.split_once('/').unwrap_or((remainder, ""));
+    if authority.eq_ignore_ascii_case("edge.forgecdn.net") {
+        return Ok(format!("https://mediafilez.forgecdn.net/{path}"));
+    }
+    Ok(url.to_owned())
 }
 
 pub(super) fn curseforge_icon_proxy_url(value: Option<&str>) -> Option<String> {
@@ -1870,6 +1886,30 @@ mod tests {
         );
         assert!(
             curseforge_icon_proxy_url(Some("https://media.forgecdn.net/data/icon.png")).is_none()
+        );
+    }
+
+    #[test]
+    fn curseforge_edge_downloads_use_the_direct_trusted_cdn_host() {
+        assert_eq!(
+            direct_forgecdn_download_url(
+                "https://edge.forgecdn.net/files/8764/211/All%20the%20Mods%2010-8.1.zip"
+            )
+            .unwrap(),
+            "https://mediafilez.forgecdn.net/files/8764/211/All%20the%20Mods%2010-8.1.zip"
+        );
+        assert_eq!(
+            direct_forgecdn_download_url(
+                "https://mediafilez.forgecdn.net/files/8764/211/All%20the%20Mods%2010-8.1.zip"
+            )
+            .unwrap(),
+            "https://mediafilez.forgecdn.net/files/8764/211/All%20the%20Mods%2010-8.1.zip"
+        );
+        assert!(
+            direct_forgecdn_download_url(
+                "https://edge.forgecdn.net.evil.test/files/8764/211/pack.zip"
+            )
+            .is_err()
         );
     }
 

@@ -70,6 +70,7 @@ import {
   START_WITH_HOST_TITLE,
 } from './start-with-host';
 import { getSessionExpiry, setSessionExpiry } from './session-expiry-api';
+import { savePersistentSessionProof } from './persistent-session';
 
 const navigationLabels: Record<PrimaryDashboardSectionId, { label: string; icon: IconName }> = {
   overview: { label: 'Overview', icon: 'overview' },
@@ -203,7 +204,8 @@ function SessionExpirySettings({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
-  const displayed = optimistic ?? expires ?? true;
+  const displayedExpiry = optimistic ?? expires ?? true;
+  const staySignedIn = !displayedExpiry;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -221,14 +223,18 @@ function SessionExpirySettings({
 
   const toggle = async (): Promise<void> => {
     if (!canManage || busy || expires === null) return;
-    const next = !displayed;
+    const nextStaySignedIn = !staySignedIn;
+    const nextExpiry = !nextStaySignedIn;
     setBusy(true);
     setError(null);
-    setOptimistic(next);
+    setOptimistic(nextExpiry);
     try {
-      const updated = await setSessionExpiry(next, csrfToken);
+      const updated = await setSessionExpiry(nextExpiry, csrfToken);
       setExpires(updated.expires);
       setOptimistic(null);
+      if (!savePersistentSessionProof(csrfToken)) {
+        setError('This browser blocked Helix session storage. A refresh may still require sign-in.');
+      }
     } catch (requestError) {
       setOptimistic(null);
       setError(requestError instanceof Error ? requestError.message : 'Helix could not change session expiry.');
@@ -239,24 +245,24 @@ function SessionExpirySettings({
 
   return (
     <section class="settings-card">
-      <div class="settings-card__head"><div><Icon name="clock" /><span><h2>Signed-in session</h2><p>Choose whether Helix signs you out after sitting idle.</p></span></div><InfoTip text="Turning this off keeps this browser signed in until you sign out or change the password. Reloading the page still asks you to sign in, because the extra proof lives only in this tab. CSRF pairing stays on." /></div>
+      <div class="settings-card__head"><div><Icon name="clock" /><span><h2>Signed-in session</h2><p>Keep this browser signed in, or use a shorter timed session.</p></span></div><InfoTip text="Page refreshes keep either session mode signed in. Turning Stay signed in on extends the session until you sign out, change the password, or reach the 400-day safety cap. Helix still requires both the HttpOnly session cookie and its origin-scoped request proof." /></div>
       <div class="host-boot-control">
         <div>
-          <span>Expire this sign-in</span>
-          <strong>{expires === null && error === null ? 'Checking…' : busy && optimistic !== null ? nextLabel(optimistic) : displayed ? 'On' : 'Off'}</strong>
-          <small>{displayed ? 'Helix signs you out after 30 minutes idle, or after eight hours even if you stay on the page.' : 'Stay signed in on this browser until you sign out or change the password.'}</small>
+          <span>Stay signed in</span>
+          <strong>{expires === null && error === null ? 'Checking…' : busy && optimistic !== null ? nextLabel(!optimistic) : staySignedIn ? 'On' : 'Off'}</strong>
+          <small>{staySignedIn ? 'Remain signed in across browser restarts until you sign out or change the password.' : 'Refreshes stay signed in, but Helix signs out after 30 minutes idle or eight hours total.'}</small>
         </div>
         <button
           class="switch-button"
           role="switch"
-          aria-checked={displayed}
+          aria-checked={staySignedIn}
           aria-busy={busy || expires === null}
           type="button"
           disabled={busy || !canManage || expires === null}
           onClick={() => void toggle()}
         >
           <i />
-          <span>{busy ? 'Saving…' : displayed ? 'On' : 'Off'}</span>
+          <span>{busy ? 'Saving…' : staySignedIn ? 'On' : 'Off'}</span>
         </button>
       </div>
       {error !== null && <InlineError message={error} />}
@@ -264,8 +270,8 @@ function SessionExpirySettings({
   );
 }
 
-function nextLabel(expires: boolean): string {
-  return expires ? 'Enabling…' : 'Disabling…';
+function nextLabel(staySignedIn: boolean): string {
+  return staySignedIn ? 'Enabling…' : 'Disabling…';
 }
 
 function CatalogsSettings({

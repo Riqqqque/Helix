@@ -4,6 +4,7 @@ import type { BrokerJob } from './control-api';
 import { ProgressBar } from './dashboard-ui';
 import { formatDuration } from './format';
 import { Icon } from './icons';
+import { OperationError } from './operation-error';
 
 function jobElapsedSeconds(job: BrokerJob, now: number): number {
   const end = job.status === 'queued' || job.status === 'running' ? now : job.updatedAtUnixMs;
@@ -46,7 +47,7 @@ export function CreateJobProgress({
         )}
       </div>
       <strong>{job.stage}</strong>
-      <span>{copy}</span>
+      {job.status === 'failed' && job.error ? <OperationError message={job.error} /> : <span>{copy}</span>}
       <ProgressBar
         value={active ? Math.max(percent, 6) : percent}
         tone={job.status === 'failed' ? 'danger' : 'normal'}

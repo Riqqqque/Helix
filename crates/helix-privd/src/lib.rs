@@ -234,6 +234,8 @@ pub enum BrokerRequest {
     },
     MinecraftModpackProject {
         project_id: String,
+        #[serde(default, skip_serializing_if = "is_modrinth_provider")]
+        provider: ModpackProvider,
     },
     InstallServerMarketplaceContent {
         instance_id: String,
@@ -493,7 +495,7 @@ pub fn http_dump_status(dump: &str) -> Option<u16> {
                 .or_else(|| line.strip_prefix("HTTP/3 "))?;
             rest.split_whitespace().next()?.parse().ok()
         })
-        .last()
+        .next_back()
 }
 
 pub fn http_status_from_curl_stderr(stderr: &str) -> Option<u16> {
@@ -704,6 +706,8 @@ pub enum MinecraftDifficulty {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MinecraftCreateSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pumpkin_bedrock_port: Option<u16>,
     pub name: String,
     pub software: MinecraftSoftware,
     pub version: String,
@@ -1027,6 +1031,7 @@ pub fn validate_cpu_millis(cpu_millis: u32) -> Result<(), String> {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MinecraftSoftware {
+    Pumpkin,
     Custom,
     Vanilla,
     Paper,
@@ -1275,6 +1280,7 @@ mod tests {
     fn create_spec_has_stable_wire_shape() {
         let request = BrokerRequest::CreateMinecraft {
             spec: MinecraftCreateSpec {
+                pumpkin_bedrock_port: None,
                 name: "Survival".to_owned(),
                 software: MinecraftSoftware::Paper,
                 version: "1.21.8".to_owned(),
@@ -1378,6 +1384,7 @@ mod tests {
 
         let custom = serde_json::to_value(BrokerRequest::CreateMinecraft {
             spec: MinecraftCreateSpec {
+                pumpkin_bedrock_port: None,
                 name: "Private build".to_owned(),
                 software: MinecraftSoftware::Custom,
                 version: "1.21.8".to_owned(),
@@ -1464,7 +1471,8 @@ mod tests {
             list_on_browser: true,
             wine_runtime_acknowledged: false,
         };
-        spec.validate_for_game(GameKind::Minecraft).expect("valid copy");
+        spec.validate_for_game(GameKind::Minecraft)
+            .expect("valid copy");
         spec.copy_acknowledged = false;
         assert!(spec.validate().is_err());
         spec.copy_acknowledged = true;
@@ -1479,7 +1487,8 @@ mod tests {
         assert!(spec.validate_for_game(GameKind::VRising).is_err());
         spec.memory_mb = 4_096;
         spec.wine_runtime_acknowledged = true;
-        spec.validate_for_game(GameKind::VRising).expect("V Rising copy");
+        spec.validate_for_game(GameKind::VRising)
+            .expect("V Rising copy");
     }
 
     #[test]
@@ -1738,6 +1747,16 @@ mod tests {
         assert_eq!(search["operation"], "minecraft_modpack_search");
         assert!(search.get("url").is_none());
         assert!(search.get("loader").is_none());
+
+        let project = serde_json::to_value(BrokerRequest::MinecraftModpackProject {
+            project_id: "123456".to_owned(),
+            provider: ModpackProvider::Curseforge,
+        })
+        .expect("serialize CurseForge modpack project");
+        assert_eq!(project["operation"], "minecraft_modpack_project");
+        assert_eq!(project["project_id"], "123456");
+        assert_eq!(project["provider"], "curseforge");
+        assert!(project.get("url").is_none());
 
         let create = serde_json::to_value(BrokerRequest::CreateMinecraftModpack {
             spec: MinecraftModpackCreateSpec {

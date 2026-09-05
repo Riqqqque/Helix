@@ -8,6 +8,11 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Pumpkin native servers with verified releases, separate Java and Bedrock ports,
+  console commands, settings, backups, and guarded updates. See the Pumpkin guide
+  for plugin and world compatibility limits.
+- Modpack update checks with a backup before activation and a restore path.
+- Background operation recovery and saved file drafts when the page reloads.
 - Settings → Catalogs stores an owner CurseForge API key on the host so marketplace
   search and “Start with a modpack” can use `api.curseforge.com`. Helix never
   ships a CurseForge secret and never shows the saved key again.
@@ -16,7 +21,7 @@ release, not a public-internet support promise.
   Pterodactyl files stay put. The new server gets a free Helix port.
 - Settings → Signed-in session can turn off idle and eight-hour expiry so this
   browser stays signed in until you sign out or change the password. Reloading
-  the page still asks you to sign in. The default stays 30 minutes idle and
+  the page preserves a valid session. The default stays 30 minutes idle and
   eight hours.
 - Removed native servers can be permanently deleted from **Removed and hidden**
   or Settings → Helix data after typing the exact name. That wipe includes world
@@ -35,6 +40,12 @@ release, not a public-internet support promise.
 
 ### Changed
 
+- Public access manages the host's game-port rules and shows router forwarding
+  instructions. Helix no longer tries to change router settings through UPnP.
+- CurseForge installs prefer the publisher's server pack, verify downloads,
+  and avoid installing known client-only content on dedicated servers.
+- New software advertised by a newer broker no longer blocks all known server
+  choices in the dashboard. Pumpkin has explicit readiness-parser coverage.
 - Home shortcuts are Homarr-style squares (big icon and name) instead of wide
   rows. Compact is a square, Wide is larger, Full is extra large. Hover still
   shows the hostname.

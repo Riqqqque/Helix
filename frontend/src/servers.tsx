@@ -46,6 +46,7 @@ import {
   type MinecraftSoftware,
   type MinecraftVersionCatalog,
   type NativeServerDetail,
+  type NativeInstalledModpack,
   type ServerAction,
   type ServerBackup,
   type ServerBackupTrash,
@@ -83,6 +84,7 @@ import {
   formatPercent,
   formatTimestamp,
 } from "./format";
+import { ServerReadySummary } from "./server-ready";
 import { CreateJobProgress, migrateCreateJobCopy, steamCreateJobCopy } from "./create-job-progress";
 import { GameMark } from "./game-marks";
 import { Icon, type IconName } from "./icons";
@@ -102,16 +104,16 @@ import {
 import { useJobPolling, type JobPollingController } from "./job-polling";
 import {
   getNetworkInventory,
-  leftoverAmpForwardConfirmation,
-  releaseAmpRouterForward,
   type GamePortMapping,
   type NetworkInventory,
 } from "./network-api";
 import { MarketplaceRoute, preloadMarketplaceRoute } from "./marketplace-route";
 import {
   createMinecraftModpack,
+  getModpackProject,
   parseMinecraftModpackCreateResult,
   type MinecraftModpackCreateResult,
+  type ModpackVersion,
   type ModpackSelection,
 } from "./modpack-api";
 import { ModpackRoute, preloadModpackPicker } from "./modpack-route";
@@ -169,12 +171,62 @@ function isSessionError(error: unknown): boolean {
   );
 }
 
+function modpackCatalogName(provider: "modrinth" | "curseforge"): string {
+  return provider === "curseforge" ? "CurseForge" : "Modrinth";
+}
+
+function modpackLoaderName(loader: string): string {
+  const normalized = loader.trim().toLowerCase();
+  if (normalized === "neoforge") return "NeoForge";
+  if (normalized === "forge") return "Forge";
+  if (normalized === "quilt") return "Quilt";
+  if (normalized === "fabric") return "Fabric";
+  return loader.trim() || "Minecraft loader";
+}
+
+export function selectCompatibleModpackUpdate(
+  installed: NativeInstalledModpack,
+  versions: ModpackVersion[],
+): ModpackVersion | null {
+  const current = versions.find((version) => version.id === installed.versionId);
+  if (current?.datePublished === null || current?.datePublished === undefined) {
+    throw new Error(
+      "The catalog page does not include this installed release. Use Check for update so Helix can verify it directly with the provider.",
+    );
+  }
+  const currentTime = Date.parse(current.datePublished);
+  if (!Number.isFinite(currentTime)) {
+    throw new Error("The provider returned an invalid installed release date.");
+  }
+  return (
+    versions
+      .filter(
+        (version) =>
+          version.installable &&
+          version.gameVersions.includes(installed.minecraftVersion) &&
+          version.loaders.some(
+            (loader) =>
+              loader.toLowerCase() === installed.loader.toLowerCase(),
+          ) &&
+          version.datePublished !== null &&
+          Number.isFinite(Date.parse(version.datePublished)) &&
+          Date.parse(version.datePublished) > currentTime,
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(right.datePublished ?? "") -
+          Date.parse(left.datePublished ?? ""),
+      )[0] ?? null
+  );
+}
+
 export const minecraftCreateSoftwareOptions: ReadonlyArray<{
   id: InstallableMinecraftSoftware;
   name: string;
   detail: string;
 }> = [
   { id: "paper", name: "Paper", detail: "Fast, plugin-ready, best default" },
+  { id: "pumpkin", name: "Pumpkin", detail: "Native Rust · no Java · Java and Bedrock clients" },
   { id: "purpur", name: "Purpur", detail: "Paper with deeper gameplay tuning" },
   {
     id: "folia",
@@ -753,106 +805,16 @@ function ServerFault({
   );
 }
 
-function AmpPortClaimHelp({
-  message,
-  claim,
-  csrfToken,
-  servers,
-  canManageNetwork,
-  onSessionExpired,
-}: {
-  message: string;
-  claim: { port: number; leftover: boolean };
-  csrfToken: string;
-  servers: ManagedServer[];
-  canManageNetwork: boolean;
-  onSessionExpired: () => void;
+function AmpPortClaimHelp({ message, claim, servers }: {
+  message: string; claim: { port: number; leftover: boolean }; servers: ManagedServer[];
+  csrfToken: string; canManageNetwork: boolean; onSessionExpired: () => void;
 }) {
-  const [confirmation, setConfirmation] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [released, setReleased] = useState(false);
-  const expected = leftoverAmpForwardConfirmation(claim.port);
-  const hostname = globalThis.location?.hostname ?? "";
-  const panelUrl = ampHelpPanelUrl(message, servers, hostname);
-  const release = async (): Promise<void> => {
-    setBusy(true);
-    setLocalError(null);
-    try {
-      const result = await releaseAmpRouterForward(claim.port, confirmation.trim(), csrfToken);
-      if (result.ampFilesChanged) {
-        setLocalError("Helix stopped because AMP files would have changed.");
-        return;
-      }
-      setReleased(true);
-    } catch (requestError) {
-      if (isSessionError(requestError)) onSessionExpired();
-      else setLocalError(describeError(requestError));
-    } finally {
-      setBusy(false);
-    }
-  };
-  if (released) {
-    return (
-      <div class="amp-port-help amp-port-help--ready" role="status">
-        <Icon name="check" size={15} />
-        <div>
-          <strong>Leftover AMP forward on {claim.port} is gone.</strong>
-          <p>AMP instance files were not changed. Retry create or save.</p>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div class="amp-port-help" role="alert">
-      <Icon name="warning" size={15} />
-      <div>
-        <strong>
-          {claim.leftover
-            ? `Leftover AMP router mapping on ${claim.port}`
-            : `AMP already has port ${claim.port} claimed`}
-        </strong>
-        <p>{message}</p>
-        <div class="amp-port-help__actions">
-          {panelUrl !== null && (
-            <a class="button button--quiet" href={panelUrl} target="_blank" rel="noreferrer">
-              Open AMP
-            </a>
-          )}
-        </div>
-        {claim.leftover && canManageNetwork && (
-          <label class="field">
-            <span>Type {expected} to delete only the leftover UPnP mapping</span>
-            <input
-              value={confirmation}
-              disabled={busy}
-              autoComplete="off"
-              spellcheck={false}
-              onInput={(event) => setConfirmation(event.currentTarget.value)}
-            />
-            <small>This does not stop AMP, rewrite instance files, or touch Helix servers.</small>
-          </label>
-        )}
-        {claim.leftover && canManageNetwork && (
-          <button
-            class="button button--primary"
-            type="button"
-            disabled={busy || confirmation.trim() !== expected}
-            onClick={() => void release()}
-          >
-            {busy ? "Removing…" : "Remove leftover AMP forward"}
-          </button>
-        )}
-        {claim.leftover && !canManageNetwork && (
-          <p>
-            Removing that leftover UPnP mapping needs network.firewall.write. You can also delete
-            that TCP forward on the router. Do not hand-edit AMP instance files.
-          </p>
-        )}
-        <InlineError message={localError} />
-      </div>
-    </div>
-  );
+  const panelUrl = ampHelpPanelUrl(message, servers, globalThis.location?.hostname ?? "");
+  return <div class="amp-port-help" role="alert"><Icon name="warning" size={15} /><div>
+    <strong>{claim.leftover ? "Check the rule in your router" : `AMP already uses port ${claim.port}`}</strong>
+    <p>{claim.leftover ? `Review port ${claim.port} in your router's forwarding settings. Helix does not change router rules or AMP files.` : message}</p>
+    {panelUrl !== null && <a class="button button--quiet" href={panelUrl} target="_blank" rel="noreferrer">Open AMP</a>}
+  </div></div>;
 }
 
 export function memoryBoundsForKind(
@@ -885,28 +847,37 @@ export function allocatedMemoryOptions(
   return options;
 }
 
+export function recommendedModpackMemoryMb(
+  loaders: string[],
+  availableMemoryBytes: number | null,
+): number {
+  const normalizedLoaders = loaders.map((loader) => loader.trim().toLowerCase());
+  const desired = normalizedLoaders.some(
+    (loader) => loader === "forge" || loader === "neoforge",
+  )
+    ? 8_192
+    : 6_144;
+  if (
+    availableMemoryBytes === null ||
+    !Number.isFinite(availableMemoryBytes) ||
+    availableMemoryBytes <= 0
+  ) {
+    return desired;
+  }
+  const availableMb = Math.floor(availableMemoryBytes / (1024 * 1024));
+  const safeLimit = availableMb - 4_096;
+  return [8_192, 6_144, 4_096].find(
+    (candidate) => candidate <= desired && candidate <= safeLimit,
+  ) ?? 4_096;
+}
+
 export function publicInternetHint(
-  kind: "minecraft" | "vrising" | "valheim" | "terraria",
-  port: number,
-  queryPort: number | null,
-  publicSetupConfirmed = false,
+  kind: "minecraft" | "vrising" | "valheim" | "terraria", port: number,
+  queryPort: number | null, hostConfigured = false,
 ): string {
-  if (publicSetupConfirmed) {
-    if (kind === "vrising") {
-      return `Helix confirmed UPnP for UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`}. Direct Connect uses this public address. Scanners can find those ports without you sharing the IP. The in-game server list is a separate listing toggle.`;
-    }
-    if (kind === "valheim") {
-      return `Helix confirmed UPnP for UDP ${port}–${port + 2}. Direct Connect uses this public address. Scanners can find those ports without you sharing the IP.`;
-    }
-    return `Helix confirmed UPnP for TCP ${port}. Direct Connect uses this public address. Scanners can find this port without you sharing the IP.`;
-  }
-  if (kind === "vrising") {
-    return `Direct Connect from the internet needs UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`} forwarded, or Helix public setup on this page. Friends can still join from the V Rising server list when listing is on.`;
-  }
-  if (kind === "valheim") {
-    return `Direct Connect from the internet needs UDP ${port}–${port + 2} forwarded, or Helix public setup on this page.`;
-  }
-  return `Direct Connect from the internet needs TCP ${port} forwarded, or Helix public setup when you create the server.`;
+  const ports = kind === "vrising" ? `UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`}`
+    : kind === "valheim" ? `UDP ${port}–${port + 2}` : `TCP ${port}`;
+  return `${hostConfigured ? "Host port setup is saved. " : ""}For internet players, forward ${ports} to this server’s LAN address in your router. Helix does not configure the router or verify internet reachability.`;
 }
 
 function CpuCapField({
@@ -942,36 +913,13 @@ function CpuCapField({
 }
 
 function publicAccessCopy(
-  kind: "minecraft" | "vrising" | "valheim" | "terraria",
-  canManageNetwork: boolean,
+  kind: "minecraft" | "vrising" | "valheim" | "terraria" | "pumpkin", canManageNetwork: boolean,
 ): { title: string; detail: string } {
-  if (!canManageNetwork) {
-    return {
-      title: "Set up public player access",
-      detail: "Requires network.firewall.write permission. The server can still be created for LAN or private-network access.",
-    };
-  }
-  if (kind === "vrising") {
-    return {
-      title: "Set up public Direct Connect",
-      detail: "After the server is online, Helix requests UDP UPnP for the game and query ports. The in-game server list is the separate listing checkbox. Listing can work without this. An open public port is found by scanners even if you never share the address.",
-    };
-  }
-  if (kind === "valheim") {
-    return {
-      title: "Set up public player access",
-      detail: "After the server is online, Helix requests UDP UPnP for the game port and the next two. Scanners can find those ports without you sharing the IP.",
-    };
-  }
-  if (kind === "terraria") {
-    return {
-      title: "Set up public player access",
-      detail: "After Terraria is online, Helix requests and verifies an exact TCP mapping from a compatible UPnP router. If UFW is active, Helix also creates a matching owned rule. Scanners can find that port without you sharing the IP.",
-    };
-  }
   return {
-    title: "Set up public player access",
-    detail: "After Minecraft is online, Helix will request and verify an exact TCP mapping from a compatible UPnP router. If UFW is active, Helix also creates a matching owned rule. Scanners can find that port without you sharing the IP; turn on Whitelist if only approved players should join.",
+    title: "Prepare host firewall",
+    detail: canManageNetwork
+      ? `Allow ${kind === "pumpkin" ? "the Java TCP port and separate Bedrock TCP/UDP port" : kind === "valheim" || kind === "vrising" ? "UDP game ports" : "the TCP game port"} when UFW is active. Helix will show the forwarding details for your router; it will not change router settings or enable UFW.`
+      : "Requires network.firewall.write permission. You can still create the server and manage host rules in Network.",
   };
 }
 
@@ -1242,18 +1190,18 @@ function PortPoolDialog({
         <span>
           <strong>
             {game === "minecraft"
-              ? "Default new Minecraft servers to public setup"
+              ? "Prepare host ports for new Minecraft servers"
               : game === "vrising"
-                ? "Default new V Rising servers to public Direct Connect"
+                ? "Prepare host ports for new V Rising servers"
                 : game === "valheim"
-                  ? "Default new Valheim servers to public setup"
-                  : "Default new Terraria servers to public setup"}
+                  ? "Prepare host ports for new Valheim servers"
+                  : "Prepare host ports for new Terraria servers"}
           </strong>
           <small>
             {canManageNetwork
               ? game === "vrising"
-                ? "Create still shows this choice. Listing on the in-game server list is separate. Helix will never enable UFW or overwrite an unowned router mapping."
-                : "The creation review still shows this choice. Helix will never enable UFW or overwrite an unowned router mapping."
+                ? "Create still shows this choice. Listing on the in-game server list is separate. Helix prepares host rules only; it does not enable UFW or change your router."
+                : "The creation review still shows this choice. Helix prepares host rules only; it does not enable UFW or change your router."
               : "Requires network.firewall.write permission."}
           </small>
         </span>
@@ -1277,6 +1225,7 @@ function CreateServerDialog({
   onSessionExpired,
   canManageNetwork,
   logicalCores,
+  availableMemoryBytes,
 }: {
   csrfToken: string;
   servers: ManagedServer[];
@@ -1285,17 +1234,20 @@ function CreateServerDialog({
   onSessionExpired: () => void;
   canManageNetwork: boolean;
   logicalCores: number;
+  availableMemoryBytes: number | null;
 }) {
   const [step, setStep] = useState<1 | 2>(1);
   const [mode, setMode] = useState<MinecraftCreateMode>("software");
   const [name, setName] = useState("");
   const [software, setSoftware] = useState<MinecraftSoftware>("paper");
+  const [pumpkinBedrockPort, setPumpkinBedrockPort] = useState("");
   const [version, setVersion] = useState("latest");
   const [modpack, setModpack] = useState<ModpackSelection | null>(null);
   const [customJarPath, setCustomJarPath] = useState("");
   const [customBrowserOpen, setCustomBrowserOpen] = useState(false);
   const [customJavaVersion, setCustomJavaVersion] = useState<17 | 21 | 25>(21);
   const [memory, setMemory] = useState(4096);
+  const [memoryManuallyChanged, setMemoryManuallyChanged] = useState(false);
   const [cpuMillis, setCpuMillis] = useState(0);
   const [players, setPlayers] = useState(20);
   const [port, setPort] = useState(() => nextMinecraftPort(servers));
@@ -1320,6 +1272,17 @@ function CreateServerDialog({
   const [jarUploading, setJarUploading] = useState(false);
   const [jarUploadPercent, setJarUploadPercent] = useState(0);
   const jarInput = useRef<HTMLInputElement | null>(null);
+  const selectModpack = (selection: ModpackSelection | null): void => {
+    setModpack(selection);
+    if (selection !== null && !memoryManuallyChanged) {
+      setMemory(
+        recommendedModpackMemoryMb(
+          selection.loaders,
+          availableMemoryBytes,
+        ),
+      );
+    }
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1514,6 +1477,7 @@ function CreateServerDialog({
             "Choose an existing .jar inside a Helix Storage root, an explicit Minecraft version, and a supported Java runtime.",
           );
         const input: MinecraftCreateInput = {
+          ...(mode === "software" && software === "pumpkin" && pumpkinBedrockPort.trim() ? { pumpkin_bedrock_port: Number(pumpkinBedrockPort) } : {}),
           name: name.trim(),
           software: mode === "custom" ? "custom" : software,
           version: version.trim(),
@@ -1571,18 +1535,25 @@ function CreateServerDialog({
       typeof resultRecord?.network_exposure === "object" && resultRecord.network_exposure !== null
         ? (resultRecord.network_exposure as Record<string, unknown>)
         : null;
-    const publicJoin =
-      typeof networkResult?.public_join_address === "string"
-        ? networkResult.public_join_address
-        : null;
-    const publicSetupError =
-      typeof networkResult?.error === "string" ? networkResult.error : null;
+    const publicSetupError = typeof networkResult?.error === "string" ? networkResult.error : null;
+    if (job.status === "complete") {
+      const actualPort = typeof resultRecord?.game_port === "number" ? resultRecord.game_port : port;
+      const host = typeof networkResult?.private_ipv4 === "string" ? networkResult.private_ipv4 : "";
+      return <Dialog title="Server ready" onClose={onClose} wide>
+        <ServerReadySummary name={name} host={host} port={actualPort}
+          elapsed={formatDuration(Math.max(0, Math.floor((job.updatedAtUnixMs - job.createdAtUnixMs) / 1000)))}
+          pack={modpackResult === null ? null : `${modpackResult.projectTitle} ${modpackResult.versionNumber}`}
+          runtime={modpackResult === null ? software : `Minecraft ${modpackResult.minecraftVersion} · ${modpackLoaderName(modpackResult.loader)} ${modpackResult.loaderVersion}`}
+          hostRequested={publicAccess} firewallState={typeof networkResult?.firewall_state === "string" ? networkResult.firewall_state : null}
+          hostError={publicSetupError} pumpkin={software === "pumpkin"}
+          bedrockPort={typeof resultRecord?.query_port === "number" ? resultRecord.query_port : undefined} />
+        <div class="dialog-actions"><button class="button button--primary" type="button" onClick={onClose}>Done</button></div>
+      </Dialog>;
+    }
     return (
       <Dialog
         title={
-          job.status === "complete"
-            ? "Server ready"
-            : job.status === "failed"
+          job.status === "failed"
               ? "Creation stopped safely"
               : mode === "modpack"
                 ? "Installing the modpack"
@@ -1595,52 +1566,16 @@ function CreateServerDialog({
           copy={
             active
               ? mode === "modpack"
-                ? "Helix is validating the Modrinth archive, assembling a server-safe subset, and starting the pinned Fabric runtime."
+                ? `Helix is validating the ${modpackCatalogName(modpack?.provider ?? "modrinth")} release, preparing its dedicated-server files, and starting the pinned ${modpackLoaderName(modpack?.loaders[0] ?? "Minecraft")} runtime.`
                 : "Helix is downloading a verified build, creating the workload, and starting Minecraft."
-              : job.status === "complete"
-                ? `${name} is online and ready to join.`
-                : parseAmpPortClaim(job.error ?? "") !== null
+              : parseAmpPortClaim(job.error ?? "") !== null
                   ? "That port is still held by AMP."
                   : (job.error ?? "Helix rolled back the incomplete server.")
           }
         >
-          {modpackResult !== null && (
-            <div class="modpack-create-result">
-              <strong>
-                {modpackResult.projectTitle} {modpackResult.versionNumber}
-              </strong>
-              <span>
-                Minecraft {modpackResult.minecraftVersion} · Fabric Loader{" "}
-                {modpackResult.fabricLoaderVersion}
-              </span>
-              <span>
-                {modpackResult.installedServerFiles} required server files
-                installed · {modpackResult.excludedServerOptionalFiles} optional
-                server files excluded · {modpackResult.excludedClientOnlyFiles}{" "}
-                client-only files excluded
-              </span>
-              <span>
-                Modrinth-declared SHA-512 verified. This is a server-safe
-                subset, not byte-for-byte full-pack parity.
-              </span>
-            </div>
-          )}
-          {job.status === "complete" && publicAccess && (
-            <div class={`creation-network-result ${publicJoin === null ? "is-warning" : "is-ready"}`}>
-              <Icon name={publicJoin === null ? "warning" : "network"} size={16} />
-              <span>
-                <strong>{publicJoin === null ? "Server online · public access needs attention" : publicJoin}</strong>
-                {publicJoin === null
-                  ? parseAmpPortClaim(publicSetupError ?? "") !== null
-                    ? "Public access stopped on an AMP-held port. Use the steps below; Helix did not overwrite AMP."
-                    : (publicSetupError ?? "Open the server’s Join section to retry automatic public setup.")
-                  : "Router mapping confirmed. Test this address from a separate external network before sharing it broadly."}
-              </span>
-            </div>
-          )}
         </CreateJobProgress>
         <ServerFault
-          message={polling.error ?? error ?? (job.status === "failed" ? job.error : null) ?? publicSetupError}
+          message={polling.error ?? error ?? (job.status === "failed" && parseAmpPortClaim(job.error ?? "") !== null ? job.error : null) ?? publicSetupError}
           csrfToken={csrfToken}
           servers={servers}
           canManageNetwork={canManageNetwork}
@@ -1662,7 +1597,7 @@ function CreateServerDialog({
             disabled={!canClose}
             onClick={onClose}
           >
-            {job.status === "complete" ? "View servers" : "Close"}
+            Close
           </button>
         </div>
       </Dialog>
@@ -1713,7 +1648,7 @@ function CreateServerDialog({
             </span>
             <span class="create-mode-copy">
               <strong>Start with a modpack</strong>
-              <small>A server-capable Fabric pack from Modrinth</small>
+              <small>A server-ready pack from Modrinth or CurseForge</small>
             </span>
           </button>
           <button
@@ -1780,6 +1715,8 @@ function CreateServerDialog({
                   }}
                   onCatalogToggle={() => setCatalogOpen((open) => !open)}
                 />
+                {software === "pumpkin" && <><p class="field--wide settings-port-note">Pumpkin is an early-development Rust server, not a Java mod loader. Choose a versioned release below. Java uses the game TCP port; Bedrock NetherNet needs a separate TCP/UDP port. No Paper/Fabric/Forge mods or modpacks; native plugins must match Pumpkin’s build. Test existing worlds separately before importing.</p>
+                  <label class="field"><span>Bedrock TCP/UDP port</span><input type="number" min={1024} max={65535} placeholder="Automatic from Minecraft port pool" value={pumpkinBedrockPort} onInput={(event) => setPumpkinBedrockPort(event.currentTarget.value)} /><small>Leave blank to reserve a second free port. This stays separate from the Java port.</small></label></>}
                 <MinecraftVersionField
                   key={`software-${software}`}
                   version={version}
@@ -1954,7 +1891,7 @@ function CreateServerDialog({
                 <ModpackRoute
                   csrfToken={csrfToken}
                   selection={modpack}
-                  onSelectionChange={setModpack}
+                  onSelectionChange={selectModpack}
                   onSessionExpired={onSessionExpired}
                 />
               </>
@@ -2006,9 +1943,10 @@ function CreateServerDialog({
               <span>Memory</span>
               <select
                 value={memory}
-                onChange={(event) =>
-                  setMemory(Number(event.currentTarget.value))
-                }
+                onChange={(event) => {
+                  setMemoryManuallyChanged(true);
+                  setMemory(Number(event.currentTarget.value));
+                }}
               >
                 <option value="2048">2 GiB</option>
                 <option value="4096">4 GiB</option>
@@ -2017,6 +1955,13 @@ function CreateServerDialog({
                 <option value="12288">12 GiB</option>
                 <option value="16384">16 GiB</option>
               </select>
+              {mode === "modpack" && modpack !== null && (
+                <small>
+                  {memoryManuallyChanged
+                    ? "Helix will keep your choice. Large Forge and NeoForge packs can need more than 4 GiB."
+                    : `Helix selected ${formatMemoryGiB(memory)} from the loader and current host headroom. You can change it.`}
+                </small>
+              )}
             </label>
             <CpuCapField
               value={cpuMillis}
@@ -2086,19 +2031,19 @@ function CreateServerDialog({
             </div>
             <div>
               <dt>Player access</dt>
-              <dd>{publicAccess ? "LAN + automatic public setup" : "Private / LAN"}</dd>
+              <dd>{publicAccess ? "Prepare host firewall" : "Private / LAN"}</dd>
             </div>
           </dl>
           {mode === "modpack" && modpack !== null && (
             <div class="modpack-compatibility-note">
               <Icon name="info" size={16} />
               <span>
-                <strong>Server-safe Fabric subset</strong>Helix will require the
-                exact listed release, verify its Modrinth-declared SHA-512,
-                strictly validate every path and declared SHA-1/SHA-512, exclude
-                server-optional and client-only files, pin Minecraft and Fabric
-                Loader, and roll back the entire new server if installation or
-                startup fails.
+                <strong>
+                  {modpackCatalogName(modpack.provider)} {modpackLoaderName(modpack.loaders[0] ?? "Minecraft")} pack
+                </strong>
+                {modpack.provider === "curseforge"
+                  ? "Helix will verify the selected CurseForge archive, prefer the publisher's dedicated server pack when one exists, validate every extracted path and catalog SHA-1, pin the matching loader, and roll back the new server if installation or startup fails."
+                  : "Helix will require the exact listed release, verify its Modrinth-declared SHA-512, validate every path and declared file hash, exclude server-optional and client-only files, pin the matching loader, and roll back the new server if installation or startup fails."}
               </span>
             </div>
           )}
@@ -2136,7 +2081,7 @@ function CreateServerDialog({
             />
             <span>
               <strong>{publicAccessCopy("minecraft", canManageNetwork).title}</strong>
-              <small>{publicAccessCopy("minecraft", canManageNetwork).detail}</small>
+              <small>{publicAccessCopy(software === "pumpkin" && mode === "software" ? "pumpkin" : "minecraft", canManageNetwork).detail}</small>
             </span>
           </label>
           <label class="check-row">
@@ -2163,7 +2108,7 @@ function CreateServerDialog({
             <Icon name="activity" />
             <span>
               {mode === "modpack"
-                ? "Only opaque catalog project and version IDs leave the browser. The broker re-resolves Modrinth or CurseForge metadata, pins a supported loader, and refuses client-only files, unsafe archive paths, and unverified downloads."
+                ? `Only opaque ${modpackCatalogName(modpack?.provider ?? "modrinth")} project and version IDs leave the browser. The broker re-resolves ${modpackCatalogName(modpack?.provider ?? "modrinth")} metadata, pins a supported loader, and refuses client-only files, unsafe archive paths, and unverified downloads.`
                 : mode === "custom"
                   ? "Helix will import a private copy, pin its SHA-256 and Java runtime, isolate it as an unprivileged container, reserve the ports, write the Minecraft configuration, and start it. Your source file is never modified."
                   : "Helix will resolve a supported build and Java runtime, verify the download, isolate the workload, write the configuration, reserve the ports, and start Minecraft."}
@@ -2196,6 +2141,16 @@ function actionLabel(action: ServerAction): string {
   return `${action.charAt(0).toUpperCase()}${action.slice(1)}`;
 }
 
+function completedUpdateDetail(job: BrokerJob): Record<string, unknown> | null {
+  if (job.status !== "complete" || job.result === null || typeof job.result !== "object") {
+    return null;
+  }
+  const result = job.result as Record<string, unknown>;
+  return result.detail !== null && typeof result.detail === "object"
+    ? (result.detail as Record<string, unknown>)
+    : null;
+}
+
 function ServerActionDialog({
   server,
   action,
@@ -2203,6 +2158,8 @@ function ServerActionDialog({
   onClose,
   onComplete,
   onSessionExpired,
+  modpack = null,
+  onViewSafetyBackup,
 }: {
   server: ManagedServer;
   action: ServerAction;
@@ -2210,13 +2167,18 @@ function ServerActionDialog({
   onClose: () => void;
   onComplete: () => Promise<void>;
   onSessionExpired: () => void;
+  modpack?: NativeInstalledModpack | null;
+  onViewSafetyBackup?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<BrokerJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [effectiveAction, setEffectiveAction] = useState<ServerAction>(action);
   const [killConfirm, setKillConfirm] = useState(false);
-  const label = actionLabel(effectiveAction);
+  const label =
+    effectiveAction === "update" && modpack !== null
+      ? "Update modpack"
+      : actionLabel(effectiveAction);
   const destructive = effectiveAction === "stop" || effectiveAction === "kill";
   const polling = useJobPolling({
     job,
@@ -2263,6 +2225,13 @@ function ServerActionDialog({
       server.manager === "helix" &&
       active &&
       (effectiveAction === "stop" || effectiveAction === "restart");
+    const updateDetail = completedUpdateDetail(job);
+    const backupId =
+      typeof updateDetail?.backup_id === "string" &&
+      /^\d{1,20}$/u.test(updateDetail.backup_id)
+        ? updateDetail.backup_id
+        : null;
+    const alreadyCurrent = updateDetail?.already_current === true;
     return (
       <Dialog
         title={
@@ -2298,7 +2267,11 @@ function ServerActionDialog({
                 ? "SIGKILL is in flight. Closing after a status-check problem will not interrupt it."
                 : "This runs in the background. Closing after a status-check problem will not interrupt it."
               : job.status === "complete"
-                ? `${server.name} is ready.`
+                ? effectiveAction === "update" && modpack !== null
+                  ? alreadyCurrent
+                    ? `${modpack.projectTitle} is already current. No backup or files were changed.`
+                    : `${server.name} passed its startup check. The pre-update backup is ready if you need to restore it.`
+                  : `${server.name} is ready.`
                 : (job.error ?? "Helix could not finish the action.")}
           </span>
           <ProgressBar
@@ -2364,6 +2337,16 @@ function ServerActionDialog({
                 Kill instead
               </button>
             ))}
+          {backupId !== null && onViewSafetyBackup !== undefined && (
+            <button
+              class="button button--quiet"
+              type="button"
+              onClick={onViewSafetyBackup}
+            >
+              <Icon name="backup" size={15} />
+              View safety backup
+            </button>
+          )}
           <button
             class="button button--primary"
             type="button"
@@ -2379,7 +2362,16 @@ function ServerActionDialog({
   return (
     <Dialog title={`${label} ${server.name}?`} onClose={onClose}>
       <div class="dialog-copy">
-        <p>{serverActionDescription(server, action)}</p>
+        <p>
+          {action === "update" && modpack !== null
+            ? `Helix will download and verify the newest compatible ${modpackCatalogName(modpack.provider)} release, stop the server cleanly, and create a full backup before changing any pack files. Worlds, player data, server settings, and locally edited configuration stay in place. Helix then validates a real startup and automatically restores the previous version if it fails.`
+            : serverActionDescription(server, action)}
+        </p>
+        {action === "update" && modpack !== null && (
+          <p>
+            <strong>{modpack.projectTitle}</strong> · currently {modpack.versionNumber} · Minecraft {modpack.minecraftVersion} · {modpackLoaderName(modpack.loader)}
+          </p>
+        )}
       </div>
       <InlineError message={error} />
       <div class="dialog-actions">
@@ -2392,7 +2384,11 @@ function ServerActionDialog({
           disabled={busy}
           onClick={() => void queueAction(action)}
         >
-          {busy ? "Queuing…" : label}
+          {busy
+            ? "Queuing…"
+            : action === "update" && modpack !== null
+              ? "Back up and update"
+              : label}
         </button>
       </div>
     </Dialog>
@@ -3334,7 +3330,7 @@ function SettingsPanel({
             min={0}
             max={65_535}
             value={settings.playerIdleTimeout}
-            disabled={!canManageServers}
+            disabled={!canManageServers || detail.software.toLowerCase() === "pumpkin"}
             title={manageTitle}
             onInput={(event) =>
               update("playerIdleTimeout", event.currentTarget.valueAsNumber)
@@ -3376,7 +3372,7 @@ function SettingsPanel({
             min={0}
             max={65_535}
             value={settings.spawnProtection}
-            disabled={!canManageServers}
+            disabled={!canManageServers || detail.software.toLowerCase() === "pumpkin"}
             title={manageTitle}
             onInput={(event) =>
               update("spawnProtection", event.currentTarget.valueAsNumber)
@@ -3384,6 +3380,7 @@ function SettingsPanel({
           />
         </label>
       </div>
+      {detail.software.toLowerCase() === "pumpkin" && <p class="settings-port-note">Pumpkin settings are saved to pumpkin.toml. Idle kick, spawn protection, and allow-flight are unavailable in this API. The game port above is Java TCP; Bedrock uses its separately reserved TCP/UDP port {detail.queryPort}. Advanced options and native plugins are available through Files. Paper/Forge/Fabric add-ons need a separate compatible bridge.</p>}
       <div class="toggle-grid">
         {(
           [
@@ -3425,7 +3422,7 @@ function SettingsPanel({
             <input
               type="checkbox"
               checked={settings[item.key]}
-              disabled={!canManageServers}
+              disabled={!canManageServers || (detail.software.toLowerCase() === "pumpkin" && item.key === "allowFlight")}
               title={manageTitle}
               onChange={(event) =>
                 update(item.key, event.currentTarget.checked)
@@ -4857,6 +4854,12 @@ function NativeServerPage({
   const [listingNotice, setListingNotice] = useState<string | null>(null);
   const [exposureBusy, setExposureBusy] = useState(false);
   const [exposureError, setExposureError] = useState<string | null>(null);
+  const [modpackUpdateCandidate, setModpackUpdateCandidate] =
+    useState<ModpackVersion | null>(null);
+  const [modpackUpdateChecking, setModpackUpdateChecking] = useState(false);
+  const [modpackUpdateChecked, setModpackUpdateChecked] = useState(false);
+  const [modpackUpdateError, setModpackUpdateError] = useState<string | null>(null);
+  const [modpackUpdateRevision, setModpackUpdateRevision] = useState(0);
   const detailLoad = useRef<Promise<void> | null>(null);
   const detailController = useRef<AbortController | null>(null);
   const load = useCallback((force = false): Promise<void> => {
@@ -4889,6 +4892,51 @@ function NativeServerPage({
   useEffect(() => {
     if (supportsMarketplaceSoftware(server.software)) preloadMarketplaceRoute();
   }, [server.software]);
+  useEffect(() => {
+    const installed = detail?.modpack;
+    if (installed === null || installed === undefined) {
+      setModpackUpdateCandidate(null);
+      setModpackUpdateError(null);
+      setModpackUpdateChecking(false);
+      setModpackUpdateChecked(false);
+      return;
+    }
+    const controller = new AbortController();
+    setModpackUpdateChecking(true);
+    setModpackUpdateError(null);
+    void getModpackProject(
+      installed.projectId,
+      csrfToken,
+      controller.signal,
+      installed.provider,
+    )
+      .then((catalog) => {
+        setModpackUpdateCandidate(
+          selectCompatibleModpackUpdate(installed, catalog.versions),
+        );
+        setModpackUpdateChecked(true);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (isSessionError(requestError)) onSessionExpired();
+        else setModpackUpdateError(describeError(requestError));
+        setModpackUpdateCandidate(null);
+        setModpackUpdateChecked(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setModpackUpdateChecking(false);
+      });
+    return () => controller.abort();
+  }, [
+    csrfToken,
+    detail?.modpack?.loader,
+    detail?.modpack?.minecraftVersion,
+    detail?.modpack?.projectId,
+    detail?.modpack?.provider,
+    detail?.modpack?.versionId,
+    modpackUpdateRevision,
+    onSessionExpired,
+  ]);
   useEffect(() => {
     const controller = new AbortController();
     void getNetworkInventory(csrfToken, controller.signal)
@@ -4958,11 +5006,13 @@ function NativeServerPage({
     ?? null;
   const publicJoinAddress =
     publicIp === null ? null : formatJoinAddress(publicIp, detail.gamePort);
-  const publicInternetNote = publicInternetHint(
+  const publicInternetNote = detail.software.toLowerCase() === "pumpkin"
+    ? `Forward TCP ${detail.gamePort} for Java and TCP + UDP ${detail.queryPort} for Bedrock NetherNet to this host's LAN IP. For Bedrock behind NAT, set networking.bedrock.nethernet.external_ip in pumpkin.toml to your public IP. Router forwarding is manual; internet reachability has not been tested.`
+    : publicInternetHint(
     detail.kind,
     detail.gamePort,
     detail.queryPort,
-    (usesUdpJoin ? udpEvidence : tcpEvidence)?.externalReachability.state === "router_mapping_confirmed",
+    (usesUdpJoin ? udpEvidence : tcpEvidence)?.externalReachability.state === "host_configured",
   );
   const updateStartOnBoot = async (enabled: boolean): Promise<void> => {
     setBootBusy(true);
@@ -5029,7 +5079,7 @@ function NativeServerPage({
             <p>
               {isReadyMarkerGame
                 ? `${joinAddress} · isolated runtime · UDP ${detail.gamePort}${detail.queryPort === null ? "" : ` / ${detail.queryPort}`}`
-                : `${joinAddress} · ${detail.minecraftVersion} · Java ${detail.javaVersion}`}
+                : `${joinAddress} · ${detail.minecraftVersion} · ${detail.software.toLowerCase() === "pumpkin" ? "Native Rust · Java / Bedrock NetherNet" : `Java ${detail.javaVersion}`}`}
             </p>
           </div>
         </div>
@@ -5100,6 +5150,80 @@ function NativeServerPage({
         </div>
       </header>
       <InlineError message={error} />
+      {detail.modpack !== null && (
+        <section
+          class={`modpack-update-banner${
+            modpackUpdateCandidate !== null
+              ? " is-available"
+              : modpackUpdateError !== null
+                ? " is-warning"
+                : ""
+          }`}
+          aria-live="polite"
+        >
+          <span class="modpack-update-icon">
+            <Icon
+              name={
+                modpackUpdateCandidate !== null
+                  ? "update"
+                  : modpackUpdateError !== null
+                    ? "warning"
+                    : modpackUpdateChecking
+                      ? "refresh"
+                      : "check"
+              }
+              class={modpackUpdateChecking ? "is-spinning" : undefined}
+              size={18}
+            />
+          </span>
+          <div>
+            <strong>
+              {modpackUpdateCandidate !== null
+                ? `${modpackUpdateCandidate.versionNumber} is available`
+                : modpackUpdateError !== null
+                  ? "Automatic update check needs attention"
+                  : modpackUpdateChecking
+                    ? `Checking ${modpackCatalogName(detail.modpack.provider)} for updates…`
+                    : `${detail.modpack.versionNumber} is current`}
+            </strong>
+            <small>
+              {modpackUpdateCandidate !== null
+                ? `A compatible ${modpackLoaderName(detail.modpack.loader)} release for Minecraft ${detail.modpack.minecraftVersion}. Helix backs up and validates before it keeps the update.`
+                : modpackUpdateError !== null
+                  ? modpackUpdateError
+                  : modpackUpdateChecking
+                    ? "This catalog check does not stop or change the server."
+                    : `Checked against ${modpackCatalogName(detail.modpack.provider)}. Nothing was changed.`}
+            </small>
+          </div>
+          <div class="modpack-update-actions">
+            {modpackUpdateCandidate !== null && (
+              <button
+                class="button button--primary"
+                type="button"
+                disabled={!canManageServers}
+                title={manageTitle}
+                onClick={() => setPending("update")}
+              >
+                <Icon name="backup" size={15} />
+                Back up and update
+              </button>
+            )}
+            {!modpackUpdateChecking && modpackUpdateCandidate === null && (
+              <button
+                class="button button--quiet"
+                type="button"
+                onClick={() =>
+                  setModpackUpdateRevision((revision) => revision + 1)
+                }
+              >
+                <Icon name="refresh" size={15} />
+                Check again
+              </button>
+            )}
+          </div>
+        </section>
+      )}
       <nav class="server-tabs" aria-label="Server tools">
         {nativeServerTabs
           .filter((item) => {
@@ -5165,6 +5289,7 @@ function NativeServerPage({
                     <CopyButton text={publicJoinAddress} />
                   )}
                 </article>
+                {detail.software.toLowerCase() === "pumpkin" && detail.queryPort !== null && <article><span>BEDROCK · TCP + UDP</span><strong>{network?.addresses.privateIpv4 ? formatJoinAddress(network.addresses.privateIpv4, detail.queryPort) : `Port ${detail.queryPort}`}</strong><small>NetherNet clients matching this Pumpkin release. Separate from Java; no Geyser needed.</small></article>}
               </div>
               <div class="join-evidence">
                 {!isReadyMarkerGame && (
@@ -5217,7 +5342,7 @@ function NativeServerPage({
                       </button>
                     )}
                   {canManageNetwork &&
-                    (usesUdpJoin ? udpEvidence : tcpEvidence)?.externalReachability.state === "router_mapping_confirmed" && (
+                    (usesUdpJoin ? udpEvidence : tcpEvidence)?.externalReachability.state === "host_configured" && (
                       <>
                         <button
                           class="button button--quiet"
@@ -5225,12 +5350,12 @@ function NativeServerPage({
                           disabled={exposureBusy}
                           onClick={() => void updatePublicAccess(false)}
                         >
-                          {exposureBusy ? "Removing…" : "Remove public player access"}
+                          {exposureBusy ? "Removing…" : "Remove Helix host rules"}
                         </button>
                         <p class="settings-port-note">
                           {detail.kind === "minecraft"
-                            ? "Anyone on the internet can try this port, including scanners. You do not have to share the IP. Turn on Whitelist in Settings if only approved players should join, or remove public access for LAN or Tailscale only."
-                            : "Anyone on the internet can try this port, including scanners. You do not have to share the IP. Remove public access if you want LAN or Tailscale only."}
+                            ? "Use Whitelist if only approved players should join. Removing these host rules does not remove router forwarding."
+                            : "Host firewall rules and router forwarding are separate. Remove unwanted forwarding in your router."}
                         </p>
                       </>
                     )}
@@ -5331,8 +5456,8 @@ function NativeServerPage({
                         <dd>{detail.build}</dd>
                       </div>
                       <div>
-                        <dt>Java</dt>
-                        <dd>{detail.javaVersion}</dd>
+                        <dt>Runtime</dt>
+                        <dd>{detail.software.toLowerCase() === "pumpkin" ? "Native Rust (no Java)" : `Java ${detail.javaVersion}`}</dd>
                       </div>
                     </>
                   )}
@@ -5456,12 +5581,22 @@ function NativeServerPage({
                   <button
                     class="button button--quiet"
                     type="button"
-                    disabled={!canManageServers}
+                    disabled={
+                      !canManageServers ||
+                      (detail.modpack !== null &&
+                        modpackUpdateChecked &&
+                        modpackUpdateCandidate === null &&
+                        modpackUpdateError === null)
+                    }
                     title={manageTitle}
                     onClick={() => setPending("update")}
                   >
                     <Icon name="update" size={15} />
-                    Check for update
+                    {detail.modpack !== null && modpackUpdateCandidate !== null
+                      ? "Back up and update modpack"
+                      : detail.modpack !== null && modpackUpdateChecked && modpackUpdateError === null
+                        ? "Modpack is current"
+                        : "Check for update"}
                   </button>
                 )}
                 <button
@@ -5605,6 +5740,12 @@ function NativeServerPage({
           onClose={() => setPending(null)}
           onComplete={completePendingAction}
           onSessionExpired={onSessionExpired}
+          modpack={detail.modpack}
+          onViewSafetyBackup={() => {
+            setPending(null);
+            setTab("backups");
+            setRefreshKey((value) => value + 1);
+          }}
         />
       )}
       {appearanceOpen && (
@@ -5965,7 +6106,7 @@ type ServerFilter = "all" | "helix" | "minecraft" | "vrising" | "valheim" | "ter
 function isMinecraftServer(server: ManagedServer): boolean {
   if (server.kind === "vrising" || server.kind === "valheim" || server.kind === "terraria") return false;
   if (server.kind === "minecraft") return true;
-  return /minecraft|paper|purpur|folia|leaves|fabric|forge|spigot|bukkit|velocity|sponge|quilt|pufferfish|neoforge/iu.test(
+  return /minecraft|pumpkin|paper|purpur|folia|leaves|fabric|forge|spigot|bukkit|velocity|sponge|quilt|pufferfish|neoforge/iu.test(
     `${server.software} ${server.version}`,
   );
 }
@@ -6819,7 +6960,7 @@ function CreateVRisingDialog({
       ) : (
         <>
           <p class="dialog-intro">
-            Helix installs the dedicated server in an isolated container. Listing on the in-game browser is on by default. Public Direct Connect is optional and needs UDP game plus query forwarded, or Helix UPnP if you check that box. When you uninstall the last V Rising server, that runtime is removed so the host looks like it was never there.
+            Helix installs the dedicated server in an isolated container. Listing on the in-game browser is on by default. Public Direct Connect is optional and needs UDP game plus query forwarded, which you configure in your router. When you uninstall the last V Rising server, that runtime is removed so the host looks like it was never there.
           </p>
           <div class="form-grid">
             <label class="field field--wide">
@@ -7265,6 +7406,7 @@ export function ServersPage({
       ? null
       : (servers.find((server) => server.id === selectedId) ?? null);
   const logicalCores = data.overview.data?.cpu.logicalCores ?? 8;
+  const availableMemoryBytes = data.overview.data?.memory.availableBytes ?? null;
   const loadRemoved = useCallback(async (): Promise<void> => {
     try {
       setRemoved(await getTrashedNativeServers(csrfToken));
@@ -7667,6 +7809,7 @@ export function ServersPage({
           onSessionExpired={onSessionExpired}
           canManageNetwork={canManageNetwork}
           logicalCores={logicalCores}
+          availableMemoryBytes={availableMemoryBytes}
         />
       )}
       {creatingVRising && (

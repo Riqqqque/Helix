@@ -29,25 +29,6 @@ pub(crate) fn amp_port_claimed_message(port: u16) -> String {
     format!("AMP already has port {port} claimed")
 }
 
-pub(crate) fn leftover_amp_forward_confirmation(port: u16) -> String {
-    format!("REMOVE AMP FORWARD {port}")
-}
-
-pub(crate) fn leftover_amp_router_mapping_message(port: u16) -> String {
-    format!(
-        "Leftover AMP router mapping on port {port}. No AMP instance currently lists that port in its files. Helix will not overwrite it. To free it without touching AMP instances, type {} below. That only deletes the leftover UPnP forward on the router.",
-        leftover_amp_forward_confirmation(port)
-    )
-}
-
-pub(crate) fn amp_router_mapping_description(description: &str) -> bool {
-    description
-        .trim()
-        .split([':', ' ', '/', '|'])
-        .next()
-        .is_some_and(|head| head.eq_ignore_ascii_case("AMP"))
-}
-
 pub struct AmpClient {
     endpoint: SocketAddr,
     public_panel_port: u16,
@@ -103,7 +84,6 @@ pub struct AmpServer {
 pub(crate) struct AmpMigrateHandle {
     pub id: String,
     pub name: String,
-    pub instance_name: String,
     pub path: PathBuf,
     pub running: bool,
     pub status: String,
@@ -618,7 +598,6 @@ impl AmpClient {
             return Ok(AmpMigrateHandle {
                 id: server.id,
                 name: server.name,
-                instance_name: server.instance_name,
                 path: PathBuf::from(server.path),
                 running,
                 status: server.status,
@@ -632,9 +611,8 @@ impl AmpClient {
                 max_players: u16::try_from(server.max_players.clamp(1, 10_000)).unwrap_or(20),
             });
         }
-        let instance_name = text(instance, "InstanceName").ok_or_else(|| {
-            "that AMP instance has no usable folder name".to_owned()
-        })?;
+        let instance_name = text(instance, "InstanceName")
+            .ok_or_else(|| "that AMP instance has no usable folder name".to_owned())?;
         validate_instance_name(&instance_name)
             .map_err(|_| "that AMP instance folder name is not usable".to_owned())?;
         let name = text(instance, "FriendlyName").unwrap_or_else(|| instance_name.clone());
@@ -646,7 +624,6 @@ impl AmpClient {
         Ok(AmpMigrateHandle {
             id: format!("amp:{instance_id}"),
             name,
-            instance_name,
             path,
             running: panel_running,
             status: if panel_running {
@@ -1918,16 +1895,6 @@ mod tests {
         assert!(explanation.contains("Configuration"));
         let panel = client.explain_claimed_port(8080);
         assert!(panel.contains("web panel"));
-        assert_eq!(
-            leftover_amp_forward_confirmation(25566),
-            "REMOVE AMP FORWARD 25566"
-        );
-        assert!(leftover_amp_router_mapping_message(25566).contains("REMOVE AMP FORWARD 25566"));
-        assert!(amp_router_mapping_description(
-            "AMP:Survival01:MinecraftModule.Minecraft.PortNumber"
-        ));
-        assert!(amp_router_mapping_description("AMP"));
-        assert!(!amp_router_mapping_description("Helix Minecraft abcd1234"));
     }
 
     #[test]

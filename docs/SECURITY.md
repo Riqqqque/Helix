@@ -112,14 +112,18 @@ Sessions use opaque random bearer tokens; only a cryptographic hash is stored.
 The browser cookie is `HttpOnly`, host-only, `SameSite=Strict`, and scoped to
 `/`. By default Helix enforces a 30-minute idle deadline and an eight-hour
 absolute deadline. Settings can turn that expiry off so the same cookie lasts
-until logout or a password change (capped at 400 days). CSRF pairing, reload
-login, and credential-change revocation stay required. A reviewed HTTPS
-deployment must add the appropriate Secure/host-prefix policy.
+until logout or a password change (capped at 400 days). CSRF pairing and
+credential-change revocation stay required. A reviewed HTTPS deployment must
+add the appropriate Secure/host-prefix policy.
 
 Every protected route requires the session cookie and the current session-bound
-`X-Helix-CSRF` proof. The frontend keeps that proof in memory, so a reload
-requires login instead of accepting a cookie-only request. CSRF rotation is
-compare-and-swap: one proof cannot successfully create two replacement proofs.
+`X-Helix-CSRF` proof. The frontend stores only that proof in origin-scoped
+browser storage so a reload can revalidate the still-`HttpOnly` cookie and proof
+through `/auth/me`. Normal idle and absolute deadlines remain server-enforced;
+an invalid or expired session clears the saved proof. Browser origins include
+the port, so another service on the same host but a different port cannot read
+it. CSRF rotation is compare-and-swap: one proof cannot successfully create two
+replacement proofs.
 
 State-changing routes validate configured Origin and incompatible Fetch Metadata
 before authorization-dependent body processing. Login, bootstrap, preferences,
@@ -401,9 +405,42 @@ every upstream pack matrix remain unclaimed. CurseForge marketplace and modpack
 downloads use the official `api.curseforge.com` catalog with an owner-supplied
 API key stored only in helix-privd (`{state_root}/curseforge-api-key`, mode
 0600). The key is never returned to the browser or stored in helixd SQLite.
+CurseForge pack archives and every required file are re-resolved by numeric
+project/file ID, restricted to approved forgecdn hosts, size-checked, and
+verified against the catalog-declared SHA-1 before staged files can be activated.
+The known `edge.forgecdn.net` redirector is converted to its direct trusted
+`mediafilez.forgecdn.net` equivalent; arbitrary redirects remain disabled.
+If a release declares `serverPackFileId`, Helix prefers that publisher server
+archive. It enforces a 2 GiB compressed archive limit, 8,192-entry limit, 10 GiB
+unpacked limit, per-file and compression-ratio limits, UTF-8 relative paths,
+regular-file-only extraction, case-insensitive collision checks, and a 45-minute
+operation deadline. Helix-owned launch files are not extracted. If no server pack
+exists, required metadata is fetched through CurseForge's bounded bulk-file API
+and each selected JAR is still verified individually.
+Required CurseForge entries with safe non-JAR names (for example shader-pack
+ZIPs) are counted and excluded instead of being written into the server's
+`mods/` directory. Path separators, drive prefixes, and traversal-like names
+still fail the entire staged install.
 Helix does not ship a CurseForge secret. If you use CurseForge, this host must
 reach `api.curseforge.com` on a normal ISP address; VPS and VPN exits are often
 blocked even with a valid key.
+
+Pack-created servers persist provider/version provenance plus a SHA-256
+inventory of pack-managed files. Manual update checks consider only stable,
+installable releases on the same Minecraft version and loader. Candidates are
+fully downloaded, publisher-hash checked, and prepared before downtime. After a
+clean stop, Helix verifies the current inventory, creates a complete backup,
+and moves old managed files into a same-filesystem rollback directory before
+activating replacements. Worlds, player/account lists, server settings, icons,
+logs, crash reports, and backups are outside the inventory. Locally edited
+configuration is preserved; changed executable JARs and path/link collisions
+fail closed. The new container must answer a Minecraft health check before the
+old rollback files are removed. Failure restores the old files, manifest,
+container, and prior running/stopped state while retaining the safety backup.
+Before activation, Helix also verifies the completed gzip archive. If the new
+server fails validation, the complete archive is restored so startup-time world
+or player-data migrations are rolled back too; failed update files remain in
+protected recovery storage.
 
 TLS and declared hashes protect specific transport/integrity properties; they
 do not prove an artifact is safe. Download size, provenance evidence,
