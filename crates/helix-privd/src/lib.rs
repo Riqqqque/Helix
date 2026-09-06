@@ -305,6 +305,10 @@ pub enum BrokerRequest {
         instance_id: String,
         memory_mb: u32,
     },
+    ChangeNativeRuntime {
+        instance_id: String,
+        spec: NativeRuntimeChangeSpec,
+    },
     SetNativeCpu {
         instance_id: String,
         cpu_millis: u32,
@@ -1025,6 +1029,35 @@ pub fn validate_cpu_millis(cpu_millis: u32) -> Result<(), String> {
         Ok(())
     } else {
         Err("CPU limit must be off, or between 0.25 and 128 cores".to_owned())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeRuntimeChangeSpec {
+    pub version: Option<String>,
+    pub expected_version: String,
+    pub expected_build: String,
+    pub confirmation_name: String,
+}
+
+#[cfg(test)]
+mod runtime_request_tests {
+    use super::*;
+    #[test]
+    fn repair_is_typed_and_cannot_supply_an_arbitrary_download() {
+        let body = serde_json::json!({ "version": null, "expected_version": "1.21.1", "expected_build": "123", "confirmation_name": "Survival" });
+        let spec: NativeRuntimeChangeSpec = serde_json::from_value(body.clone()).unwrap();
+        assert!(spec.version.is_none());
+        let mut unsafe_body = body;
+        unsafe_body["url"] = serde_json::json!("https://untrusted.example/runtime.jar");
+        assert!(serde_json::from_value::<NativeRuntimeChangeSpec>(unsafe_body).is_err());
+        assert!(
+            serde_json::from_value::<NativeRuntimeChangeSpec>(
+                serde_json::json!({"version": "1.21.1"})
+            )
+            .is_err()
+        );
     }
 }
 

@@ -1,0 +1,16 @@
+.runtime-controls {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  margin-block: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  min-width: 0;
+}
+.runtime-controls p { margin: 0; line-height: 1.55; max-width: 80ch; }
+.runtime-controls h3 { margin: 0 0 8px; }
+.runtime-controls .advanced-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.runtime-controls > .button { justify-self: start; }
+.runtime-controls select { display: block; max-width: 100%; margin-top: 8px; }
+.runtime-confirm { display: flex; align-items: center; gap: 10px; }
+.runtime-confirm input { flex: 0 0 auto; }
