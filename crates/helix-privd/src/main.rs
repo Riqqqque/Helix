@@ -3337,6 +3337,7 @@ mod tests {
     #[test]
     fn running_server_without_a_player_query_is_not_treated_as_empty() {
         let server = AmpServer {
+            modpack_icon_url: None,
             id: "helix:test".to_owned(),
             name: "Test".to_owned(),
             instance_name: "test".to_owned(),

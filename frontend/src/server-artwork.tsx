@@ -4,6 +4,7 @@ import { serverIsLive, type ManagedServer } from './control-api';
 import { GameMark, gameMarkForSoftware } from './game-marks';
 import { Icon, type IconName } from './icons';
 import { Dialog } from './modal';
+import { serverIconSource } from './server-icon-source';
 import {
   clearServerIcon,
   setServerCustomIcon,
@@ -46,7 +47,8 @@ export function ServerArtwork({
   size?: 'row' | 'detail';
 }) {
   const [imageFailed, setImageFailed] = useState(false);
-  useEffect(() => setImageFailed(false), [server.appearance]);
+  const imageUrl = serverIconSource(server);
+  useEffect(() => setImageFailed(false), [imageUrl]);
   const live = serverIsLive(server.status);
   const appearance = server.appearance;
   const preset = appearancePreset(appearance);
@@ -55,8 +57,8 @@ export function ServerArtwork({
       class={`server-artwork server-artwork--${size} server-artwork--${live ? 'online' : 'offline'}${preset === null ? '' : ` server-artwork--${preset}`}`}
       aria-hidden="true"
     >
-      {appearance.kind === 'custom' && !imageFailed
-        ? <img src={appearance.imageUrl} alt="" loading="lazy" decoding="async" onError={() => setImageFailed(true)} />
+      {imageUrl !== null && !imageFailed
+        ? <img src={imageUrl} alt="" loading="lazy" decoding="async" onError={() => setImageFailed(true)} />
         : (() => {
             const game = appearance.kind === 'default' ? gameMarkForSoftware(server.software, server.kind) : null;
             if (game !== null) return <GameMark game={game} size={size === 'detail' ? 28 : 22} />;

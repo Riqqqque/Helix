@@ -165,6 +165,8 @@ struct InstanceManifest {
 #[serde(deny_unknown_fields)]
 struct InstalledModpack {
     schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    icon_url: Option<String>,
     provider: ModpackProvider,
     project_id: String,
     project_title: String,
@@ -800,6 +802,7 @@ impl NativeManager {
                 warnings,
                 manager: "helix",
                 execution_backend: "docker",
+                modpack_icon_url: manifest.modpack.and_then(|pack| pack.icon_url),
             });
         }
         servers.sort_by_key(|server| server.name.to_lowercase());
