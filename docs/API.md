@@ -29,7 +29,13 @@ Frontend assets are separately cacheable by their hashed names.
 
 The first owner is created with a short-lived one-time local bootstrap token.
 Login establishes an opaque `HttpOnly`, host-only session cookie and returns a
-session-bound CSRF proof held in frontend memory.
+session-bound CSRF proof. Login and `/auth/me` include `sessionExpires`. The
+frontend stores only that proof in origin-scoped browser storage so this exact
+Helix origin can revalidate the still-`HttpOnly` cookie after a reload. By
+default the server expires the pair after 30 minutes idle and eight hours at
+most. `PUT /api/v1/auth/session-expiry` with `{ "expires": false }` extends the
+cookie and server deadline until logout or a password change, capped at 400
+days.
 
 Except for liveness, setup status, owner claim, and login, current API routes
 require both:
@@ -38,8 +44,9 @@ require both:
 2. the current `X-Helix-CSRF` proof.
 
 This includes protected `GET` requests because cookies are shared across ports
-on one host. Reloading the browser discards the in-memory proof and returns the
-user to login rather than accepting cookie-only reads.
+on one host. Helix never restores from the cookie alone. It loads the saved
+proof for this exact scheme, host, and port, then verifies both parts through
+`/auth/me`; rejected or stale saved proofs are deleted.
 
 State-changing requests additionally validate the configured Origin and Fetch
 Metadata before authorization and body mapping. A valid session with a missing,
@@ -57,6 +64,8 @@ malformed, stale, or wrong proof returns `403` with code `csrf_rejected`.
 | `POST` | `/api/v1/auth/login` | Password login |
 | `GET` | `/api/v1/auth/me` | Current protected user/session state |
 | `POST` | `/api/v1/auth/csrf` | Compare-and-swap CSRF rotation |
+| `GET` | `/api/v1/auth/session-expiry` | Current idle/absolute expiry setting |
+| `PUT` | `/api/v1/auth/session-expiry` | Turn idle/absolute session expiry on or off; requires `users.manage` |
 | `POST` | `/api/v1/auth/account` | Change owner login/display name and optionally password; requires `users.manage` |
 | `POST` | `/api/v1/auth/logout` | Revoke the current session and clear its cookie |
 
@@ -66,7 +75,7 @@ malformed, stale, or wrong proof returns `403` with code `csrf_rejected`.
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/health` | `system.view` | Protected dependency health |
 | `GET` | `/api/v1/system/overview` | `system.view` | Bounded CPU, memory, storage, and network snapshot |
-| `GET` | `/api/v1/host/inventory` | `system.view` | Disks, mounts, interfaces, routes, services, processes, process count, CPU model, and listeners |
+| `GET` | `/api/v1/host/inventory` | `system.view` | Disks, mounts, interfaces, routes, services, processes, process count, thread count, CPU model, and listeners |
 | `GET` | `/api/v1/weather` | `dashboard.customize` | Bounded weather data for one validated location |
 | `GET` | `/api/v1/settings/preferences` | `dashboard.customize` | Revisioned dashboard preferences |
 | `PUT` | `/api/v1/settings/preferences` | `dashboard.customize` | Save navigation, hidden pages, metric cadence, Home widgets, and whether the Servers page is enabled, with an expected revision |
@@ -172,8 +181,8 @@ response retains logical byte lengths for comparison.
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/network/inventory` | `network.firewall.read` | Private IPv4, bounded UPnP router state, local listeners, Docker publications, game ports, owned mappings, and UFW state |
-| `GET` | `/api/v1/network/globe` | `system.view` | Country-level origin and aggregated public TCP destinations. No remote addresses. |
-| `POST` | `/api/v1/network/amp-router-forwards/release` | `games.manage` + `network.firewall.write` | Delete a leftover AMP-described UPnP mapping after typing `REMOVE AMP FORWARD {port}`. Refused when AMP instance files still list the port or Helix owns public access on it. AMP files are not changed |
+| `GET` | `/api/v1/network/globe` | `system.view` | Country-level origin and aggregated public TCP destinations (game-port pings/joins vs other outbound). No remote addresses. |
+| `POST` | `/api/v1/network/amp-router-forwards/release` | `games.manage` + `network.firewall.write` | Legacy endpoint; refuses router changes and directs users to their router |
 | `POST` | `/api/v1/network/firewall/rules` | `network.firewall.write` | Create a named TCP/UDP single-port or bounded-range UFW allow rule |
 | `DELETE` | `/api/v1/network/firewall/rules/{rule_id}` | `network.firewall.write` | Delete the exact Helix-owned rule into bounded Undo state |
 | `POST` | `/api/v1/network/firewall/rules/{rule_id}/restore` | `network.firewall.write` | Restore the exact deleted rule before expiry |
@@ -186,34 +195,31 @@ Inventory keeps these facts separate:
 - an active UFW matching allowance; and
 - externally tested reachability.
 
-Helix can distinguish an absent mapping, a router-confirmed Helix-owned TCP
-mapping, CGNAT/non-public WAN space, and unavailable UPnP. A confirmed router
-mapping still returns `reachable: null` and
-`tested_from_external_network: false`: Helix does not turn a same-LAN check into
-fake outside proof. Docker DNAT may not follow the normal UFW INPUT path, so a
-Docker publication, UFW rule, router mapping, and outside test remain separate.
+Helix reports local listeners, Docker publications, host UFW rules, and a public
+address when read-only WAN discovery provides one. Host setup never proves
+internet reachability: `reachable` remains null and
+`tested_from_external_network` remains false. Docker publication and firewall
+rules are separate evidence.
 
-Rule writes are available only when UFW is installed, active, and its state is
-verified. Helix creates exact UUID-commented allow rules with durable ownership
-metadata. The separate inactive-UFW activation endpoint requires the literal
-confirmation `ENABLE UFW`, proves the supplied TCP SSH port is listening, stages
-an exact durable allow rule, verifies both the active state and rule, and
-attempts to return to inactive state if verification fails. Helix never resets
-UFW or changes its defaults. The server-specific public-access route can create
-one exact TCP UPnP mapping on a same-origin private IPv4 gateway, refuses to
-overwrite any existing mapping including ports AMP already has claimed, and
-creates a matching owned UFW rule only when UFW is already active. It cannot
-bypass CGNAT or an ISP block. Live AMP claims name the instance and the AMP
-clicks to change the port. Leftover AMP-described UPnP mappings (no instance
-file still listing that port) can be removed with
-`POST /api/v1/network/amp-router-forwards/release` after the exact confirmation
-`REMOVE AMP FORWARD {port}`. Helix never rewrites AMP instance files.
+Server network setup prepares exact owned UFW rules only when UFW is already
+active: TCP for Minecraft/Terraria, UDP game+query for V Rising, and UDP game
+through game+2 for Valheim. It never enables UFW or changes the router.
+Disabling setup removes only its owned host rules; existing router forwards are
+left untouched. Legacy `network_exposure: public` and pool
+`auto_forward_on_create` fields now request host preparation only.
+
+The separate UFW activation endpoint requires `ENABLE UFW`, preserves a verified
+listening SSH port, and verifies activation. Helix never resets UFW or changes
+its defaults. Router forwarding must be configured by the user using the
+protocol, external/internal port, and LAN destination shown in the dashboard.
+The old AMP router-forward release endpoint refuses changes and explains that
+router rules must be managed in the router. AMP instance files are unchanged.
 
 ### System packages
 
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/system/packages` | `system.packages.read` | Read installed/candidate versions, sizes, source/category, held/security/restart hints, cache age, APT simulation state, and Helix GitHub-update readiness |
+| `GET` | `/api/v1/system/packages` | `system.packages.read` | Read installed/candidate versions, sizes, source/category, held/security/restart hints, cache age, APT preview state, and Helix GitHub-update readiness |
 | `POST` | `/api/v1/system/packages/refresh` | `system.packages.write` | Start a serialized bounded APT package-list refresh job |
 | `POST` | `/api/v1/system/packages/apply` | `system.packages.write` | Start a guarded job for exact selected installed/candidate tuples |
 | `GET` | `/api/v1/system/packages/jobs/{job_id}` | `system.packages.read` | Read bounded refresh/apply/Helix-update progress, result, and safe logs |
@@ -222,7 +228,7 @@ file still listing that port) can be removed with
 
 Opening the inventory does not refresh APT lists or mutate dpkg. Refresh and
 apply are separate explicit jobs. Apply rechecks current/candidate versions,
-holds, download headroom, and an exact no-removal/no-new-package simulation;
+holds, download headroom, and an exact no-removal/no-new-package preview;
 preserves current conffiles; requires disruption acknowledgement plus the
 literal selection confirmation; verifies final versions; and never reboots.
 The response makes `rollback_claimed: false` explicit for APT. Helix self-update
@@ -295,26 +301,31 @@ or output. Disconnect ends the PTY.
 | `GET` | `/api/v1/servers/port-policies/minecraft` | `games.view` | Read the normalized Minecraft ranges, priority ports, capacity, assignments, AMP-claimed numbers in the pool, and next free port |
 | `PUT` | `/api/v1/servers/port-policies/minecraft` | `games.manage` | Persist bounded ranges, individual priority ports, and the public-setup default |
 | `GET` | `/api/v1/servers/port-policies/vrising` | `games.view` | Read the V Rising UDP pool (game + query pairs) |
-| `PUT` | `/api/v1/servers/port-policies/vrising` | `games.manage` | Persist the V Rising UDP pool; public auto-forward stays off |
+| `PUT` | `/api/v1/servers/port-policies/vrising` | `games.manage` | Persist the V Rising UDP pool and optional public-setup default |
 | `GET` | `/api/v1/servers/port-policies/valheim` | `games.view` | Read the Valheim UDP pool (game + next two) |
-| `PUT` | `/api/v1/servers/port-policies/valheim` | `games.manage` | Persist the Valheim UDP pool; public auto-forward stays off |
+| `PUT` | `/api/v1/servers/port-policies/valheim` | `games.manage` | Persist the Valheim UDP pool and optional public-setup default |
 | `GET` | `/api/v1/servers/port-policies/terraria` | `games.view` | Read the Terraria TCP pool |
-| `PUT` | `/api/v1/servers/port-policies/terraria` | `games.manage` | Persist the Terraria TCP pool |
+| `PUT` | `/api/v1/servers/port-policies/terraria` | `games.manage` | Persist the Terraria TCP pool and optional public-setup default |
 | `GET` | `/api/v1/games/readiness` | `games.view` | Compatibility alias for manager readiness |
 | `POST` | `/api/v1/servers/minecraft` | `games.manage` | Start a native Minecraft creation job |
 | `POST` | `/api/v1/servers/vrising` | `games.manage` | Start a native V Rising creation job |
 | `POST` | `/api/v1/servers/valheim` | `games.manage` | Start a native Valheim creation job |
 | `POST` | `/api/v1/servers/terraria` | `games.manage` | Start a native Terraria creation job |
+| `POST` | `/api/v1/servers/migrate/preflight` | `games.manage` | Inspect an AMP instance or managed folder before copying into a new native server |
+| `POST` | `/api/v1/servers/migrate` | `games.manage` | Start a copy job into a new native server; public exposure also needs `network.firewall.write` |
 | `GET` | `/api/v1/servers/minecraft/modpacks/search` | `games.view` | Search Modrinth or CurseForge modpack previews (`provider=modrinth` or `curseforge`) |
-| `GET` | `/api/v1/servers/minecraft/modpacks/projects/{project_id}` | `games.view` | Read bounded project/version compatibility detail |
+| `GET` | `/api/v1/servers/minecraft/modpacks/projects/{project_id}` | `games.view` | Read bounded project/version compatibility detail (`provider=modrinth` or `curseforge`) |
 | `POST` | `/api/v1/servers/minecraft/modpacks` | `games.manage` | Start a server-safe modpack creation job |
 | `GET` | `/api/v1/servers/{instance_id}` | `games.view` | Native or AMP detail |
 | `GET` | `/api/v1/servers/removed` | `games.view` | Recoverable removed native servers and retention policy |
-| `POST` | `/api/v1/servers/removed/{trash_id}/restore` | `games.manage` | Restore an exact removed native server before expiry |
-| `POST` | `/api/v1/servers/{instance_id}/actions` | `games.manage` | Typed start/stop/restart/kill/update/backup action |
+| `POST` | `/api/v1/servers/removed/{trash_id}/restore` | `games.manage` | Restore an exact removed native server |
+| `DELETE` | `/api/v1/servers/removed/{trash_id}` | `games.manage` | Permanently delete an exact removed native server after typing its name; wipes world files, backups, and console history |
+| `POST` | `/api/v1/servers/{instance_id}/actions` | `games.manage` | Typed start/stop/restart/kill/update/backup action; a modpack update resolves the newest compatible provider release and creates a full safety backup before activation |
 | `PUT` | `/api/v1/servers/{instance_id}/start-on-boot` | `games.manage` | Set Docker restart policy on one native game container without starting or stopping it now |
 | `PUT` | `/api/v1/servers/{instance_id}/memory` | `games.manage` | Set allocated memory on one native game container; recreates the published container with the new limit |
-| `PUT` | `/api/v1/servers/{instance_id}/network` | `games.manage` + `network.firewall.write` | Create or remove the exact verified Helix-owned TCP router/UFW exposure for a native server |
+| `PUT` | `/api/v1/servers/{instance_id}/cpu` | `games.manage` | Set Docker `--cpus` on one native game container (`cpu_millis`: `0` = no extra cap, else 250–128000); recreates the published container |
+| `PUT` | `/api/v1/servers/{instance_id}/browser-listing` | `games.manage` | Set V Rising `ListOnEOS` / `ListOnSteam` / `HideIPAddress`; `restart_required` when the container is running |
+| `PUT` | `/api/v1/servers/{instance_id}/network` | `games.manage` + `network.firewall.write` | Create or remove the exact verified Helix-owned TCP or UDP router/UFW exposure for a native server |
 | `POST` | `/api/v1/servers/{instance_id}/remove` | `games.manage` | Stop/remove exact native workload and move data to recoverable trash |
 | `GET` | `/api/v1/jobs/{job_id}` | `games.view` | Read current bounded job state/log |
 
@@ -331,9 +342,11 @@ installs. Paper-family and Fabric/Vanilla catalogs accept `latest`; custom JAR
 catalogs return Mojang releases and reject `latest` at create time.
 
 V Rising creation installs the dedicated server into an isolated container,
-allocates a UDP game/query pair from the V Rising pool, and stays private. The
-first create may build `helix-vrising-runtime:1` and download Steam app
-`1829350`. Removing the last active V Rising instance deletes that image.
+allocates a UDP game/query pair from the V Rising pool, lists on EOS/Steam by
+default (`list_on_browser`, with `HideIPAddress` when listed), and may request
+host UDP firewall preparation when `network_exposure` is `public`. The first create may build
+`helix-vrising-runtime:1` and download Steam app `1829350`. Removing the last
+active V Rising instance deletes that image.
 Restore rebuilds it if needed. This path is implemented and unvalidated on a
 live host; it is not publisher-supported.
 
@@ -343,9 +356,11 @@ It does not start or stop the server at toggle time. After a host reboot,
 Docker brings back servers that opted in.
 
 Native allocated memory writes the instance manifest and recreates the published
-container with the new Docker memory limit. Minecraft also updates `-Xmx`. The
-container is started again only if it was running. Bounds match create: Minecraft
-1–24 GiB, V Rising 2–24 GiB, Valheim 1–16 GiB, Terraria 512 MiB–8 GiB.
+container with the new Docker memory limit. Minecraft also updates `-Xmx`. Native
+CPU writes `cpu_millis` and recreates the container with Docker `--cpus`. `0`
+means no extra cap. The container is started again only if it was running. Memory
+bounds match create: Minecraft 1–24 GiB, V Rising 2–24 GiB, Valheim 1–16 GiB,
+Terraria 512 MiB–8 GiB. CPU bounds are off, or 0.25–128 cores.
 
 Accepted work is not completed work. Creation, install, update, and backup jobs
 return bounded broker-lifetime status that the frontend polls. Job state is not
@@ -359,14 +374,38 @@ instances stay under AMP.
 Minecraft creation accepts either one explicit port or no port, which allocates
 the first genuinely free candidate from the stored Minecraft policy while the
 creation lock is held. Priority ports are tried before ordered ranges; the
-policy is bounded to 4,096 unique candidates. Modpack creation accepts opaque
+policy is bounded to 4,096 unique candidates.
+
+`POST /api/v1/servers/migrate/preflight` inspects an AMP instance (`kind=amp`)
+or a folder under `managed_roots` (`kind=folder`). It does not write the source.
+`POST /api/v1/servers/migrate` copies into a new native server after
+`source_stopped` and `copy_acknowledged`. Live AMP instances are refused. The
+new server allocates a free Helix port and starts when the copy and first boot
+finish. AMP and Pterodactyl files are not edited or deleted. Custom Minecraft
+JARs need an explicit version. Public `network_exposure` also needs
+`network.firewall.write`. Poll `GET /api/v1/jobs/{job_id}`.
+
+Modpack creation accepts opaque
 project/version IDs, optional `provider` (`modrinth` default, or `curseforge`),
-and the ordinary server name, RAM, player, optional port, network-exposure,
+and the ordinary server name, RAM, optional CPU cap (`cpu_millis`, `0` omitted),
+player, optional port, network-exposure,
 start-on-boot, and EULA fields. Modrinth `.mrpack` downloads use exact API/CDN
-hosts without redirects and verify declared hashes. CurseForge uses the public
-website catalog and forgecdn files plus `manifest.json`. Fabric, Forge,
+hosts without redirects and verify declared hashes. CurseForge uses
+`api.curseforge.com` with an owner-supplied API key stored only by helix-privd,
+then forgecdn files plus `manifest.json`. Project and file metadata are normalized
+into the same bounded release contract. Known `edge.forgecdn.net` file URLs are
+converted to the direct `mediafilez.forgecdn.net` host instead of following a
+redirect; CurseForge downloads are checked against their declared length and
+SHA-1 before use. A declared CurseForge `serverPackFileId` is preferred;
+`alternateFileId` is also accepted when the additional file's
+`parentProjectFileId` matches the selected release. Project, file identity,
+availability, archive structure and extraction limits are verified in both
+creation and updates. Releases without a linked server archive cannot be
+installed: the client manifest is never used as a server mod list. Fabric, Forge,
 NeoForge, and Quilt loaders can be pinned. The result reports excluded
-optional/client-only files and `full_pack_parity: false`.
+optional/client-only files, whether a CurseForge publisher server pack was used,
+its filename, and the pinned loader/version. `full_pack_parity`
+remains false because Helix owns the isolated launch files and runtime.
 
 ### Server console, settings, marketplace, and backups
 
@@ -386,6 +425,9 @@ optional/client-only files and `full_pack_parity: false`.
 | `POST` | `/api/v1/servers/{instance_id}/marketplace/install` | `games.manage` | Start an exact compatible content install job (files only; no restart) |
 | `GET` | `/api/v1/marketplace/modrinth/image?path=...` | `games.view` | Same-origin, session-authenticated, exact-CDN-path image proxy for marketplace and modpack artwork |
 | `GET` | `/api/v1/marketplace/curseforge/image?path=...` | `games.view` | Same for CurseForge `media.forgecdn.net` avatars |
+| `GET` | `/api/v1/marketplace/curseforge/key` | `games.view` | Whether a CurseForge API key is saved on this host (`configured`, `catalog`); the key itself is never returned |
+| `PUT` | `/api/v1/marketplace/curseforge/key` | `games.manage` | Save a 24–256 character CurseForge API key. A live probe of `api.curseforge.com` may return `probe=ok`, `cdn_blocked` (host public IP refused, often a VPS/VPN exit), or `unreachable`; only an origin key rejection rolls the save back |
+| `DELETE` | `/api/v1/marketplace/curseforge/key` | `games.manage` | Remove the saved CurseForge API key |
 | `GET` | `/api/v1/servers/{instance_id}/backups` | `games.view` | Active backups, recoverable trash, trash note, and keep-count/keep-days policy |
 | `PUT` | `/api/v1/servers/{instance_id}/backup-policy` | `games.backups.manage` | Set keep-count (0–50) and keep-days (0–365); 0 means no limit; extras move to trash |
 | `POST` | `/api/v1/servers/{instance_id}/backup-policy` | `games.backups.manage` | Apply the saved keep rules now |
@@ -418,11 +460,21 @@ flag is advisory: the API returns it for the UI warning, but does not block an
 otherwise matching JAR. Search accepts `provider=modrinth|curseforge` and
 `catalog=content|modpacks`. Install writes checksum-verified JARs into
 `plugins/` or `mods/` and does not restart the container. Modpack create is a
-separate server-safe subset from Modrinth `.mrpack` or public CurseForge
-`manifest.json` packs; it is not a full client copy and does not claim every
+separate server-safe subset from Modrinth `.mrpack` or CurseForge
+`manifest.json` packs (owner API key required); it is not a full client copy and does not claim every
 upstream pack. Backup list responses include `policy.keep_count` and
 `policy.keep_days`. Zero means no limit. Count/age extras move to trash;
 `DELETE .../backups/trash/{trash_id}` destroys that trash entry.
+
+Native server detail includes nullable `modpack` provenance for pack-created
+servers: provider, project/version IDs and labels, Minecraft version, loader,
+and loader version. For those servers, the `update` action does not run the
+generic loader-JAR updater. It resolves a newer stable release on the exact
+Minecraft/loader line, verifies and stages it, creates a full data backup,
+activates only tracked pack files, validates a real startup, and restores the
+previous manifest/files/container on failure. A no-op current check returns
+`detail.already_current=true` and creates no backup. A successful update returns
+`detail.backup_id`, `restore_available=true`, and the installed version fields.
 
 ## Broker protocol boundary
 

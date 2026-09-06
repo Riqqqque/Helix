@@ -22,15 +22,25 @@ Helix cannot open a router, bypass CGNAT, or prove internet reachability.
 ## Globe
 
 The Globe page (and matching Home widget) maps established public TCP sockets to
-country centroids. Player pins are sockets whose local port is a published game
-port. Outbound pins are the rest. Helix does not geolocate private, loopback,
+country centroids. Game-port pins are sockets whose local port is a published
+game port, including pings and join attempts, not only logged-in players.
+Outbound pins are the rest. Helix does not geolocate private, loopback,
 link-local, multicast, or CGNAT (`100.64/10`) addresses, and it does not send
 those remote IPs to the browser. If the WAN address is missing or not globally
 routable, destination countries still plot without a host pin.
 
+An open public game port is found by internet scanners even if you never shared
+the address. That is not a Helix leak of the IP. Turn off Helix public access
+for LAN or Tailscale only, and for Minecraft turn on **Whitelist** so unapproved
+accounts cannot play.
+
+The Home Globe widget fills its card (the map covers the tile; poles or the date
+line may be cropped). The Globe page still shows the full 2:1 world.
+
 ## Host services and processes
 
-Host displays bounded service and process tables with pagination rather than a
+Linux updates are at the top of Host, above services and processes. Host still
+displays bounded service and process tables with pagination rather than a
 single page-height list. Hover/focus the information icons for definitions; the
 tooltip is rendered above card clipping and stays inside the viewport.
 
@@ -39,27 +49,37 @@ are shown separately so their memory is not misrepresented as dashboard cost.
 
 Host also lists every Docker container on the machine, with CPU and memory when
 Docker reports them. Empty published ports are normal. Start, stop, and restart
-require the exact container name. Helix dashboard and gateway containers stay
-protected.
+require the exact container name. Helix dashboard, gateway, and native game
+containers stay protected. Use Servers to restart a Helix game.
 
 ## System packages
 
-Opening System updates does not refresh APT or install anything. **Check for
-updates** starts a separate `apt-get update` job. Select exact candidates before
-Apply; the confirmation dialog shows package versions and requires disruption
+Linux updates sit at the top of Host. Opening that page does not refresh APT or
+install anything. **Check for updates** talks to the signed package mirrors.
+Select exact candidates before Apply. The confirmation dialog shows versions,
+says when a package often needs a host reboot, and requires disruption
 acknowledgement plus an exact phrase.
 
 Immediately before Apply, the broker rechecks installed/candidate versions,
-holds, download space with headroom, and an APT simulation. It rejects any
-removal or new package, preserves current conffiles, serializes package work,
-verifies the final versions, and never reboots Linux automatically.
+holds, download space with headroom, and a no-add/no-remove preview. It rejects
+any removal or new package, preserves current config files, serializes package
+work, verifies the final versions, and never reboots Linux.
+
+If Linux later writes `/var/run/reboot-required`, Host says a reboot is needed
+and names the packages when the OS listed them. Reboot stays a separate Settings
+→ Whole-host reboot action with hostname confirmation. Helix does not reboot as
+a side effect of applying packages.
 
 APT is not transactional. Helix does not claim it can roll back a failed package
 maintainer script or power loss. Read the job log and use normal dpkg/APT recovery
 when the operating system reports a partial configuration.
 
+The host broker runs APT without dropping to the `_apt` user because systemd
+`NoNewPrivileges` blocks that seteuid. The broker is already root inside its
+unit sandbox.
+
 Helix self-update checks GitHub for a newer `vMAJOR.MINOR.PATCH` release when
-you open System updates, and **Check GitHub** forces a fresh look. **Update
+you open Linux updates, and **Check GitHub** forces a fresh look. **Update
 Helix** downloads the SHA-256-pinned source archive, rebuilds only Helix
 dashboard/gateway images, and replaces helix-privd and helix-terminald. It
 health-checks and restores those on failure. The browser reloads when the new

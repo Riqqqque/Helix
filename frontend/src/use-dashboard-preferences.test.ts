@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultHomeTemplates, defaultHomeWidgets } from './home-layout';
 import type { DashboardPreferences } from './preferences-api';
 import {
+  clearUnsyncedDashboardPreferences,
   mergePreferenceChanges,
+  readUnsyncedDashboardPreferences,
   shouldMigrateLocalPreferences,
+  writeUnsyncedDashboardPreferences,
 } from './use-dashboard-preferences';
 
 const defaults: DashboardPreferences = {
@@ -16,6 +19,8 @@ const defaults: DashboardPreferences = {
   serversEnabled: true,
   hiddenPages: ['globe'],
 };
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('dashboard preference reconciliation', () => {
   it('never migrates browser defaults over an established server revision', () => {
@@ -50,5 +55,34 @@ describe('dashboard preference reconciliation', () => {
       ...remote,
       metricsRefreshMs: 2_000,
     });
+  });
+
+  it('keeps unsynced page order across a reload before Helix finishes saving', () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
+    });
+    const local: DashboardPreferences = {
+      ...defaults,
+      navigationOrder: ['servers', 'overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'hooks', 'strands', 'globe'],
+    };
+    writeUnsyncedDashboardPreferences(new Set(['navigationOrder']), local);
+    const pending = readUnsyncedDashboardPreferences();
+    expect(pending?.dirty).toEqual(['navigationOrder']);
+    expect(pending?.preferences.navigationOrder[0]).toBe('servers');
+    expect(
+      mergePreferenceChanges(defaults, pending!.preferences, new Set(pending!.dirty)).navigationOrder[0],
+    ).toBe('servers');
+    writeUnsyncedDashboardPreferences(new Set(), local);
+    expect(readUnsyncedDashboardPreferences()).toBeNull();
+    writeUnsyncedDashboardPreferences(new Set(['navigationOrder']), local);
+    clearUnsyncedDashboardPreferences();
+    expect(readUnsyncedDashboardPreferences()).toBeNull();
   });
 });

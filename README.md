@@ -23,11 +23,20 @@
 
 ## What Helix is
 
+Manage your Linux host, find what is filling a drive, and run game servers from
+one private dashboard. Keep useful notes and shortcuts on a Home layout you can
+rearrange. AMP and other connected services stay independent.
+
+**Start here:** [Install](#install-on-linux) · [User guide](https://github.com/Riqqqque/Helix/wiki) ·
+[Minecraft and modpacks](docs/wiki/Servers-and-Marketplace.md) ·
+[Pumpkin](docs/wiki/Pumpkin.md) · [Build a Strand](docs/wiki/Building-Strands.md)
+
 Helix combines a responsive web dashboard, an unprivileged Rust service, and a
 narrow typed Linux broker. It gives the browser useful host controls without
 turning the dashboard into a general root shell.
 
-The current 1.0 private-LAN build includes:
+The current main branch includes the features below. The preserved 1.0.0 release
+is an older snapshot; check its release notes before choosing it over main.
 
 - local owner setup, Argon2id password login, revocable sessions, CSRF
   protection, and owner username/password changes;
@@ -40,20 +49,23 @@ The current 1.0 private-LAN build includes:
   recoverable deletion, and cancellable largest-file/folder analysis inside
   configured storage roots;
 - separate views for private/public addresses, local listeners, Docker port
-  publications, UFW state, game-port mappings, router-confirmed UPnP mappings,
+  publications, UFW state, game-port mappings, manual router-forwarding details,
   CGNAT, and still-unverified outside reachability;
 - narrowly scoped, named UFW allow rules with exact Helix ownership metadata,
   verified deletion, and bounded Undo when UFW is available and active;
 - APT/dpkg inventory, explicit package-list refresh, and an exact selected-
-  candidate update job with held-package, disk, no-removal simulation, conffile,
+  candidate update job with held-package, disk, no-removal preview, conffile,
   final-version, and never-auto-reboot guards;
 - native Docker-backed Minecraft instances for Paper, Purpur, Folia, Leaves, Fabric,
   Forge, NeoForge, Quilt, Pufferfish, Vanilla, and a guarded local custom-JAR import,
   plus a compatibility-aware Modrinth and CurseForge plugin/mod/addon marketplace
   and Modrinth/CurseForge “Start with a modpack” (server-safe subset, not a full
   client copy);
-- bounded per-game port pools with collision-safe automatic allocation, plus
-  exact opt-in Minecraft TCP forwarding on compatible same-LAN UPnP routers;
+- Pumpkin's native Rust server with versioned, verified downloads, separate
+  Java and Bedrock ports, console commands, settings, backups, and update checks.
+  It does not natively run Paper plugins or Forge/Fabric modpacks;
+- bounded per-game port pools with collision-safe automatic allocation and
+  opt-in host firewall setup. Router forwarding stays manual;
 - start, stop, restart, confirmed native kill when stop hangs, update, backup,
   settings, files, performance, logs, and console tools for native instances;
 - bounded persistent native console history that survives browser closes and
@@ -147,7 +159,8 @@ Helix does not currently:
   eligible Debian/Ubuntu host, Hooks can install the exact `tailscale` package
   from Tailscale's signed repository and verify `tailscaled`; the owner still
   runs `tailscale up` and approves the machine;
-- claim a full client modpack copy, unsigned CurseForge API access, or every
+- claim a full client modpack copy, unsigned CurseForge access without the
+  owner’s own API key, or every
   historical Minecraft build;
 - provide MFA, a public-network security review, or a signed release channel;
 - run portable Wasm Strands or native Strand sidecars;
@@ -219,10 +232,12 @@ path.
 
 Forge, NeoForge, Quilt, and Pufferfish are default create choices. Forge uses
 the official installer for Minecraft 1.17+. Pufferfish uses the publisher CI
-over HTTPS without a checksum pin. “Start with a modpack” can search Modrinth
-or the public CurseForge website catalog without an owner API key. Modrinth
-packs verify declared hashes. CurseForge packs use `manifest.json` plus
-forgecdn files. Both pin a matching loader and start an isolated server. The
+over HTTPS without a checksum pin. “Start with a modpack” can search Modrinth,
+or CurseForge after saving an API key in Settings → Catalogs. If you use
+CurseForge, this Helix host needs a normal ISP IP; VPS and VPN exits are often
+blocked. Modrinth packs verify declared hashes. CurseForge packs use
+`manifest.json` plus forgecdn files through the official API. Both pin a
+matching loader and start an isolated server. The
 result is a server-safe subset, not byte-for-byte pack parity. The
 archive/parser/API/frontend paths have portable tests; the complete Linux
 extraction/resolver/Docker lifecycle, upstream, and real-pack matrix remains a
@@ -236,8 +251,9 @@ mods/plugins, and configuration. See
 The server chooser uses original Helix marks for Minecraft (isometric grass
 block) and V Rising (blood moon and castle). V Rising installs through a
 Helix-owned Wine + SteamCMD container. The host OS never gets Wine packages.
-First create can take a while while SteamCMD downloads the Windows dedicated
-server. Removing the last V Rising server deletes that runtime image. This path
+The create window shows download and boot progress. First Steam install often
+takes 10–30 minutes; later creates reuse that runtime. Removing the last V
+Rising server deletes that runtime image. This path
 is unofficial and not publisher-supported; it has not been proven on a live
 host yet.
 

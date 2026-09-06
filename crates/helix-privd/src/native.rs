@@ -4,11 +4,15 @@ use crate::files::{
     prune_uploads, upload_lock_error, validate_name,
 };
 use helix_privd::{
-    FileUploadPurpose, GameKind, GamePortPolicySpec, GamePortRangeSpec,
-    MAX_CONCURRENT_FILE_UPLOADS, MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES,
-    MAX_MINECRAFT_VERSION_CATALOG, MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode,
-    MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, ServerAction,
-    TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec,
+    CURSEFORGE_API_KEY_REQUIRED, CURSEFORGE_CDN_BLOCKED, CURSEFORGE_KEY_REJECTED,
+    CURSEFORGE_RATE_LIMITED, CustomMinecraftJarSpec, FileUploadPurpose, GameKind,
+    GamePortPolicySpec, GamePortRangeSpec, MAX_CONCURRENT_FILE_UPLOADS,
+    MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES, MAX_MINECRAFT_VERSION_CATALOG,
+    MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode, MinecraftModpackCreateSpec,
+    MinecraftSettingsPatch, MinecraftSoftware, ModpackProvider, ServerAction, TerrariaCreateSpec,
+    TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec, catalog_fetch_is_non_retryable,
+    classify_curseforge_curl_error, curl_extra_header_file, migrate_plan,
+    validate_curseforge_api_key,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -33,6 +37,7 @@ use uuid::Uuid;
 
 mod marketplace;
 mod modpacks;
+mod pumpkin;
 mod terraria;
 mod valheim;
 mod vrising;
@@ -48,6 +53,8 @@ const MAX_RCON_PACKET_BYTES: usize = 1024 * 1024;
 const MAX_CONSOLE_LINE_BYTES: usize = 1024 * 1024;
 const MAX_CONSOLE_HISTORY_PAGE_TEXT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_NATIVE_COMMAND_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const MODPACK_LOCK_FILE: &str = ".helix-modpack.lock.json";
+const MAX_MODPACK_LOCK_BYTES: u64 = 4 * 1024 * 1024;
 const MIN_CONSOLE_HISTORY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_CONSOLE_HISTORY_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_BACKUP_CATALOG_ENTRIES: usize = 2_048;
@@ -67,6 +74,11 @@ const USER_AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (+https://github.com/Riqqqque/Helix)"
 );
+const FORGECDN_DOWNLOAD_HOSTS: &[&str] = &[
+    "edge.forgecdn.net",
+    "mediafilez.forgecdn.net",
+    "media.forgecdn.net",
+];
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +140,8 @@ struct InstanceManifest {
     artifact_url: String,
     artifact_sha256: String,
     memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    cpu_millis: u32,
     max_players: u16,
     game_port: u16,
     #[serde(default, skip_serializing_if = "is_zero_u16")]
@@ -143,9 +157,63 @@ struct InstanceManifest {
     backup_keep_count: u16,
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     backup_keep_days: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    modpack: Option<InstalledModpack>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct InstalledModpack {
+    schema_version: u32,
+    provider: ModpackProvider,
+    project_id: String,
+    project_title: String,
+    version_id: String,
+    version_name: String,
+    version_number: String,
+    minecraft_version: String,
+    loader: String,
+    loader_version: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ModpackLock {
+    schema_version: u32,
+    provider: ModpackProvider,
+    project_id: String,
+    version_id: String,
+    managed_files: Vec<ManagedModpackFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedModpackFile {
+    path: String,
+    sha256: String,
 }
 
 impl InstanceManifest {
+    fn is_pumpkin(&self) -> bool {
+        matches!(self.software, MinecraftSoftware::Pumpkin) && self.is_minecraft()
+    }
+
+    fn artifact_name(&self) -> &'static str {
+        if self.is_pumpkin() {
+            "pumpkin"
+        } else {
+            "server.jar"
+        }
+    }
+
+    fn settings_name(&self) -> &'static str {
+        if self.is_pumpkin() {
+            "pumpkin.toml"
+        } else {
+            "server.properties"
+        }
+    }
+
     fn is_minecraft(&self) -> bool {
         matches!(self.kind, GameKind::Minecraft)
     }
@@ -221,6 +289,15 @@ struct RuntimeState {
     running: bool,
     cpu_percent: f64,
     memory_used_mb: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ContainerStartupState {
+    running: bool,
+    restarting: bool,
+    oom_killed: bool,
+    exit_code: i32,
+    restart_count: u64,
 }
 
 struct MinecraftStatus {
@@ -634,7 +711,7 @@ impl NativeManager {
             let status = statuses.remove(&manifest.id);
             let data_path = self.instance_path(&manifest.id)?;
             let mut warnings = Vec::new();
-            if manifest.is_minecraft() && !data_path.join("server.jar").is_file() {
+            if manifest.is_minecraft() && !data_path.join(manifest.artifact_name()).is_file() {
                 warnings.push("Server executable is missing".to_owned());
             }
             if manifest.is_vrising()
@@ -714,6 +791,11 @@ impl NativeManager {
                 manager_panel_port: 0,
                 panel_port: 0,
                 game_port: Some(manifest.game_port),
+                query_port: if manifest.query_port == 0 {
+                    None
+                } else {
+                    Some(manifest.query_port)
+                },
                 path: data_path.to_string_lossy().into_owned(),
                 warnings,
                 manager: "helix",
@@ -987,7 +1069,7 @@ impl NativeManager {
             "policy": {
                 "recoverable": true,
                 "automatic_purge": false,
-                "note": "Removed native servers stay in protected recovery storage until the owner explicitly purges them outside this release. Backups and console history are preserved."
+                "note": "Removed native servers stay in protected recovery storage until you delete them forever from Removed and hidden or Settings → Helix data. That wipe includes world files, backups, and console history. Helix never auto-purges."
             }
         }))
     }
@@ -1169,6 +1251,95 @@ impl NativeManager {
         }))
     }
 
+    pub fn purge_trashed_server(
+        &self,
+        trash_id: &str,
+        confirmation_name: &str,
+    ) -> Result<Value, String> {
+        validate_trash_id(trash_id)?;
+        let record_root = self.server_trash_record_path(trash_id)?;
+        require_real_directory(
+            &record_root,
+            "the removed server recovery record is unavailable",
+        )?;
+        let record = read_server_trash_record(&record_root.join("record.json"))?;
+        let manifest = read_manifest(&record_root.join("manifest.json"))?;
+        if record.schema_version != 1
+            || record.trash_id != trash_id
+            || record.instance_id != manifest.id
+            || record.name != manifest.name
+        {
+            return Err("the removed server recovery record is inconsistent".to_owned());
+        }
+        if confirmation_name != record.name {
+            return Err("type the exact server name to confirm permanent deletion".to_owned());
+        }
+        let _operation =
+            self.begin_instance_operation(&manifest.id, "permanent server deletion")?;
+        let instance_path = self.instance_path(&manifest.id)?;
+        let manifest_path = self.manifest_path(&manifest.id)?;
+        if instance_path.exists() || manifest_path.exists() {
+            return Err(
+                "an active server still uses this identity; restore or remove it from Servers first"
+                    .to_owned(),
+            );
+        }
+        if let Some((managed, instance_id)) =
+            self.exact_container_identity(&manifest.container_name)?
+        {
+            if managed != "true" || instance_id != manifest.id {
+                return Err(
+                    "the workload name belongs to a container Helix cannot prove it owns"
+                        .to_owned(),
+                );
+            }
+            self.docker(["rm", "--force", manifest.container_name.as_str()], 60)?;
+            if self
+                .exact_container_identity(&manifest.container_name)?
+                .is_some()
+            {
+                return Err(
+                    "the leftover Helix container still exists; nothing was permanently deleted"
+                        .to_owned(),
+                );
+            }
+        }
+
+        self.stop_console_archiver(&manifest.id);
+        remove_managed_directory(
+            &self.server_trash_data_path(trash_id)?,
+            "the removed server data",
+        )?;
+        remove_managed_directory(
+            &self.backup_path(&manifest.id)?,
+            "the removed server backups",
+        )?;
+        remove_managed_directory(
+            &self.backup_trash_path(&manifest.id)?,
+            "the removed server backup trash",
+        )?;
+        remove_managed_directory(
+            &self.console_archive_path(&manifest.id)?,
+            "the removed server console history",
+        )?;
+        remove_managed_directory(&record_root, "the removed server recovery record")?;
+        self.reclaim_unused_runtime(manifest.kind);
+
+        let mut result = json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "trash_id": trash_id,
+            "name": manifest.name,
+            "kind": manifest.kind_slug(),
+            "game_port": manifest.game_port,
+            "purged": true,
+            "purged_at_unix_ms": now_unix_ms()
+        });
+        if manifest.query_port != 0 {
+            result["query_port"] = json!(manifest.query_port);
+        }
+        Ok(result)
+    }
+
     pub fn readiness(&self) -> Result<Value, String> {
         let docker_version = self
             .docker(["version", "--format", "{{.Server.Version}}"], 20)?
@@ -1178,6 +1349,7 @@ impl NativeManager {
             return Err("the Helix execution backend did not report a version".to_owned());
         }
         let supported_software = [
+            "pumpkin",
             "paper",
             "purpur",
             "folia",
@@ -1202,6 +1374,8 @@ impl NativeManager {
             "files",
             "backups",
             "recoverable_backup_trash",
+            "recoverable_server_trash",
+            "server_trash_purge",
             "restore",
             "logs",
             "performance",
@@ -1211,6 +1385,7 @@ impl NativeManager {
             "local_custom_jar_import",
             "minecraft_version_catalog",
             "bounded_file_upload",
+            "server_migrate",
         ];
         Ok(json!({
             "schema_version": 1,
@@ -1234,6 +1409,7 @@ impl NativeManager {
 
     pub fn list_minecraft_versions(&self, software: MinecraftSoftware) -> Result<Value, String> {
         let (allows_latest, versions) = match software {
+            MinecraftSoftware::Pumpkin => (true, self.pumpkin_versions()?),
             MinecraftSoftware::Paper => (
                 true,
                 self.fill_installable_versions(MinecraftSoftware::Paper, "paper")?,
@@ -1460,7 +1636,9 @@ impl NativeManager {
             "java_version": manifest.java_version,
             "runtime_image": manifest.runtime_image,
             "artifact_sha256": manifest.artifact_sha256,
+            "modpack": manifest.modpack,
             "memory_limit_mb": manifest.memory_mb,
+            "cpu_limit_millis": manifest.cpu_millis,
             "game_port": manifest.game_port,
             "query_port": if manifest.query_port == 0 { Value::Null } else { json!(manifest.query_port) },
             "console_endpoint": "local_only",
@@ -1482,7 +1660,12 @@ impl NativeManager {
                 "retention_files": self.console_retention.files,
                 "scope": "per_server"
             },
-            "capabilities": capabilities
+            "capabilities": capabilities,
+            "browser_listing": if manifest.is_vrising() {
+                read_vrising_browser_listing(&data_path)
+            } else {
+                Value::Null
+            }
         }))
     }
 
@@ -1721,7 +1904,9 @@ impl NativeManager {
             ));
         }
         let _operation = self.begin_instance_operation(&manifest.id, "settings update")?;
-        let path = self.instance_path(&manifest.id)?.join("server.properties");
+        let path = self
+            .instance_path(&manifest.id)?
+            .join(manifest.settings_name());
         let original = read_small_regular_file(&path, MAX_PROPERTIES_BYTES, "server settings")?;
         let revision = file_sha256(&path)?;
         if revision != settings.expected_revision {
@@ -1731,14 +1916,26 @@ impl NativeManager {
             );
         }
         let changed_fields = {
-            let mut fields = changed_setting_fields(&parse_properties(&original), settings);
+            let properties = if manifest.is_pumpkin() {
+                pumpkin::properties(&original)?
+            } else {
+                parse_properties(&original)
+            };
+            let mut fields = changed_setting_fields(&properties, settings);
             if settings.memory_mb != manifest.memory_mb {
                 fields.push("memory_mb");
             }
             fields
         };
-        let updated = update_properties(&original, settings);
+        let updated = if manifest.is_pumpkin() {
+            pumpkin::update_config(&original, settings)?
+        } else {
+            update_properties(&original, settings)
+        };
         let port_changed = settings.game_port != manifest.game_port;
+        if manifest.is_pumpkin() && settings.game_port == manifest.query_port {
+            return Err("Java and Bedrock require separate TCP ports".to_owned());
+        }
         let memory_changed = settings.memory_mb != manifest.memory_mb;
         if port_changed {
             self.ensure_replacement_game_port(&manifest, settings.game_port)?;
@@ -1756,7 +1953,15 @@ impl NativeManager {
                 "settings": self.server_settings_for(&manifest)?
             }));
         }
-        let backup = path.with_extension(format!("properties.{}.bak", now_unix_ms()));
+        let backup = path.with_extension(format!(
+            "{}.{}.bak",
+            if manifest.is_pumpkin() {
+                "toml"
+            } else {
+                "properties"
+            },
+            now_unix_ms()
+        ));
         let previous = manifest.clone();
         let data_path = self.instance_path(&manifest.id)?;
         if updated != original {
@@ -2395,9 +2600,15 @@ impl NativeManager {
     }
 
     fn server_settings_for(&self, manifest: &InstanceManifest) -> Result<Value, String> {
-        let path = self.instance_path(&manifest.id)?.join("server.properties");
+        let path = self
+            .instance_path(&manifest.id)?
+            .join(manifest.settings_name());
         let content = read_small_regular_file(&path, MAX_PROPERTIES_BYTES, "server settings")?;
-        let properties = parse_properties(&content);
+        let properties = if manifest.is_pumpkin() {
+            pumpkin::properties(&content)?
+        } else {
+            parse_properties(&content)
+        };
         Ok(json!({
             "expected_revision": file_sha256(&path)?,
             "motd": property_text(&properties, "motd", &manifest.name),
@@ -2483,6 +2694,16 @@ impl NativeManager {
                 })
             }
             ServerAction::Update => {
+                if manifest.modpack.is_some() {
+                    return self.update_minecraft_modpack(manifest).map(|detail| {
+                        json!({
+                            "instance_id": format!("helix:{}", manifest.id),
+                            "action": action,
+                            "accepted": true,
+                            "detail": detail
+                        })
+                    });
+                }
                 let changed = self.update(manifest)?;
                 json!({
                     "updated": changed,
@@ -2584,12 +2805,16 @@ impl NativeManager {
     pub fn create_minecraft<F>(
         &self,
         spec: &MinecraftCreateSpec,
+        overlay: Option<&Path>,
         mut progress: F,
     ) -> Result<Value, String>
     where
         F: FnMut(&str, u8),
     {
         validate_create_spec(spec)?;
+        if matches!(spec.software, MinecraftSoftware::Pumpkin) && overlay.is_some() {
+            return Err("Pumpkin world and plugin conversion is not a safe automatic migration; create a separate server and import only verified compatible data from a backup".to_owned());
+        }
         let _operation = self.begin_creation_operation()?;
         progress("Checking ports, names, and storage", 6);
         let manifests = self.load_manifests()?;
@@ -2603,7 +2828,14 @@ impl NativeManager {
             self.resolve_game_port(GameKind::Minecraft, spec.game_port, &manifests)?;
         let mut resolved_spec = spec.clone();
         resolved_spec.game_port = Some(game_port);
-        let rcon_port = allocate_rcon_port(&manifests, &self.amp_occupied_ports())?;
+        let bedrock_port = if matches!(spec.software, MinecraftSoftware::Pumpkin) {
+            self.resolve_pumpkin_bedrock_port(game_port, spec.pumpkin_bedrock_port, &manifests)?
+        } else {
+            0
+        };
+        let mut reserved_ports = self.amp_occupied_ports();
+        reserved_ports.extend([game_port, bedrock_port]);
+        let rcon_port = allocate_rcon_port(&manifests, &reserved_ports)?;
         let id = Uuid::new_v4().to_string();
         let instance_name = instance_name(spec.name.trim(), &id);
         let container_name = format!("helix-game-{id}");
@@ -2626,7 +2858,9 @@ impl NativeManager {
             } else {
                 self.resolve_artifact(resolved_spec.software, resolved_spec.version.trim())?
             };
-            if artifact.java_version < 17 || artifact.java_version > 25 {
+            if !matches!(artifact.software, MinecraftSoftware::Pumpkin)
+                && (artifact.java_version < 17 || artifact.java_version > 25)
+            {
                 return Err(format!(
                     "Minecraft {} requires Java {}, which this Helix release does not manage yet",
                     artifact.version, artifact.java_version
@@ -2647,20 +2881,45 @@ impl NativeManager {
                 },
                 30,
             );
-            let jar_path = data_path.join("server.jar");
+            let pumpkin = matches!(artifact.software, MinecraftSoftware::Pumpkin);
+            let jar_path = data_path.join(if pumpkin { "pumpkin" } else { "server.jar" });
             let artifact_sha256 = self.download_artifact(&artifact, &jar_path)?;
             write_new_file(&data_path.join("eula.txt"), b"eula=true\n", 0o640)?;
             let rcon_password = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-            let properties =
-                server_properties(&resolved_spec, game_port, rcon_port, &rcon_password);
+            let properties = if pumpkin {
+                pumpkin::initial_config(
+                    &resolved_spec,
+                    game_port,
+                    bedrock_port,
+                    rcon_port,
+                    &rcon_password,
+                )?
+            } else {
+                server_properties(&resolved_spec, game_port, rcon_port, &rcon_password)
+            };
             write_new_file(
-                &data_path.join("server.properties"),
+                &data_path.join(if pumpkin {
+                    "pumpkin.toml"
+                } else {
+                    "server.properties"
+                }),
                 properties.as_bytes(),
                 0o640,
             )?;
 
-            progress("Pinning the Java runtime", 48);
-            let runtime_image = self.resolve_runtime_image(artifact.java_version)?;
+            progress(
+                if pumpkin {
+                    "Pinning the native Pumpkin runtime (no Java)"
+                } else {
+                    "Pinning the Java runtime"
+                },
+                48,
+            );
+            let runtime_image = if pumpkin {
+                self.pumpkin_runtime()?
+            } else {
+                self.resolve_runtime_image(artifact.java_version)?
+            };
             let unix_args = if artifact.install_server {
                 progress("Running the official loader installer", 52);
                 Some(self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?)
@@ -2681,26 +2940,54 @@ impl NativeManager {
                 artifact_url: artifact.url,
                 artifact_sha256,
                 memory_mb: spec.memory_mb,
+                cpu_millis: spec.cpu_millis,
                 max_players: spec.max_players,
                 game_port,
                 rcon_port,
-                rcon_password,
+                rcon_password: rcon_password.clone(),
                 start_on_boot: spec.start_on_boot,
                 run_uid,
                 created_at_unix_ms: now_unix_ms(),
                 kind: GameKind::Minecraft,
-                query_port: 0,
+                query_port: bedrock_port,
                 unix_args,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                modpack: None,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
             self.protect_instance_artifacts(&data_path, run_uid)?;
+            if let Some(source) = overlay {
+                progress("Copying world, plugins, and configs", 56);
+                self.overlay_migrated_game(
+                    GameKind::Minecraft,
+                    source,
+                    &data_path,
+                    matches!(spec.software, MinecraftSoftware::Custom),
+                    run_uid,
+                )?;
+                if let Some(source_properties) = migrate_plan::read_source_properties(source) {
+                    let properties_path = data_path.join("server.properties");
+                    let current = fs::read_to_string(&properties_path).unwrap_or_default();
+                    let merged = migrate_plan::merge_server_properties(
+                        &current,
+                        &source_properties,
+                        game_port,
+                        rcon_port,
+                        &rcon_password,
+                        spec.max_players,
+                    );
+                    fs::write(&properties_path, merged)
+                        .map_err(|_| "could not merge server.properties".to_owned())?;
+                    self.chown_instance(&data_path, run_uid)?;
+                    self.protect_instance_artifacts(&data_path, run_uid)?;
+                }
+            }
 
             progress("Creating the Helix workload", 62);
             container_create_attempted = true;
-            self.create_container(&manifest, &data_path)?;
+            self.create_validation_container(&manifest, &data_path)?;
 
             progress("Starting Minecraft", 76);
             self.docker(["start", manifest.container_name.as_str()], 90)?;
@@ -2711,6 +2998,7 @@ impl NativeManager {
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
+            self.finalize_container_restart_policy(&manifest)?;
             self.ensure_console_archiver(&manifest)?;
             progress("Online", 100);
             Ok(json!({
@@ -2718,6 +3006,8 @@ impl NativeManager {
                 "instance_name": instance_name,
                 "game_port": game_port,
                 "port_allocated_automatically": allocated_automatically,
+                "software": spec.software,
+                "query_port": if pumpkin { json!(bedrock_port) } else { Value::Null },
                 "manager": "helix",
                 "execution_backend": "docker"
             }))
@@ -2745,6 +3035,7 @@ impl NativeManager {
     pub fn create_vrising<F>(
         &self,
         spec: &VRisingCreateSpec,
+        overlay: Option<&Path>,
         mut progress: F,
     ) -> Result<Value, String>
     where
@@ -2792,6 +3083,7 @@ impl NativeManager {
                 game_port,
                 query_port,
                 spec.max_players,
+                spec.list_on_browser,
             ))
             .map_err(|_| "could not encode V Rising host settings".to_owned())?;
             write_new_file(&settings_path, &settings, 0o660)?;
@@ -2811,6 +3103,7 @@ impl NativeManager {
                 artifact_url: vrising::ARTIFACT_URL.to_owned(),
                 artifact_sha256: vrising::empty_artifact_sha256().to_owned(),
                 memory_mb: spec.memory_mb,
+                cpu_millis: spec.cpu_millis,
                 max_players: spec.max_players,
                 game_port,
                 query_port,
@@ -2822,13 +3115,40 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                modpack: None,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
+            if let Some(source) = overlay {
+                progress("Copying V Rising saves", 48);
+                self.overlay_migrated_game(GameKind::VRising, source, &data_path, false, run_uid)?;
+                let settings_path = data_path
+                    .join("save")
+                    .join("Settings")
+                    .join("ServerHostSettings.json");
+                let source_settings = fs::read_to_string(&settings_path).unwrap_or_default();
+                let settings = migrate_plan::merge_vrising_host_settings(
+                    vrising::host_settings_json(
+                        spec.name.trim(),
+                        game_port,
+                        query_port,
+                        spec.max_players,
+                        spec.list_on_browser,
+                    ),
+                    &source_settings,
+                );
+                fs::write(
+                    &settings_path,
+                    serde_json::to_vec_pretty(&settings)
+                        .map_err(|_| "could not write V Rising host settings".to_owned())?,
+                )
+                .map_err(|_| "could not write V Rising host settings".to_owned())?;
+                self.chown_instance(&data_path, run_uid)?;
+            }
 
             progress("Creating the isolated V Rising container", 52);
             container_create_attempted = true;
-            self.create_container(&manifest, &data_path)?;
+            self.create_validation_container(&manifest, &data_path)?;
 
             progress(
                 "Downloading V Rising through SteamCMD and starting the runtime",
@@ -2839,10 +3159,11 @@ impl NativeManager {
             self.wait_until_ready(&manifest, Duration::from_secs(45 * 60), |elapsed| {
                 let percent = 62_u64.saturating_add((elapsed / 40).min(35));
                 progress(
-                    "First install downloads the dedicated server (this can take a while)",
+                    "Downloading V Rising and waiting for first boot",
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
+            self.finalize_container_restart_policy(&manifest)?;
             self.ensure_console_archiver(&manifest)?;
             progress("Online", 100);
             Ok(json!({
@@ -2880,6 +3201,7 @@ impl NativeManager {
     pub fn create_valheim<F>(
         &self,
         spec: &ValheimCreateSpec,
+        overlay: Option<&Path>,
         mut progress: F,
     ) -> Result<Value, String>
     where
@@ -2934,6 +3256,7 @@ impl NativeManager {
                 artifact_url: valheim::ARTIFACT_URL.to_owned(),
                 artifact_sha256: valheim::empty_artifact_sha256().to_owned(),
                 memory_mb: spec.memory_mb,
+                cpu_millis: spec.cpu_millis,
                 max_players: spec.max_players,
                 game_port,
                 query_port,
@@ -2945,13 +3268,18 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                modpack: None,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
+            if let Some(source) = overlay {
+                progress("Copying Valheim worlds", 48);
+                self.overlay_migrated_game(GameKind::Valheim, source, &data_path, false, run_uid)?;
+            }
 
             progress("Creating the isolated Valheim container", 52);
             container_create_attempted = true;
-            self.create_container(&manifest, &data_path)?;
+            self.create_validation_container(&manifest, &data_path)?;
 
             progress(
                 "Downloading Valheim through SteamCMD and starting the runtime",
@@ -2962,10 +3290,11 @@ impl NativeManager {
             self.wait_until_ready(&manifest, Duration::from_secs(45 * 60), |elapsed| {
                 let percent = 62_u64.saturating_add((elapsed / 40).min(35));
                 progress(
-                    "First install downloads the dedicated server (this can take a while)",
+                    "Downloading Valheim and waiting for first boot",
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
+            self.finalize_container_restart_policy(&manifest)?;
             self.ensure_console_archiver(&manifest)?;
             progress("Online", 100);
             Ok(json!({
@@ -3004,6 +3333,7 @@ impl NativeManager {
     pub fn create_terraria<F>(
         &self,
         spec: &TerrariaCreateSpec,
+        overlay: Option<&Path>,
         mut progress: F,
     ) -> Result<Value, String>
     where
@@ -3072,6 +3402,7 @@ impl NativeManager {
                 artifact_url: artifact_url.to_owned(),
                 artifact_sha256: terraria::empty_artifact_sha256().to_owned(),
                 memory_mb: spec.memory_mb,
+                cpu_millis: spec.cpu_millis,
                 max_players: spec.max_players,
                 game_port,
                 query_port: 0,
@@ -3083,13 +3414,18 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                modpack: None,
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
+            if let Some(source) = overlay {
+                progress("Copying Terraria worlds and mods", 48);
+                self.overlay_migrated_game(GameKind::Terraria, source, &data_path, false, run_uid)?;
+            }
 
             progress("Creating the isolated Terraria container", 52);
             container_create_attempted = true;
-            self.create_container(&manifest, &data_path)?;
+            self.create_validation_container(&manifest, &data_path)?;
 
             progress("Downloading Terraria and starting the runtime", 62);
             self.clear_ready_marker(&manifest)?;
@@ -3097,10 +3433,11 @@ impl NativeManager {
             self.wait_until_ready(&manifest, Duration::from_secs(30 * 60), |elapsed| {
                 let percent = 62_u64.saturating_add((elapsed / 40).min(35));
                 progress(
-                    "First install downloads the dedicated server (this can take a while)",
+                    "Downloading Terraria and waiting for first boot",
                     u8::try_from(percent).unwrap_or(97),
                 );
             })?;
+            self.finalize_container_restart_policy(&manifest)?;
             self.ensure_console_archiver(&manifest)?;
             progress("Online", 100);
             Ok(json!({
@@ -3229,6 +3566,83 @@ impl NativeManager {
         }))
     }
 
+    pub fn set_cpu_millis(&self, id: &str, cpu_millis: u32) -> Result<Value, String> {
+        helix_privd::validate_cpu_millis(cpu_millis)?;
+        let mut manifest = self.load_manifest(native_id(id))?;
+        if manifest.cpu_millis == cpu_millis {
+            return Ok(json!({
+                "instance_id": format!("helix:{}", manifest.id),
+                "changed": false,
+                "cpu_millis": cpu_millis,
+                "container_republished": false
+            }));
+        }
+        let _operation = self.begin_instance_operation(&manifest.id, "cpu update")?;
+        let previous = manifest.clone();
+        let data_path = self.instance_path(&manifest.id)?;
+        let running = self.container_running(&manifest.container_name);
+        manifest.cpu_millis = cpu_millis;
+        write_manifest(&self.manifest_path(&manifest.id)?, &manifest)?;
+        if let Err(error) = self.republish_minecraft_container(&manifest, &data_path, running) {
+            let _ = write_manifest(&self.manifest_path(&previous.id)?, &previous);
+            let _ = self.republish_minecraft_container(&previous, &data_path, running);
+            return Err(error);
+        }
+        Ok(json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "changed": true,
+            "cpu_millis": cpu_millis,
+            "container_republished": true,
+            "was_running": running
+        }))
+    }
+
+    pub fn set_vrising_browser_listing(
+        &self,
+        id: &str,
+        list_on_browser: bool,
+    ) -> Result<Value, String> {
+        let manifest = self.load_manifest(native_id(id))?;
+        if !manifest.is_vrising() {
+            return Err("only V Rising servers have an in-game server list".to_owned());
+        }
+        let _operation = self.begin_instance_operation(&manifest.id, "listing update")?;
+        let data_path = self.instance_path(&manifest.id)?;
+        let path = vrising_host_settings_path(&data_path);
+        let mut settings = if path.is_file() {
+            serde_json::from_slice::<Value>(
+                &fs::read(&path).map_err(|_| "could not read V Rising host settings".to_owned())?,
+            )
+            .map_err(|_| "V Rising host settings are invalid".to_owned())?
+        } else {
+            vrising::host_settings_json(
+                &manifest.name,
+                manifest.game_port,
+                manifest.query_port,
+                manifest.max_players,
+                list_on_browser,
+            )
+        };
+        let Some(object) = settings.as_object_mut() else {
+            return Err("V Rising host settings are invalid".to_owned());
+        };
+        object.insert("ListOnSteam".to_owned(), json!(list_on_browser));
+        object.insert("ListOnEOS".to_owned(), json!(list_on_browser));
+        object.insert("HideIPAddress".to_owned(), json!(list_on_browser));
+        let encoded = serde_json::to_string_pretty(&settings)
+            .map_err(|_| "could not encode V Rising host settings".to_owned())?;
+        write_private_text(&path, &format!("{encoded}\n"))?;
+        let running = self.container_running(&manifest.container_name);
+        Ok(json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "list_on_browser": list_on_browser,
+            "list_on_eos": list_on_browser,
+            "list_on_steam": list_on_browser,
+            "hide_ip_address": list_on_browser,
+            "restart_required": running
+        }))
+    }
+
     fn require_minecraft_content(&self, manifest: &InstanceManifest) -> Result<(), String> {
         if !manifest.is_minecraft() {
             return Err(format!(
@@ -3245,6 +3659,7 @@ impl NativeManager {
         requested_version: &str,
     ) -> Result<Artifact, String> {
         match software {
+            MinecraftSoftware::Pumpkin => self.resolve_pumpkin(requested_version),
             MinecraftSoftware::Custom => {
                 Err("custom JAR servers use the local artifact import flow".to_owned())
             }
@@ -4067,12 +4482,64 @@ impl NativeManager {
     }
 
     fn fetch_json(&self, url: &str, hosts: &[&str]) -> Result<Value, String> {
+        self.fetch_json_headers(url, hosts, &[])
+    }
+
+    fn fetch_json_headers(
+        &self,
+        url: &str,
+        hosts: &[&str],
+        extra_headers: &[(&str, &str)],
+    ) -> Result<Value, String> {
+        self.fetch_json_headers_timed(url, hosts, extra_headers, 20)
+    }
+
+    fn fetch_json_headers_timed(
+        &self,
+        url: &str,
+        hosts: &[&str],
+        extra_headers: &[(&str, &str)],
+        timeout_seconds: u64,
+    ) -> Result<Value, String> {
         require_https_host(url, hosts)?;
+        let mut last_error = "the catalog request failed".to_owned();
+        let attempt_budget = Duration::from_secs(timeout_seconds.saturating_sub(1).max(1));
+        for attempt in 0..3_u8 {
+            let started = Instant::now();
+            match self.fetch_json_headers_once(url, extra_headers, timeout_seconds) {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    last_error = error;
+                    if attempt == 2
+                        || started.elapsed() >= attempt_budget
+                        || catalog_fetch_is_non_retryable(&last_error)
+                    {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(250 * u64::from(attempt + 1)));
+                }
+            }
+        }
+        Err(last_error)
+    }
+
+    fn fetch_json_headers_once(
+        &self,
+        url: &str,
+        extra_headers: &[(&str, &str)],
+        timeout_seconds: u64,
+    ) -> Result<Value, String> {
         let cache = self.state_root.join("metadata");
         fs::create_dir_all(&cache).map_err(|_| "could not create the metadata cache".to_owned())?;
         let path = cache.join(format!("{}.json", Uuid::new_v4()));
         let result = (|| {
-            self.curl_no_redirect(url, &path, MAX_METADATA_BYTES, 30)?;
+            self.curl_no_redirect_headers(
+                url,
+                &path,
+                MAX_METADATA_BYTES,
+                timeout_seconds,
+                extra_headers,
+            )?;
             let metadata =
                 fs::metadata(&path).map_err(|_| "downloaded metadata is unavailable".to_owned())?;
             if metadata.len() == 0 || metadata.len() > MAX_METADATA_BYTES {
@@ -4083,11 +4550,166 @@ impl NativeManager {
             )
             .map_err(|_| "the software catalog returned invalid metadata".to_owned())
         })();
-        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(&path);
         result
     }
 
+    fn curseforge_key_path(&self) -> PathBuf {
+        self.state_root.join("curseforge-api-key")
+    }
+
+    fn read_curseforge_api_key(&self) -> Result<Option<String>, String> {
+        let path = self.curseforge_key_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&path)
+            .map_err(|_| "could not read the saved CurseForge API key".to_owned())?;
+        if bytes.len() > 256 {
+            return Err("the saved CurseForge API key is invalid".to_owned());
+        }
+        let raw = String::from_utf8(bytes)
+            .map_err(|_| "the saved CurseForge API key is invalid".to_owned())?;
+        Ok(Some(validate_curseforge_api_key(&raw)?))
+    }
+
+    fn require_curseforge_api_key(&self) -> Result<String, String> {
+        self.read_curseforge_api_key()?
+            .ok_or_else(|| CURSEFORGE_API_KEY_REQUIRED.to_owned())
+    }
+
+    pub fn curseforge_key_status(&self) -> Result<Value, String> {
+        self.curseforge_key_status_with_probe(None)
+    }
+
+    fn curseforge_key_status_with_probe(&self, probe: Option<&str>) -> Result<Value, String> {
+        let mut status = json!({
+            "schema_version": 1,
+            "configured": self.read_curseforge_api_key()?.is_some(),
+            "catalog": "api.curseforge.com",
+        });
+        if let (Some(probe), Some(object)) = (probe, status.as_object_mut()) {
+            object.insert("probe".to_owned(), json!(probe));
+        }
+        Ok(status)
+    }
+
+    pub fn set_curseforge_api_key(&self, key: &str) -> Result<Value, String> {
+        let key = validate_curseforge_api_key(key)?;
+        let path = self.curseforge_key_path();
+        let previous = fs::read(&path).ok();
+        write_replaced_secret_file(&path, key.as_bytes())?;
+        match self.probe_curseforge_api_key() {
+            Ok(()) => self.curseforge_key_status_with_probe(Some("ok")),
+            Err(error) if error == CURSEFORGE_KEY_REJECTED => {
+                match previous {
+                    Some(bytes) => {
+                        let _ = write_replaced_secret_file(&path, &bytes);
+                    }
+                    None => {
+                        let _ = fs::remove_file(&path);
+                    }
+                }
+                Err(error)
+            }
+            Err(error) if error == CURSEFORGE_CDN_BLOCKED => {
+                self.curseforge_key_status_with_probe(Some("cdn_blocked"))
+            }
+            Err(_) => self.curseforge_key_status_with_probe(Some("unreachable")),
+        }
+    }
+
+    pub fn clear_curseforge_api_key(&self) -> Result<Value, String> {
+        let path = self.curseforge_key_path();
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|_| "could not remove the saved CurseForge API key".to_owned())?;
+        }
+        self.curseforge_key_status()
+    }
+
+    fn probe_curseforge_api_key(&self) -> Result<(), String> {
+        self.curseforge_v1("games/432").map(|_| ())
+    }
+
+    fn curseforge_v1(&self, path: &str) -> Result<Value, String> {
+        if path.is_empty()
+            || path.contains("://")
+            || path.contains(['\\', '\0', ' ', '\n', '\r'])
+            || path
+                .split(['/', '?', '&', '='])
+                .any(|segment| segment == "." || segment == "..")
+        {
+            return Err("the CurseForge catalog path is invalid".to_owned());
+        }
+        let key = self.require_curseforge_api_key()?;
+        let url = format!("https://api.curseforge.com/v1/{path}");
+        self.fetch_json_headers_timed(
+            &url,
+            &["api.curseforge.com"],
+            &[("x-api-key", key.as_str())],
+            12,
+        )
+        .map_err(|error| {
+            if error == CURSEFORGE_CDN_BLOCKED
+                || error == CURSEFORGE_KEY_REJECTED
+                || error == CURSEFORGE_RATE_LIMITED
+                || error.starts_with("CurseForge catalog was unreachable.")
+            {
+                error
+            } else {
+                let lower = error.to_ascii_lowercase();
+                if lower.contains("401") || lower.contains("403") {
+                    CURSEFORGE_CDN_BLOCKED.to_owned()
+                } else {
+                    format!("CurseForge catalog was unreachable. {error}")
+                }
+            }
+        })
+    }
+
+    fn resolve_curseforge_download_url(
+        &self,
+        project_id: &str,
+        file: &Value,
+    ) -> Result<String, String> {
+        if let Some(direct) = file
+            .get("downloadUrl")
+            .and_then(Value::as_str)
+            .filter(|candidate| candidate.len() <= 4_096)
+            .and_then(|candidate| marketplace::direct_forgecdn_download_url(candidate).ok())
+        {
+            return Ok(direct);
+        }
+        let file_id = file
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
+        if let Some(direct) = self
+            .curseforge_v1(&format!("mods/{project_id}/files/{file_id}/download-url"))
+            .ok()
+            .and_then(|response| {
+                response
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .and_then(|url| marketplace::direct_forgecdn_download_url(url).ok())
+            })
+        {
+            return Ok(direct);
+        }
+        let filename = file
+            .get("fileName")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "CurseForge returned a file without a name".to_owned())?;
+        let fallback = marketplace::forgecdn_file_url(file_id, filename)?;
+        require_https_host(&fallback, FORGECDN_DOWNLOAD_HOSTS)?;
+        Ok(fallback)
+    }
+
     fn download_artifact(&self, artifact: &Artifact, destination: &Path) -> Result<String, String> {
+        if matches!(artifact.software, MinecraftSoftware::Pumpkin) {
+            return self.download_pumpkin(artifact, destination);
+        }
         if let Some(source) = &artifact.local_source {
             return self.import_local_artifact(source, destination);
         }
@@ -4150,6 +4772,7 @@ impl NativeManager {
         if !installer.is_file() {
             return Err("the loader installer was not downloaded".to_owned());
         }
+        self.chown_instance(data_path, run_uid)?;
         let mount = format!("type=bind,src={},dst=/data", data_path.display());
         let user = format!("{run_uid}:{run_uid}");
         let args = vec![
@@ -4170,7 +4793,17 @@ impl NativeManager {
             "/data/server.jar".to_owned(),
             "--installServer".to_owned(),
         ];
-        self.docker_owned(&args, 15 * 60)?;
+        self.docker_owned(&args, 15 * 60).map_err(|error| {
+            let detail = error
+                .strip_prefix("the Helix execution backend failed: ")
+                .unwrap_or(error.as_str());
+            if detail.contains("Unable to access jarfile") {
+                "the loader installer could not read server.jar in the instance directory"
+                    .to_owned()
+            } else {
+                format!("the loader installer failed: {detail}")
+            }
+        })?;
         find_unix_args(data_path)
             .ok_or_else(|| {
                 format!(
@@ -4269,7 +4902,11 @@ impl NativeManager {
         } else {
             "no"
         };
-        let memory_limit = u64::from(manifest.memory_mb).saturating_add(1024);
+        let memory_limit = u64::from(manifest.memory_mb).saturating_add(if manifest.is_pumpkin() {
+            0
+        } else {
+            1024
+        });
         let minimum_heap = manifest.memory_mb.min(1024);
         let game_tcp = format!("0.0.0.0:{0}:{0}/tcp", manifest.game_port);
         let game_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port);
@@ -4334,9 +4971,28 @@ impl NativeManager {
             "-XX:+UseG1GC".to_owned(),
             "-XX:+ParallelRefProcEnabled".to_owned(),
             "-XX:+DisableExplicitGC".to_owned(),
-            "-XX:+AlwaysPreTouch".to_owned(),
         ];
-        if let Some(unix_args) = &manifest.unix_args {
+        if manifest.is_pumpkin() {
+            let unused_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port);
+            if let Some(index) = args.iter().position(|arg| arg == &unused_udp) {
+                args.drain(index - 1..=index);
+            }
+            let entry = args
+                .iter()
+                .position(|arg| arg == "--entrypoint")
+                .ok_or("Missing runtime entrypoint")?;
+            args.truncate(entry + 1);
+            args.pop();
+            args.extend([
+                "--publish".to_owned(),
+                format!("0.0.0.0:{0}:{0}/tcp", manifest.query_port),
+                "--publish".to_owned(),
+                format!("0.0.0.0:{0}:{0}/udp", manifest.query_port),
+                "--entrypoint".to_owned(),
+            ]);
+            args.push("/data/pumpkin".to_owned());
+            args.push(manifest.runtime_image.clone());
+        } else if let Some(unix_args) = &manifest.unix_args {
             args.push(format!("@{unix_args}"));
             args.push("nogui".to_owned());
         } else {
@@ -4344,7 +5000,42 @@ impl NativeManager {
             args.push("server.jar".to_owned());
             args.push("--nogui".to_owned());
         }
+        insert_cpu_limit(&mut args, manifest.cpu_millis);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
+        Ok(())
+    }
+
+    fn create_validation_container(
+        &self,
+        manifest: &InstanceManifest,
+        data_path: &Path,
+    ) -> Result<(), String> {
+        let mut validation_manifest = manifest.clone();
+        validation_manifest.start_on_boot = false;
+        self.create_container(&validation_manifest, data_path)
+    }
+
+    fn finalize_container_restart_policy(&self, manifest: &InstanceManifest) -> Result<(), String> {
+        let desired = if manifest.start_on_boot {
+            "unless-stopped"
+        } else {
+            "no"
+        };
+        if self.container_restart_policy(&manifest.container_name)? == desired {
+            return Ok(());
+        }
+        self.docker(
+            [
+                "update",
+                "--restart",
+                desired,
+                manifest.container_name.as_str(),
+            ],
+            20,
+        )?;
+        if self.container_restart_policy(&manifest.container_name)? != desired {
+            return Err("Docker did not persist the server's restart policy".to_owned());
+        }
         Ok(())
     }
 
@@ -4365,7 +5056,7 @@ impl NativeManager {
         let user = format!("{}:{}", manifest.run_uid, manifest.run_uid);
         let memory = format!("{memory_limit}m");
         let instance_label = format!("io.helix.instance={}", manifest.id);
-        let args = vec![
+        let mut args = vec![
             "create".to_owned(),
             "--name".to_owned(),
             manifest.container_name.clone(),
@@ -4413,6 +5104,7 @@ impl NativeManager {
             "max-file=5".to_owned(),
             manifest.runtime_image.clone(),
         ];
+        insert_cpu_limit(&mut args, manifest.cpu_millis);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -4435,7 +5127,7 @@ impl NativeManager {
         let user = format!("{}:{}", manifest.run_uid, manifest.run_uid);
         let memory = format!("{memory_limit}m");
         let instance_label = format!("io.helix.instance={}", manifest.id);
-        let args = vec![
+        let mut args = vec![
             "create".to_owned(),
             "--name".to_owned(),
             manifest.container_name.clone(),
@@ -4487,6 +5179,7 @@ impl NativeManager {
             "max-file=5".to_owned(),
             manifest.runtime_image.clone(),
         ];
+        insert_cpu_limit(&mut args, manifest.cpu_millis);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -4512,7 +5205,7 @@ impl NativeManager {
         } else {
             "vanilla"
         };
-        let args = vec![
+        let mut args = vec![
             "create".to_owned(),
             "--name".to_owned(),
             manifest.container_name.clone(),
@@ -4564,6 +5257,7 @@ impl NativeManager {
             "max-file=5".to_owned(),
             manifest.runtime_image.clone(),
         ];
+        insert_cpu_limit(&mut args, manifest.cpu_millis);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -4585,7 +5279,7 @@ impl NativeManager {
     }
 
     fn ready_timeout(&self, manifest: &InstanceManifest) -> Duration {
-        if manifest.uses_ready_marker() {
+        if manifest.uses_ready_marker() || manifest.modpack.is_some() {
             Duration::from_secs(20 * 60)
         } else {
             Duration::from_secs(6 * 60)
@@ -4655,30 +5349,99 @@ impl NativeManager {
     {
         let started = Instant::now();
         let deadline = started + timeout;
+        let initial_state = self.container_startup_state(&manifest.container_name)?;
         while Instant::now() < deadline {
-            if minecraft_status(manifest.game_port, Duration::from_secs(2)).is_ok() {
+            if minecraft_status(manifest.game_port, Duration::from_secs(2)).is_ok()
+                && (!manifest.is_pumpkin() || pumpkin::bedrock_ready(manifest.query_port))
+            {
                 return Ok(());
             }
-            if !self.container_running(&manifest.container_name) {
-                let logs = self
-                    .docker(
-                        ["logs", "--tail", "25", manifest.container_name.as_str()],
-                        20,
-                    )
-                    .unwrap_or_default();
-                return Err(if logs.trim().is_empty() {
-                    "Minecraft stopped before it became ready".to_owned()
-                } else {
-                    format!(
-                        "Minecraft stopped before it became ready: {}",
-                        one_line_tail(&logs, 600)
-                    )
-                });
+            let state = self.container_startup_state(&manifest.container_name)?;
+            if state.restarting || state.restart_count > initial_state.restart_count {
+                return Err(self.minecraft_startup_failure(
+                    manifest,
+                    state,
+                    "Minecraft restarted unexpectedly during its first boot",
+                ));
+            }
+            if !state.running {
+                return Err(self.minecraft_startup_failure(
+                    manifest,
+                    state,
+                    &format!(
+                        "Minecraft exited with code {} before it became ready",
+                        state.exit_code
+                    ),
+                ));
             }
             progress(Instant::now().saturating_duration_since(started).as_secs());
             thread::sleep(Duration::from_secs(3));
         }
-        Err("Minecraft did not become reachable before the startup deadline".to_owned())
+        let logs = self
+            .docker(
+                ["logs", "--tail", "80", manifest.container_name.as_str()],
+                20,
+            )
+            .unwrap_or_default();
+        let elapsed = Instant::now().saturating_duration_since(started).as_secs();
+        Err(if logs.trim().is_empty() {
+            format!(
+                "Minecraft kept running but did not open port {} within {elapsed} seconds",
+                manifest.game_port
+            )
+        } else {
+            format!(
+                "Minecraft kept running but did not open port {} within {elapsed} seconds. Latest startup output: {}",
+                manifest.game_port,
+                startup_failure_summary(&logs, 1_800)
+            )
+        })
+    }
+
+    fn container_startup_state(&self, name: &str) -> Result<ContainerStartupState, String> {
+        let output = self.docker(
+            [
+                "inspect",
+                "--format",
+                "{{.State.Running}}|{{.State.Restarting}}|{{.State.OOMKilled}}|{{.State.ExitCode}}|{{.RestartCount}}",
+                name,
+            ],
+            20,
+        )?;
+        parse_container_startup_state(&output)
+    }
+
+    fn minecraft_startup_failure(
+        &self,
+        manifest: &InstanceManifest,
+        state: ContainerStartupState,
+        reason: &str,
+    ) -> String {
+        let logs = self
+            .docker(
+                ["logs", "--tail", "500", manifest.container_name.as_str()],
+                20,
+            )
+            .unwrap_or_default();
+        let normalized = logs.to_ascii_lowercase();
+        let memory_exhausted = state.oom_killed
+            || normalized.contains("outofmemoryerror")
+            || normalized.contains("java heap space")
+            || normalized.contains("gc overhead limit exceeded");
+        let cause = if memory_exhausted {
+            format!(
+                "The {} MiB memory allocation was exhausted. Increase the server memory and try again",
+                manifest.memory_mb
+            )
+        } else {
+            reason.to_owned()
+        };
+        let summary = startup_failure_summary(&logs, 1_800);
+        if summary.is_empty() {
+            cause
+        } else {
+            format!("{cause}. Relevant startup output: {summary}")
+        }
     }
 
     fn backup(&self, manifest: &InstanceManifest) -> Result<PathBuf, String> {
@@ -4755,6 +5518,16 @@ impl NativeManager {
             let _ = fs::remove_file(&partial);
             return Err(error);
         }
+        if let Err(error) = run_program(
+            Path::new("/usr/bin/gzip"),
+            &["--test".to_owned(), partial.to_string_lossy().into_owned()],
+            30 * 60,
+        ) {
+            let _ = fs::remove_file(&partial);
+            return Err(format!(
+                "the completed backup failed its integrity check: {error}"
+            ));
+        }
         fs::set_permissions(&partial, fs::Permissions::from_mode(0o600))
             .map_err(|_| "could not protect the completed backup".to_owned())?;
         fs::rename(&partial, &destination)
@@ -4770,7 +5543,17 @@ impl NativeManager {
         if manifest.uses_ready_marker() {
             return self.update_ready_marker_game(manifest);
         }
-        let artifact = self.resolve_artifact(manifest.software, &manifest.minecraft_version)?;
+        let artifact = self.resolve_artifact(
+            manifest.software,
+            if manifest.is_pumpkin() {
+                "latest"
+            } else {
+                &manifest.minecraft_version
+            },
+        )?;
+        if manifest.is_pumpkin() && artifact.version != manifest.minecraft_version {
+            return Err("The latest Pumpkin release changes Minecraft client/world versions. Keep this server pinned and test the new release in a separate server before migrating a backup.".to_owned());
+        }
         if artifact.java_version != manifest.java_version {
             return Err(format!(
                 "this update changes the Java requirement from {} to {}; use the guided version upgrade flow",
@@ -4805,8 +5588,8 @@ impl NativeManager {
                 ),
             });
         }
-        let jar = data_path.join("server.jar");
-        let rollback = data_path.join("server.jar.rollback");
+        let jar = data_path.join(manifest.artifact_name());
+        let rollback = data_path.join(format!("{}.rollback", manifest.artifact_name()));
         if rollback.exists() {
             let restart = self.restart_if_previously_running(manifest, running);
             let _ = fs::remove_file(&update_path);
@@ -5245,6 +6028,69 @@ impl NativeManager {
         Ok(self.state_root.join("console").join(id))
     }
 
+    fn overlay_migrated_game(
+        &self,
+        kind: GameKind,
+        source: &Path,
+        data_path: &Path,
+        copy_server_jar: bool,
+        run_uid: u32,
+    ) -> Result<migrate_plan::OverlayReport, String> {
+        let report = migrate_plan::apply_overlay(kind, source, data_path, copy_server_jar)?;
+        match kind {
+            GameKind::Terraria => {
+                let _ = migrate_plan::ensure_named_save(
+                    &data_path.join("worlds"),
+                    "world",
+                    "wld",
+                    &["wld.bak"],
+                )?;
+            }
+            GameKind::Valheim => {
+                if migrate_plan::ensure_named_save(
+                    &data_path.join("worlds_local"),
+                    "Dedicated",
+                    "fwl",
+                    &["db", "db.old"],
+                )?
+                .is_none()
+                {
+                    let _ = migrate_plan::ensure_named_save(
+                        &data_path.join("worlds"),
+                        "Dedicated",
+                        "fwl",
+                        &["db", "db.old"],
+                    )?;
+                }
+            }
+            GameKind::Minecraft | GameKind::VRising => {}
+        }
+        self.chown_instance(data_path, run_uid)?;
+        Ok(report)
+    }
+
+    pub(crate) fn stage_migrate_jar(
+        &self,
+        source_jar: &Path,
+    ) -> Result<CustomMinecraftJarSpec, String> {
+        let metadata = fs::symlink_metadata(source_jar)
+            .map_err(|_| "the source server JAR is unavailable".to_owned())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("the source server JAR must be a regular file".to_owned());
+        }
+        if metadata.len() == 0 || metadata.len() > MAX_SERVER_JAR_BYTES {
+            return Err("the source server JAR is empty or larger than 768 MiB".to_owned());
+        }
+        let name = format!("migrate-{}.jar", Uuid::new_v4().simple());
+        let destination = self.custom_import_root.join(name);
+        fs::copy(source_jar, &destination)
+            .map_err(|_| "could not stage the source server JAR".to_owned())?;
+        Ok(CustomMinecraftJarSpec {
+            source_path: destination.to_string_lossy().into_owned(),
+            java_version: 21,
+        })
+    }
+
     fn chown_instance(&self, path: &Path, uid: u32) -> Result<(), String> {
         run_program(
             Path::new("/usr/bin/chown"),
@@ -5260,9 +6106,12 @@ impl NativeManager {
 
     fn protect_instance_artifacts(&self, path: &Path, uid: u32) -> Result<(), String> {
         for (name, mode) in [
+            ("pumpkin", 0o550),
+            ("pumpkin.toml", 0o660),
             ("server.jar", 0o440),
             ("server.properties", 0o660),
             ("eula.txt", 0o440),
+            (MODPACK_LOCK_FILE, 0o440),
         ] {
             let artifact = path.join(name);
             if !artifact.is_file() {
@@ -5286,32 +6135,91 @@ impl NativeManager {
         maximum_bytes: u64,
         maximum_seconds: u64,
     ) -> Result<(), String> {
-        run_program(
+        self.curl_no_redirect_headers(url, destination, maximum_bytes, maximum_seconds, &[])
+    }
+
+    fn curl_no_redirect_headers(
+        &self,
+        url: &str,
+        destination: &Path,
+        maximum_bytes: u64,
+        maximum_seconds: u64,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<(), String> {
+        let cache = self.state_root.join("metadata");
+        fs::create_dir_all(&cache).map_err(|_| "could not create the metadata cache".to_owned())?;
+        let header_path = if extra_headers.is_empty() {
+            None
+        } else {
+            let body = curl_extra_header_file(extra_headers)?;
+            let path = cache.join(format!("curl-{}.hdr", Uuid::new_v4()));
+            write_replaced_secret_file(&path, body.as_bytes())?;
+            Some(path)
+        };
+        let dump_path = if extra_headers.is_empty() {
+            None
+        } else {
+            Some(cache.join(format!("curl-{}.dmp", Uuid::new_v4())))
+        };
+        let mut args = vec![
+            "--disable".to_owned(),
+            if extra_headers.is_empty() {
+                "--fail".to_owned()
+            } else {
+                "--fail-with-body".to_owned()
+            },
+            "--silent".to_owned(),
+            "--show-error".to_owned(),
+            "--proto".to_owned(),
+            "=https".to_owned(),
+            "--tlsv1.2".to_owned(),
+            "--connect-timeout".to_owned(),
+            "10".to_owned(),
+            "--max-time".to_owned(),
+            maximum_seconds.to_string(),
+            "--max-filesize".to_owned(),
+            maximum_bytes.to_string(),
+            "--header".to_owned(),
+            format!("User-Agent: {USER_AGENT}"),
+            "--header".to_owned(),
+            "Accept: application/json, application/octet-stream".to_owned(),
+        ];
+        if let Some(path) = &header_path {
+            args.push("--header".to_owned());
+            args.push(format!("@{}", path.display()));
+        }
+        if let Some(path) = &dump_path {
+            args.push("--dump-header".to_owned());
+            args.push(path.to_string_lossy().into_owned());
+        }
+        args.push("--output".to_owned());
+        args.push(destination.to_string_lossy().into_owned());
+        args.push(url.to_owned());
+        let result = run_program(
             Path::new("/usr/bin/curl"),
-            &[
-                "--fail".to_owned(),
-                "--silent".to_owned(),
-                "--show-error".to_owned(),
-                "--proto".to_owned(),
-                "=https".to_owned(),
-                "--tlsv1.2".to_owned(),
-                "--connect-timeout".to_owned(),
-                "10".to_owned(),
-                "--max-time".to_owned(),
-                maximum_seconds.to_string(),
-                "--max-filesize".to_owned(),
-                maximum_bytes.to_string(),
-                "--header".to_owned(),
-                format!("User-Agent: {USER_AGENT}"),
-                "--header".to_owned(),
-                "Accept: application/json, application/octet-stream".to_owned(),
-                "--output".to_owned(),
-                destination.to_string_lossy().into_owned(),
-                url.to_owned(),
-            ],
+            &args,
             maximum_seconds.saturating_add(15),
-        )?;
-        Ok(())
+        );
+        if let Some(path) = header_path {
+            let _ = fs::remove_file(path);
+        }
+        let classified = if extra_headers.is_empty() {
+            result.map(|_| ()).map_err(map_download_curl_error)
+        } else {
+            let dump = dump_path
+                .as_ref()
+                .and_then(|path| fs::read_to_string(path).ok())
+                .unwrap_or_default();
+            let body = fs::read(destination).unwrap_or_default();
+            match result {
+                Ok(_) => Ok(()),
+                Err(error) => Err(classify_curseforge_curl_error(&error, &dump, &body)),
+            }
+        };
+        if let Some(path) = dump_path {
+            let _ = fs::remove_file(path);
+        }
+        classified
     }
 
     fn file_sha1(&self, path: &Path) -> Result<String, String> {
@@ -6230,6 +7138,9 @@ fn validate_binary(path: &Path, label: &str) -> Result<(), String> {
 }
 
 fn validate_create_spec(spec: &MinecraftCreateSpec) -> Result<(), String> {
+    if spec.pumpkin_bedrock_port.is_some() && !matches!(spec.software, MinecraftSoftware::Pumpkin) {
+        return Err("A Bedrock port is only accepted for Pumpkin".to_owned());
+    }
     let name = spec.name.trim();
     if name.is_empty()
         || name.len() > 80
@@ -6246,11 +7157,16 @@ fn validate_create_spec(spec: &MinecraftCreateSpec) -> Result<(), String> {
         return Err("custom JAR details are only accepted for a custom server".to_owned());
     }
     if !spec.version.eq_ignore_ascii_case("latest") {
-        validate_version(spec.version.trim())?;
+        if matches!(spec.software, MinecraftSoftware::Pumpkin) {
+            pumpkin::release_versions(spec.version.trim())?;
+        } else {
+            validate_version(spec.version.trim())?;
+        }
     }
     if !(1_024..=24_576).contains(&spec.memory_mb) {
         return Err("memory must be between 1 and 24 GiB".to_owned());
     }
+    helix_privd::validate_cpu_millis(spec.cpu_millis)?;
     if !(1..=10_000).contains(&spec.max_players) {
         return Err("player limit must be between 1 and 10,000".to_owned());
     }
@@ -6327,9 +7243,6 @@ fn normalize_game_port_policy(
     policy.ranges.dedup();
     policy.ports.sort_unstable();
     policy.ports.dedup();
-    if matches!(policy.game, GameKind::VRising | GameKind::Valheim) {
-        policy.auto_forward_on_create = false;
-    }
     if policy.ranges.is_empty() && policy.ports.is_empty() {
         return Err("add at least one port or port range".to_owned());
     }
@@ -6826,6 +7739,15 @@ fn numeric_version_parts(version: &str) -> Vec<u32> {
 fn minecraft_software_catalog() -> Vec<Value> {
     vec![
         software_catalog_entry(
+            "pumpkin",
+            "Pumpkin",
+            "native_server",
+            "ready",
+            false,
+            "Native Rust Minecraft server: no Java. Java uses TCP; Bedrock NetherNet uses a separate TCP/UDP port.",
+            "Early-development server with its own plugin API. Versioned Linux x86-64/ARM64 binaries are checksum verified. Not a Paper/Fabric/Forge replacement: no automatic JAR/modpack or world conversion. Native plugins must match the build; PatchBukkit is separate and compatibility is not guaranteed.",
+        ),
+        software_catalog_entry(
             "custom",
             "Custom server JAR",
             "custom_server",
@@ -7069,6 +7991,34 @@ fn file_sha256(path: &Path) -> Result<String, String> {
     Ok(output)
 }
 
+fn write_replaced_secret_file(path: &Path, content: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "secret path has no parent".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|_| "could not create the Helix secret directory".to_owned())?;
+    let temporary = parent.join(format!(".helix-secret-{}.partial", Uuid::new_v4()));
+    let result = (|| {
+        {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temporary)
+                .map_err(|_| "could not stage a Helix secret".to_owned())?;
+            file.write_all(content)
+                .and_then(|()| file.sync_all())
+                .map_err(|_| "could not persist a Helix secret".to_owned())?;
+        }
+        fs::rename(&temporary, path).map_err(|_| "could not install a Helix secret".to_owned())?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 fn write_new_file(path: &Path, content: &[u8], mode: u32) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .write(true)
@@ -7259,6 +8209,24 @@ fn require_real_directory(path: &Path, message: &str) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path).map_err(|_| message.to_owned())?;
     if !metadata.file_type().is_dir() {
         return Err(message.to_owned());
+    }
+    Ok(())
+}
+
+fn remove_managed_directory(path: &Path, label: &str) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(format!("could not inspect {label}")),
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(format!(
+            "{label} is not a real directory; Helix stopped before deleting more"
+        ));
+    }
+    fs::remove_dir_all(path).map_err(|_| format!("could not delete {label}"))?;
+    if let Some(parent) = path.parent() {
+        let _ = sync_directory(parent);
     }
     Ok(())
 }
@@ -7675,12 +8643,72 @@ fn display_software(manifest: &InstanceManifest) -> &'static str {
     }
 }
 
+fn insert_cpu_limit(args: &mut Vec<String>, cpu_millis: u32) {
+    if cpu_millis == 0 {
+        return;
+    }
+    let Some(index) = args.iter().position(|argument| argument == "--memory-swap") else {
+        return;
+    };
+    let insert_at = index.saturating_add(2);
+    args.splice(
+        insert_at..insert_at,
+        ["--cpus".to_owned(), format_docker_cpus(cpu_millis)],
+    );
+}
+
+fn format_docker_cpus(cpu_millis: u32) -> String {
+    let formatted = format!("{:.3}", f64::from(cpu_millis) / 1000.0);
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
+}
+
+fn vrising_host_settings_path(data_path: &Path) -> PathBuf {
+    data_path
+        .join("save")
+        .join("Settings")
+        .join("ServerHostSettings.json")
+}
+
+fn read_vrising_browser_listing(data_path: &Path) -> Value {
+    let path = vrising_host_settings_path(data_path);
+    let parsed = fs::read(&path)
+        .ok()
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok());
+    let list_on_eos = parsed
+        .as_ref()
+        .and_then(|value| value.get("ListOnEOS"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let list_on_steam = parsed
+        .as_ref()
+        .and_then(|value| value.get("ListOnSteam"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    json!({
+        "list_on_browser": list_on_eos || list_on_steam,
+        "list_on_eos": list_on_eos,
+        "list_on_steam": list_on_steam,
+        "hide_ip_address": parsed
+            .as_ref()
+            .and_then(|value| value.get("HideIPAddress"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    })
+}
+
 fn is_minecraft_kind(kind: &GameKind) -> bool {
     matches!(kind, GameKind::Minecraft)
 }
 
 fn is_zero_u16(port: &u16) -> bool {
     *port == 0
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 fn validate_backup_policy(keep_count: u16, keep_days: u16) -> Result<(), String> {
@@ -7710,6 +8738,7 @@ fn backup_retention_note(keep_count: u16, keep_days: u16) -> String {
 
 fn software_name(software: MinecraftSoftware) -> &'static str {
     match software {
+        MinecraftSoftware::Pumpkin => "Pumpkin",
         MinecraftSoftware::Custom => "Custom JAR",
         MinecraftSoftware::Vanilla => "Vanilla",
         MinecraftSoftware::Paper => "Paper",
@@ -7850,6 +8879,14 @@ fn run_program_combined(
     })
 }
 
+fn map_download_curl_error(error: String) -> String {
+    if error.contains("Maximum file size exceeded") {
+        "the download is larger than Helix allows for this file".to_owned()
+    } else {
+        error
+    }
+}
+
 fn run_program(program: &Path, args: &[String], timeout_seconds: u64) -> Result<String, String> {
     run_program_with_env(program, args, timeout_seconds, &[])
 }
@@ -7969,6 +9006,112 @@ fn one_line_tail(value: &str, maximum: usize) -> String {
         .collect::<Vec<_>>()
         .join(" · ");
     flattened.chars().take(maximum).collect()
+}
+
+fn parse_container_startup_state(value: &str) -> Result<ContainerStartupState, String> {
+    let fields = value.trim().split('|').collect::<Vec<_>>();
+    if fields.len() != 5 {
+        return Err("Docker returned an invalid Minecraft workload state".to_owned());
+    }
+    let parse_bool = |value: &str| match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err("Docker returned an invalid Minecraft workload state".to_owned()),
+    };
+    Ok(ContainerStartupState {
+        running: parse_bool(fields[0])?,
+        restarting: parse_bool(fields[1])?,
+        oom_killed: parse_bool(fields[2])?,
+        exit_code: fields[3]
+            .parse()
+            .map_err(|_| "Docker returned an invalid Minecraft exit code".to_owned())?,
+        restart_count: fields[4]
+            .parse()
+            .map_err(|_| "Docker returned an invalid Minecraft restart count".to_owned())?,
+    })
+}
+
+fn startup_failure_summary(value: &str, maximum: usize) -> String {
+    let lines = value
+        .lines()
+        .map(strip_terminal_sequences)
+        .map(|line| line.trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let important = lines
+        .iter()
+        .filter(|line| {
+            let normalized = line.to_ascii_lowercase();
+            [
+                "error",
+                "exception",
+                "failed",
+                "failure",
+                "caused by",
+                "outofmemory",
+                "java heap space",
+                "requires",
+                "missing",
+                "incompatible",
+                "fatal",
+                "could not",
+            ]
+            .iter()
+            .any(|needle| normalized.contains(needle))
+        })
+        .rev()
+        .take(12)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut selected = if important.is_empty() {
+        lines.iter().rev().take(12).cloned().collect::<Vec<_>>()
+    } else {
+        important
+    };
+    selected.reverse();
+    let summary = selected.join(" · ");
+    if summary.chars().count() <= maximum {
+        summary
+    } else {
+        let mut truncated = summary
+            .chars()
+            .take(maximum.saturating_sub(1))
+            .collect::<String>();
+        truncated.push('…');
+        truncated
+    }
+}
+
+fn strip_terminal_sequences(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut characters = value.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\u{1b}' {
+            match characters.next() {
+                Some('[') => {
+                    for sequence in characters.by_ref() {
+                        if ('@'..='~').contains(&sequence) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    while let Some(sequence) = characters.next() {
+                        if sequence == '\u{7}' {
+                            break;
+                        }
+                        if sequence == '\u{1b}' && characters.next_if_eq(&'\\').is_some() {
+                            break;
+                        }
+                    }
+                }
+                Some(_) | None => {}
+            }
+        } else if !character.is_control() || character == '\t' {
+            result.push(character);
+        }
+    }
+    result
 }
 
 fn parse_human_bytes(value: &str) -> Option<u64> {
@@ -8099,6 +9242,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_docker_startup_state_without_guessing_at_restart_health() {
+        assert_eq!(
+            parse_container_startup_state("false|false|true|137|3\n").unwrap(),
+            ContainerStartupState {
+                running: false,
+                restarting: false,
+                oom_killed: true,
+                exit_code: 137,
+                restart_count: 3,
+            }
+        );
+        assert!(parse_container_startup_state("true|maybe|false|0|0").is_err());
+        assert!(parse_container_startup_state("true|false|false|0").is_err());
+    }
+
+    #[test]
+    fn startup_summary_prioritizes_the_cause_and_removes_terminal_sequences() {
+        let logs = "\u{1b}[32mLoading mod one\u{1b}[0m\nLoading mod two\nCaused by: java.lang.OutOfMemoryError: Java heap space\nStopping server\n";
+        let summary = startup_failure_summary(logs, 500);
+        assert_eq!(
+            summary,
+            "Caused by: java.lang.OutOfMemoryError: Java heap space"
+        );
+        assert!(!summary.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn startup_summary_falls_back_to_recent_output_and_stays_bounded() {
+        let summary = startup_failure_summary("loading alpha\nloading beta\n", 18);
+        assert_eq!(summary, "loading alpha · l…");
+        assert_eq!(summary.chars().count(), 18);
+    }
+
+    #[test]
     fn port_policy_is_deterministic_deduplicated_and_bounded() {
         let normalized = normalize_game_port_policy(GamePortPolicySpec {
             game: GameKind::Minecraft,
@@ -8137,7 +9314,7 @@ mod tests {
     }
 
     #[test]
-    fn vrising_port_policy_cannot_enable_public_auto_forward() {
+    fn vrising_port_policy_can_enable_public_auto_forward() {
         let normalized = normalize_game_port_policy(GamePortPolicySpec {
             game: GameKind::VRising,
             ranges: vec![GamePortRangeSpec {
@@ -8148,7 +9325,14 @@ mod tests {
             auto_forward_on_create: true,
         })
         .unwrap();
-        assert!(!normalized.auto_forward_on_create);
+        assert!(normalized.auto_forward_on_create);
+    }
+
+    #[test]
+    fn docker_cpus_formats_fractional_cores() {
+        assert_eq!(format_docker_cpus(250), "0.25");
+        assert_eq!(format_docker_cpus(1_000), "1");
+        assert_eq!(format_docker_cpus(2_000), "2");
     }
 
     #[test]
@@ -8173,10 +9357,12 @@ mod tests {
     #[test]
     fn automatic_create_specs_are_valid_before_a_port_is_resolved() {
         let spec = MinecraftCreateSpec {
+            pumpkin_bedrock_port: None,
             name: "Automatic".to_owned(),
             software: MinecraftSoftware::Paper,
             version: "latest".to_owned(),
             memory_mb: 4_096,
+            cpu_millis: 0,
             max_players: 20,
             game_port: None,
             network_exposure: helix_privd::ServerNetworkExposure::Private,
@@ -8217,6 +9403,7 @@ mod tests {
         let encoded = serde_json::to_value(&manifest).unwrap();
         assert!(encoded.get("kind").is_none());
         assert!(encoded.get("query_port").is_none());
+        assert!(encoded.get("cpu_millis").is_none());
 
         let vrising = InstanceManifest {
             schema_version: MANIFEST_VERSION,
@@ -8233,6 +9420,7 @@ mod tests {
             artifact_url: vrising::ARTIFACT_URL.to_owned(),
             artifact_sha256: vrising::empty_artifact_sha256().to_owned(),
             memory_mb: 4096,
+            cpu_millis: 0,
             max_players: 40,
             game_port: 9876,
             query_port: 9877,
@@ -8244,6 +9432,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 0,
             backup_keep_days: 0,
+            modpack: None,
         };
         let encoded = serde_json::to_value(&vrising).unwrap();
         assert_eq!(encoded["kind"], "vrising");
@@ -8377,10 +9566,12 @@ mod tests {
             amp: None,
         };
         let mut spec = MinecraftCreateSpec {
+            pumpkin_bedrock_port: None,
             name: "Private build".to_owned(),
             software: MinecraftSoftware::Custom,
             version: "1.21.8".to_owned(),
             memory_mb: 4096,
+            cpu_millis: 0,
             max_players: 20,
             game_port: Some(25566),
             network_exposure: helix_privd::ServerNetworkExposure::Private,
@@ -8502,6 +9693,7 @@ mod tests {
         assert_eq!(
             ready,
             HashSet::from([
+                "pumpkin",
                 "paper",
                 "purpur",
                 "folia",
@@ -9103,6 +10295,7 @@ mod tests {
             artifact_url: "https://example.invalid/server.jar".to_owned(),
             artifact_sha256: "a".repeat(64),
             memory_mb: 4096,
+            cpu_millis: 0,
             max_players: 20,
             game_port: 25565,
             rcon_port: 30000,
@@ -9115,6 +10308,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 0,
             backup_keep_days: 0,
+            modpack: None,
         };
         write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
         let active = backup_root.join(id);
@@ -9238,6 +10432,7 @@ mod tests {
             artifact_url: "https://example.invalid/server.jar".to_owned(),
             artifact_sha256: "a".repeat(64),
             memory_mb: 4096,
+            cpu_millis: 0,
             max_players: 20,
             game_port: 25565,
             rcon_port: 30000,
@@ -9250,6 +10445,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 2,
             backup_keep_days: 0,
+            modpack: None,
         };
         write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
         let active = backup_root.join(id);
@@ -9292,5 +10488,117 @@ mod tests {
             .unwrap();
         assert_eq!(policy["policy"]["keep_count"], 1);
         assert_eq!(policy["backups"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn purge_trashed_server_wipes_recovery_data_after_typed_confirmation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state_root = temporary.path().join("state");
+        let instance_root = temporary.path().join("instances");
+        let backup_root = temporary.path().join("backups");
+        fs::create_dir_all(state_root.join("console")).unwrap();
+        fs::create_dir_all(state_root.join("server-trash")).unwrap();
+        fs::create_dir_all(instance_root.join(".trash")).unwrap();
+        fs::create_dir_all(backup_root.join(".trash")).unwrap();
+        let manager = NativeManager {
+            state_root: state_root.clone(),
+            instance_root: instance_root.clone(),
+            backup_root: backup_root.clone(),
+            docker_binary: PathBuf::from("/bin/true"),
+            console_retention: ConsoleRetention {
+                maximum_bytes: default_console_history_max_bytes(),
+                files: default_console_history_files(),
+            },
+            backup_trash_retention_days: 30,
+            custom_artifact_roots: Vec::new(),
+            operations: Mutex::new(HashSet::new()),
+            port_policies: Mutex::new(()),
+            console_archives: Mutex::new(HashMap::new()),
+            console_stops: Mutex::new(HashMap::new()),
+            tps_cache: Mutex::new(HashMap::new()),
+            custom_import_root: state_root.join("imports"),
+            uploads: Mutex::new(HashMap::new()),
+            amp: None,
+        };
+        let id = "6f55caa9-1264-4baf-8335-d3f31a704614";
+        let trash_id = "8953dc16-3891-42bf-802f-711b3ba2965a";
+        let manifest = InstanceManifest {
+            schema_version: MANIFEST_VERSION,
+            id: id.to_owned(),
+            name: "Survival".to_owned(),
+            instance_name: "survival".to_owned(),
+            container_name: format!("helix-game-{id}"),
+            software: MinecraftSoftware::Paper,
+            minecraft_version: "1.21.8".to_owned(),
+            build: "1".to_owned(),
+            java_version: 21,
+            runtime_image: "eclipse-temurin@sha256:test".to_owned(),
+            artifact_url: "https://example.invalid/server.jar".to_owned(),
+            artifact_sha256: "a".repeat(64),
+            memory_mb: 4096,
+            cpu_millis: 0,
+            max_players: 20,
+            game_port: 25565,
+            rcon_port: 30000,
+            rcon_password: "secret".to_owned(),
+            start_on_boot: true,
+            run_uid: 20_000,
+            created_at_unix_ms: 1,
+            kind: GameKind::Minecraft,
+            query_port: 0,
+            unix_args: None,
+            backup_keep_count: 0,
+            backup_keep_days: 0,
+            modpack: None,
+        };
+        let record_root = state_root.join("server-trash").join(trash_id);
+        let data_root = instance_root.join(".trash").join(trash_id);
+        fs::create_dir_all(&record_root).unwrap();
+        fs::create_dir_all(&data_root).unwrap();
+        write_manifest(&record_root.join("manifest.json"), &manifest).unwrap();
+        write_server_trash_record(
+            &record_root.join("record.json"),
+            &ServerTrashRecord {
+                schema_version: 1,
+                trash_id: trash_id.to_owned(),
+                instance_id: id.to_owned(),
+                name: "Survival".to_owned(),
+                trashed_at_unix_ms: 1,
+                was_running: false,
+            },
+        )
+        .unwrap();
+        fs::write(data_root.join("world.dat"), b"world").unwrap();
+        let backups = backup_root.join(id);
+        fs::create_dir_all(&backups).unwrap();
+        fs::write(backups.join("1787799939239.tar.gz"), b"archive").unwrap();
+        let backup_trash = backup_root.join(".trash").join(id);
+        fs::create_dir_all(&backup_trash).unwrap();
+        fs::write(backup_trash.join("stale"), b"old").unwrap();
+        let console = state_root.join("console").join(id);
+        fs::create_dir_all(&console).unwrap();
+        fs::write(console.join("current.log"), b"log").unwrap();
+
+        let rejected = manager.purge_trashed_server(trash_id, "Wrong").unwrap_err();
+        assert!(rejected.contains("exact server name"));
+        assert!(data_root.join("world.dat").is_file());
+
+        let purged = manager.purge_trashed_server(trash_id, "Survival").unwrap();
+        assert_eq!(purged["purged"], true);
+        assert_eq!(purged["instance_id"], format!("helix:{id}"));
+        assert_eq!(purged["trash_id"], trash_id);
+        assert!(purged.get("path").is_none());
+        assert!(!record_root.exists());
+        assert!(!data_root.exists());
+        assert!(!backups.exists());
+        assert!(!backup_trash.exists());
+        assert!(!console.exists());
+        assert_eq!(
+            manager.list_trashed_servers().unwrap()["servers"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 }

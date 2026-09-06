@@ -29,6 +29,7 @@ pub(crate) fn host_settings_json(
     game_port: u16,
     query_port: u16,
     max_players: u16,
+    list_on_browser: bool,
 ) -> Value {
     json!({
         "Name": name,
@@ -41,8 +42,9 @@ pub(crate) fn host_settings_json(
         "SaveName": "world1",
         "Password": "",
         "Secure": true,
-        "ListOnSteam": false,
-        "ListOnEOS": false,
+        "ListOnSteam": list_on_browser,
+        "ListOnEOS": list_on_browser,
+        "HideIPAddress": list_on_browser,
         "AutoSaveCount": 20,
         "AutoSaveInterval": 120,
         "GameSettingsPreset": "",
@@ -62,12 +64,14 @@ mod tests {
 
     #[test]
     fn host_settings_carry_the_allocated_udp_ports() {
-        let settings = host_settings_json("Castle", 9_876, 9_877, 40);
+        let settings = host_settings_json("Castle", 9_876, 9_877, 40, true);
         assert_eq!(settings["Name"], "Castle");
         assert_eq!(settings["Port"], 9_876);
         assert_eq!(settings["QueryPort"], 9_877);
         assert_eq!(settings["MaxConnectedUsers"], 40);
-        assert_eq!(settings["ListOnSteam"], false);
+        assert_eq!(settings["ListOnSteam"], true);
+        assert_eq!(settings["ListOnEOS"], true);
+        assert_eq!(settings["HideIPAddress"], true);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import render from 'preact-render-to-string';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ManagedServer } from './control-api';
 import type { DashboardData } from './dashboard-model';
 import {
@@ -9,6 +9,7 @@ import {
   importedServerPanelUrl,
   joinErrorOffersPortChange,
   parseAmpPortClaim,
+  recommendedModpackMemoryMb,
   minecraftCreateSoftwareOptions,
   NewServerChooser,
   publicInternetHint,
@@ -28,6 +29,7 @@ const nativeServer: ManagedServer = {
   panelRunning: true,
   startOnBoot: true,
   playersOnline: 3,
+  playerCountVerified: true,
   maxPlayers: 20,
   cpuPercent: 12,
   memoryUsedMb: 2_048,
@@ -55,12 +57,76 @@ const data: DashboardData = {
 };
 
 describe('Servers route', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('gives heavyweight modpacks enough memory while keeping host headroom', () => {
+    const gib = 1024 * 1024 * 1024;
+    expect(recommendedModpackMemoryMb(['neoforge'], 20 * gib)).toBe(8_192);
+    expect(recommendedModpackMemoryMb(['Forge'], 11 * gib)).toBe(6_144);
+    expect(recommendedModpackMemoryMb(['fabric'], 20 * gib)).toBe(6_144);
+    expect(recommendedModpackMemoryMb(['neoforge'], 7 * gib)).toBe(4_096);
+    expect(recommendedModpackMemoryMb(['neoforge'], null)).toBe(8_192);
+  });
+
   it('retains the native creation entry point after code splitting', () => {
     const markup = render(<ServersPage data={data} csrfToken="csrf" canManageServers canManageBackups canManageNetwork onSessionExpired={() => undefined} />);
 
     expect(markup).toContain('New server');
     expect(markup).toContain('Native game hosting');
     expect(markup).toContain('external managers remain separate');
+  });
+
+  it('opens a native server from the URL fragment', () => {
+    vi.stubGlobal('window', {
+      location: { hash: '#servers/server-1' },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    const markup = render(
+      <ServersPage
+        data={{ ...data, servers: { data: [nativeServer], phase: 'ready', error: null } }}
+        csrfToken="csrf"
+        canManageServers
+        canManageBackups
+        canManageNetwork
+        onSessionExpired={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('Opening Survival');
+  });
+
+  it('offers Copy into Helix on an imported AMP server', () => {
+    vi.stubGlobal('window', {
+      location: { hash: '#servers/amp:a1b2c3d4-1111-4222-8333-123456789abc', hostname: '192.0.2.10' },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    const ampServer: ManagedServer = {
+      ...nativeServer,
+      id: 'amp:a1b2c3d4-1111-4222-8333-123456789abc',
+      name: 'Survival01',
+      manager: 'amp_import',
+      managerPanelPort: 8_080,
+      executionBackend: 'external',
+      kind: 'imported',
+    };
+    const markup = render(
+      <ServersPage
+        data={{ ...data, servers: { data: [ampServer], phase: 'ready', error: null } }}
+        csrfToken="csrf"
+        canManageServers
+        canManageBackups
+        canManageNetwork
+        onSessionExpired={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('Copy into Helix');
+    expect(markup).toContain('IMPORTED');
+    expect(markup).toContain('Open AMP');
   });
 
   it('shows Minecraft and V Rising marks in the new-server chooser', () => {
@@ -70,14 +136,17 @@ describe('Servers route', () => {
         onVRising={() => undefined}
         onValheim={() => undefined}
         onTerraria={() => undefined}
+        onMigrate={() => undefined}
         onClose={() => undefined}
       />,
     );
 
     expect(markup).toContain('Minecraft: Java Edition');
+    expect(markup).toContain('dialog-body');
     expect(markup).toContain('V Rising');
     expect(markup).toContain('Valheim');
     expect(markup).toContain('Terraria');
+    expect(markup).toContain('Copy an existing server');
     expect(markup).toContain('Click to install');
     expect(markup).toContain('game-mark--minecraft');
     expect(markup).toContain('game-mark--vrising');
@@ -94,6 +163,9 @@ describe('Servers route', () => {
       version: 'dedicated',
       kind: 'vrising',
       gamePort: 9_876,
+      playersOnline: 0,
+      playerCountVerified: false,
+      tps: null,
     };
     const markup = render(
       <ServersPage
@@ -109,11 +181,13 @@ describe('Servers route', () => {
     expect(markup).toContain('Survival');
     expect(markup).toContain('Castle');
     expect(markup).toContain('V Rising');
+    expect(markup).toContain('3 / 20');
+    expect(markup).not.toContain('0 / 20');
   });
 
   it('offers every currently installable native Minecraft software', () => {
     expect(minecraftCreateSoftwareOptions.map((option) => option.id)).toEqual([
-      'paper', 'purpur', 'folia', 'leaves', 'fabric', 'neoforge', 'forge', 'quilt', 'pufferfish', 'vanilla',
+      'paper', 'pumpkin', 'purpur', 'folia', 'leaves', 'fabric', 'neoforge', 'forge', 'quilt', 'pufferfish', 'vanilla',
     ]);
   });
 
@@ -158,6 +232,10 @@ describe('Servers route', () => {
     expect(serverActionDescription(nativeServer, 'kill')).toContain('SIGKILL');
     expect(serverActionDescription(nativeServer, 'kill')).toContain('when Stop is stuck');
     expect(serverActionDescription(ampServer, 'kill')).toContain('cannot force-kill AMP');
+    const vrising: ManagedServer = { ...nativeServer, kind: 'vrising' };
+    expect(serverActionDescription(vrising, 'restart')).toContain('ready marker');
+    expect(serverActionDescription(vrising, 'restart')).not.toContain('Minecraft health check');
+    expect(serverActionDescription(vrising, 'start')).toContain('ready marker');
   });
 
   it('treats AMP idle as asleep, with Start instead of Restart', () => {
@@ -265,11 +343,13 @@ describe('Servers route', () => {
     expect(allocatedMemoryOptions('minecraft', 3072)).toContain(3072);
   });
 
-  it('tells operators to forward the public game port themselves', () => {
-    expect(publicInternetHint('minecraft', 25565, null)).toContain('Forward TCP 25565');
-    expect(publicInternetHint('terraria', 7777, null)).toContain('Forward TCP 7777');
+  it('tells operators how public Direct Connect still needs the game ports', () => {
+    expect(publicInternetHint('minecraft', 25565, null)).toContain('TCP 25565');
+    expect(publicInternetHint('terraria', 7777, null)).toContain('TCP 7777');
     expect(publicInternetHint('vrising', 9876, 9877)).toContain('UDP 9876 and 9877');
     expect(publicInternetHint('valheim', 2456, null)).toContain('UDP 2456–2458');
+    expect(publicInternetHint('vrising', 9876, 9877, true)).toContain('Host port setup is saved');
+    expect(publicInternetHint('minecraft', 25565, null, true)).toContain('does not configure the router');
   });
 
   it('points Join port conflicts at Settings and names AMP mappings', () => {
@@ -321,5 +401,40 @@ describe('Servers route', () => {
     expect(onlineMarkup).toContain('20.0');
     expect(missingMarkup).toContain('TPS');
     expect(missingMarkup).not.toContain('20.0');
+  });
+
+  it('offers Forget here for a hidden AMP connection without claiming AMP deletion', () => {
+    const ampId = 'amp:71b629b7-5861-47b8-907b-acde40dadc9e';
+    const store = new Map<string, string>([
+      ['helix.servers.hidden-imports', JSON.stringify([ampId])],
+    ]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+    });
+    const ampServer: ManagedServer = {
+      ...nativeServer,
+      id: ampId,
+      name: 'AllTheMons',
+      manager: 'amp_import',
+      executionBackend: 'external',
+    };
+    const markup = render(
+      <ServersPage
+        data={{ ...data, servers: { data: [ampServer], phase: 'ready', error: null } }}
+        csrfToken="csrf"
+        canManageServers
+        canManageBackups
+        canManageNetwork
+        onSessionExpired={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Removed and hidden');
+    expect(markup).toContain('Hidden AMP connection');
+    expect(markup).toContain('Forget here');
+    expect(markup).toContain('Show again');
+    expect(markup).not.toContain('Delete forever');
   });
 });

@@ -6,6 +6,108 @@ release, not a public-internet support promise.
 
 ## Unreleased
 
+### Added
+
+- Pumpkin native servers with verified releases, separate Java and Bedrock ports,
+  console commands, settings, backups, and guarded updates. See the Pumpkin guide
+  for plugin and world compatibility limits.
+- Modpack update checks with a backup before activation and a restore path.
+- Background operation recovery and saved file drafts when the page reloads.
+- Settings → Catalogs stores an owner CurseForge API key on the host so marketplace
+  search and “Start with a modpack” can use `api.curseforge.com`. Helix never
+  ships a CurseForge secret and never shows the saved key again.
+- Servers can copy a stopped AMP or Pterodactyl world into a **new** native
+  Helix server (Minecraft first, then V Rising, Valheim, Terraria). AMP and
+  Pterodactyl files stay put. The new server gets a free Helix port.
+- Settings → Signed-in session can turn off idle and eight-hour expiry so this
+  browser stays signed in until you sign out or change the password. Reloading
+  the page preserves a valid session. The default stays 30 minutes idle and
+  eight hours.
+- Removed native servers can be permanently deleted from **Removed and hidden**
+  or Settings → Helix data after typing the exact name. That wipe includes world
+  files, Helix backups, and console history. Hidden AMP connections can be
+  forgotten in this browser from the same list without touching AMP.
+- Native create can cap container CPU as well as RAM. Overview can change either
+  later. `0` means no extra CPU cap.
+- V Rising can list on the in-game server browser (EOS and Steam, on by default)
+  and can request UDP public Direct Connect the same way Minecraft does for TCP.
+- Valheim and Terraria can request public setup at create. Overview can set up
+  or remove Helix-owned public access for native servers.
+- Creating a Minecraft, V Rising, Valheim, or Terraria server now shows a
+  spinner, percent, and elapsed time while the download and first boot run.
+  First Steam installs still often take 10–30 minutes; later creates reuse the
+  runtime.
+
+### Changed
+
+- Public access manages the host's game-port rules and shows router forwarding
+  instructions. Helix no longer tries to change router settings through UPnP.
+- CurseForge installs prefer the publisher's server pack, verify downloads,
+  and avoid installing known client-only content on dedicated servers.
+- New software advertised by a newer broker no longer blocks all known server
+  choices in the dashboard. Pumpkin has explicit readiness-parser coverage.
+- Home shortcuts are Homarr-style squares (big icon and name) instead of wide
+  rows. Compact is a square, Wide is larger, Full is extra large. Hover still
+  shows the hostname.
+- Globe and Join copy treat game-port lines as pings and join attempts, and say
+  scanners can find an open public port without anyone sharing the IP.
+
+- Host puts Linux updates at the top, with Check for updates as the main action.
+  Copy talks about a preview of what would change instead of a "simulation", and
+  it says when Linux needs a host reboot. Helix still never reboots for you.
+- Overlay windows keep a real inset so titles, copy, forms, and actions no
+  longer sit on the border.
+- Marketplace search retries a failed catalog call and keeps the last good
+  results on screen. CurseForge now uses the official API with the key from
+  Settings → Catalogs instead of scraping the public website.
+- Catalogs, marketplace, and “Start with a modpack” say up front that CurseForge
+  needs this host on a normal ISP IP. VPS and VPN exits are often blocked.
+- Copy on join addresses, Terminal, and Home tiles flips to Copied so you can
+  tell it landed.
+- HTTPS calls Helix makes as itself now send `Helix/1.0.0` in the User-Agent.
+- Settings → Helix data is a full-width card with real padding, stacked server
+  rows, and plain-language copy for start-after-boot and dismissed notices.
+  Create-server and the server page use the same start-after-boot wording.
+
+### Fixed
+
+- Forge and NeoForge `--installServer` now chowns the instance directory to
+  the isolated runtime user first. The installer container could not read
+  `/data/server.jar` while that folder was still root-owned.
+- Modpack downloads no longer abort with curl's "Maximum file size exceeded"
+  when the CDN Content-Length is bigger than the size in the pack index, or
+  when a CurseForge file omits `fileLength`. Helix caps curl at the safety
+  limit and checks hashes.
+- Creating a server from a Modrinth pack no longer dies on a messy pack
+  summary (newlines, padding, or a blurb longer than 2 KB). Helix keeps a
+  cleaned copy and still installs.
+- Catalogs no longer says a CurseForge CDN block will "clear." That response is
+  this host's public IP getting refused, usually a VPS or VPN exit.
+- CurseForge console pastes can include hidden unicode, fullwidth `$`, page
+  text, or docker `$$` wrapping. Helix pulls out the `$2a$` key and stores that.
+- Home Globe fills the widget instead of sitting in a letterboxed 2:1 box. The
+  Globe page still shows the whole world.
+- Checking for Linux updates no longer dies on APT's HTTPS helper (`seteuid 42`
+  / `Method https has died`). The host broker keeps APT as root inside its
+  existing sandbox instead of letting APT drop to `_apt`.
+- Overview and Host process count is Linux processes (thread groups), not
+  kernel threads. `/proc/loadavg` still supplies the thread total, shown as a
+  subtitle. On this class of host that is typically a few hundred processes and
+  a couple thousand threads.
+- Storage use percent accepts findmnt's number or `"12%"` form, and falls back
+  to used/size when the percent field is missing, so full-disk warnings still
+  fire.
+- Server list player totals stay blank when Helix could not verify a player
+  query, instead of showing `0`.
+- The Docker page will not start, stop, or restart native `helix-game-*`
+  containers. Those go through Servers so the stop is 45 seconds and
+  health-checked.
+- Open in Settings → Helix data now jumps to that server, not just the Servers
+  list. Show them again also refreshes the bell menu in the same tab.
+- Arranging pages, hiding pages, Home layouts, colors, and the refresh interval
+  no longer snap back to factory defaults if you reload before Helix finishes
+  saving. This browser keeps the unsaved change and retries.
+
 ## 1.0.0 - 2026-08-29
 
 ### Added

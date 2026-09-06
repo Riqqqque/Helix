@@ -48,6 +48,12 @@ The privileged broker keeps read-only `analysis_roots` separate from writable
 mounted drive can be inspected, while create, edit, rename, and trash operations
 remain limited to explicitly managed storage directories.
 
+Copying a Pterodactyl volume or an AMP V Rising/Valheim/Terraria folder into a
+new Helix server also stays inside `managed_roots`. Add
+`/var/lib/pterodactyl/volumes` or `/home/amp/.ampdata/instances` when those
+trees should be selectable. AMP Minecraft copies use the AMP connection and
+do not need that folder in Storage.
+
 The result distinguishes two ideas:
 
 - **scan coverage** says whether every eligible entry was considered; and

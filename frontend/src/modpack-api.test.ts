@@ -11,6 +11,7 @@ import {
 const csrf = 'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM';
 const searchResponse = {
   schema_version: 1,
+  provider: 'modrinth',
   query: '',
   offset: 0,
   limit: 12,
@@ -54,6 +55,7 @@ const searchResponse = {
 
 const projectResponse = {
   schema_version: 1,
+  provider: 'modrinth',
   project: {
     id: 'fabricPack1',
     slug: 'fabric-adventure',
@@ -117,9 +119,12 @@ const resultResponse = {
   schema_version: 1,
   instance_id: 'helix:id',
   modpack: {
+    provider: 'modrinth',
     project_title: 'Fabric Adventure',
     version_number: '1.2.0',
     minecraft_version: '1.21.1',
+    loader: 'fabric',
+    loader_version: '0.16.14',
     fabric_loader_version: '0.16.14',
     installed_server_files: 42,
     excluded_server_optional_files: 3,
@@ -154,11 +159,75 @@ describe('Modrinth modpack contracts', () => {
       ...projectResponse,
       versions: [{ ...projectResponse.versions[0], mrpack_file: null }],
       compatible_version_count: 1,
-    })).toThrow(/omitted its .mrpack/i);
+    })).toThrow(/omitted its pack file/i);
+  });
+
+  it('accepts CurseForge artwork only through the authenticated image proxy', () => {
+    const curseforgeIcon = '/api/v1/marketplace/curseforge/image?path=%2Favatars%2F12%2F345%2Ficon.png';
+    const curseforgeSearch = {
+      ...searchResponse,
+      provider: 'curseforge',
+      results: [{
+        ...searchResponse.results[0],
+        project_id: '12345',
+        slug: 'curseforge-adventure',
+        compatibility_status: 'unverified',
+        compatibility_reason: 'Open releases to check the exact Minecraft version and loader',
+        web_url: 'https://www.curseforge.com/minecraft/modpacks/curseforge-adventure',
+        icon_url: curseforgeIcon,
+      }],
+    };
+    const curseforgeProject = {
+      ...projectResponse,
+      provider: 'curseforge',
+      project: {
+        ...projectResponse.project,
+        id: '12345',
+        slug: 'curseforge-adventure',
+        web_url: 'https://www.curseforge.com/minecraft/modpacks/curseforge-adventure',
+        icon_url: curseforgeIcon,
+      },
+      versions: [{
+        id: '9876543',
+        name: 'CurseForge Adventure 1.2.0',
+        version_number: 'curseforge-adventure-1.2.0.zip',
+        version_type: 'release',
+        status: 'available',
+        date_published: '2026-08-20T10:30:00Z',
+        downloads: 0,
+        game_versions: ['1.21.1', 'Forge'],
+        loaders: ['forge'],
+        installable: true,
+        compatibility_reason: 'Stable Forge CurseForge pack',
+        mrpack_file: {
+          filename: 'curseforge-adventure-1.2.0.zip',
+          size: 2_000_000,
+          modrinth_declared_sha512_available: false,
+        },
+      }],
+      compatible_version_count: 1,
+    };
+
+    expect(parseModpackSearchPage(curseforgeSearch).results[0]).toMatchObject({
+      compatibilityStatus: 'unverified',
+      iconUrl: curseforgeIcon,
+    });
+    expect(parseModpackProjectDetail(curseforgeProject)).toMatchObject({
+      provider: 'curseforge',
+      project: { iconUrl: curseforgeIcon },
+      versions: [{ downloads: 0, installable: true, mrpackFile: { filename: 'curseforge-adventure-1.2.0.zip' } }],
+    });
+    expect(() => parseModpackSearchPage({
+      ...curseforgeSearch,
+      results: [{ ...curseforgeSearch.results[0], icon_url: 'https://media.forgecdn.net/avatars/12/345/icon.png' }],
+    })).toThrow(/unsafe icon_url/i);
   });
 
   it('parses exact excluded-file counts and refuses inconsistent safety claims', () => {
     expect(parseMinecraftModpackCreateResult(resultResponse)).toMatchObject({
+      provider: 'modrinth',
+      loader: 'fabric',
+      loaderVersion: '0.16.14',
       installedServerFiles: 42,
       excludedServerOptionalFiles: 3,
       excludedClientOnlyFiles: 8,
@@ -168,6 +237,60 @@ describe('Modrinth modpack contracts', () => {
       ...resultResponse,
       modpack: { ...resultResponse.modpack, full_pack_parity: true },
     })).toThrow(/inconsistent safety/i);
+  });
+
+  it('reports CurseForge server packs without Modrinth or Fabric claims', () => {
+    expect(parseMinecraftModpackCreateResult({
+      schema_version: 1,
+      instance_id: 'helix:curseforge',
+      modpack: {
+        provider: 'curseforge',
+        project_title: 'All the Mods 10',
+        version_number: '8.1',
+        minecraft_version: '1.21.1',
+        loader: 'neoforge',
+        loader_version: '21.1.249',
+        installed_server_files: 462,
+        excluded_non_jar_files: 0,
+        excluded_launch_files: 0,
+        server_pack_used: true,
+        server_pack_filename: 'ServerFiles-8.1.zip',
+        full_pack_parity: false,
+      },
+    })).toMatchObject({
+      provider: 'curseforge',
+      loader: 'neoforge',
+      loaderVersion: '21.1.249',
+      serverPackUsed: true,
+      serverPackFilename: 'ServerFiles-8.1.zip',
+      catalogIntegrityVerified: true,
+    });
+  });
+
+  it('keeps the selected provider on CurseForge project requests', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ...projectResponse,
+      provider: 'curseforge',
+      project: {
+        ...projectResponse.project,
+        id: '12345',
+        slug: 'curseforge-adventure',
+        web_url: 'https://www.curseforge.com/minecraft/modpacks/curseforge-adventure',
+        icon_url: null,
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const detail = await getModpackProject('12345', csrf, undefined, 'curseforge');
+
+    expect(detail.provider).toBe('curseforge');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/servers/minecraft/modpacks/projects/12345?provider=curseforge',
+      expect.any(Object),
+    );
   });
 
   it('uses only search, project, and opaque project/version create contracts', async () => {
@@ -194,7 +317,7 @@ describe('Modrinth modpack contracts', () => {
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       '/api/v1/servers/minecraft/modpacks/search?query=+fabric+adventure+&offset=0&limit=12&provider=modrinth',
-      '/api/v1/servers/minecraft/modpacks/projects/fabricPack1',
+      '/api/v1/servers/minecraft/modpacks/projects/fabricPack1?provider=modrinth',
       '/api/v1/servers/minecraft/modpacks',
     ]);
     const post = fetchMock.mock.calls[2]?.[1] as RequestInit;

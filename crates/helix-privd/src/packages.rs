@@ -244,7 +244,7 @@ impl PackageManager {
             }
         };
         if let Some(error) = &simulation.error {
-            push_error(&mut errors, "apt_simulation", error);
+            push_error(&mut errors, "package_preview", error);
         }
 
         if apt_cache_available && !packages.is_empty() {
@@ -280,11 +280,10 @@ impl PackageManager {
                 .candidate_version
                 .as_ref()
                 .is_some_and(|candidate| candidate != &package.installed_version);
-            let base = package.name.split(':').next().unwrap_or(&package.name);
-            if reboot_packages.contains(&package.name) || reboot_packages.contains(base) {
-                package.restart_hint = "host_reboot_requested".to_owned();
-                package.restart_impact_known = true;
-            }
+            let (restart_hint, restart_impact_known) =
+                restart_assessment(&package.name, &reboot_packages);
+            package.restart_hint = restart_hint.to_owned();
+            package.restart_impact_known = restart_impact_known;
         }
         packages.sort_by(|left, right| {
             right
@@ -310,12 +309,12 @@ impl PackageManager {
         let (apply_reason_code, apply_reason) = if apply_available {
             (
                 "selected_exact_candidates_supported",
-                "Helix can apply explicitly selected, exact APT candidates in one serialized background job. It rechecks installed and candidate versions, held packages, free download space, a no-removal simulation, and the final installed versions. Existing configuration files are preserved and Linux is never rebooted automatically.",
+                "Pick exact package versions. Helix rechecks those versions, held packages, download space, and that the change would not add or remove packages. Existing config files stay. Helix never reboots Linux for you.",
             )
         } else {
             (
                 "package_safety_evidence_unavailable",
-                "Selected updates remain unavailable until dpkg-query, apt-cache, apt-get, apt-mark, and a current read-only simulation all return usable evidence.",
+                "Updates cannot be applied until package tools and a current preview of the change are available. Check for updates if the lists look stale or the preview failed.",
             )
         };
         Ok(json!({
@@ -396,20 +395,19 @@ impl PackageManager {
             .try_lock()
             .map_err(|_| "another package operation is already running".to_owned())?;
         let started_at_unix_ms = now_unix_ms();
+        let mut args = Vec::from(apt_lock_args());
+        args.extend(apt_sandbox_args());
+        args.extend([
+            "-o".to_owned(),
+            "Acquire::Retries=3".to_owned(),
+            "update".to_owned(),
+        ]);
         let output = self.runner.run(
             &self.config.apt_get_binary,
-            &[
-                "-o".to_owned(),
-                "DPkg::Lock::Timeout=30".to_owned(),
-                "-o".to_owned(),
-                "Acquire::Retries=3".to_owned(),
-                "-o".to_owned(),
-                "Dpkg::Use-Pty=0".to_owned(),
-                "update".to_owned(),
-            ],
+            &args,
             Duration::from_secs(5 * 60),
         )?;
-        require_success(&output)?;
+        require_apt_success(&output)?;
         Ok(json!({
             "refreshed": true,
             "started_at_unix_ms": started_at_unix_ms,
@@ -530,7 +528,7 @@ impl PackageManager {
             &simulation_args,
             Duration::from_secs(2 * 60),
         )?;
-        require_success(&simulation_output)?;
+        require_apt_success(&simulation_output)?;
         let simulation = parse_apt_simulation(&simulation_output.stdout);
         verify_selected_simulation(requested, &simulation)?;
 
@@ -539,7 +537,11 @@ impl PackageManager {
             &selected_update_args(requested, false),
             Duration::from_secs(30 * 60),
         )?;
-        require_success(&apply_output)?;
+        if let Err(error) = require_apt_success(&apply_output) {
+            return Err(format!(
+                "{error} APT may have changed some packages before it stopped. Helix did not reboot. If Linux reports a broken install, use the distribution's dpkg recovery tools."
+            ));
+        }
 
         let after = self.query_installed_packages()?;
         let after_by_name = after
@@ -564,6 +566,14 @@ impl PackageManager {
             }
         }
         let reboot_packages = read_package_set(&self.config.reboot_packages_path);
+        let reboot_required = self.config.reboot_required_path.is_file();
+        let mut reboot_required_packages = reboot_packages.into_iter().collect::<Vec<_>>();
+        reboot_required_packages.sort();
+        let note = if reboot_required {
+            "Every selected version verified after APT completed. Linux now reports that a host reboot is needed. Helix did not reboot. Use Settings → Whole-host reboot when you choose."
+        } else {
+            "Every selected version verified after APT completed. Package maintainer scripts can restart affected services. Linux did not ask for a reboot. Helix never reboots automatically."
+        };
         Ok(json!({
             "updated": requested.iter().map(|package| json!({
                 "name": package.name,
@@ -574,12 +584,12 @@ impl PackageManager {
             "completed_at_unix_ms": now_unix_ms(),
             "download_size_bytes": download_bytes,
             "free_space_before_bytes": available_bytes,
-            "reboot_required": self.config.reboot_required_path.is_file(),
-            "reboot_required_packages": reboot_packages,
+            "reboot_required": reboot_required,
+            "reboot_required_packages": reboot_required_packages,
             "configuration_policy": "preserve_existing",
             "rollback_claimed": false,
             "automatic_reboot": false,
-            "note": "Every selected version verified after APT completed. Package maintainer scripts can restart affected services; Linux was not rebooted."
+            "note": note
         }))
     }
 
@@ -612,17 +622,18 @@ impl PackageManager {
     }
 
     fn simulate_upgrade(&self) -> Result<SimulationSummary, String> {
-        let output = self.runner.run(
-            &self.config.apt_get_binary,
-            &[
-                "--simulate".to_owned(),
-                "-o".to_owned(),
-                "Dpkg::Options::=--force-confold".to_owned(),
-                "upgrade".to_owned(),
-            ],
-            Duration::from_secs(8),
-        )?;
-        require_success(&output)?;
+        let mut args = vec!["--simulate".to_owned()];
+        args.extend(apt_lock_args());
+        args.extend(apt_sandbox_args());
+        args.extend([
+            "-o".to_owned(),
+            "Dpkg::Options::=--force-confold".to_owned(),
+            "upgrade".to_owned(),
+        ]);
+        let output = self
+            .runner
+            .run(&self.config.apt_get_binary, &args, Duration::from_secs(8))?;
+        require_apt_success(&output)?;
         Ok(parse_apt_simulation(&output.stdout))
     }
 
@@ -687,7 +698,7 @@ fn validate_update_request(
 }
 
 fn selected_update_args(requested: &[PackageUpdateCandidate], simulate: bool) -> Vec<String> {
-    let mut args = Vec::with_capacity(22 + requested.len());
+    let mut args = Vec::with_capacity(26 + requested.len());
     if simulate {
         args.push("--simulate".to_owned());
     } else {
@@ -710,6 +721,8 @@ fn selected_update_args(requested: &[PackageUpdateCandidate], simulate: bool) ->
         "APT::Get::allow-remove-essential=false".to_owned(),
         "-o".to_owned(),
         "APT::Get::allow-change-held-packages=false".to_owned(),
+        "-o".to_owned(),
+        "APT::Sandbox::User=root".to_owned(),
         "install".to_owned(),
     ]);
     let mut exact = requested
@@ -726,11 +739,11 @@ fn verify_selected_simulation(
     simulation: &SimulationSummary,
 ) -> Result<(), String> {
     if !simulation.available {
-        return Err("APT could not simulate the selected updates".to_owned());
+        return Err("APT could not preview the selected updates".to_owned());
     }
     if simulation.removals != 0 || simulation.new_packages != 0 {
         return Err(format!(
-            "the selected update simulation proposed {} removal(s) and {} new package(s); Helix did not apply it",
+            "the selected update preview would make {} removal(s) and {} new package(s); Helix did not apply it",
             simulation.removals, simulation.new_packages
         ));
     }
@@ -744,7 +757,7 @@ fn verify_selected_simulation(
             != Some(request.candidate_version.as_str())
         {
             return Err(format!(
-                "APT's final simulation did not contain the exact selected version of {}; nothing was applied",
+                "APT's final preview did not contain the exact selected version of {}; nothing was applied",
                 request.name
             ));
         }
@@ -764,7 +777,7 @@ fn verify_selected_simulation(
         .any(|name| !requested_names.contains(name.as_str()))
     {
         return Err(
-            "APT's final simulation included an unselected package; nothing was applied".to_owned(),
+            "APT's final preview included an unselected package; nothing was applied".to_owned(),
         );
     }
     Ok(())
@@ -1032,6 +1045,151 @@ fn valid_package_version(value: &str) -> bool {
         })
 }
 
+/// APT's https method drops to `_apt` (uid 42). helix-privd runs under systemd
+/// `NoNewPrivileges=true`, which makes that seteuid fail and kills the download
+/// (`Method https has died`, exit 112). The broker is already root inside a
+/// tight unit sandbox, so package jobs keep APT as root instead of weakening
+/// NoNewPrivileges.
+fn apt_sandbox_args() -> [String; 2] {
+    ["-o".to_owned(), "APT::Sandbox::User=root".to_owned()]
+}
+
+fn apt_lock_args() -> [String; 4] {
+    [
+        "-o".to_owned(),
+        "DPkg::Lock::Timeout=30".to_owned(),
+        "-o".to_owned(),
+        "Dpkg::Use-Pty=0".to_owned(),
+    ]
+}
+
+fn package_base_name(name: &str) -> &str {
+    name.split(':').next().unwrap_or(name)
+}
+
+fn restart_assessment(name: &str, reboot_packages: &HashSet<String>) -> (&'static str, bool) {
+    let base = package_base_name(name);
+    if reboot_packages.contains(name) || reboot_packages.contains(base) {
+        return ("host_reboot_requested", true);
+    }
+    if likely_host_reboot_package(base) {
+        return ("likely_host_reboot", true);
+    }
+    if likely_service_restart_package(base) {
+        return ("likely_service_restart", true);
+    }
+    ("unknown", false)
+}
+
+fn likely_host_reboot_package(base: &str) -> bool {
+    matches!(
+        base,
+        "libc6"
+            | "libc-bin"
+            | "systemd"
+            | "systemd-sysv"
+            | "dbus"
+            | "initramfs-tools"
+            | "linux-base"
+            | "linux-firmware"
+            | "cryptsetup"
+    ) || base.starts_with("linux-image")
+        || base.starts_with("linux-modules")
+        || base.starts_with("linux-generic")
+        || base.starts_with("linux-virtual")
+        || base.starts_with("linux-signed")
+        || base.starts_with("linux-lowlatency")
+        || base.starts_with("grub-")
+        || base.starts_with("shim")
+}
+
+fn likely_service_restart_package(base: &str) -> bool {
+    matches!(
+        base,
+        "openssl"
+            | "openssh-server"
+            | "docker.io"
+            | "docker-ce"
+            | "containerd"
+            | "containerd.io"
+            | "nginx"
+            | "apache2"
+    ) || base.starts_with("libssl")
+}
+
+fn apt_failure_body(output: &CommandOutput) -> String {
+    let stderr = output.stderr.trim();
+    let stdout = output.stdout.trim();
+    if stderr.is_empty() {
+        stdout.to_owned()
+    } else if stdout.is_empty() {
+        stderr.to_owned()
+    } else {
+        format!("{stderr} {stdout}")
+    }
+}
+
+fn apt_output_failed(output: &CommandOutput) -> bool {
+    !output.success || apt_download_helper_failed(&apt_failure_body(output))
+}
+
+fn apt_download_helper_failed(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("seteuid 42")
+        || lowered.contains("setresuid")
+        || lowered.contains("failed to set new user ids")
+        || lowered.contains("method https has died")
+        || lowered.contains("sub-process https returned an error code")
+}
+
+fn explain_apt_failure(raw: &str) -> String {
+    let lowered = raw.to_ascii_lowercase();
+    if apt_download_helper_failed(raw) {
+        return "APT could not download package lists because its HTTPS helper crashed while trying to switch to the _apt user (uid 42). Helix now runs that download as root inside the host broker sandbox. If this still appears, the host cannot reach the package mirrors or helix-privd cannot write /var/lib/apt.".to_owned();
+    }
+    if lowered.contains("could not get lock")
+        || lowered.contains("unable to acquire the dpkg frontend lock")
+        || lowered.contains("unable to lock directory")
+    {
+        return "Another package tool is using APT right now (unattended-upgrades, apt, or dpkg). Wait for it to finish, then try again.".to_owned();
+    }
+    if lowered.contains("dpkg was interrupted") || lowered.contains("dpkg --configure -a") {
+        return "Linux left a package install unfinished. Helix will not try to recover that automatically. Finish or repair it with the distribution's dpkg tools, then check for updates again.".to_owned();
+    }
+    if lowered.contains("temporary failure resolving")
+        || lowered.contains("could not resolve")
+        || lowered.contains("name or service not known")
+    {
+        return "This host could not resolve the package mirror hostname. Check DNS and network, then check for updates again.".to_owned();
+    }
+    if lowered.contains("hash sum mismatch")
+        || lowered.contains("clearsigned file isn't valid")
+        || lowered.contains("the following signatures were invalid")
+        || lowered.contains("no valid openpgp data found")
+    {
+        return "The package list from the mirror failed its signature or checksum check. Do not apply updates until a refresh succeeds.".to_owned();
+    }
+    if lowered.contains("no space left") {
+        return "The disk that holds APT downloads is full.".to_owned();
+    }
+    if lowered.contains("403 forbidden") || lowered.contains("401 unauthorized") {
+        return "The package mirror refused the download.".to_owned();
+    }
+    if raw.trim().is_empty() {
+        "the command failed without details".to_owned()
+    } else {
+        sanitize_text(raw, 500)
+    }
+}
+
+fn require_apt_success(output: &CommandOutput) -> Result<(), String> {
+    if apt_output_failed(output) {
+        Err(explain_apt_failure(&apt_failure_body(output)))
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_config(config: &PackageConfig) -> Result<(), String> {
     if [
         &config.dpkg_query_binary,
@@ -1277,6 +1435,11 @@ mod tests {
                 .iter()
                 .any(|(_, args)| args.iter().any(|arg| arg == "--simulate"))
         );
+        assert!(
+            calls
+                .iter()
+                .any(|(_, args)| args.iter().any(|arg| arg == "APT::Sandbox::User=root"))
+        );
     }
 
     #[test]
@@ -1326,6 +1489,7 @@ mod tests {
                 .iter()
                 .any(|arg| arg == "Dpkg::Options::=--force-confold")
         );
+        assert!(apply.1.iter().any(|arg| arg == "APT::Sandbox::User=root"));
         assert!(!apply.1.iter().any(|arg| arg == "sh" || arg == "bash -c"));
     }
 
@@ -1388,9 +1552,48 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1.last().map(String::as_str), Some("update"));
         assert!(
+            calls[0]
+                .1
+                .iter()
+                .any(|arg| arg == "APT::Sandbox::User=root")
+        );
+        assert!(
             calls[0].1.iter().all(|arg| {
                 !matches!(arg.as_str(), "install" | "upgrade" | "reboot" | "remove")
             })
+        );
+    }
+
+    #[test]
+    fn apt_https_sandbox_failure_is_explained_in_plain_language() {
+        let message = explain_apt_failure(
+            "E: seteuid 42 failed - seteuid (1: Operation not permitted)\nE: Method https has died unexpectedly!\nE: Sub-process https returned an error code (112)",
+        );
+        assert!(message.contains("_apt"));
+        assert!(message.contains("root"));
+        assert!(!message.to_ascii_lowercase().contains("simulation"));
+    }
+
+    #[test]
+    fn kernel_and_libc_updates_are_marked_as_likely_host_reboot() {
+        let empty = HashSet::new();
+        assert_eq!(
+            restart_assessment("linux-image-generic", &empty),
+            ("likely_host_reboot", true)
+        );
+        assert_eq!(
+            restart_assessment("libc6:amd64", &empty),
+            ("likely_host_reboot", true)
+        );
+        assert_eq!(
+            restart_assessment("openssl", &empty),
+            ("likely_service_restart", true)
+        );
+        let mut requested = HashSet::new();
+        requested.insert("openssl".to_owned());
+        assert_eq!(
+            restart_assessment("openssl", &requested),
+            ("host_reboot_requested", true)
         );
     }
 }

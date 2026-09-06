@@ -75,7 +75,8 @@ clients to the pinned dashboard UID.
 The PTY is an interactive login bash, so profile, `~`, and Tab completion work
 like a normal SSH session. Helix forwards Tab into the shell instead of moving
 browser focus. Copy/paste use Ctrl/Cmd+Shift+C and Ctrl/Cmd+Shift+V (plain
-Ctrl+C still interrupts). Ctrl+F searches the local scrollback. Ctrl+/− and
+Ctrl+C still interrupts). The Copy button reads **Copied** after a successful
+copy. Ctrl+F searches the local scrollback. Ctrl+/− and
 Ctrl+wheel change font size. http(s) links in output open in a new tab. Mouse
 reporting is forwarded so programs like `htop` can use it. Helix does not add
 scp, extra SSH hops, or a second file completer of its own.

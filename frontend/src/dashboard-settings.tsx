@@ -36,15 +36,41 @@ import { Dialog } from './modal';
 import { formatTimestamp } from './format';
 import type { ThemePreference } from './theme';
 import type { AuthenticatedUser } from './types';
-import type { ManagedServer, TrashedNativeServerCatalog } from './control-api';
+import type { ManagedServer, TrashedNativeServer, TrashedNativeServerCatalog } from './control-api';
 import {
   getTrashedNativeServers,
   restoreTrashedNativeServer,
   setNativeStartOnBoot,
+  serverStatusLabel,
   trashNativeServer,
 } from './control-api';
-import { clearDismissals, dismissedCount } from './dismissals';
+import { purgeTrashedNativeServer } from './native-server-trash-api';
+import {
+  CURSEFORGE_CONSOLE_URL,
+  clearCurseforgeApiKey,
+  getCurseforgeKeyStatus,
+  normalizeCurseforgeApiKey,
+  setCurseforgeApiKey,
+} from './curseforge-key-api';
+import './catalogs-settings.css';
+import {
+  readForgottenImportedServers,
+  rememberImportedServer,
+  readHiddenImportedServers,
+} from './imported-server-visibility';
+import {
+  clearDismissals,
+  DISMISSALS_CHANGED_EVENT,
+  listDismissedIds,
+} from './dismissals';
 import { GameMark, gameMarkForSoftware } from './game-marks';
+import { serverDetailHash } from './server-hash';
+import {
+  START_WITH_HOST_DETAIL,
+  START_WITH_HOST_TITLE,
+} from './start-with-host';
+import { getSessionExpiry, setSessionExpiry } from './session-expiry-api';
+import { savePersistentSessionProof } from './persistent-session';
 
 const navigationLabels: Record<PrimaryDashboardSectionId, { label: string; icon: IconName }> = {
   overview: { label: 'Overview', icon: 'overview' },
@@ -163,6 +189,206 @@ function AccountSettings({
         {error !== null && <div class="settings-form-error" role="alert"><Icon name="warning" size={15} />{error}</div>}
         <div class="settings-form-actions"><span>Email is not part of Helix’s local owner authentication.</span><button class="button button--primary" type="submit" disabled={busy || !changed || currentPassword.length === 0}>{busy ? 'Saving…' : 'Save account changes'}</button></div>
       </form>
+    </section>
+  );
+}
+
+function SessionExpirySettings({
+  csrfToken,
+  canManage,
+}: {
+  csrfToken: string;
+  canManage: boolean;
+}) {
+  const [expires, setExpires] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [optimistic, setOptimistic] = useState<boolean | null>(null);
+  const displayedExpiry = optimistic ?? expires ?? true;
+  const staySignedIn = !displayedExpiry;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getSessionExpiry(csrfToken, controller.signal)
+      .then((state) => {
+        setExpires(state.expires);
+        setError(null);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        setError(requestError instanceof Error ? requestError.message : 'Helix could not read session expiry.');
+      });
+    return () => controller.abort();
+  }, [csrfToken]);
+
+  const toggle = async (): Promise<void> => {
+    if (!canManage || busy || expires === null) return;
+    const nextStaySignedIn = !staySignedIn;
+    const nextExpiry = !nextStaySignedIn;
+    setBusy(true);
+    setError(null);
+    setOptimistic(nextExpiry);
+    try {
+      const updated = await setSessionExpiry(nextExpiry, csrfToken);
+      setExpires(updated.expires);
+      setOptimistic(null);
+      if (!savePersistentSessionProof(csrfToken)) {
+        setError('This browser blocked Helix session storage. A refresh may still require sign-in.');
+      }
+    } catch (requestError) {
+      setOptimistic(null);
+      setError(requestError instanceof Error ? requestError.message : 'Helix could not change session expiry.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section class="settings-card">
+      <div class="settings-card__head"><div><Icon name="clock" /><span><h2>Signed-in session</h2><p>Keep this browser signed in, or use a shorter timed session.</p></span></div><InfoTip text="Page refreshes keep either session mode signed in. Turning Stay signed in on extends the session until you sign out, change the password, or reach the 400-day safety cap. Helix still requires both the HttpOnly session cookie and its origin-scoped request proof." /></div>
+      <div class="host-boot-control">
+        <div>
+          <span>Stay signed in</span>
+          <strong>{expires === null && error === null ? 'Checking…' : busy && optimistic !== null ? nextLabel(!optimistic) : staySignedIn ? 'On' : 'Off'}</strong>
+          <small>{staySignedIn ? 'Remain signed in across browser restarts until you sign out or change the password.' : 'Refreshes stay signed in, but Helix signs out after 30 minutes idle or eight hours total.'}</small>
+        </div>
+        <button
+          class="switch-button"
+          role="switch"
+          aria-checked={staySignedIn}
+          aria-busy={busy || expires === null}
+          type="button"
+          disabled={busy || !canManage || expires === null}
+          onClick={() => void toggle()}
+        >
+          <i />
+          <span>{busy ? 'Saving…' : staySignedIn ? 'On' : 'Off'}</span>
+        </button>
+      </div>
+      {error !== null && <InlineError message={error} />}
+    </section>
+  );
+}
+
+function nextLabel(staySignedIn: boolean): string {
+  return staySignedIn ? 'Enabling…' : 'Disabling…';
+}
+
+function CatalogsSettings({
+  user,
+  csrfToken,
+}: {
+  user: AuthenticatedUser;
+  csrfToken: string;
+}) {
+  const canView = user.capabilities.includes('games.view');
+  const canManage = user.capabilities.includes('games.manage');
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [key, setKey] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!canView) return;
+    const controller = new AbortController();
+    void getCurseforgeKeyStatus(csrfToken, controller.signal)
+      .then((status) => {
+        setConfigured(status.configured);
+        setError(null);
+        setNotice(null);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        setConfigured(null);
+        setError(requestError instanceof Error ? requestError.message : 'Helix could not read the CurseForge catalog setting.');
+      });
+    return () => controller.abort();
+  }, [canView, csrfToken]);
+
+  if (!canView && !canManage) return null;
+
+  const save = async (event: Event): Promise<void> => {
+    event.preventDefault();
+    if (!canManage || busy) return;
+    const trimmed = normalizeCurseforgeApiKey(key);
+    if (trimmed.length < 24 || trimmed.length > 256) {
+      setError('CurseForge API keys are 24–256 characters.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const status = await setCurseforgeApiKey(trimmed, csrfToken);
+      setKey('');
+      setConfigured(status.configured);
+      if (status.probe === 'cdn_blocked') {
+        setNotice("Saved. CurseForge blocked this server's public IP. The key is fine. Search works once this host exits on a normal ISP address instead of a VPS/VPN.");
+      } else if (status.probe === 'unreachable') {
+        setNotice('Saved. Helix could not reach CurseForge to verify the key.');
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Helix could not save the CurseForge API key.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (): Promise<void> => {
+    if (!canManage || busy || configured !== true) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const status = await clearCurseforgeApiKey(csrfToken);
+      setKey('');
+      setConfigured(status.configured);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Helix could not remove the CurseForge API key.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section class="settings-card">
+      <div class="settings-card__head"><div><Icon name="search" /><span><h2>Catalogs</h2><p>CurseForge downloads need your own API key. If you use CurseForge, this host needs a normal ISP IP. VPS and VPN exits are often blocked. Modrinth stays public.</p></span></div><InfoTip text="Helix stores the key only on this host, never in the browser or the dashboard database, and never shows it again. If CurseForge's network blocks this server, the key is still kept." /></div>
+      <div class="host-boot-control">
+        <div>
+          <span>CurseForge API key</span>
+          <strong>{error !== null && configured === null ? 'Unavailable' : configured === true ? 'Saved on this host' : configured === false ? 'Not saved' : canView ? 'Checking…' : 'Unknown'}</strong>
+          <small>Get a key from the CurseForge console, then marketplace search and “Start with a modpack” can download from api.curseforge.com.</small>
+        </div>
+        <a class="button button--quiet" href={CURSEFORGE_CONSOLE_URL} target="_blank" rel="noreferrer">Open CurseForge console <Icon name="external" size={14} /></a>
+      </div>
+      {canManage && (
+        <form class="account-settings-form" onSubmit={(event) => void save(event)}>
+          <label class="account-current-password catalogs-key-field">
+            <span>API key</span>
+            <input
+              type="password"
+              value={key}
+              maxLength={512}
+              autoComplete="off"
+              spellcheck={false}
+              autocapitalize="none"
+              placeholder={configured === true ? 'Paste a replacement key' : 'Paste the key from console.curseforge.com'}
+              onInput={(event) => setKey(event.currentTarget.value)}
+            />
+            <small>Paste from the console. Hidden characters, quotes, and docker $$ wrapping are stripped. Helix keeps the key in a private file on this host and never shows it again.</small>
+          </label>
+          {notice !== null && <div class="settings-form-error" role="status"><Icon name="warning" size={15} />{notice}</div>}
+          {error !== null && <div class="settings-form-error" role="alert"><Icon name="warning" size={15} />{error}</div>}
+          <div class="settings-form-actions">
+            <span>Removing the key stops new CurseForge downloads until another is saved.</span>
+            <span class="catalogs-key-actions">
+              {configured === true && <button class="button button--quiet" type="button" disabled={busy} onClick={() => void remove()}>{busy ? 'Working…' : 'Remove'}</button>}
+              <button class="button button--primary" type="submit" disabled={busy || key.trim().length === 0}>{busy ? 'Working…' : 'Save key'}</button>
+            </span>
+          </div>
+        </form>
+      )}
     </section>
   );
 }
@@ -477,7 +703,7 @@ function HostIntegrationSettings({
         {integration === null ? <div class="host-integration-empty"><Icon name="refresh" class={resource.phase === 'loading' ? 'is-spinning' : undefined} /><span>{resource.phase === 'loading' ? 'Reading Linux and Docker state…' : 'Host integration data is unavailable.'}</span></div> : <>
           <div class="host-integration-list">{serviceRow('Docker', integration.services.docker)}{serviceRow('Helix broker', integration.services.helixPrivd)}</div>
           <div class="host-container-policies">{([['Dashboard', integration.containers.dashboard], ['Gateway', integration.containers.gateway]] as const).map(([label, container]) => <div key={label}><span><i class={`status-dot status-dot--${container?.running === true ? 'good' : 'idle'}`} /><strong>{label}</strong></span><span>{container === null ? 'Not found' : container.running ? container.health ?? 'Running' : 'Stopped'}</span><small>Restart policy: <code>{container?.restartPolicy ?? 'unavailable'}</code></small></div>)}</div>
-          <div class="host-boot-control"><div><span>Helix starts after boot</span><strong>{busy && optimisticStartOnBoot !== null ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : integration.startOnBoot.state === 'unavailable' ? 'Unavailable' : displayedStartOnBoot === true ? 'Enabled' : displayedStartOnBoot === false ? 'Disabled' : 'Mixed policies'}</strong><small>This changes restart policy only. It does not start or stop containers now.</small></div><button class="switch-button" role="switch" aria-checked={displayedStartOnBoot ?? 'mixed'} aria-busy={busy} type="button" disabled={busy || !canWrite || integration.startOnBoot.state === 'unavailable'} onClick={() => void toggle()}><i /><span>{busy ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : displayedStartOnBoot === true ? 'On' : 'Off'}</span></button></div>
+          <div class="host-boot-control"><div><span>Helix dashboard after boot</span><strong>{busy && optimisticStartOnBoot !== null ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : integration.startOnBoot.state === 'unavailable' ? 'Unavailable' : displayedStartOnBoot === true ? 'Enabled' : displayedStartOnBoot === false ? 'Disabled' : 'Mixed policies'}</strong><small>This is the Helix dashboard and gateway only, not Minecraft or other game servers. It only changes what Docker does after Linux restarts. It does not start or stop anything right now.</small></div><button class="switch-button" role="switch" aria-checked={displayedStartOnBoot ?? 'mixed'} aria-busy={busy} type="button" disabled={busy || !canWrite || integration.startOnBoot.state === 'unavailable'} onClick={() => void toggle()}><i /><span>{busy ? optimisticStartOnBoot ? 'Enabling…' : 'Disabling…' : displayedStartOnBoot === true ? 'On' : 'Off'}</span></button></div>
           <div class="host-policy-caveat"><Icon name="info" size={15} /><span>{integration.startOnBoot.note ?? 'Docker restart policy is the source of truth.'} Container recreation or a future Compose change may reapply a different policy.</span></div>
           {notice !== null && <div class="host-integration-notice" role="status"><Icon name="check" size={14} />{notice}</div>}
           {!canWrite && <div class="host-integration-notice"><Icon name="info" size={14} />This account can view integration state but cannot change it.</div>}
@@ -493,6 +719,12 @@ function HostIntegrationSettings({
       {recurringRebootOpen && integration !== null && <RecurringHostRebootDialog integration={integration} csrfToken={csrfToken} onClose={() => setRecurringRebootOpen(false)} onChanged={onRefresh} />}
     </>
   );
+}
+
+function dismissedNoticeLabel(id: string): string {
+  if (id === 'storage-space-intro') return 'Storage space-analyzer intro';
+  if (id.startsWith('capacity:')) return `Full-disk warning for ${id.slice('capacity:'.length)}`;
+  return 'A dashboard notice';
 }
 
 function HelixDataSettings({
@@ -512,8 +744,18 @@ function HelixDataSettings({
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pendingTrash, setPendingTrash] = useState<ManagedServer | null>(null);
+  const [pendingPurge, setPendingPurge] = useState<TrashedNativeServer | null>(null);
   const [confirmName, setConfirmName] = useState('');
-  const [noticeCount, setNoticeCount] = useState(dismissedCount);
+  const [dismissedIds, setDismissedIds] = useState(listDismissedIds);
+  const [forgottenImported, setForgottenImported] = useState(readForgottenImportedServers);
+  const [removedEpoch, setRemovedEpoch] = useState(0);
+  const forgottenServers = imported.filter((server) => forgottenImported.includes(server.id));
+
+  useEffect(() => {
+    const refreshNotices = (): void => setDismissedIds(listDismissedIds());
+    window.addEventListener(DISMISSALS_CHANGED_EVENT, refreshNotices);
+    return () => window.removeEventListener(DISMISSALS_CHANGED_EVENT, refreshNotices);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -526,7 +768,7 @@ function HelixDataSettings({
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Helix could not list recoverable servers.');
       });
     return () => controller.abort();
-  }, [csrfToken, servers]);
+  }, [csrfToken, servers, removedEpoch]);
 
   const toggleBoot = async (server: ManagedServer): Promise<void> => {
     if (!canManage || busyId !== null) return;
@@ -572,56 +814,214 @@ function HelixDataSettings({
     }
   };
 
+  const purge = async (): Promise<void> => {
+    if (pendingPurge === null || confirmName !== pendingPurge.name || !canManage) return;
+    setBusyId(pendingPurge.trashId);
+    setError(null);
+    try {
+      await purgeTrashedNativeServer(pendingPurge.trashId, confirmName, csrfToken);
+      setPendingPurge(null);
+      setConfirmName('');
+      setRemovedEpoch((epoch) => epoch + 1);
+      await onRefresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Helix could not permanently delete that server.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const showForgottenImported = (id: string): void => {
+    const next = rememberImportedServer(id, readHiddenImportedServers(), forgottenImported);
+    setForgottenImported(next.forgotten);
+  };
+
+  const showNoticesAgain = (): void => {
+    clearDismissals();
+    setDismissedIds([]);
+  };
+
   return (
     <section class="settings-card settings-card--helix-data">
-      <div class="settings-card__head"><div><Icon name="folder" /><span><h2>Helix data</h2><p>Native servers, recoverable trash, and this browser’s dismissed notices.</p></span></div><InfoTip text="Imported AMP or other connections stay owned by those managers. Removing a native server moves its files into recoverable trash; it is not an off-host backup." /></div>
-      <div class="helix-data-summary">
-        <div><strong>{helixServers.length}</strong><span>native servers</span></div>
-        <div><strong>{imported.length}</strong><span>imported connections</span></div>
-        <div><strong>{removed?.servers.length ?? '—'}</strong><span>in recoverable trash</span></div>
-      </div>
-      {helixServers.length === 0 ? <p class="helix-data-empty">No native Helix servers yet. Create one from Servers.</p> : (
-        <ul class="helix-data-list">
-          {helixServers.map((server) => (
-            <li key={server.id}>
-              <GameMark game={gameMarkForSoftware(server.software, server.kind) ?? 'minecraft'} size={22} />
-              <div>
-                <strong>{server.name}</strong>
-                <small>{server.software} · {server.status} · port {server.gamePort || '—'}</small>
-              </div>
-              <button class="switch-button" role="switch" type="button" disabled={!canManage || busyId !== null} aria-checked={server.startOnBoot} onClick={() => void toggleBoot(server)}>
-                <i />
-                <span>{server.startOnBoot ? 'Boot' : 'Manual'}</span>
-              </button>
-              <a class="button button--quiet" href={`#servers`}>Open</a>
-              <button class="button button--quiet" type="button" disabled={!canManage || busyId !== null} onClick={() => { setPendingTrash(server); setConfirmName(''); }}>Remove</button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {(removed?.servers.length ?? 0) > 0 && (
-        <div class="helix-data-trash">
-          <strong>Recoverable trash</strong>
-          <ul>
-            {removed?.servers.map((item) => (
-              <li key={item.trashId}>
-                <span>{item.name}<small>{item.software} · {formatTimestamp(item.trashedAtUnixMs)}</small></span>
-                <button class="button button--quiet" type="button" disabled={!canManage || busyId !== null} onClick={() => void restore(item.trashId)}>Restore</button>
-              </li>
-            ))}
-          </ul>
-          <p>{removed?.policy.note}</p>
-        </div>
-      )}
-      <div class="helix-data-notices">
+      <div class="settings-card__head">
         <div>
-          <strong>Dismissed notices</strong>
-          <small>{noticeCount === 0 ? 'No capacity or storage notices are hidden in this browser.' : `${noticeCount} hidden in this browser.`}</small>
+          <Icon name="folder" />
+          <span>
+            <h2>Helix data</h2>
+            <p>Native servers Helix owns, recoverable trash, forgotten AMP connections in this browser, and notices this browser has hidden.</p>
+          </span>
         </div>
-        <button class="button button--quiet" type="button" disabled={noticeCount === 0} onClick={() => { clearDismissals(); setNoticeCount(0); }}>Show them again</button>
+        <InfoTip text="Imported AMP or other connections stay owned by those managers. Removing a native server moves its files into recoverable trash; Delete forever from that list erases them. Start after the host boots is also on the Servers page when you create a server." />
       </div>
-      <InlineError message={error} />
-      {!canManage && <div class="host-integration-notice"><Icon name="info" size={14} />This account can view Helix data but cannot remove or restore servers.</div>}
+      <div class="helix-data-body">
+        <div class="helix-data-summary">
+          <div>
+            <strong>{helixServers.length}</strong>
+            <span>Native servers</span>
+            <small>Created and owned by Helix</small>
+          </div>
+          <div>
+            <strong>{imported.length}</strong>
+            <span>Imported connections</span>
+            <small>AMP or other managers Helix can see. Helix does not own those files.</small>
+          </div>
+          <div>
+            <strong>{removed?.servers.length ?? '—'}</strong>
+            <span>Recoverable trash</span>
+            <small>Removed native servers you can restore or delete forever</small>
+          </div>
+        </div>
+
+        <div class="helix-data-section">
+          <h3>Native servers</h3>
+          <p>
+            Each native server can come back by itself after Linux or Docker restarts. That choice is on when you create a server, and you can change it here or on the Servers page. It does not start or stop the server right now.
+          </p>
+          {helixServers.length === 0 ? (
+            <p class="helix-data-empty">No native Helix servers yet. Create one from Servers → New server. Start after the host boots is on by default there.</p>
+          ) : (
+            <ul class="helix-data-list">
+              {helixServers.map((server) => {
+                const bootCopyId = `helix-data-boot-${server.id.replace(/[^a-zA-Z0-9_-]+/g, '-')}`;
+                const saving = busyId === server.id;
+                return (
+                  <li key={server.id} class="helix-data-server">
+                    <header>
+                      <GameMark game={gameMarkForSoftware(server.software, server.kind) ?? 'minecraft'} size={28} />
+                      <div>
+                        <strong>{server.name}</strong>
+                        <small>
+                          {server.software} · {serverStatusLabel(server.status)} · port {server.gamePort || '—'}
+                        </small>
+                      </div>
+                    </header>
+                    <div class="helix-data-boot">
+                      <div>
+                        <span>{START_WITH_HOST_TITLE}</span>
+                        <strong>{server.startOnBoot ? 'On' : 'Off'}</strong>
+                        <small id={bootCopyId}>{START_WITH_HOST_DETAIL}</small>
+                      </div>
+                      <button
+                        class="switch-button"
+                        role="switch"
+                        type="button"
+                        disabled={!canManage || busyId !== null}
+                        aria-checked={server.startOnBoot}
+                        aria-describedby={bootCopyId}
+                        aria-label={`${START_WITH_HOST_TITLE} for ${server.name}`}
+                        onClick={() => void toggleBoot(server)}
+                      >
+                        <i />
+                        <span>{saving ? 'Saving…' : server.startOnBoot ? 'On' : 'Off'}</span>
+                      </button>
+                    </div>
+                    <div class="helix-data-server-actions">
+                      <a class="button button--quiet" href={serverDetailHash(server.id)}>Open in Servers</a>
+                      <button
+                        class="button button--quiet"
+                        type="button"
+                        disabled={!canManage || busyId !== null}
+                        onClick={() => {
+                          setPendingTrash(server);
+                          setConfirmName('');
+                        }}
+                      >
+                        Remove…
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {(removed?.servers.length ?? 0) > 0 && (
+          <div class="helix-data-section helix-data-trash">
+            <h3>Recoverable trash</h3>
+            <p>These native servers were removed from Helix. Restore brings the files back onto the Servers page. Delete forever erases the world files, Helix backups, and console history. This is not an off-host backup.</p>
+            <ul>
+              {removed?.servers.map((item) => (
+                <li key={item.trashId}>
+                  <span>
+                    {item.name}
+                    <small>{item.software} · {formatTimestamp(item.trashedAtUnixMs)}</small>
+                  </span>
+                  <div class="helix-data-trash-actions">
+                    <button class="button button--quiet" type="button" disabled={!canManage || busyId !== null} onClick={() => void restore(item.trashId)}>
+                      Restore
+                    </button>
+                    <button
+                      class="button button--danger"
+                      type="button"
+                      disabled={!canManage || busyId !== null}
+                      onClick={() => {
+                        setPendingPurge(item);
+                        setConfirmName('');
+                      }}
+                    >
+                      Delete forever
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {removed?.policy.note !== undefined && removed.policy.note.length > 0 && <p>{removed.policy.note}</p>}
+          </div>
+        )}
+
+        {forgottenServers.length > 0 && (
+          <div class="helix-data-section helix-data-trash">
+            <h3>Forgotten AMP connections</h3>
+            <p>Forgotten in this browser only. Helix did not stop or delete the AMP instance. Show on Servers puts it back on the Servers list here.</p>
+            <ul>
+              {forgottenServers.map((server) => (
+                <li key={server.id}>
+                  <span>
+                    {server.name}
+                    <small>{server.software} · AMP connection</small>
+                  </span>
+                  <button class="button button--quiet" type="button" onClick={() => showForgottenImported(server.id)}>
+                    Show on Servers
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div class="helix-data-section">
+          <h3>Dismissed notices</h3>
+          <p>
+            If you closed a full-disk warning on Overview, a notice in the bell menu, or the Storage space-analyzer intro, Helix remembers that in this browser only. Other browsers and other people on this dashboard still see those banners. Show them again brings them back.
+          </p>
+          <div class="helix-data-notices">
+            <div>
+              <strong>{dismissedIds.length === 0 ? 'Nothing hidden' : `${dismissedIds.length} hidden in this browser`}</strong>
+              {dismissedIds.length === 0 ? (
+                <small>No Overview, storage, or bell notices are hidden here.</small>
+              ) : (
+                <ul>
+                  {dismissedIds.map((id) => (
+                    <li key={id}>{dismissedNoticeLabel(id)}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <button class="button button--quiet" type="button" disabled={dismissedIds.length === 0} onClick={showNoticesAgain}>
+              Show them again
+            </button>
+          </div>
+        </div>
+
+        <InlineError message={error} />
+        {!canManage && (
+          <div class="host-integration-notice">
+            <Icon name="info" size={14} />
+            This account can view Helix data but cannot remove, restore, or permanently delete servers.
+          </div>
+        )}
+      </div>
       {pendingTrash !== null && (
         <Dialog title={`Remove ${pendingTrash.name}?`} onClose={() => setPendingTrash(null)}>
           <p class="dialog-intro">This moves the native server into recoverable trash. Type the exact server name to confirm.</p>
@@ -629,6 +1029,16 @@ function HelixDataSettings({
           <div class="dialog-actions">
             <button class="button button--quiet" type="button" onClick={() => setPendingTrash(null)}>Cancel</button>
             <button class="button button--danger" type="button" disabled={confirmName !== pendingTrash.name || busyId !== null} onClick={() => void trash()}>{busyId !== null ? 'Removing…' : 'Move to trash'}</button>
+          </div>
+        </Dialog>
+      )}
+      {pendingPurge !== null && (
+        <Dialog title={`Delete ${pendingPurge.name} forever?`} onClose={() => busyId === null && setPendingPurge(null)}>
+          <p class="dialog-intro">This permanently erases the recovered world files, Helix backups, and console history. Type the exact server name to confirm.</p>
+          <label class="field field--wide"><span>Server name</span><input value={confirmName} onInput={(event) => setConfirmName(event.currentTarget.value)} autocomplete="off" disabled={busyId !== null} /></label>
+          <div class="dialog-actions">
+            <button class="button button--quiet" type="button" disabled={busyId !== null} onClick={() => setPendingPurge(null)}>Cancel</button>
+            <button class="button button--danger" type="button" disabled={confirmName !== pendingPurge.name || busyId !== null} onClick={() => void purge()}>{busyId !== null ? 'Deleting…' : 'Delete forever'}</button>
           </div>
         </Dialog>
       )}
@@ -706,6 +1116,7 @@ export function DashboardSettingsPage({
             </button>
           </div>
         </section>
+        <CatalogsSettings user={user} csrfToken={csrfToken} />
         <section class="settings-card">
           <div class="settings-card__head"><div><Icon name="moon" /><span><h2>Appearance</h2><p>Choose the contrast that works best on this screen.</p></span></div></div>
           <div class="theme-choice-grid">{(['system', 'midnight', 'oled', 'light'] as const).map((option) => <button key={option} class={theme === option ? 'is-active' : ''} type="button" aria-pressed={theme === option} onClick={() => onThemeChange(option)}><span class={`theme-preview theme-preview--${option}`}><i /><i /><i /></span><strong>{themeLabels[option]}</strong><small>{option === 'system' ? 'Follow this device' : option === 'oled' ? 'True black surfaces' : `${themeLabels[option]} palette`}</small>{theme === option && <Icon name="check" size={14} />}</button>)}</div>
@@ -747,6 +1158,7 @@ export function DashboardSettingsPage({
         </section>
         <HelixDataSettings servers={servers} csrfToken={csrfToken} canManage={user.capabilities.includes('games.manage')} onRefresh={onHostIntegrationRefresh} />
         <HostIntegrationSettings resource={hostIntegration} user={user} csrfToken={csrfToken} onRefresh={onHostIntegrationRefresh} />
+        <SessionExpirySettings csrfToken={csrfToken} canManage={user.capabilities.includes('users.manage')} />
         <AccountSettings user={user} csrfToken={csrfToken} onAccountUpdated={onAccountUpdated} />
       </div>
     </div>

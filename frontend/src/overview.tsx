@@ -103,7 +103,7 @@ export function OverviewPage({ data, themeLabel, csrfToken, canManageDocker, onS
       ))}
       <section class="host-facts overview-identity">
         <div><span>Processor</span><strong>{inventory.data?.cpuModel ?? (overview.data === null ? '—' : `${overview.data.cpu.logicalCores} cores`)}</strong></div>
-        <div><span>Processes</span><strong>{inventory.data === null ? '—' : inventory.data.processCount.toLocaleString()}</strong></div>
+        <div><span>Processes</span><strong>{inventory.data === null ? '—' : inventory.data.processCount.toLocaleString()}</strong><small>{inventory.data === null ? 'Linux thread groups' : `${inventory.data.threadCount.toLocaleString()} threads`}</small></div>
         <div><span>Virtual memory</span><strong>{overview.data === null || overview.data.swap.totalBytes === 0 ? 'No swap' : `${formatBytes(overview.data.swap.usedBytes)} / ${formatBytes(overview.data.swap.totalBytes)}`}</strong></div>
         <div><span>Operating system</span><strong>{overview.data?.operatingSystem ?? '—'}</strong></div>
         <div><span>Helix</span><strong>{overview.data?.helixVersion ?? '—'}</strong><small>{themeLabel} theme</small></div>
@@ -144,7 +144,7 @@ export function OverviewPage({ data, themeLabel, csrfToken, canManageDocker, onS
           <div class="section-title"><div><h2>Servers</h2><p>Helix and imported workloads</p></div><a href="#servers">Manage <Icon name="chevron" size={14} /></a></div>
           <div class="compact-server-list">
             {(servers.data ?? []).slice().sort((a, b) => Number(serverIsLive(b.status)) - Number(serverIsLive(a.status))).slice(0, 6).map((server) => (
-              <div key={server.id}><span class={`status-dot status-dot--${serverStatusTone(server.status)}`} /><strong>{server.name}</strong><span>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers)}</span><small>{server.software} {server.version}</small></div>
+              <div key={server.id}><span class={`status-dot status-dot--${serverStatusTone(server.status)}`} /><strong>{server.name}</strong><span>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers, server.playerCountVerified)}</span><small>{server.software} {server.version}</small></div>
             ))}
           </div>
         </section>

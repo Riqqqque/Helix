@@ -18,6 +18,7 @@ export interface HostInventory {
   processes: ProcessInfo[];
   loadAverage: [number, number, number];
   processCount: number;
+  threadCount: number;
   cpuModel: string | null;
   collectedAtUnixMs: number;
 }
@@ -206,9 +207,26 @@ export function serverPrimaryLifecycleAction(server: ManagedServer): 'start' | '
   return 'start';
 }
 
-export function serverStatusSummary(status: ServerStatus, playersOnline: number, maxPlayers: number): string {
-  if (status === 'online') return `${playersOnline}/${maxPlayers} players`;
+export function serverStatusSummary(
+  status: ServerStatus,
+  playersOnline: number,
+  maxPlayers: number,
+  playerCountVerified = true,
+): string {
+  if (status === 'online') {
+    if (!playerCountVerified) return 'Online';
+    return `${playersOnline}/${maxPlayers} players`;
+  }
   return serverStatusLabel(status);
+}
+
+export function serverPlayerHeadline(server: Pick<ManagedServer, 'status' | 'playersOnline' | 'maxPlayers' | 'playerCountVerified'>): string {
+  if (!serverIsLive(server.status) || !server.playerCountVerified) return '—';
+  return `${server.playersOnline} / ${server.maxPlayers}`;
+}
+
+export function serverReportsTps(server: Pick<ManagedServer, 'kind'>): boolean {
+  return server.kind === 'minecraft' || server.kind === 'imported';
 }
 
 export type ServerKind = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'imported';
@@ -224,6 +242,7 @@ export interface ManagedServer {
   panelRunning: boolean;
   startOnBoot: boolean;
   playersOnline: number;
+  playerCountVerified: boolean;
   maxPlayers: number;
   cpuPercent: number;
   memoryUsedMb: number;
@@ -240,13 +259,15 @@ export interface ManagedServer {
 }
 
 export type ServerAction = 'start' | 'stop' | 'restart' | 'kill' | 'update' | 'backup';
-export type MinecraftSoftware = 'custom' | 'vanilla' | 'paper' | 'purpur' | 'folia' | 'leaves' | 'fabric' | 'neoforge' | 'forge' | 'quilt' | 'pufferfish';
+export type MinecraftSoftware = 'custom' | 'vanilla' | 'paper' | 'purpur' | 'folia' | 'leaves' | 'fabric' | 'neoforge' | 'forge' | 'quilt' | 'pumpkin' | 'pufferfish';
 
 export interface MinecraftCreateInput {
+  pumpkin_bedrock_port?: number;
   name: string;
   software: MinecraftSoftware;
   version: string;
   memory_mb: number;
+  cpu_millis?: number;
   max_players: number;
   game_port?: number;
   network_exposure: 'private' | 'public';
@@ -354,6 +375,7 @@ export interface NativeServerDetail {
   runtimeImage: string;
   artifactSha256: string;
   memoryLimitMb: number;
+  cpuLimitMillis: number;
   gamePort: number;
   queryPort: number | null;
   startOnBoot: boolean;
@@ -375,6 +397,27 @@ export interface NativeServerDetail {
     scope: 'per_server';
   };
   capabilities: string[];
+  browserListing: NativeBrowserListing | null;
+  modpack: NativeInstalledModpack | null;
+}
+
+export interface NativeInstalledModpack {
+  provider: 'modrinth' | 'curseforge';
+  projectId: string;
+  projectTitle: string;
+  versionId: string;
+  versionName: string;
+  versionNumber: string;
+  minecraftVersion: string;
+  loader: string;
+  loaderVersion: string;
+}
+
+export interface NativeBrowserListing {
+  listOnBrowser: boolean;
+  listOnEos: boolean;
+  listOnSteam: boolean;
+  hideIpAddress: boolean;
 }
 
 export interface ServerLogSnapshot {
@@ -604,6 +647,7 @@ export function parseHostInventory(value: unknown): HostInventory {
     }),
     loadAverage: load as [number, number, number],
     processCount: number(root, 'process_count'),
+    threadCount: number(root, 'thread_count'),
     cpuModel: optionalString(root, 'cpu_model'),
     collectedAtUnixMs: number(root, 'collected_at_unix_ms'),
   };
@@ -707,6 +751,7 @@ export function parseServers(value: unknown): ManagedServer[] {
       panelRunning: boolean(item, 'panel_running'),
       startOnBoot: boolean(item, 'start_on_boot'),
       playersOnline: number(item, 'players_online'),
+      playerCountVerified: boolean(item, 'player_count_verified'),
       maxPlayers: number(item, 'max_players'),
       cpuPercent: number(item, 'cpu_percent'),
       memoryUsedMb: number(item, 'memory_used_mb'),
@@ -850,6 +895,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     runtimeImage: expectString(root, 'runtime_image', 'server detail'),
     artifactSha256: expectString(root, 'artifact_sha256', 'server detail'),
     memoryLimitMb: number(root, 'memory_limit_mb'),
+    cpuLimitMillis: root.cpu_limit_millis == null ? 0 : number(root, 'cpu_limit_millis'),
     gamePort: number(root, 'game_port'),
     queryPort,
     startOnBoot: boolean(root, 'start_on_boot'),
@@ -876,6 +922,46 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
       if (typeof entry !== 'string') throw new Error('Invalid server capability');
       return entry;
     }),
+    browserListing: parseBrowserListing(root.browser_listing),
+    modpack: parseNativeInstalledModpack(root.modpack),
+  };
+}
+
+function parseNativeInstalledModpack(value: unknown): NativeInstalledModpack | null {
+  if (value === null || value === undefined) return null;
+  const root = expectRecord(value, 'installed modpack');
+  const provider = expectString(root, 'provider', 'installed modpack');
+  if (provider !== 'modrinth' && provider !== 'curseforge') {
+    throw new Error('Invalid installed modpack provider');
+  }
+  const bounded = (key: string, maximum: number): string => {
+    const text = expectString(root, key, 'installed modpack');
+    if (text.length === 0 || text.length > maximum) {
+      throw new Error(`Invalid installed modpack ${key}`);
+    }
+    return text;
+  };
+  return {
+    provider,
+    projectId: bounded('project_id', 64),
+    projectTitle: bounded('project_title', 256),
+    versionId: bounded('version_id', 64),
+    versionName: bounded('version_name', 256),
+    versionNumber: bounded('version_number', 128),
+    minecraftVersion: bounded('minecraft_version', 64),
+    loader: bounded('loader', 32),
+    loaderVersion: bounded('loader_version', 128),
+  };
+}
+
+function parseBrowserListing(value: unknown): NativeBrowserListing | null {
+  if (value === null || value === undefined) return null;
+  const root = expectRecord(value, 'browser listing');
+  return {
+    listOnBrowser: boolean(root, 'list_on_browser'),
+    listOnEos: boolean(root, 'list_on_eos'),
+    listOnSteam: boolean(root, 'list_on_steam'),
+    hideIpAddress: boolean(root, 'hide_ip_address'),
   };
 }
 
@@ -1138,35 +1224,41 @@ export function createMinecraftServer(input: MinecraftCreateInput, csrfToken: st
 export function createVRisingServer(input: {
   name: string;
   memory_mb: number;
+  cpu_millis?: number;
   max_players: number;
   game_port?: number;
   query_port?: number;
   start_on_boot: boolean;
   wine_runtime_acknowledged: boolean;
+  network_exposure: 'private' | 'public';
+  list_on_browser: boolean;
 }, csrfToken: string): Promise<{ jobId: string }> {
   return requestJson('/api/v1/servers/vrising', (value) => {
     const root = expectRecord(value, 'V Rising job');
     return { jobId: expectString(root, 'job_id', 'V Rising job') };
-  }, { method: 'POST', body: { ...input, network_exposure: 'private' }, csrfToken, timeoutMs: 20_000 });
+  }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
 }
 
 export function createValheimServer(input: {
   name: string;
   memory_mb: number;
+  cpu_millis?: number;
   max_players: number;
   game_port?: number;
   start_on_boot: boolean;
+  network_exposure: 'private' | 'public';
 }, csrfToken: string): Promise<{ jobId: string }> {
   return requestJson('/api/v1/servers/valheim', (value) => {
     const root = expectRecord(value, 'Valheim job');
     return { jobId: expectString(root, 'job_id', 'Valheim job') };
-  }, { method: 'POST', body: { ...input, network_exposure: 'private' }, csrfToken, timeoutMs: 20_000 });
+  }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
 }
 
 export function createTerrariaServer(input: {
   name: string;
   software: 'vanilla' | 'tmodloader';
   memory_mb: number;
+  cpu_millis?: number;
   max_players: number;
   game_port?: number;
   start_on_boot: boolean;
@@ -1198,6 +1290,35 @@ export function setNativeMemory(
       changed: boolean(root, 'changed'),
     };
   }, { method: 'PUT', body: { memory_mb: memoryMb }, csrfToken, timeoutMs: 90_000 });
+}
+
+export function setNativeCpu(
+  id: string,
+  cpuMillis: number,
+  csrfToken: string,
+): Promise<{ cpuMillis: number; containerRepublished: boolean; changed: boolean }> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/cpu`, (value) => {
+    const root = expectRecord(value, 'native CPU');
+    return {
+      cpuMillis: number(root, 'cpu_millis'),
+      containerRepublished: root.container_republished === true,
+      changed: boolean(root, 'changed'),
+    };
+  }, { method: 'PUT', body: { cpu_millis: cpuMillis }, csrfToken, timeoutMs: 90_000 });
+}
+
+export function setNativeBrowserListing(
+  id: string,
+  listOnBrowser: boolean,
+  csrfToken: string,
+): Promise<{ listOnBrowser: boolean; restartRequired: boolean }> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/browser-listing`, (value) => {
+    const root = expectRecord(value, 'native browser listing');
+    return {
+      listOnBrowser: boolean(root, 'list_on_browser'),
+      restartRequired: boolean(root, 'restart_required'),
+    };
+  }, { method: 'PUT', body: { list_on_browser: listOnBrowser }, csrfToken });
 }
 
 export function setServerNetworkExposure(

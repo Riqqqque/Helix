@@ -496,7 +496,7 @@ export function searchMarketplace(
   if (new TextEncoder().encode(trimmed).length > 120 || Array.from(trimmed).some((character) => /\p{Cc}/u.test(character))) throw new ApiError('Marketplace search text is invalid.');
   if (!Number.isInteger(offset) || offset < 0 || offset > 10_000 || !Number.isInteger(limit) || limit < 1 || limit > 50) throw new ApiError('Marketplace pagination is invalid.');
   const params = new URLSearchParams({ query: trimmed, offset: String(offset), limit: String(limit), provider, catalog });
-  return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/search?${params.toString()}`, parseMarketplaceSearchPage, { csrfToken, signal, timeoutMs: 25_000 });
+  return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/search?${params.toString()}`, parseMarketplaceSearchPage, { csrfToken, signal, timeoutMs: 40_000 });
 }
 
 export function getMarketplaceProject(
@@ -508,7 +508,7 @@ export function getMarketplaceProject(
 ): Promise<MarketplaceProjectDetail> {
   validateMarketplaceId(projectId, 'project');
   const params = new URLSearchParams({ provider });
-  return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/projects/${encodeURIComponent(projectId)}?${params.toString()}`, parseMarketplaceProjectDetail, { csrfToken, signal, timeoutMs: 25_000 });
+  return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/projects/${encodeURIComponent(projectId)}?${params.toString()}`, parseMarketplaceProjectDetail, { csrfToken, signal, timeoutMs: 40_000 });
 }
 
 export function installMarketplaceProject(
@@ -524,8 +524,8 @@ export function installMarketplaceProject(
     method: 'POST',
     body: { project_id: projectId, version_id: versionId, provider, restart_server: false },
     csrfToken,
-    timeoutMs: 25_000,
-  });
+  timeoutMs: 40_000,
+});
 }
 
 export function getMarketplaceInstallJob(jobId: string, csrfToken: string, signal?: AbortSignal): Promise<MarketplaceInstallJob> {

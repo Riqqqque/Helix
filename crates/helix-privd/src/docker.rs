@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use uuid::Uuid;
 
 const DASHBOARD_ICONS_PNG: &str = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png";
 
@@ -75,7 +76,6 @@ impl HostControl {
                 apply_docker_stats(&mut containers, &stats.stdout);
             }
         }
-        let protected = self.protected_container_names();
         for container in &mut containers {
             if let Some(object) = container.as_object_mut() {
                 let name = object
@@ -85,7 +85,7 @@ impl HostControl {
                     .to_owned();
                 object.insert(
                     "protected".to_owned(),
-                    Value::Bool(protected.iter().any(|item| item == &name)),
+                    Value::Bool(self.container_is_protected(&name)),
                 );
             }
         }
@@ -98,7 +98,7 @@ impl HostControl {
             "truncated": truncated,
             "portainer": portainer,
             "error": Value::Null,
-            "note": "Helix lists Docker Engine containers on this host, including ones Portainer also shows. Start, stop, and restart require typing the exact container name. Helix dashboard and gateway containers cannot be stopped here.",
+            "note": "Helix lists Docker Engine containers on this host, including ones Portainer also shows. Start, stop, and restart require typing the exact container name. Helix dashboard, gateway, and native game containers cannot be stopped here.",
             "collected_at_unix_ms": now_unix_ms()
         }))
     }
@@ -113,15 +113,14 @@ impl HostControl {
         if confirmation != name {
             return Err("type the exact container name to confirm this action".to_owned());
         }
-        if self
-            .protected_container_names()
-            .iter()
-            .any(|item| item == name)
-        {
-            return Err(
+        if self.container_is_protected(name) {
+            return Err(if is_helix_game_container(name) {
+                "Helix will not start, stop, or restart a native game container from this page; use Servers so the stop is graceful and health-checked"
+                    .to_owned()
+            } else {
                 "Helix will not start, stop, or restart its own dashboard or gateway container from this page"
-                    .to_owned(),
-            );
+                    .to_owned()
+            });
         }
         let _mutation = self
             .mutation
@@ -286,12 +285,16 @@ impl HostControl {
             .and_then(require_success)
     }
 
-    fn protected_container_names(&self) -> Vec<String> {
-        vec![
-            self.config.dashboard_container.clone(),
-            self.config.gateway_container.clone(),
-        ]
+    fn container_is_protected(&self, name: &str) -> bool {
+        name == self.config.dashboard_container
+            || name == self.config.gateway_container
+            || is_helix_game_container(name)
     }
+}
+
+fn is_helix_game_container(name: &str) -> bool {
+    name.strip_prefix("helix-game-")
+        .is_some_and(|id| Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id))
 }
 
 #[allow(clippy::collapsible_if)]
@@ -1652,5 +1655,18 @@ mod tests {
         assert!(validate_container_name("plex; reboot").is_err());
         assert!(validate_container_name("../escape").is_err());
         assert!(validate_container_name("").is_err());
+    }
+
+    #[test]
+    fn native_game_containers_are_protected_from_the_docker_page() {
+        assert!(is_helix_game_container(
+            "helix-game-2876a033-11d1-4035-9734-236bc7723792"
+        ));
+        assert!(!is_helix_game_container("plex"));
+        assert!(!is_helix_game_container("server-dashboard"));
+        assert!(!is_helix_game_container("helix-game-not-a-uuid"));
+        assert!(!is_helix_game_container(
+            "helix-game-2876A033-11D1-4035-9734-236BC7723792"
+        ));
     }
 }

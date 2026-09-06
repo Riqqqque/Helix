@@ -36,9 +36,10 @@ use files::{FileManager, MAX_CONFIGURED_ROOTS, StorageAnalysisManager};
 #[cfg(target_os = "linux")]
 use helix_privd::{
     BrokerClient, BrokerRequest, BrokerResponse, DockerContainerActionKind, FileUploadPurpose,
-    FileUploadTarget, HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec,
-    MinecraftSettingsPatch, PackageUpdateCandidate, ServerNetworkExposure, TerrariaCreateSpec,
-    VRisingCreateSpec, ValheimCreateSpec, read_frame, write_frame,
+    FileUploadTarget, GameKind, HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec,
+    MinecraftSettingsPatch, MinecraftSoftware, PackageUpdateCandidate, ServerMigrateSource,
+    ServerMigrateSpec, ServerNetworkExposure, TerrariaCreateSpec, TerrariaSoftware,
+    VRisingCreateSpec, ValheimCreateSpec, migrate_plan, read_frame, write_frame,
 };
 #[cfg(target_os = "linux")]
 use helix_update::{HelixUpdateConfig, HelixUpdateManager};
@@ -49,7 +50,7 @@ use host::{HostControl, HostControlConfig};
 #[cfg(target_os = "linux")]
 use native::{NativeConfig, NativeManager};
 #[cfg(target_os = "linux")]
-use network::{GamePortMapping, NetworkConfig, NetworkManager};
+use network::{GamePortMapping, NetworkConfig, NetworkManager, exposure_ports};
 #[cfg(target_os = "linux")]
 use packages::{PackageConfig, PackageManager};
 #[cfg(target_os = "linux")]
@@ -114,6 +115,22 @@ struct BrokerConfig {
     hook_installer: HookInstallerConfig,
     #[serde(default)]
     helix_update: HelixUpdateConfig,
+}
+
+#[cfg(target_os = "linux")]
+struct ResolvedMigrate {
+    source_kind: &'static str,
+    source_id: String,
+    source_name: String,
+    source_path: PathBuf,
+    game_root: PathBuf,
+    game: GameKind,
+    running: bool,
+    status: String,
+    software_raw: String,
+    version_raw: String,
+    memory_mb: u32,
+    max_players: u16,
 }
 
 #[cfg(target_os = "linux")]
@@ -494,6 +511,10 @@ impl BrokerContext {
                 .as_deref()
                 .ok_or_else(|| "the Helix server manager is not configured".to_owned())
                 .and_then(|native| native.restore_trashed_server(&trash_id)),
+            BrokerRequest::PurgeTrashedServer {
+                trash_id,
+                confirmation_name,
+            } => self.purge_trashed_native_server(&trash_id, &confirmation_name),
             BrokerRequest::ServerInventoryHealth {} => self.server_inventory_health(),
             BrokerRequest::ServerManagerReadiness {} => self.server_manager_readiness(),
             BrokerRequest::ServerDetail { instance_id } => self
@@ -547,11 +568,14 @@ impl BrokerContext {
                 .and_then(|native| {
                     native.minecraft_modpack_search(&query, offset, limit, provider)
                 }),
-            BrokerRequest::MinecraftModpackProject { project_id } => self
+            BrokerRequest::MinecraftModpackProject {
+                project_id,
+                provider,
+            } => self
                 .native
                 .as_deref()
                 .ok_or_else(|| "the Helix server manager is not configured".to_owned())
-                .and_then(|native| native.minecraft_modpack_project(&project_id)),
+                .and_then(|native| native.minecraft_modpack_project(&project_id, provider)),
             BrokerRequest::InstallServerMarketplaceContent {
                 instance_id,
                 project_id,
@@ -615,6 +639,8 @@ impl BrokerContext {
             BrokerRequest::CreateVRising { spec } => self.start_vrising_job(spec),
             BrokerRequest::CreateValheim { spec } => self.start_valheim_job(spec),
             BrokerRequest::CreateTerraria { spec } => self.start_terraria_job(spec),
+            BrokerRequest::MigrateServerPreflight { source } => self.migrate_preflight(source),
+            BrokerRequest::MigrateServer { spec } => self.start_migrate_job(spec),
             BrokerRequest::SetNativeStartOnBoot {
                 instance_id,
                 enabled,
@@ -627,12 +653,39 @@ impl BrokerContext {
             } => self
                 .native_manager(&instance_id)
                 .and_then(|native| native.set_memory_mb(&instance_id, memory_mb)),
+            BrokerRequest::SetNativeCpu {
+                instance_id,
+                cpu_millis,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.set_cpu_millis(&instance_id, cpu_millis)),
+            BrokerRequest::SetNativeBrowserListing {
+                instance_id,
+                list_on_browser,
+            } => self.native_manager(&instance_id).and_then(|native| {
+                native.set_vrising_browser_listing(&instance_id, list_on_browser)
+            }),
             BrokerRequest::ListMinecraftVersions { software } => self
                 .native
                 .as_deref()
                 .ok_or_else(|| "the Helix server manager is not configured".to_owned())
                 .and_then(|native| native.list_minecraft_versions(software)),
             BrokerRequest::JobStatus { job_id } => self.job_status(&job_id),
+            BrokerRequest::CurseforgeKeyStatus {} => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(NativeManager::curseforge_key_status),
+            BrokerRequest::SetCurseforgeApiKey { key } => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(|native| native.set_curseforge_api_key(&key)),
+            BrokerRequest::ClearCurseforgeApiKey {} => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(NativeManager::clear_curseforge_api_key),
         };
 
         match result {
@@ -769,13 +822,7 @@ impl BrokerContext {
             return Err(error);
         }
         self.network.set_server_exposure(
-            &GamePortMapping {
-                instance_id: server.id,
-                name: server.name,
-                manager: server.manager.to_owned(),
-                port,
-                running: server.panel_running,
-            },
+            &game_port_mapping_from_server(&server, port),
             enabled,
             &self.amp_occupied_ports(),
         )
@@ -820,13 +867,36 @@ impl BrokerContext {
             .find(|server| server.id == instance_id)
             .ok_or_else(|| "the Helix-owned server does not exist".to_owned())?;
         self.network
-            .drop_server_exposure_if_present(&GamePortMapping {
-                instance_id: server.id,
-                name: server.name,
-                manager: server.manager.to_owned(),
-                port,
-                running: server.panel_running,
-            })
+            .drop_server_exposure_if_present(&game_port_mapping_from_server(&server, port))
+    }
+
+    fn purge_trashed_native_server(
+        &self,
+        trash_id: &str,
+        confirmation_name: &str,
+    ) -> Result<Value, String> {
+        let native = self
+            .native
+            .as_deref()
+            .ok_or_else(|| "the Helix server manager is not configured".to_owned())?;
+        let mut result = native.purge_trashed_server(trash_id, confirmation_name)?;
+        let Some(instance_id) = result
+            .get("instance_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            return Ok(result);
+        };
+        match self.network.drop_exposure_for_instance(&instance_id) {
+            Ok(true) => {
+                result["public_access_cleared"] = json!(true);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                result["exposure_warning"] = json!(error);
+            }
+        }
+        Ok(result)
     }
 
     fn apply_creation_exposure(
@@ -849,25 +919,19 @@ impl BrokerContext {
         else {
             return value;
         };
-        let network = if requested == ServerNetworkExposure::Public {
+        let mut network = if requested == ServerNetworkExposure::Public {
             if let Some(error) = self.explain_amp_claimed_port(port) {
                 json!({
                     "enabled": false,
                     "state": "needs_attention",
                     "server_created": true,
                     "error": error,
-                    "note": "The server is online, but automatic public access could not be confirmed. Retry from the server's Join section."
+                    "note": "The server is online, but host firewall setup needs attention. Review Network or retry from the server's Join section. Router settings were not changed."
                 })
             } else {
                 self.network
                     .set_server_exposure(
-                        &GamePortMapping {
-                            instance_id,
-                            name: server_name.to_owned(),
-                            manager: "helix".to_owned(),
-                            port,
-                            running: true,
-                        },
+                        &game_port_mapping_from_create(instance_id, server_name, port, &value),
                         true,
                         &self.amp_occupied_ports(),
                     )
@@ -877,7 +941,7 @@ impl BrokerContext {
                             "state": "needs_attention",
                             "server_created": true,
                             "error": error,
-                            "note": "The server is online, but automatic public access could not be confirmed. Retry from the server's Join section."
+                            "note": "The server is online, but host firewall setup needs attention. Review Network or retry from the server's Join section. Router settings were not changed."
                         })
                     })
             }
@@ -888,6 +952,8 @@ impl BrokerContext {
                 "note": "The server was created for LAN or private-network access."
             })
         };
+        network["private_ipv4"] = json!(network::detect_private_ipv4());
+        network["router_changed"] = json!(false);
         if let Some(object) = value.as_object_mut() {
             object.insert("network_exposure".to_owned(), network);
         }
@@ -1379,11 +1445,15 @@ impl BrokerContext {
             .spawn(move || {
                 context.update_job(&worker_job_id, |job| {
                     job.status = JobState::Running;
-                    job.stage = "Refreshing signed APT package lists".to_owned();
+                    job.stage = "Checking signed Linux package sources".to_owned();
                     job.progress_percent = 10;
                 });
                 let result = context.packages.refresh_lists();
-                context.finish_job(&worker_job_id, result, "Package lists refreshed");
+                context.finish_job(
+                    &worker_job_id,
+                    result,
+                    "Package lists updated. Nothing was installed.",
+                );
             })
             .is_err()
         {
@@ -1411,7 +1481,7 @@ impl BrokerContext {
             .spawn(move || {
                 context.update_job(&worker_job_id, |job| {
                     job.status = JobState::Running;
-                    job.stage = "Revalidating exact package candidates and disk space".to_owned();
+                    job.stage = "Checking the selected versions and disk space".to_owned();
                     job.progress_percent = 5;
                 });
                 let result = context.packages.apply_updates(
@@ -1419,7 +1489,11 @@ impl BrokerContext {
                     &confirmation,
                     disruption_acknowledged,
                 );
-                context.finish_job(&worker_job_id, result, "Selected updates verified");
+                context.finish_job(
+                    &worker_job_id,
+                    result,
+                    "Selected packages installed and verified",
+                );
             })
             .is_err()
         {
@@ -1627,6 +1701,419 @@ impl BrokerContext {
         Ok(json!({"job_id": job_id, "reused": false}))
     }
 
+    fn migrate_preflight(&self, source: ServerMigrateSource) -> Result<Value, String> {
+        let resolved = self.resolve_migrate_source(&source)?;
+        let mapped = if resolved.game == GameKind::Minecraft {
+            Some(if resolved.source_kind == "amp" {
+                migrate_plan::resolve_minecraft_software(
+                    &resolved.software_raw,
+                    &resolved.game_root,
+                )?
+            } else {
+                migrate_plan::detect_minecraft_software_from_root(&resolved.game_root)?
+            })
+        } else {
+            None
+        };
+        let copy_server_jar = mapped.as_ref().is_some_and(|mapped| mapped.copy_server_jar);
+        let report =
+            migrate_plan::scan_overlay(resolved.game, &resolved.game_root, copy_server_jar)?;
+        let version = migrate_plan::minecraft_version_for_create(&resolved.version_raw);
+        let terraria_software = if resolved.game == GameKind::Terraria {
+            Some(migrate_plan::detect_terraria_software(&resolved.game_root)?)
+        } else {
+            None
+        };
+        let mut blockers = Vec::new();
+        if resolved.running {
+            blockers.push(
+                "Stop the source server first. A live world copy can miss chunks or lock files."
+                    .to_owned(),
+            );
+        }
+        if copy_server_jar && version.used_latest {
+            blockers.push(
+                "This copy needs the exact Minecraft version (for example 1.21.8). Helix will not guess latest for a custom JAR."
+                    .to_owned(),
+            );
+        }
+        let mut notes = vec![
+            "Helix copies into a new native server. AMP and Pterodactyl files are not edited or deleted.".to_owned(),
+            "The new Helix server gets a free port. The old manager keeps its port until you retire that instance.".to_owned(),
+        ];
+        if resolved.source_kind == "folder" {
+            notes.push(
+                "Stop the Pterodactyl or AMP server yourself. Helix cannot see Wings power state from a folder path.".to_owned(),
+            );
+        }
+        match resolved.game {
+            GameKind::Minecraft => notes.push(
+                "Helix installs a fresh Java loader, then copies worlds, plugins, mods, and configs. AMP Java, logs, backups, and kvp stay behind.".to_owned(),
+            ),
+            GameKind::VRising => notes.push(
+                "Helix installs V Rising in its isolated runtime, then copies saves. Wine/SteamCMD folders from AMP are skipped.".to_owned(),
+            ),
+            GameKind::Valheim => notes.push(
+                "Helix installs the Linux dedicated server, then copies worlds and BepInEx plugins. If the world is not named Dedicated, Helix also keeps a copy as Dedicated so the server loads it.".to_owned(),
+            ),
+            GameKind::Terraria => notes.push(
+                "Helix installs Terraria or tModLoader, then copies worlds and .tmod files. If the world is not named world.wld, Helix also keeps a copy as world.wld so the dedicated server loads it.".to_owned(),
+            ),
+        }
+        if let Some(mapped) = mapped.as_ref()
+            && let Some(warning) = mapped.warning
+        {
+            notes.push(warning.to_owned());
+        }
+        Ok(json!({
+            "schema_version": 1,
+            "game": resolved.game,
+            "source_kind": resolved.source_kind,
+            "source_id": resolved.source_id,
+            "source_name": resolved.source_name,
+            "source_path": resolved.source_path,
+            "game_root": resolved.game_root,
+            "software": mapped.as_ref().map(|mapped| mapped.software),
+            "terraria_software": terraria_software,
+            "copy_server_jar": copy_server_jar,
+            "version": version.version,
+            "version_used_latest": version.used_latest,
+            "memory_mb": resolved.memory_mb,
+            "max_players": resolved.max_players,
+            "running": resolved.running,
+            "status": resolved.status,
+            "files": report.files,
+            "bytes": report.bytes,
+            "skipped": report.skipped,
+            "copies": report.copies,
+            "skips": report.skips,
+            "warning": mapped.as_ref().and_then(|mapped| mapped.warning),
+            "blockers": blockers,
+            "notes": notes
+        }))
+    }
+
+    fn resolve_migrate_source(
+        &self,
+        source: &ServerMigrateSource,
+    ) -> Result<ResolvedMigrate, String> {
+        match source {
+            ServerMigrateSource::Amp { instance_id } => {
+                let amp = self
+                    .amp
+                    .as_deref()
+                    .ok_or_else(|| "AMP is not configured on this host".to_owned())?;
+                let handle = amp.migrate_handle(instance_id)?;
+                let (game, game_root) = migrate_plan::find_game_root(&handle.path)?;
+                Ok(ResolvedMigrate {
+                    source_kind: "amp",
+                    source_id: handle.id,
+                    source_name: handle.name,
+                    source_path: handle.path,
+                    game_root,
+                    game,
+                    running: handle.running,
+                    status: handle.status,
+                    software_raw: handle.software,
+                    version_raw: handle.version,
+                    memory_mb: handle.memory_mb,
+                    max_players: handle.max_players,
+                })
+            }
+            ServerMigrateSource::Folder { path } => {
+                if path.len() > migrate_plan::MAX_MIGRATE_PATH_BYTES {
+                    return Err("that folder path is too long".to_owned());
+                }
+                let canonical = self.files.existing_managed_directory(path)?;
+                let (game, game_root) = migrate_plan::find_game_root(&canonical)?;
+                let memory_mb = match game {
+                    GameKind::Minecraft => 4_096,
+                    GameKind::VRising => 4_096,
+                    GameKind::Valheim => 2_048,
+                    GameKind::Terraria => 1_024,
+                };
+                let max_players = match game {
+                    GameKind::Minecraft => 20,
+                    GameKind::VRising => 40,
+                    GameKind::Valheim => 10,
+                    GameKind::Terraria => 8,
+                };
+                let software_raw = match game {
+                    GameKind::Minecraft => migrate_plan::minecraft_software_label(
+                        migrate_plan::detect_minecraft_software_from_root(&game_root)?.software,
+                    )
+                    .to_owned(),
+                    GameKind::VRising => "V Rising".to_owned(),
+                    GameKind::Valheim => "Valheim".to_owned(),
+                    GameKind::Terraria => match migrate_plan::detect_terraria_software(&game_root)?
+                    {
+                        TerrariaSoftware::Tmodloader => "tModLoader".to_owned(),
+                        TerrariaSoftware::Vanilla => "Terraria".to_owned(),
+                    },
+                };
+                Ok(ResolvedMigrate {
+                    source_kind: "folder",
+                    source_id: canonical.to_string_lossy().into_owned(),
+                    source_name: game_root
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("Copied server")
+                        .to_owned(),
+                    source_path: canonical,
+                    game_root,
+                    game,
+                    running: false,
+                    status: "folder".to_owned(),
+                    software_raw,
+                    version_raw: "latest".to_owned(),
+                    memory_mb,
+                    max_players,
+                })
+            }
+        }
+    }
+
+    fn start_migrate_job(self: &Arc<Self>, spec: ServerMigrateSpec) -> Result<Value, String> {
+        if !spec.copy_acknowledged {
+            return Err(
+                "confirm that Helix will copy into a new native server and leave the source manager alone"
+                    .to_owned(),
+            );
+        }
+        if !spec.source_stopped {
+            return Err("confirm the source server is stopped before copying".to_owned());
+        }
+        let resolved = self.resolve_migrate_source(&spec.source)?;
+        if resolved.running {
+            return Err(
+                "stop the source server first. Helix will not copy a live world.".to_owned(),
+            );
+        }
+        let game = spec.game.unwrap_or(resolved.game);
+        if game != resolved.game {
+            return Err("that folder is a different game than the one you selected".to_owned());
+        }
+        spec.validate_for_game(game)?;
+        let resource = match game {
+            GameKind::Minecraft => "minecraft:create",
+            GameKind::VRising => "vrising:create",
+            GameKind::Valheim => "valheim:create",
+            GameKind::Terraria => "terraria:create",
+        };
+        let reuse = format!("migrate:{}", resolved.source_id);
+        let native = Arc::clone(
+            self.native
+                .as_ref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())?,
+        );
+        let (job_id, reused) = self.queue_job("server_migrate", Some(resource), Some(&reuse))?;
+        if reused {
+            return Ok(json!({"job_id": job_id, "reused": true}));
+        }
+        let context = Arc::clone(self);
+        let worker_job_id = job_id.clone();
+        let overlay = resolved.game_root.clone();
+        if thread::Builder::new()
+            .name(format!("migrate-job-{}", &job_id[..8]))
+            .spawn(move || {
+                context.update_job(&worker_job_id, |job| {
+                    job.status = JobState::Running;
+                    job.stage = "Copying into a new Helix server".to_owned();
+                    job.progress_percent = 4;
+                });
+                let result = match game {
+                    GameKind::Minecraft => context.migrate_minecraft(
+                        &native,
+                        &spec,
+                        &resolved,
+                        &overlay,
+                        |stage, progress| {
+                            context.update_job(&worker_job_id, |job| {
+                                job.stage = stage.to_owned();
+                                job.progress_percent = progress;
+                            });
+                        },
+                    ),
+                    GameKind::VRising => {
+                        context.migrate_vrising(&native, &spec, &overlay, |stage, progress| {
+                            context.update_job(&worker_job_id, |job| {
+                                job.stage = stage.to_owned();
+                                job.progress_percent = progress;
+                            });
+                        })
+                    }
+                    GameKind::Valheim => {
+                        context.migrate_valheim(&native, &spec, &overlay, |stage, progress| {
+                            context.update_job(&worker_job_id, |job| {
+                                job.stage = stage.to_owned();
+                                job.progress_percent = progress;
+                            });
+                        })
+                    }
+                    GameKind::Terraria => {
+                        context.migrate_terraria(&native, &spec, &overlay, |stage, progress| {
+                            context.update_job(&worker_job_id, |job| {
+                                job.stage = stage.to_owned();
+                                job.progress_percent = progress;
+                            });
+                        })
+                    }
+                };
+                context.update_job(&worker_job_id, |job| match result {
+                    Ok(value) => {
+                        job.status = JobState::Complete;
+                        job.stage = "Copied".to_owned();
+                        job.progress_percent = 100;
+                        job.result = Some(value);
+                    }
+                    Err(message) => {
+                        job.status = JobState::Failed;
+                        job.stage = "Failed".to_owned();
+                        job.error = Some(message);
+                    }
+                });
+            })
+            .is_err()
+        {
+            self.finish_job(&job_id, Err("could not start the copy job".to_owned()), "");
+            return Err("could not start the copy job".to_owned());
+        }
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
+    fn migrate_minecraft<F>(
+        &self,
+        native: &NativeManager,
+        spec: &ServerMigrateSpec,
+        resolved: &ResolvedMigrate,
+        overlay: &Path,
+        progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        let mapped = if let Some(software) = spec.software {
+            migrate_plan::MappedMinecraftSoftware {
+                software,
+                copy_server_jar: matches!(software, MinecraftSoftware::Custom),
+                warning: None,
+            }
+        } else {
+            migrate_plan::resolve_minecraft_software(&resolved.software_raw, overlay)?
+        };
+        let version = spec
+            .version
+            .as_deref()
+            .map(migrate_plan::minecraft_version_for_create)
+            .unwrap_or_else(|| migrate_plan::minecraft_version_for_create(&resolved.version_raw));
+        let mut create = MinecraftCreateSpec {
+            pumpkin_bedrock_port: None,
+            name: spec.name.clone(),
+            software: mapped.software,
+            version: version.version,
+            memory_mb: spec.memory_mb,
+            cpu_millis: spec.cpu_millis,
+            max_players: spec.max_players,
+            game_port: spec.game_port,
+            network_exposure: spec.network_exposure,
+            start_on_boot: spec.start_on_boot,
+            eula_accepted: spec.eula_accepted,
+            custom_jar: None,
+        };
+        if mapped.copy_server_jar {
+            let jar = migrate_plan::find_minecraft_server_jar(overlay)?;
+            let mut staged = native.stage_migrate_jar(&jar)?;
+            staged.java_version = 21;
+            create.software = MinecraftSoftware::Custom;
+            create.custom_jar = Some(staged);
+            if create.version.eq_ignore_ascii_case("latest") {
+                return Err(
+                    "custom JAR copies need the exact Minecraft version (for example 1.21.8)"
+                        .to_owned(),
+                );
+            }
+        }
+        native
+            .create_minecraft(&create, Some(overlay), progress)
+            .map(|value| self.apply_creation_exposure(value, &spec.name, spec.network_exposure))
+    }
+
+    fn migrate_vrising<F>(
+        &self,
+        native: &NativeManager,
+        spec: &ServerMigrateSpec,
+        overlay: &Path,
+        progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        let create = VRisingCreateSpec {
+            name: spec.name.clone(),
+            memory_mb: spec.memory_mb,
+            cpu_millis: spec.cpu_millis,
+            max_players: spec.max_players,
+            game_port: spec.game_port,
+            query_port: spec.query_port,
+            network_exposure: spec.network_exposure,
+            list_on_browser: spec.list_on_browser,
+            start_on_boot: spec.start_on_boot,
+            wine_runtime_acknowledged: spec.wine_runtime_acknowledged,
+        };
+        native
+            .create_vrising(&create, Some(overlay), progress)
+            .map(|value| self.apply_creation_exposure(value, &spec.name, spec.network_exposure))
+    }
+
+    fn migrate_valheim<F>(
+        &self,
+        native: &NativeManager,
+        spec: &ServerMigrateSpec,
+        overlay: &Path,
+        progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        let create = ValheimCreateSpec {
+            name: spec.name.clone(),
+            memory_mb: spec.memory_mb,
+            cpu_millis: spec.cpu_millis,
+            max_players: spec.max_players,
+            game_port: spec.game_port,
+            network_exposure: spec.network_exposure,
+            start_on_boot: spec.start_on_boot,
+        };
+        native
+            .create_valheim(&create, Some(overlay), progress)
+            .map(|value| self.apply_creation_exposure(value, &spec.name, spec.network_exposure))
+    }
+
+    fn migrate_terraria<F>(
+        &self,
+        native: &NativeManager,
+        spec: &ServerMigrateSpec,
+        overlay: &Path,
+        progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        let create = TerrariaCreateSpec {
+            name: spec.name.clone(),
+            software: migrate_plan::detect_terraria_software(overlay)?,
+            memory_mb: spec.memory_mb,
+            cpu_millis: spec.cpu_millis,
+            max_players: spec.max_players,
+            game_port: spec.game_port,
+            network_exposure: spec.network_exposure,
+            start_on_boot: spec.start_on_boot,
+        };
+        native
+            .create_terraria(&create, Some(overlay), progress)
+            .map(|value| self.apply_creation_exposure(value, &spec.name, spec.network_exposure))
+    }
+
     fn start_minecraft_job(self: &Arc<Self>, spec: MinecraftCreateSpec) -> Result<Value, String> {
         let native = Arc::clone(
             self.native
@@ -1646,7 +2133,7 @@ impl BrokerContext {
                     job.progress_percent = 2;
                 });
                 let result = native
-                    .create_minecraft(&spec, |stage, progress| {
+                    .create_minecraft(&spec, None, |stage, progress| {
                         context.update_job(&worker_job_id, |job| {
                             job.stage = stage.to_owned();
                             job.progress_percent = progress;
@@ -1700,12 +2187,16 @@ impl BrokerContext {
                     job.stage = "Preparing".to_owned();
                     job.progress_percent = 2;
                 });
-                let result = native.create_vrising(&spec, |stage, progress| {
-                    context.update_job(&worker_job_id, |job| {
-                        job.stage = stage.to_owned();
-                        job.progress_percent = progress;
+                let result = native
+                    .create_vrising(&spec, None, |stage, progress| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = progress;
+                        });
+                    })
+                    .map(|value| {
+                        context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                     });
-                });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
                         job.status = JobState::Complete;
@@ -1751,12 +2242,16 @@ impl BrokerContext {
                     job.stage = "Preparing".to_owned();
                     job.progress_percent = 2;
                 });
-                let result = native.create_valheim(&spec, |stage, progress| {
-                    context.update_job(&worker_job_id, |job| {
-                        job.stage = stage.to_owned();
-                        job.progress_percent = progress;
+                let result = native
+                    .create_valheim(&spec, None, |stage, progress| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = progress;
+                        });
+                    })
+                    .map(|value| {
+                        context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                     });
-                });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
                         job.status = JobState::Complete;
@@ -1802,12 +2297,16 @@ impl BrokerContext {
                     job.stage = "Preparing".to_owned();
                     job.progress_percent = 2;
                 });
-                let result = native.create_terraria(&spec, |stage, progress| {
-                    context.update_job(&worker_job_id, |job| {
-                        job.stage = stage.to_owned();
-                        job.progress_percent = progress;
+                let result = native
+                    .create_terraria(&spec, None, |stage, progress| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = progress;
+                        });
+                    })
+                    .map(|value| {
+                        context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
                     });
-                });
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
                         job.status = JobState::Complete;
@@ -1853,7 +2352,14 @@ impl BrokerContext {
             .spawn(move || {
                 context.update_job(&worker_job_id, |job| {
                     job.status = JobState::Running;
-                    job.stage = "Resolving the selected Modrinth release".to_owned();
+                    job.stage = match spec.provider {
+                        helix_privd::ModpackProvider::Curseforge => {
+                            "Resolving the selected CurseForge release".to_owned()
+                        }
+                        helix_privd::ModpackProvider::Modrinth => {
+                            "Resolving the selected Modrinth release".to_owned()
+                        }
+                    };
                     job.progress_percent = 2;
                 });
                 let result = native
@@ -1884,10 +2390,10 @@ impl BrokerContext {
         {
             self.finish_job(
                 &job_id,
-                Err("could not start the Modrinth modpack installation job".to_owned()),
+                Err("could not start the modpack installation job".to_owned()),
                 "",
             );
-            return Err("could not start the Modrinth modpack installation job".to_owned());
+            return Err("could not start the modpack installation job".to_owned());
         }
         Ok(json!({"job_id": job_id, "reused": false}))
     }
@@ -2254,14 +2760,78 @@ fn amp_inventory_health(result: Option<Result<AmpInventory, String>>) -> Value {
 #[cfg(target_os = "linux")]
 fn append_game_port_mappings(mappings: &mut Vec<GamePortMapping>, servers: Vec<AmpServer>) {
     mappings.extend(servers.into_iter().filter_map(|server| {
-        server.game_port.map(|port| GamePortMapping {
-            instance_id: server.id,
-            name: server.name,
-            manager: server.manager.to_owned(),
-            port,
-            running: server.panel_running,
-        })
+        let port = server.game_port?;
+        Some(game_port_mapping_from_server(&server, port))
     }));
+}
+
+#[cfg(target_os = "linux")]
+fn game_port_mapping_from_server(server: &AmpServer, port: u16) -> GamePortMapping {
+    let (protocol, extra_ports) = exposure_ports(
+        if server.software.eq_ignore_ascii_case("pumpkin") {
+            "pumpkin"
+        } else {
+            server.kind
+        },
+        port,
+        server.query_port,
+    );
+    GamePortMapping {
+        instance_id: server.id.clone(),
+        name: server.name.clone(),
+        manager: server.manager.to_owned(),
+        port,
+        running: server.panel_running,
+        extra_ports,
+        protocol,
+        kind: if server.software.eq_ignore_ascii_case("pumpkin") {
+            "pumpkin"
+        } else {
+            server.kind
+        }
+        .to_owned(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn game_port_mapping_from_create(
+    instance_id: String,
+    server_name: &str,
+    port: u16,
+    value: &Value,
+) -> GamePortMapping {
+    let kind = value
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("minecraft");
+    let query_port = value
+        .get("query_port")
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok());
+    let (protocol, extra_ports) = exposure_ports(
+        if value["software"] == "pumpkin" {
+            "pumpkin"
+        } else {
+            kind
+        },
+        port,
+        query_port,
+    );
+    GamePortMapping {
+        instance_id,
+        name: server_name.to_owned(),
+        manager: "helix".to_owned(),
+        port,
+        running: true,
+        extra_ports,
+        protocol,
+        kind: if value["software"] == "pumpkin" {
+            "pumpkin"
+        } else {
+            kind
+        }
+        .to_owned(),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -2493,7 +3063,10 @@ fn problem_code(message: &str) -> &'static str {
         || lower.contains("already in progress")
     {
         "conflict"
-    } else if lower.contains("unavailable") || lower.contains("did not become reachable") {
+    } else if lower.contains("unavailable")
+        || lower.contains("did not become reachable")
+        || lower.contains("did not open port")
+    {
         "dependency_unavailable"
     } else {
         "operation_failed"
@@ -2783,6 +3356,7 @@ mod tests {
             manager_panel_port: 0,
             panel_port: 0,
             game_port: Some(25_565),
+            query_port: None,
             path: "/srv/test".to_owned(),
             warnings: Vec::new(),
             manager: "helix",

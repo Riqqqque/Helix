@@ -211,7 +211,7 @@ export function ServerIconDialog({
   };
 
   return (
-    <Dialog title={`Server icon · ${server.name}`} onClose={onClose} wide>
+    <Dialog title={`Server icon · ${server.name}`} onClose={onClose} wide flush>
       <div class="server-icon-editor">
         <section>
           <div class="server-icon-editor__head"><div><strong>Presets</strong><span>Fast, lightweight artwork stored as a theme choice.</span></div></div>

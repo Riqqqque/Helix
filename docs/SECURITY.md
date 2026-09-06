@@ -110,13 +110,20 @@ release work.
 
 Sessions use opaque random bearer tokens; only a cryptographic hash is stored.
 The browser cookie is `HttpOnly`, host-only, `SameSite=Strict`, and scoped to
-`/`. A reviewed HTTPS deployment must add the appropriate Secure/host-prefix
-policy.
+`/`. By default Helix enforces a 30-minute idle deadline and an eight-hour
+absolute deadline. Settings can turn that expiry off so the same cookie lasts
+until logout or a password change (capped at 400 days). CSRF pairing and
+credential-change revocation stay required. A reviewed HTTPS deployment must
+add the appropriate Secure/host-prefix policy.
 
 Every protected route requires the session cookie and the current session-bound
-`X-Helix-CSRF` proof. The frontend keeps that proof in memory, so a reload
-requires login instead of accepting a cookie-only request. CSRF rotation is
-compare-and-swap: one proof cannot successfully create two replacement proofs.
+`X-Helix-CSRF` proof. The frontend stores only that proof in origin-scoped
+browser storage so a reload can revalidate the still-`HttpOnly` cookie and proof
+through `/auth/me`. Normal idle and absolute deadlines remain server-enforced;
+an invalid or expired session clears the saved proof. Browser origins include
+the port, so another service on the same host but a different port cannot read
+it. CSRF rotation is compare-and-swap: one proof cannot successfully create two
+replacement proofs.
 
 State-changing routes validate configured Origin and incompatible Fetch Metadata
 before authorization-dependent body processing. Login, bootstrap, preferences,
@@ -212,13 +219,18 @@ boots, not unlimited retention.
 
 Native backup deletion creates an opaque trash record and moves only the exact
 known archive/metadata pair. Undo restores only the matching protected record
-within policy. This does not replace off-host backups or prove restore after
-disk loss.
+within policy. Removed native servers use the same kind of recovery storage.
+Permanent deletion from Removed and hidden requires the exact server name and
+then deletes world files, backups, and console history. This does not replace
+off-host backups or prove restore after disk loss.
 
 AMP credentials must be root-owned/private, and the AMP endpoint must remain on
 loopback. AMP responses are bounded and strictly interpreted. An unavailable or
-ambiguous AMP action fails; Helix does not adopt or rewrite AMP instances during
-discovery.
+ambiguous AMP action fails. Helix does not adopt AMP or Pterodactyl instances
+as native servers. A separate copy job can read a stopped source and write a
+new Helix instance; AMP kvp, `server.properties`, worlds, and Pterodactyl
+volumes are not rewritten or deleted. Discovery still does not turn an imported
+connection into a `helix:` server.
 
 ## Host power and start on boot
 
@@ -281,8 +293,8 @@ Native-server public setup discovers only UPnP Internet Gateway Devices on the
 local link. SSDP responses are bounded; the description URL must use plain HTTP
 to the literal private/link-local IPv4 sender; redirects, DNS names,
 credentials, fragments, cross-origin control URLs, oversized HTTP/XML bodies,
-and XML document types are rejected. Helix checks for any existing TCP mapping
-before creation, verifies its exact internal address, port, enabled flag, and
+and XML document types are rejected. Helix checks for any existing TCP or UDP
+mapping before creation, verifies its exact internal address, port, enabled flag, and
 description afterward, and journals ownership. If AMP already has that port
 claimed, Helix names the AMP instance when it can and tells you to change the
 port in AMP (stop the instance, Configuration → Server Settings / Portals,
@@ -290,26 +302,34 @@ Apply). Helix does not rewrite AMP files or call AMP SetConfig. If the instance
 is gone and only a leftover UPnP mapping whose description starts with `AMP`
 remains, a separate confirmed release can delete that router mapping only.
 Removal of Helix-owned public access re-verifies
-that exact body and refuses drifted/unowned state. Only TCP is requested for
-Minecraft.
+that exact body and refuses drifted/unowned state. Minecraft and Terraria
+request TCP. V Rising requests UDP for the game and query ports. Valheim
+requests UDP for the game port and the next two.
 UFW is supplemented only if already active. A CGNAT/private/reserved WAN address
-is reported as blocked rather than public. Live router/UFW mutation testing is
-still a release gate and must use disposable rules and a controlled router.
+is reported as blocked rather than public. A confirmed mapping is reachable from
+the public internet; scanners find common game ports without the operator
+sharing the address. Helix does not treat that as proof of a leaked IP. Live
+router/UFW mutation testing is still a release gate and must use disposable
+rules and a controlled router.
 
 ## Packages and Helix updates
 
-Opening the package page reads dpkg/APT inventory and a simulation without
-refreshing lists or mutating dpkg. A separate explicit refresh job can run
-`apt-get update`. A separate selected-candidate job accepts bounded exact
-name/installed/candidate tuples, rejects holds and changed candidates, requires
-download headroom and disruption acknowledgement, re-runs a no-removal/no-new-
-package simulation, preserves existing conffiles, serializes APT work, and
-verifies every final installed version. Bounded job logs are retained.
+Opening the package page reads dpkg/APT inventory and a no-change preview
+without refreshing lists or mutating dpkg. A separate explicit refresh job can
+run `apt-get update`. helix-privd passes `APT::Sandbox::User=root` so APT's
+HTTPS helper does not seteuid to `_apt`; systemd `NoNewPrivileges` would
+otherwise kill that download. A separate selected-candidate job accepts bounded
+exact name/installed/candidate tuples, rejects holds and changed candidates,
+requires download headroom and disruption acknowledgement, re-runs a
+no-removal/no-new-package preview, preserves existing conffiles, serializes APT
+work, and verifies every final installed version. Bounded job logs are retained.
 
 This is not transactional package rollback. Power loss, maintainer-script
 failure, dpkg partial configuration, service disruption, and unusual conffile
 states still require the distribution's recovery tools and a disposable test
-matrix. Helix never auto-reboots after package work.
+matrix. Helix never auto-reboots after package work. Kernel, libc, systemd, and
+similar packages are labeled as often needing a host reboot; `/var/run/reboot-required`
+is the OS truth after apply. Reboot remains a separate `system.power` action.
 
 ## Optional host terminal
 
@@ -381,8 +401,46 @@ failure removes the exact incomplete container, manifest, and instance.
 
 Server-optional and client-only files are excluded and counted. The result is a
 server-safe subset, not byte-for-byte full-pack parity. Unknown loaders and
-every upstream pack matrix remain unclaimed. CurseForge uses the public website
-catalog and CDN, not a stored owner API key.
+every upstream pack matrix remain unclaimed. CurseForge marketplace and modpack
+downloads use the official `api.curseforge.com` catalog with an owner-supplied
+API key stored only in helix-privd (`{state_root}/curseforge-api-key`, mode
+0600). The key is never returned to the browser or stored in helixd SQLite.
+CurseForge pack archives and every required file are re-resolved by numeric
+project/file ID, restricted to approved forgecdn hosts, size-checked, and
+verified against the catalog-declared SHA-1 before staged files can be activated.
+The known `edge.forgecdn.net` redirector is converted to its direct trusted
+`mediafilez.forgecdn.net` equivalent; arbitrary redirects remain disabled.
+If a release declares `serverPackFileId`, Helix prefers that publisher server
+archive. It enforces a 2 GiB compressed archive limit, 8,192-entry limit, 10 GiB
+unpacked limit, per-file and compression-ratio limits, UTF-8 relative paths,
+regular-file-only extraction, case-insensitive collision checks, and a 45-minute
+operation deadline. Helix-owned launch files are not extracted. If no server pack
+exists, required metadata is fetched through CurseForge's bounded bulk-file API
+and each selected JAR is still verified individually.
+Required CurseForge entries with safe non-JAR names (for example shader-pack
+ZIPs) are counted and excluded instead of being written into the server's
+`mods/` directory. Path separators, drive prefixes, and traversal-like names
+still fail the entire staged install.
+Helix does not ship a CurseForge secret. If you use CurseForge, this host must
+reach `api.curseforge.com` on a normal ISP address; VPS and VPN exits are often
+blocked even with a valid key.
+
+Pack-created servers persist provider/version provenance plus a SHA-256
+inventory of pack-managed files. Manual update checks consider only stable,
+installable releases on the same Minecraft version and loader. Candidates are
+fully downloaded, publisher-hash checked, and prepared before downtime. After a
+clean stop, Helix verifies the current inventory, creates a complete backup,
+and moves old managed files into a same-filesystem rollback directory before
+activating replacements. Worlds, player/account lists, server settings, icons,
+logs, crash reports, and backups are outside the inventory. Locally edited
+configuration is preserved; changed executable JARs and path/link collisions
+fail closed. The new container must answer a Minecraft health check before the
+old rollback files are removed. Failure restores the old files, manifest,
+container, and prior running/stopped state while retaining the safety backup.
+Before activation, Helix also verifies the completed gzip archive. If the new
+server fails validation, the complete archive is restored so startup-time world
+or player-data migrations are rolled back too; failed update files remain in
+protected recovery storage.
 
 TLS and declared hashes protect specific transport/integrity properties; they
 do not prove an artifact is safe. Download size, provenance evidence,
@@ -423,7 +481,8 @@ root. Broader operator actions, export, holds, hash chaining, off-host
 forwarding, and a reviewed support-bundle generator remain future work.
 
 Helix has no required cloud account and no advertised telemetry pipeline. Local
-weather, Modrinth, Minecraft/runtime, and optional AMP requests still disclose
+weather, Modrinth, official CurseForge (when the owner saved an API key),
+Minecraft/runtime, and optional AMP requests still disclose
 the information necessary to those configured services.
 
 ## Private network and Tailscale
@@ -487,7 +546,7 @@ mocked, covered only by one host, or waived without an explicit narrow reason.
 - systemd transient units: <https://www.freedesktop.org/software/systemd/man/latest/systemd-run.html>
 - Linux constrained path resolution: <https://man7.org/linux/man-pages/man2/openat2.2.html>
 - UFW behavior: <https://manpages.ubuntu.com/manpages/jammy/man8/ufw.8.html>
-- APT simulation: <https://manpages.ubuntu.com/manpages/jammy/man8/apt-get.8.html>
+- APT preview (`apt-get --simulate`): <https://manpages.ubuntu.com/manpages/jammy/man8/apt-get.8.html>
 - SQLite durability/WAL: <https://www.sqlite.org/pragma.html> and <https://www.sqlite.org/wal.html>
 
 Minimum supported versions and effective target-host behavior must be tested;

@@ -62,6 +62,7 @@ deployment guide. Nothing ships with a demo city or demo server.
 - [Dashboard and Home](https://github.com/Riqqqque/Helix/wiki/Dashboard-and-Home)
 - [Storage and Files](https://github.com/Riqqqque/Helix/wiki/Storage-and-Files)
 - [Servers and Marketplace](https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace)
+- [Copy a server into Helix](https://github.com/Riqqqque/Helix/wiki/Server-Migration)
 - [Network, Host, and Updates](https://github.com/Riqqqque/Helix/wiki/Network-Host-and-Updates)
 - [Hooks and Terminal](https://github.com/Riqqqque/Helix/wiki/Hooks-and-Terminal)
 - [Architecture](https://github.com/Riqqqque/Helix/wiki/Architecture)
@@ -74,7 +75,8 @@ deployment guide. Nothing ships with a demo city or demo server.
 
 Broad/unattended package upgrades, public-network
 exposure, portable Wasm Strands, and native Strand sidecars are not implemented.
-Helix can apply a SHA-256-pinned GitHub release to itself from System updates.
+Helix can apply a SHA-256-pinned GitHub release to itself from Host → Linux
+updates.
 Exact selected APT candidates do have a guarded path but no rollback claim.
 Helix can inspect UFW, manage exact owned allow rules, and separately enable
 inactive UFW only after preserving a verified SSH listener; it cannot configure
@@ -83,10 +85,12 @@ private Tailscale route and install/start the exact service on eligible
 Debian/Ubuntu hosts, but it does not authenticate the tailnet or widen network
 trust.
 
-Modpack creation searches Modrinth or the public CurseForge catalog without an
-owner API key, pins a supported loader (Fabric, Forge, NeoForge, or Quilt),
-and starts an isolated server. The result is a server-safe subset, not a full
-client copy. Broad pack matrices and every upstream failure mode stay open.
+Modpack creation searches Modrinth, and CurseForge when an owner API key is
+saved in Settings → Catalogs. If you use CurseForge, this host needs a normal
+ISP IP; VPS and VPN exits are often blocked. Create pins a supported loader
+(Fabric, Forge, NeoForge, or Quilt) and starts an isolated server. The result is
+a server-safe subset, not a full client copy. Broad pack matrices and every
+upstream failure mode stay open.
 
 The authoritative implementation ledger is
 [`PROGRESS.md`](https://github.com/Riqqqque/Helix/blob/main/PROGRESS.md).

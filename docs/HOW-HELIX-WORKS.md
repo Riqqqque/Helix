@@ -32,9 +32,12 @@ flowchart LR
 
 1. `helixd` starts as an unprivileged process, opens its local state, and serves
    the compiled frontend and versioned API.
-2. Login creates a bounded revocable session. Protected requests require the
-   session cookie, an in-memory session-bound CSRF proof, and the capability for
-   that operation.
+2. Login creates a revocable session. By default it expires after 30 minutes
+   idle and eight hours; Settings can turn that off. Protected requests require
+   the session cookie, a session-bound CSRF proof, and the capability for that
+   operation. Helix saves only the proof for this exact browser origin and
+   revalidates both parts after a reload; refreshing never extends or bypasses
+   the server deadline.
 3. Read-only adapters collect bounded host data. The browser never reads the
    host directly.
 4. Root-required work is serialized into a closed `BrokerRequest` enum and sent
@@ -63,10 +66,14 @@ boundary.
 Helix-native Minecraft instances run in Docker containers managed by the
 broker. Current native install paths cover Paper, Purpur, Folia, Leaves, Fabric, and
 Vanilla. V Rising uses a separate Helix-owned isolated runtime image rather than
-installing Wine on the host. The manager provides creation, lifecycle actions,
+installing Wine on the host. New V Rising servers list on the in-game browser
+by default. Direct Connect to a public IP still needs the UDP game and query
+ports. The manager provides creation, lifecycle actions,
 settings where they exist, files, performance, console or logs, updates,
-backups, restore, a start-on-boot Docker restart policy, and compatible
-Modrinth or CurseForge content where the selected software supports it. Each server can use a
+backups, restore, a start-after-boot choice, and compatible
+Modrinth or CurseForge content where the selected software supports it. If you
+use CurseForge, this host needs a normal ISP IP; VPS and VPN exits are often
+blocked. Each server can use a
 compact preset, a game mark, or a validated same-origin uploaded PNG/JPEG icon.
 
 “Start with a modpack” is a separate narrow creation path. Search can explain
@@ -85,8 +92,10 @@ of trusting browser memory. History pages are cursor-based and bounded, so
 permanent or unlimited.
 
 Per-instance guards serialize incompatible work. Creation, update, backup, and
-marketplace installs expose background job status, but current job state lives
-for the broker process lifetime and is not yet a crash-persistent queue. Native
+marketplace installs expose background job status. The browser keeps only an
+opaque job receipt so a reload reattaches to status instead of submitting the
+mutation again. Current job state still lives for the broker process lifetime
+and is not yet a crash-persistent queue. Native
 kill is a confirmed SIGKILL that can run beside a hung stop or restart; it is
 not offered for AMP.
 
@@ -98,7 +107,9 @@ lifecycle semantics. Helix will not rewrite AMP instance files or steal a live
 AMP game port; it names the instance and the AMP clicks to change the port, or
 it can delete a leftover AMP-described UPnP mapping after an exact confirmation
 when no instance still lists that number. An unavailable or ambiguous AMP
-response fails closed.
+response fails closed. A separate copy job can read a stopped AMP world and
+write a new Helix server; that does not turn the AMP instance into a native
+one.
 
 ## Host, storage, network, and updates
 
@@ -118,11 +129,13 @@ Start-on-boot changes only the exact configured Helix dashboard and gateway
 container restart policies. Immediate host reboot requires exact hostname
 confirmation, acknowledgement, workload preflight, a 10–300 second delay, and
 a cancellable systemd timer. Recurring daily/weekday schedules use the verified
-host timezone and the same safety checks.
+host timezone and the same safety checks. Native game containers cannot be
+started, stopped, or restarted from the Docker inventory page; Servers uses a
+45-second stop and a health check.
 
 Opening the package page is read-only. Package-list refresh and exact selected-
 candidate Apply are separate confirmed jobs. Apply revalidates versions, holds,
-disk headroom, a no-removal/no-new-package simulation, conffile policy, and final
+disk headroom, a no-removal/no-new-package preview, conffile policy, and final
 installed versions. It does not claim rollback or reboot automatically. Helix
 self-update can apply a SHA-256-pinned GitHub source archive to the dashboard,
 gateway, and broker, then roll those back if health-check fails. `git pull` is
@@ -159,8 +172,10 @@ broker-managed roots rather than trusting display names as paths.
 
 Critical-state snapshots and integrity checks exist. Native backups can be
 created and restored; deleting a known backup moves it into protected
-recoverable trash with an opaque identity and Undo metadata. This is not a
-substitute for an independent off-host copy or a clean-machine restore drill.
+recoverable trash with an opaque identity and Undo metadata. Removed native
+servers work the same way until you delete them forever from Removed and hidden.
+This is not a substitute for an independent off-host copy or a clean-machine
+restore drill.
 
 ## Why this design is appealing
 

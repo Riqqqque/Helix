@@ -50,6 +50,16 @@ jobs:
       - name: Run tests
         run: cargo test --locked --workspace --all-targets --all-features
 
+      - name: Test privileged backup rollback
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test_binary=$(cargo test --locked -p helix-privd --bin helix-privd --all-features --no-run --message-format=json |
+            jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable')
+          test -n "$test_binary"
+          test -x "$test_binary"
+          sudo "$test_binary" --ignored --exact native::modpacks::tests::failed_boot_rollback_restores_the_complete_backup_including_world_data
+
       - name: Check packaging shell syntax
         if: matrix.toolchain == 'stable'
         run: >-

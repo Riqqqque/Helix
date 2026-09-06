@@ -27,8 +27,8 @@ use helix_privd::{
     FileUploadTarget, FirewallRuleSpec, GameKind, GamePortPolicySpec, HookServiceAction,
     MarketplaceCatalog, MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch,
     MinecraftSoftware, ModpackProvider, PackageUpdateCandidate, RecurringRebootSpec, ServerAction,
-    ServerNetworkExposure, StorageAnalysisMode, TerrariaCreateSpec, VRisingCreateSpec,
-    ValheimCreateSpec,
+    ServerMigrateSource, ServerMigrateSpec, ServerNetworkExposure, StorageAnalysisMode,
+    TerrariaCreateSpec, VRisingCreateSpec, ValheimCreateSpec,
 };
 use helix_state::{
     DatabaseSet, ServerAppearanceUpdateOutcome, UserPreferencesRecord, UserPreferencesUpdateInput,
@@ -311,6 +311,12 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             "/marketplace/curseforge/image",
             get(marketplace_curseforge_image),
         )
+        .route(
+            "/marketplace/curseforge/key",
+            get(curseforge_key_status)
+                .put(set_curseforge_api_key)
+                .delete(clear_curseforge_api_key),
+        )
         .route("/files", get(list_directory))
         .route("/files/directory", post(create_directory))
         .route("/files/file", post(create_file))
@@ -372,6 +378,8 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/servers/vrising", post(create_vrising))
         .route("/servers/valheim", post(create_valheim))
         .route("/servers/terraria", post(create_terraria))
+        .route("/servers/migrate/preflight", post(migrate_server_preflight))
+        .route("/servers/migrate", post(migrate_server))
         .route("/servers/{instance_id}", get(server_detail))
         .route(
             "/servers/{instance_id}/appearance",
@@ -437,6 +445,11 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             put(set_native_start_on_boot),
         )
         .route("/servers/{instance_id}/memory", put(set_native_memory))
+        .route("/servers/{instance_id}/cpu", put(set_native_cpu))
+        .route(
+            "/servers/{instance_id}/browser-listing",
+            put(set_native_browser_listing),
+        )
         .route("/servers/{instance_id}/remove", post(trash_native_server))
         .route("/jobs/{job_id}", get(job_status))
         .layer(DefaultBodyLimit::max(FILE_API_BODY_LIMIT_BYTES));
@@ -459,11 +472,20 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .merge(terminal_api)
         .merge(settings_api)
         .merge(strand_api)
-        .fallback(api_not_found)
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(50),
-        ));
+        ))
+        .merge(
+            Router::new()
+                .route("/servers/removed/{trash_id}", delete(purge_trashed_server))
+                .layer(DefaultBodyLimit::max(FILE_API_BODY_LIMIT_BYTES))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::REQUEST_TIMEOUT,
+                    Duration::from_secs(300),
+                )),
+        )
+        .fallback(api_not_found);
 
     let index = web_root.join("index.html");
     let index_file = ServeFile::new(index)
@@ -800,6 +822,34 @@ async fn marketplace_image(
         HeaderValue::from_static("private, max-age=1800"),
     );
     Ok(response)
+}
+
+async fn curseforge_key_status(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    broker_json(&state, BrokerRequest::CurseforgeKeyStatus {}).await
+}
+
+async fn set_curseforge_api_key(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<CurseforgeApiKeyBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(&state, BrokerRequest::SetCurseforgeApiKey { key: body.key }).await
+}
+
+async fn clear_curseforge_api_key(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    broker_json(&state, BrokerRequest::ClearCurseforgeApiKey {}).await
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1574,6 +1624,24 @@ struct StartOnBootBody {
 #[serde(deny_unknown_fields)]
 struct NativeMemoryBody {
     memory_mb: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeCpuBody {
+    cpu_millis: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeBrowserListingBody {
+    list_on_browser: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CurseforgeApiKeyBody {
+    key: String,
 }
 
 #[derive(Deserialize)]
@@ -2498,6 +2566,44 @@ async fn restore_trashed_server(
     broker_json(&state, BrokerRequest::RestoreTrashedServer { trash_id }).await
 }
 
+async fn purge_trashed_server(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(trash_id): RoutePath<String>,
+    body: Result<Json<RemoveNativeServerBody>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    let mut value = broker_value(
+        &state,
+        BrokerRequest::PurgeTrashedServer {
+            trash_id,
+            confirmation_name: body.confirmation_name,
+        },
+    )
+    .await?;
+    if let Some(instance_id) = value
+        .get("instance_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+    {
+        let databases = Arc::clone(&state.databases);
+        let tracker = state.blocking_tasks.clone();
+        let appearance_cleared = tokio::task::spawn_blocking(move || {
+            let _guard = tracker.start();
+            databases
+                .state()
+                .purge_server_appearance(&instance_id)
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false);
+        value["appearance_cleared"] = serde_json::json!(appearance_cleared);
+    }
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response())
+}
+
 async fn server_appearance(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -2983,6 +3089,9 @@ async fn create_vrising(
     let Json(mut spec) = body.map_err(auth::map_json_rejection)?;
     spec.wine_runtime_acknowledged = true;
     spec.validate().map_err(ApiError::BrokerRejected)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
     broker_json(&state, BrokerRequest::CreateVRising { spec }).await
 }
 
@@ -2995,6 +3104,9 @@ async fn create_valheim(
     auth::require_capability(&state, &headers, "games.manage").await?;
     let Json(spec) = body.map_err(auth::map_json_rejection)?;
     spec.validate().map_err(ApiError::BrokerRejected)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
     broker_json(&state, BrokerRequest::CreateValheim { spec }).await
 }
 
@@ -3011,6 +3123,33 @@ async fn create_terraria(
         auth::require_capability(&state, &headers, "network.firewall.write").await?;
     }
     broker_json(&state, BrokerRequest::CreateTerraria { spec }).await
+}
+
+async fn migrate_server_preflight(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<ServerMigrateSource>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(source) = body.map_err(auth::map_json_rejection)?;
+    broker_json(&state, BrokerRequest::MigrateServerPreflight { source }).await
+}
+
+async fn migrate_server(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<ServerMigrateSpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(mut spec) = body.map_err(auth::map_json_rejection)?;
+    spec.wine_runtime_acknowledged = true;
+    spec.validate().map_err(ApiError::BrokerRejected)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
+    broker_json(&state, BrokerRequest::MigrateServer { spec }).await
 }
 
 async fn set_native_start_on_boot(
@@ -3051,6 +3190,45 @@ async fn set_native_memory(
     .await
 }
 
+async fn set_native_cpu(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<NativeCpuBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    helix_privd::validate_cpu_millis(body.cpu_millis).map_err(ApiError::BrokerRejected)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetNativeCpu {
+            instance_id,
+            cpu_millis: body.cpu_millis,
+        },
+    )
+    .await
+}
+
+async fn set_native_browser_listing(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<NativeBrowserListingBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetNativeBrowserListing {
+            instance_id,
+            list_on_browser: body.list_on_browser,
+        },
+    )
+    .await
+}
+
 async fn minecraft_modpack_search(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -3073,11 +3251,15 @@ async fn minecraft_modpack_project(
     State(state): State<ApiState>,
     headers: HeaderMap,
     RoutePath(project_id): RoutePath<String>,
+    Query(query): Query<ServerMarketplaceProjectQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     auth::require_capability(&state, &headers, "games.view").await?;
     broker_json(
         &state,
-        BrokerRequest::MinecraftModpackProject { project_id },
+        BrokerRequest::MinecraftModpackProject {
+            project_id,
+            provider: query.provider,
+        },
     )
     .await
 }
@@ -3852,6 +4034,7 @@ mod tests {
         let body = response_json(response).await;
         assert_eq!(body["user"]["loginName"], "owner");
         assert_eq!(body["user"]["displayName"], "Riqué");
+        assert_eq!(body["sessionExpires"], true);
         AuthClient {
             cookie,
             csrf: body["csrfToken"].as_str().expect("CSRF token").to_owned(),
@@ -4153,6 +4336,7 @@ mod tests {
                 .is_some_and(|items| items.iter().any(|item| item == "system.view"))
         );
         assert!(me["expiresAtUnixMs"].as_i64().is_some());
+        assert_eq!(me["sessionExpires"], true);
 
         for route in [
             "/api/v1/health",
@@ -4308,6 +4492,96 @@ mod tests {
                 .is_some_and(|items| items.iter().any(|item| item == "system.view"))
         );
         assert!(login["csrfToken"].as_str().is_some());
+        assert_eq!(login["sessionExpires"], true);
+    }
+
+    #[tokio::test]
+    async fn session_expiry_toggle_updates_cookie_max_age() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let bootstrap = install_bootstrap(&context);
+        let client = claim_owner(&context, &bootstrap).await;
+
+        let disabled = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    put_json(
+                        "/api/v1/auth/session-expiry",
+                        &json!({ "expires": false }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("disable expiry");
+        assert_eq!(disabled.status(), StatusCode::OK);
+        let set_cookie = disabled
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("session cookie")
+            .to_str()
+            .expect("cookie text")
+            .to_owned();
+        assert!(set_cookie.contains("Max-Age=34560000"));
+        let body = response_json(disabled).await;
+        assert_eq!(body["expires"], false);
+        assert!(body["expiresAtUnixMs"].as_i64().is_some());
+
+        let me = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(get("/api/v1/auth/me"), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .expect("me after disable");
+        assert_eq!(me.status(), StatusCode::OK);
+        let me = response_json(me).await;
+        assert_eq!(me["sessionExpires"], false);
+
+        let current = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(get("/api/v1/auth/session-expiry"), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .expect("get expiry");
+        assert_eq!(current.status(), StatusCode::OK);
+        let current = response_json(current).await;
+        assert_eq!(current["expires"], false);
+
+        let enabled = context
+            .app
+            .oneshot(with_csrf(
+                with_cookie(
+                    put_json(
+                        "/api/v1/auth/session-expiry",
+                        &json!({ "expires": true }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("enable expiry");
+        assert_eq!(enabled.status(), StatusCode::OK);
+        let set_cookie = enabled
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("session cookie")
+            .to_str()
+            .expect("cookie text")
+            .to_owned();
+        assert!(set_cookie.contains("Max-Age=28800"));
+        let body = response_json(enabled).await;
+        assert_eq!(body["expires"], true);
     }
 
     #[tokio::test]
@@ -6111,6 +6385,7 @@ mod tests {
             "/api/v1/servers/example/marketplace/projects/1bokaNcj",
             "/api/v1/servers/minecraft/modpacks/search?query=adventure",
             "/api/v1/servers/minecraft/modpacks/projects/1bokaNcj",
+            "/api/v1/marketplace/curseforge/key",
         ] {
             let response = context
                 .app
@@ -6340,6 +6615,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn curseforge_key_requires_games_capabilities() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let unauthenticated = context
+            .app
+            .clone()
+            .oneshot(get("/api/v1/marketplace/curseforge/key"))
+            .await
+            .expect("unauthenticated curseforge key response");
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+        let unauthenticated_put = HttpRequest::builder()
+            .method("PUT")
+            .uri("/api/v1/marketplace/curseforge/key")
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::CONTENT_TYPE, "application/json")
+            .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 41000))))
+            .body(Body::from("{"))
+            .expect("malformed unauthenticated curseforge key request");
+        let response = context
+            .app
+            .clone()
+            .oneshot(unauthenticated_put)
+            .await
+            .expect("unauthenticated curseforge key put response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let connection =
+            rusqlite::Connection::open(context.data.path().join("state").join("helix-state.db"))
+                .expect("open state database");
+        connection
+            .execute(
+                "DELETE FROM role_capabilities WHERE capability = 'games.manage'",
+                [],
+            )
+            .expect("remove server management capability");
+        drop(connection);
+        let bootstrap = install_bootstrap(&context);
+        let client = claim_owner(&context, &bootstrap).await;
+        let response = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    put_json(
+                        "/api/v1/marketplace/curseforge/key",
+                        &json!({ "key": "$2a$10$abcdefghijklmnopqrstuvwx" }),
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("curseforge key put authorization response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response_json(response).await["code"],
+            "authorization_denied"
+        );
+
+        let response = context
+            .app
+            .oneshot(with_csrf(
+                with_cookie(
+                    delete_json("/api/v1/marketplace/curseforge/key", 1),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .expect("curseforge key delete authorization response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response_json(response).await["code"],
+            "authorization_denied"
+        );
+    }
+
+    #[tokio::test]
     async fn server_console_maps_json_only_after_headers_and_authentication() {
         let context = test_app(DatabaseStatus::Ok).await;
         let response = context
@@ -6374,6 +6729,8 @@ mod tests {
             "/api/v1/servers/example/settings",
             "/api/v1/servers/example/actions",
             "/api/v1/servers/minecraft",
+            "/api/v1/servers/migrate/preflight",
+            "/api/v1/servers/migrate",
         ];
         for (index, path) in paths.iter().enumerate() {
             let response = context

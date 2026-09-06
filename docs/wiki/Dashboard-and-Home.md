@@ -16,7 +16,9 @@ or Settings. An empty URL fragment opens Home so a pinned tab lands on the
 dashboard. Settings stays at the bottom of the sidebar. Choose **Arrange**
 beside Pages to move, hide, or add primary pages; the set and order follow the
 owner account. Hidden pages keep their slot, so Add puts them back where they
-were.
+were. A refresh does not snap pages back to the factory order. Helix saves the
+layout to this host, and if you reload before that save lands, this browser
+keeps the change and retries.
 
 Host metrics refresh every five seconds by default. Change that interval in
 **Settings → Dashboard behavior**. The top-right refresh button requests a
@@ -54,7 +56,7 @@ declared `helix:ui.widget`. The Globe widget is the same country-level map as
 the Globe page, including an optional data-motion toggle in widget settings. While editing, **Import from Homarr** reads Homarr
 apps that already have an http(s) address. Current Homarr stores those in SQLite; older
 Homarr JSON configs still work. Helix adds the checked shortcuts onto **the Home
-you are already editing**, in Homarr's layout order as short tiles. They do not
+you are already editing**, in Homarr's layout order as square tiles. They do not
 create a separate Homarr Home. Those tiles are normal widgets: rename them,
 resize them, recolor them, or copy them onto any other Home. Re-import skips
 shortcuts that are already on that Home. On a plain HTTP dashboard, Paste uses Helix's
@@ -64,7 +66,8 @@ from Homarr's http(s) icon URLs, Homarr icon names via the dashboard-icons set, 
 Helix's matcher on the app name and link. Uploaded Homarr media files, notes, and
 Homarr-only apps stay in Homarr.
 
-**Copy all** copies every widget on the current Home. **Paste onto another Home**
+**Copy all** copies every widget on the current Home. The button reads **Copied**
+for a moment after it works. **Paste onto another Home**
 drops that whole set onto the destination in one go, then you can rearrange.
 Ctrl/Cmd+A selects all tiles while editing; Ctrl/Cmd+C copies the selection, or
 all tiles if nothing is selected. Widget settings still has **Copy to another
@@ -79,9 +82,11 @@ the browser; Helix does not keep a timeseries database.
 
 Globe is off the sidebar until you add it. It draws this host from the router's
 public WAN country, then country pins for established public TCP peers. Game
-ports Helix already knows (native and AMP) count as players; everything else
-public is outbound. Loopback, LAN, CGNAT, and overlay addresses stay off the
-map. Lookup happens in helix-privd; the browser never receives remote IPs.
+ports Helix already knows (native and AMP) count as game-port connections,
+including pings and join attempts; everything else public is outbound. Loopback,
+LAN, CGNAT, and overlay addresses stay off the map. Lookup happens in
+helix-privd; the browser never receives remote IPs. The Home widget map fills
+its card. The Globe page keeps the full world visible.
 
 Lines default to solid. **Data motion** is opt-in. Dots travel faster where more
 sessions or queued traffic share a country. That is not a bytes-per-second
@@ -92,8 +97,8 @@ public NRO whois country table (CC0); land outlines are Natural Earth 110m.
 
 A Notes widget can hold up to eight named pages. Its settings control whether
 the active page can be edited without entering layout mode. Changes use the same
-debounced, revision-aware preference save as the rest of Home, with a browser
-fallback that retries if the server is temporarily unavailable.
+preference save as the rest of Home. If you reload before Helix accepts the save,
+this browser keeps the notes and retries.
 
 Notes are application preferences, not an encrypted secret vault. Addresses and
 ordinary reminders are reasonable; passwords, private keys, access tokens, and
@@ -107,7 +112,18 @@ Helix validates contrast-sensitive values rather than accepting arbitrary CSS.
 
 ## Dismissed notices
 
-Capacity notices on Overview can be dismissed from the card or from the
-notifications bell in the top bar. Dismissal is this browser’s local list; it
-does not change the disk, remove files, or hide the same evidence inside
-Storage. Settings can show those notices again.
+If you close a full-disk warning on Overview, a notice in the bell menu, or the
+Storage space-analyzer intro, Helix remembers that in this browser only. Other
+browsers and other people on this dashboard still see those banners. The disk is
+unchanged. **Settings → Helix data → Show them again** brings the banners back.
+
+## Helix data
+
+Settings → Helix data lists native servers Helix owns, imported connections it
+can see, recoverable trash, and AMP connections this browser has forgotten.
+Recoverable trash can restore a removed native server or delete it forever.
+Each native server has **Start after the host
+boots**: on means the game comes back after Linux or Docker restarts; off means
+it stays stopped until you press Start. That same checkbox is on by default
+when you create a server. It does not start or stop the server right now. This
+is not the Host integration toggle for the Helix dashboard containers.

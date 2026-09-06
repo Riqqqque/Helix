@@ -21,7 +21,7 @@ const ownerPresent: SetupStatus = {
 };
 
 describe('authentication flow transitions', () => {
-  it('routes a fresh installation to setup and requires login after a reload', () => {
+  it('routes a fresh installation to setup and an owner without saved proof to login', () => {
     expect(destinationForSetupStatus(ownerMissing)).toEqual({
       kind: 'setup',
       status: ownerMissing,

@@ -10,17 +10,22 @@ import {
   getServerBackups,
   getServerDetail,
   parseDirectoryListing,
+  parseHostInventory,
   parseMinecraftSettingsSaveResult,
   parseServers,
   restoreTrashedServerBackup,
   runServerAction,
   setNativeMemory,
+  setNativeCpu,
+  setNativeBrowserListing,
   setNativeStartOnBoot,
   setServerNetworkExposure,
   saveServerSettings,
   trashServerBackup,
+  getTrashedNativeServers,
   type MinecraftSettings,
 } from './control-api';
+import { purgeTrashedNativeServer } from './native-server-trash-api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -285,6 +290,36 @@ describe('native server API', () => {
     expect(JSON.parse(String(request.body))).toEqual({ memory_mb: 8192 });
   });
 
+  it('updates native CPU cap and V Rising listing', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        changed: true,
+        cpu_millis: 2000,
+        container_republished: true,
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        list_on_browser: true,
+        restart_required: true,
+      }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(setNativeCpu('helix:server-id', 2000, 'csrf')).resolves.toEqual({
+      changed: true,
+      cpuMillis: 2000,
+      containerRepublished: true,
+    });
+    await expect(setNativeBrowserListing('helix:server-id', true, 'csrf')).resolves.toEqual({
+      listOnBrowser: true,
+      restartRequired: true,
+    });
+    const [cpuPath, cpuRequest] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(cpuPath).toContain('helix%3Aserver-id/cpu');
+    expect(JSON.parse(String(cpuRequest.body))).toEqual({ cpu_millis: 2000 });
+    const [listingPath, listingRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(listingPath).toContain('helix%3Aserver-id/browser-listing');
+    expect(JSON.parse(String(listingRequest.body))).toEqual({ list_on_browser: true });
+  });
+
   it('parses a background action job without waiting for the work', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ job_id: 'ccf645d5-7896-4659-bc71-6f177efb589d' }), { status: 200 }),
@@ -413,6 +448,52 @@ describe('native server API', () => {
     expect(undoRequest.method).toBe('POST');
   });
 
+  it('lists removed native servers and permanently deletes with a typed name', async () => {
+    const trashId = '8953dc16-3891-42bf-802f-711b3ba2965a';
+    const catalog = {
+      schema_version: 1,
+      servers: [{
+        trash_id: trashId,
+        instance_id: 'helix:6f55caa9-1264-4baf-8335-d3f31a704614',
+        name: 'Survival',
+        software: 'Paper',
+        minecraft_version: '1.21.8',
+        game_port: 25565,
+        trashed_at_unix_ms: 1787800020000,
+        data_present: true,
+        backups_preserved: true,
+      }],
+      policy: {
+        recoverable: true,
+        automatic_purge: false,
+        note: 'Removed native servers stay in protected recovery storage until you delete them forever.',
+      },
+    };
+    const purged = {
+      instance_id: 'helix:6f55caa9-1264-4baf-8335-d3f31a704614',
+      trash_id: trashId,
+      purged: true,
+      purged_at_unix_ms: 1787800030000,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(catalog), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(purged), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const parsed = await getTrashedNativeServers('csrf');
+    expect(parsed.servers[0]?.trashId).toBe(trashId);
+    expect(parsed.policy.automaticPurge).toBe(false);
+    await purgeTrashedNativeServer(trashId, 'Survival', 'csrf');
+
+    const [purgePath, purgeRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(purgePath).toBe(`/api/v1/servers/removed/${trashId}`);
+    expect(purgeRequest.method).toBe('DELETE');
+    expect(purgeRequest.body).toBe(JSON.stringify({ confirmation_name: 'Survival' }));
+    const purgeHeaders = new Headers(purgeRequest.headers);
+    expect(purgeHeaders.get('Content-Type')).toBe('application/json');
+    expect(purgeHeaders.get('X-Helix-CSRF')).toBe('csrf');
+  });
+
   it('rejects malformed detail status instead of rendering invented state', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ status: 'mystery' }), { status: 200 }),
@@ -420,6 +501,69 @@ describe('native server API', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(getServerDetail('helix:server-id', 'csrf')).rejects.toThrow();
+  });
+
+  it('parses installed modpack provenance used by safe update checks', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        id: 'helix:server-id',
+        name: 'All the Mods',
+        instance_name: 'all-the-mods-server-id',
+        kind: 'minecraft',
+        software: 'NeoForge',
+        minecraft_version: '1.21.1',
+        build: '21.1.249',
+        java_version: 21,
+        runtime_image: 'eclipse-temurin@sha256:' + 'a'.repeat(64),
+        artifact_sha256: 'b'.repeat(64),
+        memory_limit_mb: 8192,
+        cpu_limit_millis: 0,
+        game_port: 25567,
+        query_port: null,
+        start_on_boot: false,
+        created_at_unix_ms: 1_788_500_000_000,
+        data_path: '/srv/helix/instances/server-id',
+        disk_bytes: 1_200_000_000,
+        status: 'online',
+        players_online: 0,
+        max_players: 20,
+        cpu_percent: 4.2,
+        memory_used_mb: 6400,
+        tps: 20,
+        container_state: {},
+        settings: wireSettings(),
+        console_history: {
+          persistent: true,
+          retention_bytes: 67_108_864,
+          retention_files: 8,
+          scope: 'per_server',
+        },
+        capabilities: ['console', 'backups', 'advanced'],
+        browser_listing: null,
+        modpack: {
+          schema_version: 1,
+          provider: 'curseforge',
+          project_id: '925200',
+          project_title: 'All the Mods 10',
+          version_id: '8764211',
+          version_name: 'ATM10 8.1',
+          version_number: '8.1',
+          minecraft_version: '1.21.1',
+          loader: 'neoforge',
+          loader_version: '21.1.249',
+        },
+      }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getServerDetail('helix:server-id', 'csrf')).resolves.toMatchObject({
+      modpack: {
+        provider: 'curseforge',
+        projectId: '925200',
+        versionId: '8764211',
+        loaderVersion: '21.1.249',
+      },
+    });
   });
 });
 
@@ -435,6 +579,7 @@ describe('server list API', () => {
     panel_running: true,
     start_on_boot: true,
     players_online: 0,
+    player_count_verified: true,
     max_players: 10,
     cpu_percent: 0,
     memory_used_mb: 0,
@@ -459,11 +604,51 @@ describe('server list API', () => {
       panelRunning: true,
       memoryUsedMb: 0,
       memoryLimitMb: 10_240,
+      playerCountVerified: true,
     });
+    expect(() => {
+      const rest: Record<string, unknown> = { ...server };
+      delete rest.player_count_verified;
+      parseServers([rest]);
+    }).toThrow(/player_count_verified/i);
     const starting = parseServers([{ ...server, status: 'starting' }]);
     expect(starting[0]?.status).toBe('starting');
     const failed = parseServers([{ ...server, status: 'failed' }]);
     expect(failed[0]?.status).toBe('failed');
     expect(() => parseServers([{ ...server, status: 'mystery' }])).toThrow(/status/i);
+  });
+});
+
+describe('host inventory', () => {
+  it('reads process count separately from kernel thread count', () => {
+    const parsed = parseHostInventory({
+      disks: [],
+      mounts: [],
+      interfaces: [],
+      routes: [],
+      listeners: [],
+      services: [],
+      processes: [],
+      load_average: [0.4, 0.7, 0.6],
+      process_count: 490,
+      thread_count: 2261,
+      cpu_model: 'AMD Ryzen',
+      collected_at_unix_ms: 1,
+    });
+    expect(parsed.processCount).toBe(490);
+    expect(parsed.threadCount).toBe(2261);
+    expect(() => parseHostInventory({
+      disks: [],
+      mounts: [],
+      interfaces: [],
+      routes: [],
+      listeners: [],
+      services: [],
+      processes: [],
+      load_average: [0.4, 0.7, 0.6],
+      process_count: 2261,
+      cpu_model: 'AMD Ryzen',
+      collected_at_unix_ms: 1,
+    })).toThrow(/thread_count/i);
   });
 });

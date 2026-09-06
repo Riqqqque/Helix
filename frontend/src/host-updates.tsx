@@ -44,7 +44,7 @@ function expectedConfirmation(count: number): string {
 function describeError(error: unknown): string {
   return error instanceof Error
     ? error.message
-    : "Helix could not read the package inventory.";
+    : "Helix could not read Linux updates.";
 }
 
 function isSessionError(error: unknown): boolean {
@@ -86,10 +86,135 @@ function formatCacheAge(
 }
 
 function restartLabel(item: SystemPackage): string {
-  if (item.restartHint === "host_reboot_requested")
-    return "Host reboot requested";
+  if (item.restartHint === "host_reboot_requested") return "Linux asked for a reboot";
+  if (item.restartHint === "likely_host_reboot") return "Often needs a host reboot";
+  if (item.restartHint === "likely_service_restart") return "Services may restart";
   if (item.restartImpactKnown) return item.restartHint.replaceAll("_", " ");
   return "Impact unknown";
+}
+
+function restartTone(item: SystemPackage): "warning" | "idle" {
+  return item.restartHint === "host_reboot_requested" ||
+    item.restartHint === "likely_host_reboot"
+    ? "warning"
+    : "idle";
+}
+
+function packageNeedsHostReboot(item: SystemPackage): boolean {
+  return (
+    item.restartHint === "host_reboot_requested" ||
+    item.restartHint === "likely_host_reboot"
+  );
+}
+
+function cacheLooksStale(
+  cacheUnixMs: number | null,
+  collectedUnixMs: number,
+): boolean {
+  if (cacheUnixMs === null) return true;
+  return collectedUnixMs - cacheUnixMs > 24 * 60 * 60 * 1_000;
+}
+
+function previewLabel(data: SystemPackageInventory): string {
+  if (!data.simulation.available) {
+    return data.simulation.error ?? "Preview unavailable";
+  }
+  const parts = [
+    `${data.simulation.upgradeCandidates} package${data.simulation.upgradeCandidates === 1 ? "" : "s"} can be upgraded`,
+  ];
+  if (data.simulation.newPackages === 0 && data.simulation.removals === 0) {
+    parts.push("would not add or remove packages");
+  } else {
+    parts.push(
+      `would add ${data.simulation.newPackages} and remove ${data.simulation.removals}`,
+    );
+  }
+  if (data.simulation.heldBack > 0) {
+    parts.push(`${data.simulation.heldBack} held back`);
+  }
+  return parts.join(" · ");
+}
+
+function errorComponentLabel(component: string): string {
+  if (component === "apt_simulation" || component === "package_preview") {
+    return "Package preview";
+  }
+  if (component === "dpkg_query") return "Installed packages";
+  if (component === "apt_cache") return "Package details";
+  if (component === "apt_mark") return "Held packages";
+  return component.replaceAll("_", " ");
+}
+
+function toolLabel(tool: string): string {
+  if (tool === "dpkgQuery") return "dpkg";
+  if (tool === "aptCache") return "apt-cache";
+  if (tool === "aptGet") return "apt-get";
+  if (tool === "aptMark") return "apt-mark";
+  return tool;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function jobRebootRequired(job: PackageJob): boolean {
+  return asRecord(job.result)?.reboot_required === true;
+}
+
+function jobRebootPackages(job: PackageJob): string[] {
+  const packages = asRecord(job.result)?.reboot_required_packages;
+  if (!Array.isArray(packages)) return [];
+  return packages.filter(
+    (entry): entry is string => typeof entry === "string" && entry.length > 0,
+  );
+}
+
+function jobBannerCopy(job: PackageJob): { title: string; detail: string } {
+  if (job.status === "failed") {
+    return {
+      title:
+        job.kind === "helix_release_apply"
+          ? "Helix update stopped"
+          : job.kind === "system_package_lists_refresh"
+            ? "Could not check for updates"
+            : "Linux update stopped",
+      detail: job.error ?? "The operation did not complete.",
+    };
+  }
+  if (job.status === "complete") {
+    if (job.kind === "helix_release_apply") {
+      return {
+        title: "Helix update staged",
+        detail:
+          "The dashboard will restart. Refresh after it comes back. Game containers stay running.",
+      };
+    }
+    if (job.kind === "system_package_lists_refresh") {
+      return {
+        title: "Package lists updated",
+        detail:
+          "Nothing was installed. Review the list and apply the exact packages you want.",
+      };
+    }
+    if (jobRebootRequired(job)) {
+      const packages = jobRebootPackages(job);
+      return {
+        title: "Linux updates installed · host reboot needed",
+        detail: `${packages.length > 0 ? packages.join(", ") : "One or more packages"} asked for a reboot. Helix did not reboot. Open Settings → Whole-host reboot when you choose.`,
+      };
+    }
+    return {
+      title: "Linux updates installed",
+      detail:
+        "Selected versions verified. Linux did not ask for a reboot. Helix never reboots automatically.",
+    };
+  }
+  return {
+    title: job.stage,
+    detail: `${job.progressPercent}% · This keeps running if you leave the page.`,
+  };
 }
 
 function packageMatches(
@@ -170,33 +295,43 @@ export function PackageInventoryView({
     0,
   );
   const safeUpdates = data.inventory.packages.filter(selectableUpdate);
+  const cacheStale = cacheLooksStale(
+    data.aptCacheRefreshedAtUnixMs,
+    data.collectedAtUnixMs,
+  );
+  const rebootNow = data.hostRestart.rebootRequiredMarkerPresent;
+  const previewFailed = !data.simulation.available;
   return (
     <>
-      <section class="update-summary-grid" aria-label="Package update summary">
+      <section class="update-summary-grid" aria-label="Linux update summary">
         <article>
           <span>
             Installed{" "}
-            <InfoTip text="Packages currently reported by dpkg. A bounded inventory can be truncated on unusually large hosts." />
+            <InfoTip text="Packages currently reported by dpkg. A very large host can truncate this list." />
           </span>
           <strong>{data.inventory.installedTotal.toLocaleString()}</strong>
           <small>
             {data.inventory.truncated
               ? "Inventory truncated"
-              : "dpkg installed packages"}
+              : "Currently installed"}
           </small>
         </article>
         <article>
           <span>
-            Updates{" "}
-            <InfoTip text="Installed and candidate versions differ in the current APT metadata. The candidate can change after the next package-list refresh." />
+            Ready to update{" "}
+            <InfoTip text="Installed and candidate versions differ in the current package lists. Check for updates if this looks stale." />
           </span>
           <strong>{data.inventory.upgradeAvailableTotal}</strong>
-          <small>Candidate version differs</small>
+          <small>
+            {data.inventory.upgradeAvailableTotal === 0
+              ? "No package updates in the current lists"
+              : "Exact versions you can select below"}
+          </small>
         </article>
         <article>
           <span>
             Security{" "}
-            <InfoTip text="Best-effort classification from the candidate package origin. Unknown is kept separate from false." />
+            <InfoTip text="Best-effort classification from the candidate origin. Unknown is kept separate from no." />
           </span>
           <strong
             class={
@@ -205,77 +340,108 @@ export function PackageInventoryView({
           >
             {data.inventory.securityUpdateTotal}
           </strong>
-          <small>Security-origin candidates</small>
+          <small>From a security archive</small>
         </article>
         <article>
           <span>
-            APT cache age{" "}
-            <InfoTip text="Helix only reads the newest package-list timestamp here. Opening or refreshing this page never runs apt update." />
+            List age{" "}
+            <InfoTip text="Opening this page does not talk to the mirrors. Check for updates refreshes the signed package lists." />
           </span>
           <strong>{cacheAge}</strong>
           <small>
             {data.aptCacheRefreshedAtUnixMs === null
-              ? "No cache timestamp found"
+              ? "No list timestamp found"
               : formatTimestamp(data.aptCacheRefreshedAtUnixMs)}
           </small>
         </article>
       </section>
 
-      <div
-        class={`package-safety-note ${data.hostRestart.rebootRequiredMarkerPresent ? "package-safety-note--warning" : ""}`}
-      >
-        <Icon
-          name={
-            data.hostRestart.rebootRequiredMarkerPresent ? "warning" : "info"
-          }
-          size={17}
-        />
-        <div>
-          <strong>
-            {data.hostRestart.rebootRequiredMarkerPresent
-              ? "Linux reports a host reboot is pending"
-              : "Nothing changes until you confirm it"}
-          </strong>
-          <span>
-            {data.hostRestart.rebootRequiredMarkerPresent
-              ? `${data.hostRestart.packages.length > 0 ? data.hostRestart.packages.join(", ") : "One or more prior updates"} requested a reboot. Helix never reboots Linux automatically.`
-              : "Reading and filtering this inventory is non-mutating. Check for updates refreshes APT metadata; applying updates uses only the exact packages you select."}
-          </span>
+      {rebootNow && (
+        <div class="package-safety-note package-safety-note--warning">
+          <Icon name="warning" size={17} />
+          <div>
+            <strong>Linux needs a host reboot</strong>
+            <span>
+              {data.hostRestart.packages.length > 0
+                ? `${data.hostRestart.packages.join(", ")} asked for a reboot.`
+                : "A previous update asked for a reboot."}{" "}
+              Helix never reboots Linux for you. Open{" "}
+              <a href="#settings">Settings → Whole-host reboot</a> when you are
+              ready. That disconnects Helix, players, and every other service.
+            </span>
+          </div>
         </div>
-      </div>
+      )}
+
+      {cacheStale && !previewFailed && (
+        <div class="package-safety-note package-safety-note--warning">
+          <Icon name="warning" size={17} />
+          <div>
+            <strong>Package lists look stale</strong>
+            <span>
+              Use <strong>Check for updates</strong> before applying anything.
+              That only refreshes the signed lists. Nothing is installed until
+              you apply selected packages.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {previewFailed && (
+        <div class="package-safety-note package-safety-note--warning">
+          <Icon name="warning" size={17} />
+          <div>
+            <strong>Helix could not preview what APT would change</strong>
+            <span>
+              {data.simulation.error ??
+                "Package tools did not return a usable preview."}{" "}
+              Apply stays off until this works. Try Check for updates, or wait
+              if another package tool has the APT lock.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {!rebootNow && !previewFailed && !cacheStale && (
+        <div class="package-safety-note">
+          <Icon name="info" size={17} />
+          <div>
+            <strong>Nothing changes until you confirm it</strong>
+            <span>
+              Reading this list is safe. Check for updates talks to the
+              mirrors. Apply installs only the exact packages you select. Helix
+              never reboots Linux automatically.
+            </span>
+          </div>
+        </div>
+      )}
 
       <section class="surface infrastructure-section package-readiness">
         <div class="section-title">
           <div>
             <h2>
-              Update readiness{" "}
-              <InfoTip text="A safe update job must revalidate exact package candidates, dpkg locks, disk space, conffile policy, and workload impact immediately before applying anything." />
+              Linux packages{" "}
+              <InfoTip text="Helix has no upgrade-everything button. You choose exact versions. Before apply it rechecks versions, holds, disk space, and that the change would not add or remove packages." />
             </h2>
-            <p>Read-only simulation and explicit safety gates</p>
+            <p>
+              {previewFailed
+                ? "Apply is unavailable until the preview works"
+                : previewLabel(data)}
+            </p>
           </div>
           <span
-            class={`state-label state-label--${data.simulation.available ? "good" : "warning"}`}
+            class={`state-label state-label--${data.upgradeApply.available ? "good" : "warning"}`}
           >
-            {data.simulation.available
-              ? "Simulation ready"
-              : "Simulation unavailable"}
+            {data.upgradeApply.available
+              ? data.inventory.upgradeAvailableTotal === 0
+                ? "Up to date"
+                : "Ready to apply selected"
+              : "Cannot apply yet"}
           </span>
         </div>
         <div class="update-readiness-grid">
           <article>
-            <span>Simulation</span>
-            <strong>
-              {data.simulation.upgradeCandidates} upgrades ·{" "}
-              {data.simulation.newPackages} new
-            </strong>
-            <small>
-              {data.simulation.removals} removals · {data.simulation.heldBack}{" "}
-              held back
-            </small>
-            {data.simulation.error !== null && <p>{data.simulation.error}</p>}
-          </article>
-          <article>
-            <span>Host packages</span>
+            <span>Apply selected Linux updates</span>
             <strong>
               {data.upgradeApply.available
                 ? `${selected.size} selected`
@@ -315,7 +481,7 @@ export function PackageInventoryView({
             </div>
           </article>
           <article>
-            <span>Helix itself</span>
+            <span>Helix dashboard</span>
             <strong>
               {data.helixSelfUpdate.updateAvailable &&
               data.helixSelfUpdate.latestVersion !== null
@@ -358,9 +524,10 @@ export function PackageInventoryView({
           </article>
         </div>
         <p class="readiness-footnote">
-          Package rollback is not claimed. Existing conffiles are kept, held
-          packages and removals are refused, exact candidates are rechecked, and
-          no update can trigger an automatic reboot.
+          Helix does not claim it can undo a failed package install. Existing
+          config files are kept. Held packages, new packages, and removals are
+          refused. If an update needs a host reboot, Helix says so and still
+          does not reboot for you.
         </p>
       </section>
 
@@ -368,8 +535,8 @@ export function PackageInventoryView({
         <div class="section-title package-inventory-head">
           <div>
             <h2>
-              Package inventory{" "}
-              <InfoTip text="Installed versions come from dpkg. Candidate versions, origins, descriptions, and download sizes depend on the available APT metadata and can be unknown." />
+              Package list{" "}
+              <InfoTip text="Installed versions come from dpkg. Candidate versions, origins, descriptions, and download sizes depend on the current package lists." />
             </h2>
             <p>
               {packages.length.toLocaleString()} matching packages · collected{" "}
@@ -513,7 +680,7 @@ export function PackageInventoryView({
                   </td>
                   <td>
                     <span
-                      class={`state-label state-label--${item.restartHint === "host_reboot_requested" ? "warning" : "idle"}`}
+                      class={`state-label state-label--${restartTone(item)}`}
                     >
                       {restartLabel(item)}
                     </span>
@@ -560,7 +727,7 @@ export function PackageInventoryView({
         <section class="surface infrastructure-section package-diagnostics">
           <div class="section-title">
             <div>
-              <h2>Inventory diagnostics</h2>
+              <h2>What Helix could not read</h2>
               <p>Missing tools and partial evidence stay visible</p>
             </div>
             <span class="state-label state-label--warning">
@@ -573,13 +740,13 @@ export function PackageInventoryView({
                 <i
                   class={`status-dot status-dot--${available ? "good" : "idle"}`}
                 />
-                {tool.replace(/([A-Z])/gu, " $1")}
+                {toolLabel(tool)}
               </span>
             ))}
           </div>
           {data.errors.map((error) => (
             <p class="table-note" key={`${error.component}-${error.message}`}>
-              <strong>{error.component}</strong>: {error.message}
+              <strong>{errorComponentLabel(error.component)}</strong>: {error.message}
             </p>
           ))}
         </section>
@@ -781,6 +948,7 @@ export function HostUpdatesPanel({
     job?.status === "queued" ||
     job?.status === "running";
   const confirmationPhrase = expectedConfirmation(selectedPackages.length);
+  const rebootPackages = selectedPackages.filter(packageNeedsHostReboot);
 
   const rememberJob = (id: string, kind: string, stage: string): void => {
     const now = Date.now();
@@ -839,7 +1007,7 @@ export function HostUpdatesPanel({
       rememberJob(
         dispatched.jobId,
         "system_package_apply",
-        "Queued to revalidate exact candidates",
+        "Queued to check the selected versions",
       );
       setApplyOpen(false);
       setConfirmation("");
@@ -928,11 +1096,11 @@ export function HostUpdatesPanel({
       <div class="section-title section-title--spaced">
         <div>
           <h2>
-            System updates{" "}
-            <InfoTip text="Helix separates a read-only inventory refresh from APT's package-list refresh and from an explicitly confirmed package apply. Package services may restart; Linux never reboots automatically." />
+            Linux updates{" "}
+            <InfoTip text="Check for updates refreshes signed package lists. Apply installs only the exact packages you select. Package services may restart. If Linux needs a host reboot, Helix says so and still does not reboot for you." />
           </h2>
           <p>
-            Exact package candidates, visible safety gates, no surprise reboot
+            Pick exact packages. Helix never reboots Linux automatically.
           </p>
         </div>
         <div class="package-heading-actions">
@@ -977,12 +1145,12 @@ export function HostUpdatesPanel({
       )}
       {job !== null && !waitingForHelix && (
         <section
-          class={`package-job-banner package-job-banner--${job.status}`}
+          class={`package-job-banner package-job-banner--${job.status === "complete" && jobRebootRequired(job) ? "warning" : job.status}`}
           aria-live="polite"
         >
           <Icon
             name={
-              job.status === "failed"
+              job.status === "failed" || jobRebootRequired(job)
                 ? "warning"
                 : job.status === "complete"
                   ? "check"
@@ -991,26 +1159,8 @@ export function HostUpdatesPanel({
             size={18}
           />
           <div>
-            <strong>
-              {job.status === "complete"
-                ? job.kind === "helix_release_apply"
-                  ? "Helix update staged"
-                  : "Package operation complete"
-                : job.status === "failed"
-                  ? job.kind === "helix_release_apply"
-                    ? "Helix update stopped"
-                    : "Package operation stopped safely"
-                  : job.stage}
-            </strong>
-            <span>
-              {job.status === "failed"
-                ? (job.error ?? "The operation did not complete.")
-                : job.status === "complete"
-                  ? job.kind === "helix_release_apply"
-                    ? "The dashboard will restart. Refresh after it comes back. Game containers stay running."
-                    : job.stage
-                  : `${job.progressPercent}% · The broker keeps this running if you leave the page.`}
-            </span>
+            <strong>{jobBannerCopy(job).title}</strong>
+            <span>{jobBannerCopy(job).detail}</span>
           </div>
           {(job.status === "complete" || job.status === "failed") && (
             <button
@@ -1028,8 +1178,8 @@ export function HostUpdatesPanel({
           <Icon name={error === null ? "update" : "warning"} size={28} />
           <span>
             {error === null
-              ? "Reading dpkg and APT metadata…"
-              : "Package inventory is unavailable."}
+              ? "Reading installed packages and update lists…"
+              : "Linux updates are unavailable."}
           </span>
         </div>
       ) : (
@@ -1079,8 +1229,9 @@ export function HostUpdatesPanel({
               </strong>
               <span>
                 Exact versions are rechecked immediately before APT runs. Held
-                packages, new packages, removals, candidate drift, and
-                insufficient disk headroom stop the job.
+                packages, new packages, removals, a version that changed since
+                you looked, or not enough free disk stop the job. Nothing is
+                applied in those cases.
               </span>
             </div>
             <div class="package-apply-preview">
@@ -1090,6 +1241,9 @@ export function HostUpdatesPanel({
                   <code>
                     {item.installedVersion} → {item.candidateVersion}
                   </code>
+                  {packageNeedsHostReboot(item) && (
+                    <small>{restartLabel(item)}</small>
+                  )}
                 </span>
               ))}
               {selectedPackages.length > 12 && (
@@ -1098,6 +1252,21 @@ export function HostUpdatesPanel({
                 </small>
               )}
             </div>
+            {rebootPackages.length > 0 && (
+              <div class="package-safety-note package-safety-note--warning">
+                <Icon name="warning" size={17} />
+                <div>
+                  <strong>These updates often need a host reboot</strong>
+                  <span>
+                    {rebootPackages.map((item) => item.name).join(", ")}. Helix
+                    will not reboot Linux. After the job finishes, if Linux
+                    asked for a reboot, use Settings → Whole-host reboot when
+                    you choose. That stops Helix, players, and every other
+                    service until the host is back.
+                  </span>
+                </div>
+              </div>
+            )}
             <div class="package-safety-note package-safety-note--warning">
               <Icon name="warning" size={17} />
               <div>
@@ -1106,8 +1275,9 @@ export function HostUpdatesPanel({
                 </strong>
                 <span>
                   Active streams, servers, or other workloads may be
-                  interrupted. Helix preserves existing conffiles, claims no
-                  package rollback, and will not reboot the host.
+                  interrupted. Existing config files are kept. Helix does not
+                  claim it can undo a failed package install, and it will not
+                  reboot the host.
                 </span>
               </div>
             </div>

@@ -49,7 +49,7 @@ cd /data/server
   -world "${HELIX_WORLD_NAME:-Dedicated}" \
   -password "${HELIX_PASSWORD:-}" \
   -public 0 \
-  -savedir /data/worlds \
+  -savedir /data \
   >/data/logs/valheim.log 2>&1 &
 SERVER_PID=$!
 

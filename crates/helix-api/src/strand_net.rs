@@ -4,7 +4,11 @@ use std::{
 };
 use thiserror::Error;
 
-const USER_AGENT: &str = "Helix/0.1 (+https://github.com/Riqqqque/Helix)";
+const USER_AGENT: &str = concat!(
+    "Helix/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/Riqqqque/Helix)"
+);
 const MAX_REDIRECTS: u32 = 0;
 
 #[derive(Debug, Error)]

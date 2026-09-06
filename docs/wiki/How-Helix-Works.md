@@ -12,18 +12,22 @@ restart to you. Console capture and game containers do not depend on the dashboa
 being open. Minecraft RCON is loopback-only (127.0.0.1 on this host, not a player
 port). Console history is bounded and rotates; it is persistent, not unlimited.
 Native Stop waits for a clean shutdown; Kill is a confirmed SIGKILL for when that
-stop hangs. AMP instances do not get Kill. Native servers can opt into Docker
-start-on-boot. Owner setup can skip the Servers page and Settings can restore it
+stop hangs. AMP instances do not get Kill. Native servers can opt into coming back after the host boots. That choice is on
+by default when you create a server. Owner setup can skip the Servers page and Settings can restore it
 later.
 
 V Rising installs the official dedicated server into an isolated Helix
-container; the host never receives Wine packages.
+container; the host never receives Wine packages. New servers list on the
+in-game browser by default. Direct Connect to a public IP is optional and needs
+the UDP game and query ports.
 
 AMP integration is a bridge to a separate loopback AMP API. Helix may show and
 invoke the AMP actions it understands, including idle/sleep versus actually
 online, but AMP remains responsible for its own instances and files. Helix will
 not steal a live AMP game port or rewrite AMP configs; leftover AMP UPnP
-mappings can be removed only after an exact typed confirmation.
+mappings can be removed only after an exact typed confirmation. Copy an existing
+server makes a new native Helix server from a stopped AMP or Pterodactyl world;
+it does not take over the old instance.
 
 The Home page is deliberately modular: widgets can be added, moved, resized,
 renamed, recolored, and removed across multiple exportable layouts without
@@ -48,7 +52,9 @@ public internet exposure, and independently signed Helix keys are not current
 features. Native
 Minecraft create includes Paper, Purpur, Folia, Leaves, Fabric, Forge, NeoForge,
 Quilt, Pufferfish, and Vanilla. Modpack create can use Modrinth `.mrpack` or
-public CurseForge `manifest.json` packs as a server-safe subset, not a full
+CurseForge `manifest.json` packs (owner API key in Settings → Catalogs; CurseForge
+also needs this host on a normal ISP IP) as a
+server-safe subset, not a full
 client copy. Valheim and Terraria have native create with file-drop mods.
 Exact selected APT candidates have a guarded explicit path with no rollback
 claim. Tailscale can sit in front of a separately constrained private entry

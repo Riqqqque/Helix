@@ -33,6 +33,7 @@ import {
   type HomeWidgetKind,
   type NoteWidgetConfiguration,
 } from './home-layout';
+import { copyFlashLabel, useCopyFlash } from './copy-button';
 import { DockerInventoryPanel } from './docker-panel';
 import { getHomarrCatalog, type HomarrWidgetCandidate } from './docker-api';
 import { shortcutIconUrl, shortcutLetter } from './shortcut-icons';
@@ -99,7 +100,7 @@ function makeWidget(kind: HomeWidgetKind): HomeWidget {
     storage: { size: 'wide', height: 'medium', title: 'Storage', content: '', url: '', color: '', icon: '' },
     weather: { size: 'wide', height: 'medium', title: 'Weather', content: '', url: '', color: '', icon: '' },
     note: { size: 'compact', height: 'medium', title: 'Notes', content: '', url: '', color: '', icon: '' },
-    shortcut: { size: 'compact', height: 'medium', title: 'Shortcut', content: '', url: '', color: '', icon: '' },
+    shortcut: { size: 'compact', height: 'short', title: 'Shortcut', content: '', url: '', color: '', icon: '' },
     graphs: { size: 'wide', height: 'medium', title: 'Live graphs', content: '', url: '', color: '', icon: '' },
     docker: { size: 'wide', height: 'tall', title: 'Docker', content: '', url: '', color: '', icon: '' },
     strand: { size: 'wide', height: 'tall', title: 'Strand', content: '', url: '', color: '', icon: '' },
@@ -139,6 +140,7 @@ function WidgetControls({
   onRemove,
   onDragStart,
   onDragEnd,
+  copied = false,
 }: {
   widget: HomeWidget;
   first: boolean;
@@ -151,6 +153,7 @@ function WidgetControls({
   onRemove: () => void;
   onDragStart: (event: DragEvent) => void;
   onDragEnd: () => void;
+  copied?: boolean;
 }) {
   return (
     <div class="home-widget__controls" aria-label={`Arrange ${widget.title}`}>
@@ -166,11 +169,13 @@ function WidgetControls({
       <button type="button" onClick={onResize} title="Cycle widget width">
         {widget.size}
       </button>
-      <button type="button" onClick={onHeight} title="Cycle widget height">
-        {widget.height}
-      </button>
-      <button type="button" onClick={onCopy} aria-label={`Copy ${widget.title}`} title="Copy widget">
-        <CopyGlyph size={14} />
+      {widget.kind !== 'shortcut' && (
+        <button type="button" onClick={onHeight} title="Cycle widget height">
+          {widget.height}
+        </button>
+      )}
+      <button type="button" class={copied ? 'is-copied' : undefined} onClick={onCopy} aria-label={copied ? 'Copied' : `Copy ${widget.title}`} title={copied ? 'Copied' : 'Copy widget'}>
+        {copied ? <Icon name="check" size={14} /> : <CopyGlyph size={14} />}
       </button>
       <button type="button" onClick={onSettings} aria-label={`Open ${widget.title} settings`} title="Widget settings">
         <Icon name="settings" size={14} />
@@ -286,7 +291,7 @@ function HostWidget({ overview, inventory }: Pick<HomePageProps, 'overview' | 'i
       <div><span>CPU</span><strong>{overview?.cpu.usagePercent === null || overview === null ? '—' : formatPercent(overview.cpu.usagePercent)}</strong><small>{inventory?.cpuModel ?? `${overview?.cpu.logicalCores ?? '—'} cores`}</small></div>
       <div><span>Memory</span><strong>{memory === null ? '—' : formatPercent(memory)}</strong><small>{overview === null ? 'Waiting for host' : `${formatBytes(overview.memory.availableBytes)} available`}</small></div>
       <div><span>Uptime</span><strong>{overview === null ? '—' : formatDuration(overview.uptimeSeconds)}</strong><small>{overview?.hostname ?? 'Host not reported'}</small></div>
-      <div><span>Load</span><strong>{inventory?.loadAverage[0].toFixed(2) ?? '—'}</strong><small>{inventory === null ? '1 minute average' : `${inventory.processCount.toLocaleString()} processes`}</small></div>
+      <div><span>Load</span><strong>{inventory?.loadAverage[0].toFixed(2) ?? '—'}</strong><small>{inventory === null ? '1 minute average' : `${inventory.processCount.toLocaleString()} processes · ${inventory.threadCount.toLocaleString()} threads`}</small></div>
     </div>
   );
 }
@@ -320,7 +325,7 @@ function ServersWidget({ servers }: Pick<HomePageProps, 'servers'>) {
         <a href="#servers" key={server.id}>
           <span class={`status-dot status-dot--${serverStatusTone(server.status)}`} />
           <strong>{server.name}</strong>
-          <small>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers)}</small>
+          <small>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers, server.playerCountVerified)}</small>
           <span>{server.manager === 'helix' ? 'Helix' : 'AMP'}</span>
         </a>
       ))}
@@ -561,9 +566,16 @@ function WidgetBody({ widget, editing, onChange, data, csrfToken, canManageDocke
       </div>
     );
   }
-  return href.length === 0
-    ? <div class="home-widget__empty">Turn on edit mode to add this shortcut’s address.</div>
-    : <a class="home-shortcut" href={href} target="_blank" rel="noopener noreferrer"><ShortcutMark name={widget.title} url={href} icon={widget.icon} size={35} /><span><strong>{widget.title}</strong><small>{new URL(href).hostname}</small></span></a>;
+  if (href.length === 0) {
+    return <div class="home-widget__empty">Turn on edit mode to add this shortcut’s address.</div>;
+  }
+  const hostname = new URL(href).hostname;
+  return (
+    <a class="home-shortcut" href={href} target="_blank" rel="noopener noreferrer" title={hostname} aria-label={`${widget.title} (${hostname})`}>
+      <ShortcutMark name={widget.title} url={href} icon={widget.icon} size={64} />
+      <span><strong>{widget.title}</strong></span>
+    </a>
+  );
 }
 
 function WidgetSettings({ widget, otherHomes, onChange, onCopyToHome, onClose }: {
@@ -578,8 +590,34 @@ function WidgetSettings({ widget, otherHomes, onChange, onCopyToHome, onClose }:
     <div class="home-widget-settings" role="group" aria-label={`${widget.title} settings`}>
       <div class="home-widget-settings__head"><strong>Widget settings</strong><button type="button" onClick={onClose} aria-label="Close widget settings"><Icon name="close" size={14} /></button></div>
       <div class="home-widget-settings__grid">
-        <label><span>Width</span><select value={widget.size} onChange={(event) => onChange({ size: event.currentTarget.value as HomeWidget['size'] })}><option value="compact">Compact</option><option value="wide">Wide</option><option value="full">Full row</option></select></label>
-        <label><span>Height</span><select value={widget.height} onChange={(event) => onChange({ height: event.currentTarget.value as HomeWidget['height'] })}><option value="short">Short</option><option value="medium">Medium</option><option value="tall">Tall</option></select></label>
+        <label>
+          <span>Width</span>
+          <select value={widget.size} onChange={(event) => onChange({ size: event.currentTarget.value as HomeWidget['size'] })}>
+            {widget.kind === 'shortcut' ? (
+              <>
+                <option value="compact">Square</option>
+                <option value="wide">Large</option>
+                <option value="full">Extra large</option>
+              </>
+            ) : (
+              <>
+                <option value="compact">Compact</option>
+                <option value="wide">Wide</option>
+                <option value="full">Full row</option>
+              </>
+            )}
+          </select>
+        </label>
+        {widget.kind !== 'shortcut' && (
+          <label>
+            <span>Height</span>
+            <select value={widget.height} onChange={(event) => onChange({ height: event.currentTarget.value as HomeWidget['height'] })}>
+              <option value="short">Short</option>
+              <option value="medium">Medium</option>
+              <option value="tall">Tall</option>
+            </select>
+          </label>
+        )}
         <label><span>Accent</span><span class="home-color-control"><input type="color" value={widget.color || '#d7f64d'} onInput={(event) => onChange({ color: event.currentTarget.value.toLowerCase() })} /><button type="button" onClick={() => onChange({ color: '' })}>Use Home color</button></span></label>
         {otherHomes.length > 0 && (
           <label>
@@ -696,6 +734,8 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
   const [homarrSelected, setHomarrSelected] = useState<string[]>([]);
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null);
+  const copyFlash = useCopyFlash();
+  const [copiedSource, setCopiedSource] = useState<string | null>(null);
   const activeTemplate = templates.find((template) => template.id === activeHomeId) ?? templates[0]!;
   const widgets = activeTemplate.widgets;
   const existingShortcutUrls = homeShortcutUrls(widgets);
@@ -728,9 +768,11 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
       // LAN HTTP often blocks the clipboard API; the in-browser copy still works.
     }
   };
-  const copyWidgets = (copied: HomeWidget[]): void => {
+  const copyWidgets = (copied: HomeWidget[], source: 'all' | 'selection' = 'selection'): void => {
     if (copied.length === 0) return;
     rememberClipboard(copied);
+    copyFlash.show('copied');
+    setCopiedSource(source === 'all' || copied.length !== 1 ? 'all' : copied[0]!.id);
     setLayoutNotice(copied.length === 1
       ? `Copied ${copied[0]!.title}. Switch Homes and paste, or paste here.`
       : `Copied ${copied.length} widgets. Switch Homes and paste, or paste here.`);
@@ -775,13 +817,13 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
       if (target instanceof HTMLElement && /^(?:INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
       if (event.key === 'a' || event.key === 'A') {
         event.preventDefault();
-        copyWidgets(widgets);
+        copyWidgets(widgets, 'all');
         return;
       }
       if (event.key === 'c' || event.key === 'C') {
         const widget = widgets.find((item) => item.id === selectedWidgetId);
         event.preventDefault();
-        copyWidgets(widget === undefined ? widgets : [widget]);
+        copyWidgets(widget === undefined ? widgets : [widget], widget === undefined ? 'all' : 'selection');
         return;
       }
       if (event.key === 'v' || event.key === 'V') {
@@ -833,7 +875,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
     const shortcuts = additions.map((widget, index) => ({
       id: newHomeWidgetId('shortcut', index.toString(36)),
       kind: 'shortcut' as const,
-      size: homarrShortcutSize(widget.width),
+      size: homarrShortcutSize(),
       height: 'short' as const,
       title: widget.name.slice(0, 80),
       content: '',
@@ -860,7 +902,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
         <div class="page-head-actions home-page-actions">
           {editing && <button class="button button--quiet" type="button" onClick={() => setAdding((value) => !value)}><Icon name="plus" size={15} />Add widget</button>}
           {editing && <button class="button button--quiet" type="button" disabled={homarrLoading} onClick={() => void loadHomarr()}>{homarrLoading ? 'Reading Homarr…' : 'Import from Homarr'}</button>}
-          {editing && <button class="button button--quiet" type="button" disabled={widgets.length === 0} onClick={() => copyWidgets(widgets)}><CopyGlyph size={15} />Copy all</button>}
+          {editing && <button class={`button button--quiet${copyFlash.flash === 'copied' && copiedSource === 'all' ? ' is-copied' : ''}${copyFlash.flash === 'failed' && copiedSource === 'all' ? ' is-failed' : ''}`} type="button" disabled={widgets.length === 0} onClick={() => copyWidgets(widgets, 'all')}>{copyFlash.flash === 'copied' && copiedSource === 'all' ? <Icon name="check" size={15} /> : <CopyGlyph size={15} />}{copyFlashLabel(copiedSource === 'all' ? copyFlash.flash : 'idle', 'Copy all')}</button>}
           {editing && <button class="button button--quiet" type="button" onClick={() => void pasteFromClipboard()}><CopyGlyph size={15} />Paste</button>}
           {editing && otherHomes.length > 0 && (
             <label class="home-copy-all-select">
@@ -873,7 +915,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
                   if (homeId.length === 0) return;
                   const incoming = readWidgetClipboard();
                   if (incoming.length === 0) {
-                    copyWidgets(widgets);
+                    copyWidgets(widgets, 'all');
                     applyPaste(widgets, homeId);
                     return;
                   }
@@ -968,7 +1010,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
           >
             <header>
               <div>{widget.kind === 'shortcut' ? <ShortcutMark name={widget.title} url={widget.url} icon={widget.icon} size={16} /> : <Icon name={widgetIcons[widget.kind]} size={16} />}{editing ? <input class="home-widget__title-input" value={widget.title} maxLength={80} aria-label={`${widget.kind} widget title`} onInput={(event) => updateWidget(widget.id, { title: event.currentTarget.value })} /> : <h2>{widget.title}</h2>}</div>
-              {editing && <WidgetControls widget={widget} first={index === 0} last={index === widgets.length - 1} onMove={(offset) => changeWidgets((current) => moveHomeWidget(current, widget.id, offset))} onResize={() => updateWidget(widget.id, { size: nextHomeWidgetSize(widget.size) })} onHeight={() => updateWidget(widget.id, { height: nextHomeWidgetHeight(widget.height) })} onSettings={() => { setSelectedWidgetId(widget.id); setSettingsWidgetId((current) => current === widget.id ? null : widget.id); }} onCopy={() => { setSelectedWidgetId(widget.id); copyWidgets([widget]); }} onDragStart={(event) => { setSelectedWidgetId(widget.id); setDraggedWidgetId(widget.id); event.dataTransfer?.setData('text/plain', widget.id); if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = 'move'; }} onDragEnd={finishDrag} onRemove={() => changeWidgets((current) => current.filter((candidate) => candidate.id !== widget.id))} />}
+              {editing && <WidgetControls widget={widget} first={index === 0} last={index === widgets.length - 1} copied={copyFlash.flash === 'copied' && copiedSource === widget.id} onMove={(offset) => changeWidgets((current) => moveHomeWidget(current, widget.id, offset))} onResize={() => updateWidget(widget.id, { size: nextHomeWidgetSize(widget.size) })} onHeight={() => updateWidget(widget.id, { height: nextHomeWidgetHeight(widget.height) })} onSettings={() => { setSelectedWidgetId(widget.id); setSettingsWidgetId((current) => current === widget.id ? null : widget.id); }} onCopy={() => { setSelectedWidgetId(widget.id); copyWidgets([widget], 'selection'); }} onDragStart={(event) => { setSelectedWidgetId(widget.id); setDraggedWidgetId(widget.id); event.dataTransfer?.setData('text/plain', widget.id); if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = 'move'; }} onDragEnd={finishDrag} onRemove={() => changeWidgets((current) => current.filter((candidate) => candidate.id !== widget.id))} />}
             </header>
             {editing && settingsWidgetId === widget.id && <WidgetSettings widget={widget} otherHomes={otherHomes} onChange={(patch) => updateWidget(widget.id, patch)} onCopyToHome={(homeId) => { setSelectedWidgetId(widget.id); rememberClipboard([widget]); applyPaste([widget], homeId); }} onClose={() => setSettingsWidgetId(null)} />}
             <WidgetBody widget={widget} editing={editing} onChange={(patch) => updateWidget(widget.id, patch)} data={{ overview, inventory, servers }} csrfToken={csrfToken} canManageDocker={canManageDocker} onSessionExpired={onSessionExpired} />

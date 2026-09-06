@@ -1,11 +1,13 @@
 //! Narrow protocol shared by the unprivileged dashboard and `helix-privd`.
 
+pub mod migrate_plan;
 pub mod mrpack;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{io, path::PathBuf};
 use thiserror::Error;
+use unicode_normalization::UnicodeNormalization;
 
 pub const MAX_REQUEST_BYTES: usize = 5 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
@@ -182,6 +184,10 @@ pub enum BrokerRequest {
     RestoreTrashedServer {
         trash_id: String,
     },
+    PurgeTrashedServer {
+        trash_id: String,
+        confirmation_name: String,
+    },
     ServerInventoryHealth {},
     ServerManagerReadiness {},
     ServerDetail {
@@ -228,6 +234,8 @@ pub enum BrokerRequest {
     },
     MinecraftModpackProject {
         project_id: String,
+        #[serde(default, skip_serializing_if = "is_modrinth_provider")]
+        provider: ModpackProvider,
     },
     InstallServerMarketplaceContent {
         instance_id: String,
@@ -297,12 +305,235 @@ pub enum BrokerRequest {
         instance_id: String,
         memory_mb: u32,
     },
+    SetNativeCpu {
+        instance_id: String,
+        cpu_millis: u32,
+    },
+    SetNativeBrowserListing {
+        instance_id: String,
+        list_on_browser: bool,
+    },
     ListMinecraftVersions {
         software: MinecraftSoftware,
+    },
+    MigrateServerPreflight {
+        source: ServerMigrateSource,
+    },
+    MigrateServer {
+        spec: ServerMigrateSpec,
     },
     JobStatus {
         job_id: String,
     },
+    CurseforgeKeyStatus {},
+    SetCurseforgeApiKey {
+        key: String,
+    },
+    ClearCurseforgeApiKey {},
+}
+
+pub const CURSEFORGE_API_KEY_REQUIRED: &str = "CurseForge needs an API key. Open Settings → Catalogs, paste a key from console.curseforge.com, then search again.";
+pub const CURSEFORGE_KEY_REJECTED: &str =
+    "CurseForge rejected the saved API key. Replace it in Settings → Catalogs.";
+pub const CURSEFORGE_CDN_BLOCKED: &str = "CurseForge's CDN blocked this host's public IP. That is not a bad key. Search needs this host to reach the internet without a VPS or VPN exit they block.";
+pub const CURSEFORGE_RATE_LIMITED: &str =
+    "CurseForge rate-limited this host. Wait a bit and try again.";
+
+pub fn validate_curseforge_api_key(value: &str) -> Result<String, String> {
+    let mut key = strip_curseforge_key_noise(value);
+    for _ in 0..3 {
+        let unquoted = strip_wrapping_quotes(key.trim());
+        if unquoted.len() == key.trim().len() {
+            break;
+        }
+        key = unquoted.to_owned();
+    }
+    key = key.trim().to_owned();
+    if key.contains("$$2") {
+        key = key.replace("$$", "$");
+    }
+    if let Some(token) = extract_curseforge_console_key(&key) {
+        key = token;
+    } else {
+        key.retain(|character| character.is_ascii_graphic());
+    }
+    if key.len() < 24 || key.len() > 256 {
+        return Err("CurseForge API keys are 24–256 characters".to_owned());
+    }
+    if !key.chars().all(|character| character.is_ascii_graphic()) {
+        return Err("that CurseForge API key contains characters Helix will not store".to_owned());
+    }
+    Ok(key)
+}
+
+fn strip_curseforge_key_noise(value: &str) -> String {
+    value
+        .nfkc()
+        .filter(|character| !curseforge_key_ignorable(*character))
+        .map(map_curseforge_key_punctuation)
+        .collect()
+}
+
+fn curseforge_key_ignorable(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{00ad}'
+                | '\u{034f}'
+                | '\u{061c}'
+                | '\u{180e}'
+                | '\u{200b}'
+                | '\u{200c}'
+                | '\u{200d}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{202a}'
+                | '\u{202b}'
+                | '\u{202c}'
+                | '\u{202d}'
+                | '\u{202e}'
+                | '\u{2060}'
+                | '\u{2061}'
+                | '\u{2062}'
+                | '\u{2063}'
+                | '\u{2064}'
+                | '\u{2066}'
+                | '\u{2067}'
+                | '\u{2068}'
+                | '\u{2069}'
+                | '\u{206a}'
+                | '\u{206b}'
+                | '\u{206c}'
+                | '\u{206d}'
+                | '\u{206e}'
+                | '\u{206f}'
+                | '\u{feff}'
+                | '\u{fff9}'
+                | '\u{fffa}'
+                | '\u{fffb}'
+        )
+}
+
+fn map_curseforge_key_punctuation(character: char) -> char {
+    match character {
+        '\u{00a0}' | '\u{202f}' | '\u{2007}' | '\u{2008}' | '\u{2009}' | '\u{200a}' => ' ',
+        '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' => '\'',
+        '\u{201c}' | '\u{201d}' | '\u{201e}' | '\u{201f}' => '"',
+        '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+        | '\u{2212}' => '-',
+        other => other,
+    }
+}
+
+fn strip_wrapping_quotes(value: &str) -> &str {
+    let value = value.trim();
+    let mut characters = value.chars();
+    let Some(first) = characters.next() else {
+        return value;
+    };
+    let Some(last) = characters.next_back() else {
+        return value;
+    };
+    if matches!(
+        (first, last),
+        ('"', '"') | ('\'', '\'') | ('\u{201c}', '\u{201d}') | ('\u{2018}', '\u{2019}')
+    ) {
+        let start = first.len_utf8();
+        &value[start..value.len() - last.len_utf8()]
+    } else {
+        value
+    }
+}
+
+fn extract_curseforge_console_key(value: &str) -> Option<String> {
+    let start = value.find("$2")?;
+    let mut token = String::new();
+    for character in value[start..].chars() {
+        if character == '$'
+            || character == '/'
+            || character == '.'
+            || character.is_ascii_alphanumeric()
+        {
+            token.push(character);
+            if token.len() >= 256 {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    (token.len() >= 24).then_some(token)
+}
+
+pub fn curl_extra_header_file(headers: &[(&str, &str)]) -> Result<String, String> {
+    let mut body = String::new();
+    for (name, value) in headers {
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || value.contains(['\r', '\n'])
+        {
+            return Err("the catalog request used an invalid header".to_owned());
+        }
+        body.push_str(name);
+        body.push_str(": ");
+        body.push_str(value);
+        body.push('\n');
+    }
+    Ok(body)
+}
+
+pub fn http_dump_status(dump: &str) -> Option<u16> {
+    dump.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line
+                .strip_prefix("HTTP/1.0 ")
+                .or_else(|| line.strip_prefix("HTTP/1.1 "))
+                .or_else(|| line.strip_prefix("HTTP/2 "))
+                .or_else(|| line.strip_prefix("HTTP/3 "))?;
+            rest.split_whitespace().next()?.parse().ok()
+        })
+        .next_back()
+}
+
+pub fn http_status_from_curl_stderr(stderr: &str) -> Option<u16> {
+    let marker = "returned error: ";
+    let idx = stderr.rfind(marker)?;
+    stderr[idx + marker.len()..]
+        .split(|character: char| !character.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+}
+
+pub fn classify_curseforge_curl_error(stderr: &str, header_dump: &str, body: &[u8]) -> String {
+    let status = http_dump_status(header_dump).or_else(|| http_status_from_curl_stderr(stderr));
+    let body_text = String::from_utf8_lossy(body).to_ascii_lowercase();
+    let dump = header_dump.to_ascii_lowercase();
+    let cloudfront = dump.contains("cloudfront");
+    let key_text = body_text.contains("api key")
+        || body_text.contains("unauthorized")
+        || body_text.contains("missing or invalid");
+    match status {
+        Some(429) => CURSEFORGE_RATE_LIMITED.to_owned(),
+        Some(401 | 403) if key_text => CURSEFORGE_KEY_REJECTED.to_owned(),
+        Some(401 | 403) if body.is_empty() || cloudfront => CURSEFORGE_CDN_BLOCKED.to_owned(),
+        Some(401 | 403) => CURSEFORGE_KEY_REJECTED.to_owned(),
+        Some(code) if (500..600).contains(&code) => {
+            format!("CurseForge catalog was unreachable. HTTP {code}")
+        }
+        _ => format!("CurseForge catalog was unreachable. {stderr}"),
+    }
+}
+
+pub fn catalog_fetch_is_non_retryable(error: &str) -> bool {
+    error == CURSEFORGE_CDN_BLOCKED
+        || error == CURSEFORGE_KEY_REJECTED
+        || error == CURSEFORGE_RATE_LIMITED
+        || error.contains("returned error: 4")
+        || error.contains("HTTP 4")
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -310,6 +541,22 @@ pub enum BrokerRequest {
 pub enum FirewallProtocol {
     Tcp,
     Udp,
+}
+
+impl FirewallProtocol {
+    pub fn soap_name(self) -> &'static str {
+        match self {
+            Self::Tcp => "TCP",
+            Self::Udp => "UDP",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -459,10 +706,14 @@ pub enum MinecraftDifficulty {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MinecraftCreateSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pumpkin_bedrock_port: Option<u16>,
     pub name: String,
     pub software: MinecraftSoftware,
     pub version: String,
     pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
     pub max_players: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_port: Option<u16>,
@@ -481,11 +732,27 @@ pub struct CustomMinecraftJarSpec {
     pub java_version: u16,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ServerMigrateSource {
+    Amp { instance_id: String },
+    Folder { path: String },
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct VRisingCreateSpec {
+pub struct ServerMigrateSpec {
+    pub source: ServerMigrateSource,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<GameKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub software: Option<MinecraftSoftware>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
     pub max_players: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_port: Option<u16>,
@@ -493,6 +760,107 @@ pub struct VRisingCreateSpec {
     pub query_port: Option<u16>,
     #[serde(default)]
     pub network_exposure: ServerNetworkExposure,
+    pub start_on_boot: bool,
+    pub eula_accepted: bool,
+    pub source_stopped: bool,
+    pub copy_acknowledged: bool,
+    #[serde(default = "default_true")]
+    pub list_on_browser: bool,
+    #[serde(default)]
+    pub wine_runtime_acknowledged: bool,
+}
+
+impl ServerMigrateSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_dedicated_name(&self.name)?;
+        if !self.copy_acknowledged {
+            return Err(
+                "confirm that Helix will copy into a new native server and leave the source manager alone"
+                    .to_owned(),
+            );
+        }
+        if !self.source_stopped {
+            return Err("confirm the source server is stopped before copying".to_owned());
+        }
+        validate_cpu_millis(self.cpu_millis)?;
+        if self.game_port.is_some_and(|port| port < 1_024) {
+            return Err("game port must be at least 1024".to_owned());
+        }
+        if self.query_port.is_some_and(|port| port < 1_024) {
+            return Err("query port must be at least 1024".to_owned());
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_game(&self, game: GameKind) -> Result<(), String> {
+        self.validate()?;
+        match game {
+            GameKind::Minecraft => {
+                if !self.eula_accepted {
+                    return Err("the Minecraft EULA must be explicitly accepted".to_owned());
+                }
+                if !(1_024..=24_576).contains(&self.memory_mb) {
+                    return Err("memory must be between 1 and 24 GiB".to_owned());
+                }
+                if !(1..=10_000).contains(&self.max_players) {
+                    return Err("player limit must be between 1 and 10,000".to_owned());
+                }
+                Ok(())
+            }
+            GameKind::VRising => VRisingCreateSpec {
+                name: self.name.clone(),
+                memory_mb: self.memory_mb,
+                cpu_millis: self.cpu_millis,
+                max_players: self.max_players,
+                game_port: self.game_port,
+                query_port: self.query_port,
+                network_exposure: self.network_exposure,
+                list_on_browser: self.list_on_browser,
+                start_on_boot: self.start_on_boot,
+                wine_runtime_acknowledged: self.wine_runtime_acknowledged,
+            }
+            .validate(),
+            GameKind::Valheim => ValheimCreateSpec {
+                name: self.name.clone(),
+                memory_mb: self.memory_mb,
+                cpu_millis: self.cpu_millis,
+                max_players: self.max_players,
+                game_port: self.game_port,
+                network_exposure: self.network_exposure,
+                start_on_boot: self.start_on_boot,
+            }
+            .validate(),
+            GameKind::Terraria => TerrariaCreateSpec {
+                name: self.name.clone(),
+                software: TerrariaSoftware::Vanilla,
+                memory_mb: self.memory_mb,
+                cpu_millis: self.cpu_millis,
+                max_players: self.max_players,
+                game_port: self.game_port,
+                network_exposure: self.network_exposure,
+                start_on_boot: self.start_on_boot,
+            }
+            .validate(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct VRisingCreateSpec {
+    pub name: String,
+    pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
+    pub max_players: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_port: Option<u16>,
+    #[serde(default)]
+    pub network_exposure: ServerNetworkExposure,
+    #[serde(default = "default_true")]
+    pub list_on_browser: bool,
     pub start_on_boot: bool,
     pub wine_runtime_acknowledged: bool,
 }
@@ -510,6 +878,7 @@ impl VRisingCreateSpec {
         if !(2_048..=24_576).contains(&self.memory_mb) {
             return Err("V Rising memory must be between 2 and 24 GiB".to_owned());
         }
+        validate_cpu_millis(self.cpu_millis)?;
         if !(1..=128).contains(&self.max_players) {
             return Err("V Rising player limit must be between 1 and 128".to_owned());
         }
@@ -527,12 +896,6 @@ impl VRisingCreateSpec {
         if self.query_port.is_some() && self.game_port.is_none() {
             return Err("a query port also needs a game port".to_owned());
         }
-        if self.network_exposure != ServerNetworkExposure::Private {
-            return Err(
-                "V Rising public UPnP is not offered yet; create the server as private and forward both UDP ports yourself if needed"
-                    .to_owned(),
-            );
-        }
         if !self.wine_runtime_acknowledged {
             return Err("Helix could not confirm the isolated V Rising runtime install".to_owned());
         }
@@ -545,6 +908,8 @@ impl VRisingCreateSpec {
 pub struct ValheimCreateSpec {
     pub name: String,
     pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
     pub max_players: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_port: Option<u16>,
@@ -559,17 +924,12 @@ impl ValheimCreateSpec {
         if !(1_024..=16_384).contains(&self.memory_mb) {
             return Err("Valheim memory must be between 1 and 16 GiB".to_owned());
         }
+        validate_cpu_millis(self.cpu_millis)?;
         if !(1..=64).contains(&self.max_players) {
             return Err("Valheim player limit must be between 1 and 64".to_owned());
         }
         if self.game_port.is_some_and(|port| port < 1_024) {
             return Err("game port must be at least 1024".to_owned());
-        }
-        if self.network_exposure != ServerNetworkExposure::Private {
-            return Err(
-                "Valheim public UPnP is not offered yet; create the server as private and forward UDP 2456–2458 yourself if needed"
-                    .to_owned(),
-            );
         }
         Ok(())
     }
@@ -581,6 +941,8 @@ pub struct TerrariaCreateSpec {
     pub name: String,
     pub software: TerrariaSoftware,
     pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
     pub max_players: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_port: Option<u16>,
@@ -595,6 +957,7 @@ impl TerrariaCreateSpec {
         if !(512..=8_192).contains(&self.memory_mb) {
             return Err("Terraria memory must be between 512 MiB and 8 GiB".to_owned());
         }
+        validate_cpu_millis(self.cpu_millis)?;
         if !(1..=255).contains(&self.max_players) {
             return Err("Terraria player limit must be between 1 and 255".to_owned());
         }
@@ -622,6 +985,8 @@ fn validate_dedicated_name(name: &str) -> Result<(), String> {
 pub struct MinecraftModpackCreateSpec {
     pub name: String,
     pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
     pub max_players: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game_port: Option<u16>,
@@ -647,9 +1012,26 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub fn validate_cpu_millis(cpu_millis: u32) -> Result<(), String> {
+    if cpu_millis == 0 || (250..=128_000).contains(&cpu_millis) {
+        Ok(())
+    } else {
+        Err("CPU limit must be off, or between 0.25 and 128 cores".to_owned())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MinecraftSoftware {
+    Pumpkin,
     Custom,
     Vanilla,
     Paper,
@@ -795,7 +1177,7 @@ fn request_over_socket(
     let mut stream =
         UnixStream::connect(socket_path).map_err(|_| BrokerClientError::Unavailable)?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
+        .set_read_timeout(Some(broker_read_timeout(request)))
         .map_err(|_| BrokerClientError::Unavailable)?;
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
@@ -827,6 +1209,21 @@ fn request_over_socket(
             || "request rejected".to_owned(),
             |problem| problem.message,
         )))
+    }
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn broker_read_timeout(request: &BrokerRequest) -> std::time::Duration {
+    match request {
+        BrokerRequest::TrashNativeServer { .. }
+        | BrokerRequest::RestoreTrashedServer { .. }
+        | BrokerRequest::PurgeTrashedServer { .. } => std::time::Duration::from_secs(300),
+        BrokerRequest::ServerMarketplaceSearch { .. }
+        | BrokerRequest::ServerMarketplaceProject { .. }
+        | BrokerRequest::MinecraftModpackSearch { .. }
+        | BrokerRequest::MinecraftModpackProject { .. }
+        | BrokerRequest::SetCurseforgeApiKey { .. } => std::time::Duration::from_secs(45),
+        _ => std::time::Duration::from_secs(30),
     }
 }
 
@@ -883,10 +1280,12 @@ mod tests {
     fn create_spec_has_stable_wire_shape() {
         let request = BrokerRequest::CreateMinecraft {
             spec: MinecraftCreateSpec {
+                pumpkin_bedrock_port: None,
                 name: "Survival".to_owned(),
                 software: MinecraftSoftware::Paper,
                 version: "1.21.8".to_owned(),
                 memory_mb: 4096,
+                cpu_millis: 0,
                 max_players: 20,
                 game_port: Some(25565),
                 network_exposure: ServerNetworkExposure::Private,
@@ -899,15 +1298,47 @@ mod tests {
         assert_eq!(encoded["operation"], "create_minecraft");
         assert_eq!(encoded["spec"]["software"], "paper");
         assert!(encoded["spec"].get("custom_jar").is_none());
+        assert!(encoded["spec"].get("cpu_millis").is_none());
+
+        let migrate = serde_json::to_value(BrokerRequest::MigrateServer {
+            spec: ServerMigrateSpec {
+                source: ServerMigrateSource::Amp {
+                    instance_id: "amp:12345678-1234-4234-8234-123456789abc".to_owned(),
+                },
+                name: "Survival".to_owned(),
+                game: Some(GameKind::Minecraft),
+                software: Some(MinecraftSoftware::Paper),
+                version: Some("1.21.8".to_owned()),
+                memory_mb: 4_096,
+                cpu_millis: 0,
+                max_players: 20,
+                game_port: None,
+                query_port: None,
+                network_exposure: ServerNetworkExposure::Private,
+                start_on_boot: true,
+                eula_accepted: true,
+                source_stopped: true,
+                copy_acknowledged: true,
+                list_on_browser: true,
+                wine_runtime_acknowledged: false,
+            },
+        })
+        .expect("serialize migrate request");
+        assert_eq!(migrate["operation"], "migrate_server");
+        assert_eq!(migrate["spec"]["source"]["kind"], "amp");
+        assert!(migrate["spec"].get("cpu_millis").is_none());
+        assert!(migrate["spec"].get("start_after").is_none());
 
         let vrising = serde_json::to_value(BrokerRequest::CreateVRising {
             spec: VRisingCreateSpec {
                 name: "Castle".to_owned(),
                 memory_mb: 4_096,
+                cpu_millis: 0,
                 max_players: 40,
                 game_port: None,
                 query_port: None,
                 network_exposure: ServerNetworkExposure::Private,
+                list_on_browser: true,
                 start_on_boot: true,
                 wine_runtime_acknowledged: true,
             },
@@ -915,7 +1346,25 @@ mod tests {
         .expect("serialize V Rising request");
         assert_eq!(vrising["operation"], "create_vrising");
         assert_eq!(vrising["spec"]["wine_runtime_acknowledged"], true);
+        assert_eq!(vrising["spec"]["list_on_browser"], true);
         assert!(vrising["spec"].get("game_port").is_none());
+        assert!(vrising["spec"].get("cpu_millis").is_none());
+
+        let cpu = serde_json::to_value(BrokerRequest::SetNativeCpu {
+            instance_id: "helix:test".to_owned(),
+            cpu_millis: 2_000,
+        })
+        .expect("serialize CPU request");
+        assert_eq!(cpu["operation"], "set_native_cpu");
+        assert_eq!(cpu["cpu_millis"], 2_000);
+
+        let listing = serde_json::to_value(BrokerRequest::SetNativeBrowserListing {
+            instance_id: "helix:test".to_owned(),
+            list_on_browser: false,
+        })
+        .expect("serialize listing request");
+        assert_eq!(listing["operation"], "set_native_browser_listing");
+        assert_eq!(listing["list_on_browser"], false);
 
         let boot = serde_json::to_value(BrokerRequest::SetNativeStartOnBoot {
             instance_id: "helix:test".to_owned(),
@@ -935,10 +1384,12 @@ mod tests {
 
         let custom = serde_json::to_value(BrokerRequest::CreateMinecraft {
             spec: MinecraftCreateSpec {
+                pumpkin_bedrock_port: None,
                 name: "Private build".to_owned(),
                 software: MinecraftSoftware::Custom,
                 version: "1.21.8".to_owned(),
                 memory_mb: 4096,
+                cpu_millis: 0,
                 max_players: 20,
                 game_port: Some(25566),
                 network_exposure: ServerNetworkExposure::Private,
@@ -998,6 +1449,49 @@ mod tests {
     }
 
     #[test]
+    fn migrate_spec_requires_stop_and_copy_acknowledgement() {
+        let mut spec = ServerMigrateSpec {
+            source: ServerMigrateSource::Folder {
+                path: "/srv/storage/pterodactyl/world".to_owned(),
+            },
+            name: "Copied".to_owned(),
+            game: Some(GameKind::Minecraft),
+            software: Some(MinecraftSoftware::Paper),
+            version: Some("latest".to_owned()),
+            memory_mb: 4_096,
+            cpu_millis: 0,
+            max_players: 20,
+            game_port: None,
+            query_port: None,
+            network_exposure: ServerNetworkExposure::Private,
+            start_on_boot: true,
+            eula_accepted: true,
+            source_stopped: true,
+            copy_acknowledged: true,
+            list_on_browser: true,
+            wine_runtime_acknowledged: false,
+        };
+        spec.validate_for_game(GameKind::Minecraft)
+            .expect("valid copy");
+        spec.copy_acknowledged = false;
+        assert!(spec.validate().is_err());
+        spec.copy_acknowledged = true;
+        spec.source_stopped = false;
+        assert!(spec.validate().is_err());
+        spec.source_stopped = true;
+        spec.eula_accepted = false;
+        assert!(spec.validate_for_game(GameKind::Minecraft).is_err());
+        spec.eula_accepted = true;
+        spec.memory_mb = 1_024;
+        spec.wine_runtime_acknowledged = false;
+        assert!(spec.validate_for_game(GameKind::VRising).is_err());
+        spec.memory_mb = 4_096;
+        spec.wine_runtime_acknowledged = true;
+        spec.validate_for_game(GameKind::VRising)
+            .expect("V Rising copy");
+    }
+
+    #[test]
     fn backup_trash_requests_have_path_opaque_wire_shapes() {
         let trash = BrokerRequest::TrashBackup {
             instance_id: "helix:6f55caa9-1264-4baf-8335-d3f31a704614".to_owned(),
@@ -1016,6 +1510,27 @@ mod tests {
         assert_eq!(encoded["operation"], "restore_trashed_backup");
         assert_eq!(encoded["trash_id"], "8953dc16-3891-42bf-802f-711b3ba2965a");
         assert!(encoded.get("path").is_none());
+
+        let purge = BrokerRequest::PurgeTrashedServer {
+            trash_id: "8953dc16-3891-42bf-802f-711b3ba2965a".to_owned(),
+            confirmation_name: "Survival".to_owned(),
+        };
+        let encoded = serde_json::to_value(purge).expect("serialize purge request");
+        assert_eq!(encoded["operation"], "purge_trashed_server");
+        assert_eq!(encoded["trash_id"], "8953dc16-3891-42bf-802f-711b3ba2965a");
+        assert_eq!(encoded["confirmation_name"], "Survival");
+        assert!(encoded.get("path").is_none());
+        assert_eq!(
+            broker_read_timeout(&BrokerRequest::PurgeTrashedServer {
+                trash_id: "8953dc16-3891-42bf-802f-711b3ba2965a".to_owned(),
+                confirmation_name: "Survival".to_owned(),
+            }),
+            std::time::Duration::from_secs(300)
+        );
+        assert_eq!(
+            broker_read_timeout(&BrokerRequest::ListTrashedServers {}),
+            std::time::Duration::from_secs(30)
+        );
     }
 
     #[test]
@@ -1192,6 +1707,17 @@ mod tests {
         assert_eq!(search["query"], "world edit");
         assert!(search.get("url").is_none());
         assert!(search.get("path").is_none());
+        assert_eq!(
+            broker_read_timeout(&BrokerRequest::ServerMarketplaceSearch {
+                instance_id: "helix:6f55caa9-1264-4baf-8335-d3f31a704614".to_owned(),
+                query: "world edit".to_owned(),
+                offset: 0,
+                limit: 20,
+                provider: ModpackProvider::Curseforge,
+                catalog: MarketplaceCatalog::Content,
+            }),
+            std::time::Duration::from_secs(45)
+        );
 
         let install = serde_json::to_value(BrokerRequest::InstallServerMarketplaceContent {
             instance_id: "helix:6f55caa9-1264-4baf-8335-d3f31a704614".to_owned(),
@@ -1222,10 +1748,21 @@ mod tests {
         assert!(search.get("url").is_none());
         assert!(search.get("loader").is_none());
 
+        let project = serde_json::to_value(BrokerRequest::MinecraftModpackProject {
+            project_id: "123456".to_owned(),
+            provider: ModpackProvider::Curseforge,
+        })
+        .expect("serialize CurseForge modpack project");
+        assert_eq!(project["operation"], "minecraft_modpack_project");
+        assert_eq!(project["project_id"], "123456");
+        assert_eq!(project["provider"], "curseforge");
+        assert!(project.get("url").is_none());
+
         let create = serde_json::to_value(BrokerRequest::CreateMinecraftModpack {
             spec: MinecraftModpackCreateSpec {
                 name: "Fabric Adventure".to_owned(),
                 memory_mb: 6144,
+                cpu_millis: 0,
                 max_players: 20,
                 game_port: Some(25_565),
                 network_exposure: ServerNetworkExposure::Private,
@@ -1427,14 +1964,109 @@ mod tests {
     }
 
     #[test]
-    fn vrising_create_spec_rejects_public_exposure_and_missing_wine_ack() {
+    fn curseforge_api_key_is_bounded_printable_ascii() {
+        assert!(validate_curseforge_api_key("short").is_err());
+        assert!(
+            validate_curseforge_api_key("not-ascii-\u{043a}\u{043b}\u{044e}\u{0447}-xxxxxxxx")
+                .is_err()
+        );
+        let key = "$2a$10$abcdefghijklmnopqrstuvwx";
+        assert_eq!(
+            validate_curseforge_api_key(&format!("  '{key}'  ")).unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key(&format!("\"{key}\"")).unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key("$$2a$$10$$abcdefghijklmnopqrstuvwx").unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key("$2a$10$abc/defGHIJK.lmnopqrstuv").unwrap(),
+            "$2a$10$abc/defGHIJK.lmnopqrstuv"
+        );
+        assert_eq!(
+            validate_curseforge_api_key(&format!("{}\n{}", &key[..16], &key[16..])).unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key(&format!(
+                "CF_API_KEY=$$2a$$10$${}\u{200b}",
+                &key["$2a$10$".len()..]
+            ))
+            .unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key(&format!("Copy this: {key} please\u{00a0}")).unwrap(),
+            key
+        );
+        assert_eq!(
+            validate_curseforge_api_key("\u{ff04}2a\u{ff04}10\u{ff04}abcdefghijklmnopqrstuvwx")
+                .unwrap(),
+            key
+        );
+        let header_file = curl_extra_header_file(&[("x-api-key", key)]).expect("header file");
+        assert_eq!(header_file, format!("x-api-key: {key}\n"));
+        assert!(!header_file.contains("$$"));
+        assert!(curl_extra_header_file(&[("x-api-key", "line\nbreak")]).is_err());
+        let cloudfront_dump = "HTTP/2 403 \r\ncontent-length: 0\r\nx-cache: Error from cloudfront\r\nvia: 1.1 edge.cloudfront.net (CloudFront)\r\n";
+        assert_eq!(http_dump_status(cloudfront_dump), Some(403));
+        assert_eq!(
+            classify_curseforge_curl_error(
+                "The requested URL returned error: 403",
+                cloudfront_dump,
+                b""
+            ),
+            CURSEFORGE_CDN_BLOCKED
+        );
+        assert_eq!(
+            classify_curseforge_curl_error(
+                "The requested URL returned error: 403",
+                "HTTP/1.1 403 Forbidden\r\nserver: Kestrel\r\n",
+                b"Forbidden: API Key missing or invalid"
+            ),
+            CURSEFORGE_KEY_REJECTED
+        );
+        assert_eq!(
+            classify_curseforge_curl_error(
+                "The requested URL returned error: 429",
+                "HTTP/2 429 \r\n",
+                b""
+            ),
+            CURSEFORGE_RATE_LIMITED
+        );
+        assert!(catalog_fetch_is_non_retryable(CURSEFORGE_CDN_BLOCKED));
+        let status = serde_json::to_value(BrokerRequest::CurseforgeKeyStatus {})
+            .expect("serialize curseforge status");
+        assert_eq!(status["operation"], "curseforge_key_status");
+        assert!(status.get("key").is_none());
+        let set = serde_json::to_value(BrokerRequest::SetCurseforgeApiKey {
+            key: key.to_owned(),
+        })
+        .expect("serialize curseforge key");
+        assert_eq!(set["operation"], "set_curseforge_api_key");
+        assert_eq!(set["key"], key);
+        assert!(set.get("url").is_none());
+        let clear = serde_json::to_value(BrokerRequest::ClearCurseforgeApiKey {})
+            .expect("serialize curseforge clear");
+        assert_eq!(clear["operation"], "clear_curseforge_api_key");
+        assert!(clear.get("key").is_none());
+    }
+
+    #[test]
+    fn vrising_create_spec_rejects_missing_wine_ack_and_accepts_public_udp() {
         let mut spec = VRisingCreateSpec {
             name: "Castle".to_owned(),
             memory_mb: 4_096,
+            cpu_millis: 0,
             max_players: 40,
             game_port: None,
             query_port: None,
             network_exposure: ServerNetworkExposure::Private,
+            list_on_browser: true,
             start_on_boot: true,
             wine_runtime_acknowledged: true,
         };
@@ -1443,8 +2075,11 @@ mod tests {
         assert!(spec.validate().unwrap_err().contains("runtime"));
         spec.wine_runtime_acknowledged = true;
         spec.network_exposure = ServerNetworkExposure::Public;
-        assert!(spec.validate().unwrap_err().contains("private"));
-        spec.network_exposure = ServerNetworkExposure::Private;
+        spec.validate().expect("public UDP is allowed for V Rising");
+        spec.cpu_millis = 100;
+        assert!(spec.validate().unwrap_err().contains("CPU"));
+        spec.cpu_millis = 2_000;
+        spec.validate().expect("two cores is a valid cap");
         spec.game_port = Some(9_876);
         spec.query_port = Some(9_876);
         assert!(spec.validate().unwrap_err().contains("different"));

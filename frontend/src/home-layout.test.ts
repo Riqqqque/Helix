@@ -150,9 +150,7 @@ describe('home layout', () => {
     expect(result.activeHomeId).toBe(HOMARR_HOME_ID);
     expect(result.templates.map((template) => template.id)).toEqual(['home-main', HOMARR_HOME_ID]);
     expect(result.templates[1]?.widgets.map((widget) => widget.title)).toEqual(['Radarr', 'Plex']);
-    expect(homarrShortcutSize(1)).toBe('compact');
-    expect(homarrShortcutSize(4)).toBe('wide');
-    expect(homarrShortcutSize(8)).toBe('full');
+    expect(homarrShortcutSize()).toBe('compact');
   });
 
   it('keeps edited Homarr shortcuts when the same apps are imported again', () => {

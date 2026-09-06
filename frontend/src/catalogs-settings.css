@@ -1,0 +1,9 @@
+.catalogs-key-field {
+  max-width: none;
+}
+.catalogs-key-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}

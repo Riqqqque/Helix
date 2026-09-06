@@ -6,6 +6,7 @@
 //! can be assembled inside a fresh staging directory.
 
 use serde::Deserialize;
+use serde_json::Value;
 use sha1::Sha1;
 use sha2::{Digest as _, Sha512};
 use std::{
@@ -42,11 +43,11 @@ pub struct MrpackLimits {
 impl Default for MrpackLimits {
     fn default() -> Self {
         Self {
-            maximum_archive_bytes: 256 * 1024 * 1024,
+            maximum_archive_bytes: 768 * 1024 * 1024,
             maximum_index_bytes: 4 * 1024 * 1024,
             maximum_archive_entries: 8_192,
             maximum_files: 4_096,
-            maximum_file_bytes: 512 * 1024 * 1024,
+            maximum_file_bytes: 768 * 1024 * 1024,
             maximum_download_bytes: 8 * 1024 * 1024 * 1024,
             maximum_override_bytes: 2 * 1024 * 1024 * 1024,
             maximum_unpacked_bytes: 10 * 1024 * 1024 * 1024,
@@ -355,9 +356,7 @@ fn validate_index(
     }
     validate_label(&index.name, "modpack name", 256)?;
     validate_label(&index.version_id, "modpack version", 128)?;
-    if let Some(summary) = index.summary.as_deref() {
-        validate_label(summary, "modpack summary", 2_048)?;
-    }
+    let summary = sanitize_summary(index.summary.as_deref(), 2_048);
     let minecraft_version =
         required_dependency(index.dependencies.minecraft.as_deref(), "Minecraft version")?;
     if let Some(dependency) = index.dependencies.unsupported.keys().next() {
@@ -472,7 +471,7 @@ fn validate_index(
     Ok(MrpackPlan {
         name: index.name,
         version_id: index.version_id,
-        summary: index.summary,
+        summary,
         minecraft_version: minecraft_version.to_owned(),
         loader,
         fabric_loader_version: loader_version.to_owned(),
@@ -577,9 +576,9 @@ pub fn verify_download(path: &Path, expected: &MrpackDownload) -> Result<(), Str
             expected.path
         ));
     }
-    if metadata.len() != expected.size {
+    if metadata.len() == 0 || metadata.len() > MrpackLimits::default().maximum_file_bytes {
         return Err(format!(
-            "{} did not match its declared file size",
+            "{} is outside Helix file size limits",
             expected.path
         ));
     }
@@ -874,6 +873,41 @@ fn validate_label(value: &str, label: &str, maximum_bytes: usize) -> Result<(), 
     Ok(())
 }
 
+pub fn json_u64(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number.as_u64().or_else(|| {
+            number
+                .as_i64()
+                .and_then(|signed| u64::try_from(signed).ok())
+        }),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn sanitize_summary(value: Option<&str>, maximum_bytes: usize) -> Option<String> {
+    let value = value?;
+    let mut cleaned = String::new();
+    for character in value.chars() {
+        if character.is_control() && !matches!(character, '\n' | '\r' | '\t') {
+            continue;
+        }
+        let encoded = character.len_utf8();
+        if cleaned.len().saturating_add(encoded) > maximum_bytes {
+            break;
+        }
+        cleaned.push(character);
+    }
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else if trimmed.len() == cleaned.len() {
+        Some(cleaned)
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
 fn validate_hex(value: &str, length: usize, label: &str) -> Result<(), String> {
     if value.len() != length || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(format!("the modpack contains an invalid {label} checksum"));
@@ -999,6 +1033,10 @@ mod tests {
         let downloaded = temp.path().join("example.jar");
         fs::write(&downloaded, payload).expect("download fixture");
         verify_download(&downloaded, &plan.files[0]).expect("verify both hashes");
+        let mut mismatched_size = plan.files[0].clone();
+        mismatched_size.size = 1;
+        verify_download(&downloaded, &mismatched_size)
+            .expect("declared size is not the integrity check");
         fs::write(&downloaded, b"wrong size").expect("corrupt fixture");
         assert!(verify_download(&downloaded, &plan.files[0]).is_err());
     }
@@ -1171,6 +1209,84 @@ mod tests {
             .expect_err("unknown loader must fail closed");
         assert!(error.contains("future-loader"));
         assert!(error.contains("not supported"), "{error}");
+    }
+
+    #[test]
+    fn messy_pack_summaries_are_cleaned_instead_of_rejecting_the_install() {
+        let temp = TempDir::new().expect("tempdir");
+        let payload = b"server mod";
+        let (sha1, sha512) = checksums(payload);
+        let cases = [
+            ("  padded blurb  ", Some("padded blurb")),
+            ("line one\nline two\r\n", Some("line one\nline two")),
+            ("", None),
+            ("\n\t  \r", None),
+        ];
+        for (raw, expected) in cases {
+            let archive = temp.path().join(format!("summary-{}.mrpack", raw.len()));
+            let index = serde_json::to_vec(&serde_json::json!({
+                "formatVersion": 1,
+                "game": "minecraft",
+                "versionId": "1.0.0",
+                "name": "Summary fixture",
+                "summary": raw,
+                "files": [{
+                    "path": "mods/server.jar",
+                    "hashes": {"sha1": sha1, "sha512": sha512},
+                    "env": {"client": "required", "server": "required"},
+                    "downloads": ["https://cdn.modrinth.com/data/p/v/server.jar"],
+                    "fileSize": payload.len(),
+                }],
+                "dependencies": {"minecraft": "1.21.1", "fabric-loader": "0.16.14"},
+            }))
+            .expect("serialize fixture");
+            write_pack(&archive, &index, &[]);
+            let plan = inspect_mrpack(&archive, &MrpackLimits::default(), deadline())
+                .unwrap_or_else(|error| panic!("summary {raw:?} should install: {error}"));
+            assert_eq!(plan.summary.as_deref(), expected, "summary {raw:?}");
+            assert_eq!(plan.files.len(), 1);
+        }
+
+        let long = "a".repeat(2_100);
+        let archive = temp.path().join("long-summary.mrpack");
+        let index = serde_json::to_vec(&serde_json::json!({
+            "formatVersion": 1,
+            "game": "minecraft",
+            "versionId": "1.0.0",
+            "name": "Summary fixture",
+            "summary": long,
+            "files": [{
+                "path": "mods/server.jar",
+                "hashes": {"sha1": sha1, "sha512": sha512},
+                "env": {"client": "required", "server": "required"},
+                "downloads": ["https://cdn.modrinth.com/data/p/v/server.jar"],
+                "fileSize": payload.len(),
+            }],
+            "dependencies": {"minecraft": "1.21.1", "fabric-loader": "0.16.14"},
+        }))
+        .expect("serialize fixture");
+        write_pack(&archive, &index, &[]);
+        let plan = inspect_mrpack(&archive, &MrpackLimits::default(), deadline())
+            .expect("long summary should truncate");
+        assert_eq!(plan.summary.as_deref().map(str::len), Some(2_048));
+    }
+
+    #[test]
+    fn json_u64_reads_numbers_and_decimal_strings() {
+        assert_eq!(json_u64(&serde_json::json!(4096)), Some(4096));
+        assert_eq!(json_u64(&serde_json::json!("8192")), Some(8192));
+        assert_eq!(json_u64(&serde_json::json!(" 12 ")), Some(12));
+        assert_eq!(json_u64(&serde_json::json!(-1)), None);
+        assert_eq!(json_u64(&serde_json::json!("nope")), None);
+    }
+
+    #[test]
+    fn sanitize_summary_strips_non_text_controls() {
+        assert_eq!(
+            sanitize_summary(Some("ok\u{0000} pack\u{007f}"), 2_048).as_deref(),
+            Some("ok pack")
+        );
+        assert_eq!(sanitize_summary(None, 2_048), None);
     }
 
     #[test]
