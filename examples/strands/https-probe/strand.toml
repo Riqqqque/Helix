@@ -1,0 +1,46 @@
+schema = "helix.strand/1"
+id = "c3e0d2a1-8f44-4b9e-9c11-6a7b5d4e3f20"
+slug = "https-probe"
+name = "HTTPS Probe"
+version = "0.1.0"
+description = "Calls one allowlisted HTTPS JSON API through Helix and remembers the last response."
+license = "AGPL-3.0-or-later"
+publisher = "Helix example"
+kind = "ui-only"
+
+[[capabilities]]
+name = "helix:net.https"
+reason = "Fetch a public weather JSON sample so other HTTPS APIs can copy the pattern."
+optional = false
+origins = ["https://api.open-meteo.com"]
+
+[[capabilities]]
+name = "helix:storage.kv"
+reason = "Remember the last successful probe in this Strand's own key/value store."
+optional = false
+
+[[capabilities]]
+name = "helix:ui.page"
+reason = "Open this Strand as a page in the Strands workspace."
+optional = false
+
+[[capabilities]]
+name = "helix:ui.widget"
+reason = "Optionally pin this Strand as a Home widget."
+optional = false
+
+[compatibility]
+helix = ">=1.0.0, <2.0.0"
+host_api = "1"
+
+[limits]
+memory_mib = 32
+timeout_ms = 8000
+concurrent_calls = 2
+queue_depth = 32
+storage_mib = 1
+outbound_requests_per_minute = 12
+log_kib_per_minute = 64
+
+[ui]
+entry = "ui/index.html"

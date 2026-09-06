@@ -1,0 +1,99 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/helix-api",
+  "crates/helix-auth",
+  "crates/helix-config",
+  "crates/helix-core",
+  "crates/helix-secrets",
+  "crates/helix-state",
+  "crates/helix-strand-kit",
+  "crates/helix-system",
+  "crates/helix-terminal",
+  "crates/helix-privd",
+  "crates/helixctl",
+  "crates/helixd",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Rique"]
+license = "AGPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+argon2 = { version = "0.5.3", default-features = false, features = ["std", "zeroize"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing", "ws"] }
+base64 = { version = "0.23.1", default-features = false, features = ["std"] }
+chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+clap = { version = "4.6.6", features = ["derive", "env"] }
+fs2 = "0.4.3"
+getrandom = { version = "0.4.3", features = ["std"] }
+helix-api = { path = "crates/helix-api" }
+helix-auth = { path = "crates/helix-auth" }
+helix-config = { path = "crates/helix-config" }
+helix-core = { path = "crates/helix-core" }
+helix-secrets = { path = "crates/helix-secrets" }
+helix-state = { path = "crates/helix-state" }
+helix-strand-kit = { path = "crates/helix-strand-kit" }
+helix-system = { path = "crates/helix-system" }
+helix-terminal = { path = "crates/helix-terminal" }
+helix-privd = { path = "crates/helix-privd" }
+hyper = { version = "1.11.0", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1.20", default-features = false, features = [
+  "http1",
+  "server",
+  "service",
+  "tokio",
+] }
+futures-util = { version = "0.3.32", default-features = false, features = ["sink", "std"] }
+mime = "0.3.17"
+portable-pty = "0.9.0"
+quick-xml = { version = "0.42.0", default-features = false }
+rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
+semver = "1.0.28"
+secrecy = { version = "=0.10.3", default-features = false }
+rustix = { version = "1.1.4", default-features = false, features = ["net", "process", "system"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+sha1 = { version = "0.11.0", default-features = false }
+sysinfo = { version = "0.38.4", default-features = false, features = ["disk", "network", "system"] }
+subtle = { version = "2.6.1", default-features = false }
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "1.1.4"
+tower = { version = "0.5.3", features = ["limit", "util"] }
+tower-http = { version = "0.7.0", features = [
+  "catch-panic",
+  "compression-br",
+  "compression-gzip",
+  "fs",
+  "request-id",
+  "set-header",
+  "timeout",
+  "trace",
+] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
+unicode-normalization = "0.1.25"
+ureq = { version = "=3.4.0", default-features = false, features = ["rustls"] }
+uuid = { version = "1.25.0", features = ["serde", "v4"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zeroize = { version = "1.9.0", features = ["std"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"

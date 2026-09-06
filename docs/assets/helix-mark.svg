@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">Helix</title>
+  <desc id="desc">Two crossing green strands on a dark rounded square.</desc>
+  <defs>
+    <radialGradient id="backdrop" cx="76%" cy="8%" r="100%">
+      <stop offset="0" stop-color="#17283a"/>
+      <stop offset="0.58" stop-color="#0d1522"/>
+      <stop offset="1" stop-color="#090d16"/>
+    </radialGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="160" height="160" rx="38" fill="url(#backdrop)"/>
+  <rect x="1" y="1" width="158" height="158" rx="37" fill="none" stroke="#bed0e2" stroke-opacity="0.13" stroke-width="2"/>
+  <g transform="rotate(-8 80 80)">
+    <rect x="65" y="30" width="30" height="100" rx="15" transform="rotate(43 80 80)" fill="#71e6a3" filter="url(#glow)"/>
+    <rect x="65" y="30" width="30" height="100" rx="15" transform="rotate(-43 80 80)" fill="#101724" stroke="#71e6a3" stroke-width="3"/>
+    <circle cx="51" cy="51" r="5" fill="#a0f0c1"/>
+    <circle cx="109" cy="109" r="5" fill="#a0f0c1"/>
+  </g>
+</svg>

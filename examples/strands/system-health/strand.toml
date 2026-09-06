@@ -1,0 +1,41 @@
+# Installable UI Strand. Pack it with helixctl strand pack, then install the zip from the Strands page.
+schema = "helix.strand/1"
+id = "b893d568-327d-4b6e-b0b6-0b7a58e0c852"
+slug = "system-health"
+name = "System Health"
+version = "0.1.0"
+description = "Shows a bounded summary of host health from Helix-mediated metrics."
+license = "AGPL-3.0-or-later"
+publisher = "Helix example"
+kind = "ui-only"
+
+[[capabilities]]
+name = "helix:metrics.read"
+reason = "Read the selected node's bounded health summary."
+optional = false
+
+[[capabilities]]
+name = "helix:ui.page"
+reason = "Open this Strand as a page in the Strands workspace."
+optional = false
+
+[[capabilities]]
+name = "helix:ui.widget"
+reason = "Optionally pin this Strand as a Home widget."
+optional = false
+
+[compatibility]
+helix = ">=1.0.0, <2.0.0"
+host_api = "1"
+
+[limits]
+memory_mib = 32
+timeout_ms = 1000
+concurrent_calls = 2
+queue_depth = 32
+storage_mib = 1
+outbound_requests_per_minute = 0
+log_kib_per_minute = 64
+
+[ui]
+entry = "ui/index.html"

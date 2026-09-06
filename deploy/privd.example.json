@@ -1,0 +1,24 @@
+{
+  "socket": "/run/helix/privd.sock",
+  "amp_credentials": "/etc/helix/amp.json",
+  "managed_roots": [
+    "/srv/helix/instances",
+    "/srv/storage",
+    "/srv/amp/instances"
+  ],
+  "analysis_roots": [
+    "/"
+  ],
+  "native": {
+    "state_root": "/srv/helix/state/instances",
+    "instance_root": "/srv/helix/instances",
+    "backup_root": "/srv/helix/backups",
+    "docker_binary": "/usr/bin/docker",
+    "custom_artifact_roots": [
+      "/srv/storage"
+    ]
+  },
+  "network": {
+    "state_root": "/srv/helix/state/network"
+  }
+}

@@ -1,0 +1,40 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      rust-patch-and-minor:
+        update-types:
+          - patch
+          - minor
+    # sysinfo 0.39+ requires Rust 1.95; Helix currently promises Rust 1.88.
+    ignore:
+      - dependency-name: sysinfo
+        versions:
+          - ">= 0.39.0"
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      frontend-patch-and-minor:
+        update-types:
+          - patch
+          - minor
+    # typescript-eslint 8.68 supports TypeScript below 6.1; upgrade majors as a
+    # reviewed frontend-toolchain change instead of an isolated Dependabot bump.
+    ignore:
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

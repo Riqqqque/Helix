@@ -1,0 +1,334 @@
+.page--terminal {
+  --terminal-background: #090b0e;
+  --terminal-foreground: #e6e9df;
+  gap: 14px;
+}
+
+.terminal-safety {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+}
+
+.terminal-safety > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.terminal-safety > div > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.terminal-safety strong,
+.terminal-safety p {
+  display: block;
+}
+
+.terminal-safety p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.terminal-frame {
+  overflow: hidden;
+  padding: 0;
+  border-color: color-mix(in srgb, var(--line) 78%, var(--accent) 22%);
+}
+
+.terminal-toolbar {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 13px 10px 17px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-raised) 88%, #000 12%);
+}
+
+.terminal-toolbar > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-toolbar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.terminal-hint {
+  max-width: min(36vw, 280px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.terminal-toolbar strong {
+  max-width: min(52vw, 620px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.terminal-led {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.terminal-stage {
+  position: relative;
+  min-height: clamp(430px, 62vh, 740px);
+  background: var(--terminal-background);
+}
+
+.terminal-shortcuts {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px 7px 17px;
+  border-bottom: 1px solid var(--line);
+  color: var(--quiet);
+  background: color-mix(in srgb, var(--surface-raised) 94%, #000 6%);
+}
+
+.terminal-shortcuts > span {
+  margin-right: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.terminal-shortcuts button {
+  min-height: 25px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--surface);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.terminal-shortcuts button:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  color: var(--accent);
+}
+
+.terminal-shortcuts small {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+}
+
+.terminal-find {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 13px 7px 17px;
+  border-bottom: 1px solid var(--line);
+  color: var(--quiet);
+  background: color-mix(in srgb, var(--surface-raised) 94%, #000 6%);
+}
+
+.terminal-find > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.terminal-find input {
+  min-width: 0;
+  flex: 1 1 180px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+}
+
+.terminal-find input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.terminal-find-status {
+  flex: 0 0 auto;
+  min-width: 4.5rem;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.terminal-find-status.is-miss {
+  color: var(--danger);
+}
+
+.terminal-host {
+  position: absolute;
+  inset: 0;
+  padding: 13px 12px 10px;
+  background: var(--terminal-background);
+}
+
+.terminal-host.is-bell {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 80%, transparent);
+}
+
+.terminal-host .xterm,
+.terminal-host .xterm-viewport {
+  height: 100%;
+}
+
+.terminal-host .xterm-viewport {
+  scrollbar-color: color-mix(in srgb, var(--accent) 35%, #30353b) transparent;
+}
+
+.terminal-lock {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 30px;
+  text-align: center;
+  color: var(--terminal-foreground);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--terminal-background) 88%, transparent),
+      color-mix(in srgb, var(--terminal-background) 96%, #000 4%)
+    ),
+    repeating-linear-gradient(0deg, transparent 0 23px, color-mix(in srgb, var(--terminal-foreground) 4%, transparent) 24px);
+  backdrop-filter: blur(3px);
+}
+
+.terminal-lock > svg {
+  color: var(--accent);
+}
+
+.terminal-lock > strong {
+  font-size: 19px;
+}
+
+.terminal-lock > p {
+  max-width: 520px;
+  margin: -4px 0 2px;
+  color: color-mix(in srgb, var(--terminal-foreground) 72%, transparent);
+  line-height: 1.55;
+}
+
+.terminal-lock label {
+  width: min(100%, 390px);
+  display: grid;
+  gap: 7px;
+  text-align: left;
+}
+
+.terminal-lock label span {
+  color: color-mix(in srgb, var(--terminal-foreground) 86%, transparent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.terminal-lock input {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--terminal-foreground) 18%, transparent);
+  border-radius: 9px;
+  padding: 11px 12px;
+  color: var(--terminal-foreground);
+  background: color-mix(in srgb, var(--terminal-background) 70%, #000 30%);
+  outline: none;
+}
+
+.terminal-lock input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.terminal-frame > footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--line);
+  color: var(--quiet);
+  background: var(--surface-raised);
+  font-size: 11px;
+}
+
+.terminal-frame > footer span::before {
+  content: '·';
+  margin-right: 7px;
+  color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .terminal-safety,
+  .terminal-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .terminal-toolbar > div:last-child,
+  .terminal-toolbar-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .terminal-find {
+    flex-wrap: wrap;
+  }
+
+  .terminal-find input {
+    flex: 1 1 100%;
+  }
+
+  .terminal-shortcuts {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .terminal-shortcuts small {
+    width: 100%;
+    margin-left: 0;
+    white-space: normal;
+  }
+
+  .terminal-toolbar .button {
+    justify-content: center;
+  }
+
+  .terminal-stage {
+    min-height: 500px;
+  }
+
+  .terminal-lock {
+    padding: 22px 16px;
+  }
+}

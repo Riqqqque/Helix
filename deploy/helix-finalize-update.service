@@ -1,0 +1,25 @@
+[Unit]
+Description=Helix release finalize
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=helix-broker
+UMask=0007
+ExecStart=/usr/local/libexec/helix-privd --config /etc/helix/privd.json --finalize-pending-update
+TimeoutStartSec=15min
+Nice=5
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/helix /run/docker.sock /var/run/docker.sock /var/lib/helix /srv/helix /srv/storage /srv/amp/instances /boot /etc /usr /var
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+NoNewPrivileges=true

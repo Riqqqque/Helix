@@ -1,0 +1,64 @@
+[Unit]
+Description=Helix local server control plane
+After=local-fs.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=helix
+Group=helix
+UMask=0077
+WorkingDirectory=/var/lib/helix
+ExecStart=/usr/bin/helixd --config /etc/helix/helix.toml
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+# helixd enforces a 20-second total drain deadline. Keep a hard-stop margin for
+# process teardown while preserving the unclean marker on forced termination.
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=helixd
+
+# systemd creates these roots before dropping privileges. tmpfiles.d creates
+# the private domain-specific subdirectories used by Helix.
+StateDirectory=helix
+StateDirectoryMode=0700
+CacheDirectory=helix
+CacheDirectoryMode=0700
+RuntimeDirectory=helix
+RuntimeDirectoryMode=0700
+
+# The web daemon has no privileged capabilities. Host mutations belong behind
+# the future typed privilege broker, not in helixd.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadOnlyPaths=/etc/helix /usr/share/helix
+ReadWritePaths=/var/lib/helix /var/cache/helix /run/helix
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+LimitNOFILE=1024
+LimitCORE=0
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

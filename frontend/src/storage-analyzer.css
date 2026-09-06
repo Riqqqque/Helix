@@ -1,0 +1,896 @@
+.storage-analysis-backdrop {
+  padding: 18px;
+}
+
+.dialog.storage-analysis-dialog {
+  width: min(1080px, 100%);
+  max-height: min(900px, calc(100vh - 36px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.storage-analysis-dialog > header {
+  flex: 0 0 auto;
+  min-height: 66px;
+  padding-left: 22px;
+}
+
+.storage-analysis-dialog > header > div {
+  min-width: 0;
+}
+
+.storage-analysis-dialog > header .eyebrow {
+  margin: 0 0 4px;
+  font-size: 7px;
+}
+
+.storage-analysis-dialog > header h2 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.storage-analysis-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 18px 20px 0;
+}
+
+.storage-analysis-body > .inline-error {
+  margin-bottom: 14px;
+}
+
+.storage-analysis-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0 30px;
+}
+
+.storage-analysis-target,
+.storage-analysis-path {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--sidebar);
+}
+
+.storage-analysis-target > svg {
+  flex: 0 0 auto;
+  color: var(--warning);
+}
+
+.storage-analysis-target > div,
+.storage-analysis-path {
+  min-width: 0;
+}
+
+.storage-analysis-target span,
+.storage-analysis-path > span {
+  color: var(--quiet);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.storage-analysis-target code,
+.storage-analysis-path code {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-analysis-modes {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.storage-analysis-modes > button {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.storage-analysis-modes > button:hover,
+.storage-analysis-modes > button.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.storage-analysis-modes > button > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 10px;
+}
+
+.storage-analysis-modes > button > span > svg {
+  color: var(--accent);
+}
+
+.storage-analysis-modes > button > small {
+  color: var(--quiet);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.storage-analysis-path {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.storage-analysis-guards {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 14px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+
+.storage-analysis-guards > div {
+  min-width: 0;
+  min-height: 112px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: center;
+  gap: 5px 9px;
+  padding: 17px;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 66%, transparent);
+}
+
+.storage-analysis-guards > div:last-child {
+  border-right: 0;
+}
+
+.storage-analysis-guards svg {
+  grid-row: 1 / 3;
+  color: var(--accent);
+}
+
+.storage-analysis-guards strong {
+  font-size: 10px;
+}
+
+.storage-analysis-guards span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.storage-analysis-idle > p {
+  margin: 19px 0 12px;
+  color: var(--quiet);
+  font-size: 9px;
+  text-align: center;
+}
+
+.storage-analysis-start {
+  min-width: 180px;
+  min-height: 38px;
+}
+
+.storage-analysis-progress {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.storage-analysis-progress__head {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.storage-analysis-state {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  border-radius: 50%;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.storage-analysis-state--cancelled,
+.storage-analysis-state--failed {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  background: color-mix(in srgb, var(--warning) 5%, transparent);
+}
+
+.storage-analysis-state--failed {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.storage-analysis-progress__head > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.storage-analysis-progress__head strong {
+  font-size: 12px;
+}
+
+.storage-analysis-progress__head span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.storage-analysis-progress__track {
+  position: relative;
+  height: 3px;
+  display: block;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.storage-analysis-progress__track i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+}
+
+.storage-analysis-progress__track.is-indeterminate i {
+  width: 34%;
+  animation: storage-analysis-scan 1.25s ease-in-out infinite;
+}
+
+@keyframes storage-analysis-scan {
+  from { transform: translateX(-105%); }
+  to { transform: translateX(295%); }
+}
+
+.storage-analysis-progress__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.storage-analysis-progress__stats > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 13px 16px;
+  border-right: 1px solid var(--line);
+}
+
+.storage-analysis-progress__stats > div:last-child {
+  border-right: 0;
+}
+
+.storage-analysis-progress__stats span {
+  color: var(--quiet);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.storage-analysis-progress__stats strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-analysis-budgets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 0 16px 13px;
+}
+
+.storage-analysis-budgets > span {
+  position: relative;
+  height: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--sidebar);
+}
+
+.storage-analysis-budgets i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.storage-analysis-budgets small {
+  position: relative;
+  display: block;
+  padding: 3px 6px;
+  color: var(--muted);
+  font-size: 7px;
+  line-height: 10px;
+}
+
+.storage-analysis-retry {
+  margin-top: 10px;
+}
+
+.storage-analysis-results {
+  margin-top: 14px;
+}
+
+.storage-analysis-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--line));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--warning) 5%, transparent);
+  color: var(--warning);
+}
+
+.storage-analysis-notice > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.storage-analysis-notice > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.storage-analysis-notice strong {
+  font-size: 9px;
+}
+
+.storage-analysis-notice span {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.storage-analysis-notice.is-complete {
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 32%, var(--line));
+  background: color-mix(in srgb, var(--good) 5%, transparent);
+}
+
+.storage-analysis-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+
+.storage-analysis-summary > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 13px 14px;
+  border-right: 1px solid var(--line);
+}
+
+.storage-analysis-summary > div:last-child {
+  border-right: 0;
+}
+
+.storage-analysis-summary span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--quiet);
+  font-size: 8px;
+}
+
+.storage-analysis-summary strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-analysis-details {
+  margin: 9px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--sidebar);
+}
+
+.storage-analysis-details summary {
+  padding: 9px 11px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.storage-analysis-details > div {
+  padding: 0 11px 10px;
+}
+
+.storage-analysis-details dl {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  background: var(--line);
+}
+
+.storage-analysis-details dl > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px;
+  background: var(--surface);
+}
+
+.storage-analysis-details dt {
+  overflow: hidden;
+  color: var(--quiet);
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-analysis-details dd {
+  margin: 0;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.storage-analysis-details p {
+  margin: 8px 0 0;
+  color: var(--quiet);
+  font-size: 7px;
+}
+
+.storage-analysis-result-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.storage-analysis-tabs {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.storage-analysis-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.storage-analysis-tabs > button {
+  min-height: 31px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.storage-analysis-tabs > button:hover,
+.storage-analysis-tabs > button.is-active {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.storage-analysis-tabs > button.is-active {
+  border-color: var(--line-strong);
+}
+
+.storage-analysis-tabs > button > span {
+  min-width: 18px;
+  padding: 2px 4px;
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--quiet);
+  font-size: 7px;
+  text-align: center;
+}
+
+.storage-analysis-definitions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  color: var(--quiet);
+  font-size: 8px;
+}
+
+.storage-analysis-definitions > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.storage-analysis-sort {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.storage-analysis-sort > span {
+  color: var(--quiet);
+  font-size: 8px;
+}
+
+.storage-analysis-sort select {
+  height: 31px;
+  padding: 0 25px 0 8px;
+  border-color: var(--line);
+  background: var(--surface);
+  font-size: 9px;
+}
+
+.storage-analysis-table-wrap {
+  margin-top: 8px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+
+.storage-analysis-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 9px;
+}
+
+.storage-analysis-table--folders {
+  min-width: 880px;
+}
+
+.storage-analysis-table th {
+  height: 33px;
+  padding: 0 11px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 75%, transparent);
+  color: var(--quiet);
+  font-size: 7px;
+  font-weight: 650;
+  letter-spacing: .07em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.storage-analysis-table td {
+  height: 51px;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.storage-analysis-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.storage-analysis-table tbody tr:hover {
+  background: color-mix(in srgb, var(--surface-hover) 64%, transparent);
+}
+
+.storage-analysis-table th:first-child {
+  width: 48%;
+}
+
+.storage-analysis-table td:last-child {
+  text-align: right;
+}
+
+.storage-analysis-table td > strong {
+  color: var(--text);
+  font-size: 10px;
+}
+
+.storage-analysis-table .button {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 8px;
+}
+
+.storage-analysis-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.storage-analysis-entry {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.storage-analysis-entry > svg {
+  flex: 0 0 auto;
+  color: var(--warning);
+}
+
+.storage-analysis-entry > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.storage-analysis-entry strong,
+.storage-analysis-entry code {
+  max-width: 440px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-analysis-entry strong {
+  color: var(--text);
+  font-size: 9px;
+}
+
+.storage-analysis-entry code {
+  color: var(--quiet);
+  font-size: 7px;
+}
+
+.storage-analysis-coverages {
+  display: flex;
+  gap: 4px;
+}
+
+.storage-analysis-coverage {
+  padding: 3px 5px;
+  border: 1px solid color-mix(in srgb, var(--good) 30%, var(--line));
+  border-radius: 3px;
+  color: var(--good);
+  font-size: 7px;
+}
+
+.storage-analysis-coverage.is-partial {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--line));
+}
+
+.storage-analysis-omitted {
+  margin: 8px 0 0;
+  color: var(--quiet);
+  font-size: 8px;
+}
+
+.storage-analysis-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--quiet);
+  font-size: 8px;
+}
+
+.storage-analysis-pagination > div {
+  display: flex;
+  gap: 5px;
+}
+
+.storage-analysis-pagination .button {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 8px;
+}
+
+.storage-analysis-trash-path {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--quiet);
+  font-size: 9px;
+}
+
+.storage-analysis-empty {
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--quiet);
+}
+
+.storage-analysis-empty strong {
+  color: var(--text);
+  font-size: 10px;
+}
+
+.storage-analysis-empty span {
+  font-size: 8px;
+}
+
+.storage-analysis-failure {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  border-radius: 4px;
+  color: var(--danger);
+  font-size: 9px;
+}
+
+.storage-analysis-footer {
+  min-height: 58px;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.storage-analysis-footer > span {
+  color: var(--quiet);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.storage-analysis-footer > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+}
+
+@media (max-width: 760px) {
+  .storage-analysis-backdrop {
+    padding: 8px;
+  }
+
+  .dialog.storage-analysis-dialog {
+    max-height: calc(100vh - 16px);
+  }
+
+  .storage-analysis-body {
+    padding: 12px 12px 0;
+  }
+
+  .storage-analysis-guards,
+  .storage-analysis-summary,
+  .storage-analysis-modes {
+    grid-template-columns: 1fr;
+  }
+
+  .storage-analysis-guards > div,
+  .storage-analysis-summary > div {
+    min-height: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .storage-analysis-guards > div:last-child,
+  .storage-analysis-summary > div:last-child {
+    border-bottom: 0;
+  }
+
+  .storage-analysis-progress__stats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .storage-analysis-progress__stats > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .storage-analysis-progress__stats > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .storage-analysis-details dl {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .storage-analysis-result-tools,
+  .storage-analysis-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .storage-analysis-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .storage-analysis-sort {
+    justify-content: space-between;
+  }
+
+  .storage-analysis-sort select {
+    flex: 1;
+  }
+
+  .storage-analysis-footer > div {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 460px) {
+  .storage-analysis-dialog > header {
+    min-height: 58px;
+    padding-left: 15px;
+  }
+
+  .storage-analysis-budgets {
+    grid-template-columns: 1fr;
+  }
+
+  .storage-analysis-footer > div {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .storage-analysis-footer .button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .storage-analysis-progress__track.is-indeterminate i {
+    width: 100%;
+    animation: none;
+    opacity: .45;
+  }
+}

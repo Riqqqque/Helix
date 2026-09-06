@@ -1,0 +1,220 @@
+.globe-map {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 2 / 1;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background:
+    radial-gradient(120% 90% at 50% 8%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 52%),
+    radial-gradient(80% 70% at 18% 88%, color-mix(in srgb, var(--surface-raised, var(--surface)) 80%, transparent), transparent 60%),
+    var(--bg);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.globe-map--compact {
+  border-radius: 10px;
+  min-height: 0;
+}
+
+.globe-map__svg,
+.globe-map__particles {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.globe-map__particles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.globe-map__ocean {
+  fill: color-mix(in srgb, var(--bg) 72%, var(--surface));
+}
+
+.globe-map__grid {
+  stroke: color-mix(in srgb, var(--line) 70%, transparent);
+  stroke-width: 0.6;
+  stroke-dasharray: 3 5;
+}
+
+.globe-map__land path {
+  fill: color-mix(in srgb, var(--text) 14%, var(--surface));
+  stroke: color-mix(in srgb, var(--text) 22%, var(--line));
+  stroke-width: 0.45;
+}
+
+.globe-map__arc {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: 1.15;
+}
+
+.globe-map__arc--player {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 1.4px color-mix(in srgb, var(--accent) 55%, transparent));
+}
+
+.globe-map__arc--outbound {
+  stroke: color-mix(in srgb, var(--text) 55%, var(--line));
+}
+
+.globe-map__pin {
+  fill: color-mix(in srgb, var(--text) 35%, transparent);
+}
+
+.globe-map__pin--player {
+  fill: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.globe-map__pin-core {
+  fill: var(--text);
+}
+
+.globe-map__pin--player .globe-map__pin-core {
+  fill: var(--accent);
+}
+
+.globe-map__origin-glow {
+  fill: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.globe-map__origin-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.4;
+}
+
+.globe-map__origin-core {
+  fill: var(--accent);
+}
+
+.page--globe {
+  max-width: 1180px;
+}
+
+.globe-stage {
+  display: grid;
+  gap: 16px;
+}
+
+.globe-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.globe-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 7px;
+  border-radius: 99px;
+  vertical-align: -1px;
+}
+
+.globe-legend i.is-origin {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.globe-legend i.is-player {
+  background: var(--accent);
+}
+
+.globe-legend i.is-outbound {
+  background: color-mix(in srgb, var(--text) 55%, var(--line));
+}
+
+.globe-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.globe-empty,
+.globe-status {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.globe-empty strong,
+.globe-status strong {
+  font-size: 14px;
+}
+
+.globe-empty span,
+.globe-status span,
+.globe-empty small,
+.globe-status small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.globe-link-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.globe-link-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.globe-link-card strong {
+  font-size: 13px;
+}
+
+.globe-link-card small {
+  color: var(--muted);
+}
+
+.globe-link-card .globe-link-kind {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--quiet);
+}
+
+.home-widget--kind-globe .globe-map {
+  min-height: 168px;
+}
+
+.home-widget--kind-globe.home-widget--height-tall .globe-map {
+  min-height: 248px;
+}
+
+.home-globe-widget {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  height: 100%;
+}
+
+.home-globe-widget .globe-map {
+  flex: 1;
+  height: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .globe-map.is-flowing .globe-map__particles {
+    display: none;
+  }
+}
