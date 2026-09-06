@@ -1,3 +1,19 @@
+.games-workspace,
+.game-detail {
+  display: grid;
+  gap: 1rem;
+  container: games / inline-size;
+}
+
+.games-hero {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 2rem;
+  padding: 0.5rem 0 clamp(1.4rem, 3vw, 2.4rem);
+}
+
+.games-hero h1,
 .game-detail__identity h1 {
   max-width: 16ch;
   margin: 0.45rem 0 0.75rem;
@@ -699,19 +715,3 @@
   .game-status,
   .game-gate { forced-color-adjust: auto; }
 }
-.runtime-controls {
-  display: grid;
-  gap: 14px;
-  padding: 20px;
-  margin-block: 18px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  min-width: 0;
-}
-.runtime-controls p { margin: 0; line-height: 1.55; max-width: 80ch; }
-.runtime-controls h3 { margin: 0 0 8px; }
-.runtime-controls .advanced-actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.runtime-controls > .button { justify-self: start; }
-.runtime-controls select { display: block; max-width: 100%; margin-top: 8px; }
-.runtime-confirm { display: flex; align-items: center; gap: 10px; }
-.runtime-confirm input { flex: 0 0 auto; }
