@@ -1041,6 +1041,26 @@ pub struct NativeRuntimeChangeSpec {
     pub confirmation_name: String,
 }
 
+#[cfg(test)]
+mod runtime_request_tests {
+    use super::*;
+    #[test]
+    fn repair_is_typed_and_cannot_supply_an_arbitrary_download() {
+        let body = serde_json::json!({ "version": null, "expected_version": "1.21.1", "expected_build": "123", "confirmation_name": "Survival" });
+        let spec: NativeRuntimeChangeSpec = serde_json::from_value(body.clone()).unwrap();
+        assert!(spec.version.is_none());
+        let mut unsafe_body = body;
+        unsafe_body["url"] = serde_json::json!("https://untrusted.example/runtime.jar");
+        assert!(serde_json::from_value::<NativeRuntimeChangeSpec>(unsafe_body).is_err());
+        assert!(
+            serde_json::from_value::<NativeRuntimeChangeSpec>(
+                serde_json::json!({"version": "1.21.1"})
+            )
+            .is_err()
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MinecraftSoftware {
