@@ -106,6 +106,7 @@ function notify(): void {
 }
 
 function operationLabel(path: string): string {
+  if (path.includes('/servers/') && path.endsWith('/runtime')) return 'Server runtime change';
   if (path.includes('/marketplace/')) return 'Marketplace install';
   if (path.includes('/modpack') && path.includes('/update')) return 'Modpack update';
   if (path.includes('/modpack')) return 'Minecraft modpack creation';

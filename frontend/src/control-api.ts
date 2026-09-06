@@ -1105,6 +1105,12 @@ export interface MinecraftVersionCatalog {
   versions: string[];
 }
 
+export function changeNativeRuntime(detail: NativeServerDetail, version: string | null, csrfToken: string): Promise<JobDispatch> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(detail.id)}/runtime`, parseJobDispatch, {
+    method: 'POST', csrfToken, body: { version, expected_version: detail.minecraftVersion, expected_build: detail.build, confirmation_name: detail.name },
+  });
+}
+
 function parseMinecraftVersionCatalog(value: unknown): MinecraftVersionCatalog {
   const root = expectRecord(value, 'Minecraft versions');
   if (expectNumber(root, 'schema_version', 'Minecraft versions', { integer: true }) !== 1) {

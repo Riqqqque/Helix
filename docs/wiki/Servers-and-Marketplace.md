@@ -9,6 +9,21 @@ For the native Rust server, see [Pumpkin setup, compatibility, ports, and recove
 
 ## Choosing a game
 
+## Runtime versions and repairs
+
+Open a native Minecraft server and choose **Advanced → Server software**.
+**Repair current runtime** reinstalls the exact runtime and loader libraries.
+**Choose version / update build** lets you select a published version without
+recreating the server. Both require confirmation and a full safety backup.
+Running servers restart and roll back the full backup if startup fails. Stopped
+servers stay stopped and need a manual start to test; use **Backups & restore**
+if that start fails. Modpacks keep their pinned Minecraft/loader pair and update
+through the pack controls. Custom JARs need a backed-up manual replacement.
+World downgrades are blocked; restore a matching backup or use a separate server.
+See [the full runtime guide](https://github.com/Riqqqque/Helix/blob/main/docs/SERVER-RUNTIME.md).
+
+## Creating servers
+
 New CurseForge and Modrinth modpack servers use the pack's catalog artwork as
 their default icon. Uploaded icons and selected presets take priority. Choose
 **Restore default** to return to the pack artwork. If the pack has no supported

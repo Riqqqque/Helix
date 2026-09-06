@@ -1211,7 +1211,7 @@ impl NativeManager {
         }))
     }
 
-    fn restore_modpack_safety_backup(
+    pub(super) fn restore_modpack_safety_backup(
         &self,
         manifest: &InstanceManifest,
         data_path: &Path,

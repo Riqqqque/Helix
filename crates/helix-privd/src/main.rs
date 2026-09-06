@@ -653,6 +653,9 @@ impl BrokerContext {
             } => self
                 .native_manager(&instance_id)
                 .and_then(|native| native.set_memory_mb(&instance_id, memory_mb)),
+            BrokerRequest::ChangeNativeRuntime { instance_id, spec } => {
+                self.start_runtime_job(instance_id, spec)
+            }
             BrokerRequest::SetNativeCpu {
                 instance_id,
                 cpu_millis,
@@ -1557,6 +1560,52 @@ impl BrokerContext {
                 "",
             );
             return Err("could not start the Helix update job".to_owned());
+        }
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
+    fn start_runtime_job(
+        self: &Arc<Self>,
+        instance_id: String,
+        spec: helix_privd::NativeRuntimeChangeSpec,
+    ) -> Result<Value, String> {
+        self.native_manager(&instance_id)?;
+        let native = Arc::clone(
+            self.native
+                .as_ref()
+                .ok_or("Server manager is unavailable")?,
+        );
+        let reuse_key = serde_json::to_string(&spec).map_err(|e| e.to_string())?;
+        let (job_id, reused) = self.queue_job(
+            "server_runtime",
+            Some(&format!("server:{instance_id}")),
+            Some(&reuse_key),
+        )?;
+        if reused {
+            return Ok(json!({"job_id": job_id, "reused": true}));
+        }
+        let context = Arc::clone(self);
+        let worker_id = job_id.clone();
+        if thread::Builder::new()
+            .name(format!("runtime-{}", &job_id[..8]))
+            .spawn(move || {
+                let result = native.change_runtime(&instance_id, &spec, |stage, percent| {
+                    context.update_job(&worker_id, |job| {
+                        job.status = JobState::Running;
+                        job.stage = stage.to_owned();
+                        job.progress_percent = percent;
+                    });
+                });
+                context.finish_job(
+                    &worker_id,
+                    result,
+                    "Runtime saved; safety backup available in Backups",
+                );
+            })
+            .is_err()
+        {
+            self.finish_job(&job_id, Err("Could not start runtime job".to_owned()), "");
+            return Err("Could not start runtime job".to_owned());
         }
         Ok(json!({"job_id": job_id, "reused": false}))
     }

@@ -38,6 +38,7 @@ use uuid::Uuid;
 mod marketplace;
 mod modpacks;
 mod pumpkin;
+mod runtime;
 mod terraria;
 mod valheim;
 mod vrising;
@@ -5564,103 +5565,23 @@ impl NativeManager {
         if manifest.uses_ready_marker() {
             return self.update_ready_marker_game(manifest);
         }
-        let artifact = self.resolve_artifact(
-            manifest.software,
-            if manifest.is_pumpkin() {
-                "latest"
-            } else {
-                &manifest.minecraft_version
-            },
-        )?;
-        if manifest.is_pumpkin() && artifact.version != manifest.minecraft_version {
-            return Err("The latest Pumpkin release changes Minecraft client/world versions. Keep this server pinned and test the new release in a separate server before migrating a backup.".to_owned());
-        }
-        if artifact.java_version != manifest.java_version {
-            return Err(format!(
-                "this update changes the Java requirement from {} to {}; use the guided version upgrade flow",
-                manifest.java_version, artifact.java_version
-            ));
-        }
-        let data_path = self.instance_path(&manifest.id)?;
-        let update_path = self
-            .state_root
-            .join(".staging")
-            .join(format!("{}.jar", manifest.id));
-        let _ = fs::remove_file(&update_path);
-        let sha256 = self.download_artifact(&artifact, &update_path)?;
-        if sha256 == manifest.artifact_sha256 {
-            let _ = fs::remove_file(update_path);
+        let version = if manifest.is_pumpkin() {
+            "latest"
+        } else {
+            &manifest.minecraft_version
+        };
+        let artifact = self.resolve_artifact(manifest.software, version)?;
+        if artifact.build == manifest.build
+            && file_sha256(
+                &self
+                    .instance_path(&manifest.id)?
+                    .join(manifest.artifact_name()),
+            )
+            .is_ok_and(|digest| digest == manifest.artifact_sha256)
+        {
             return Ok(false);
         }
-        let running = self.container_running(&manifest.container_name);
-        if running {
-            self.docker(
-                ["stop", "--time", "45", manifest.container_name.as_str()],
-                75,
-            )?;
-        }
-        if let Err(error) = self.archive_data(manifest) {
-            let restart = self.restart_if_previously_running(manifest, running);
-            let _ = fs::remove_file(&update_path);
-            return Err(match restart {
-                Ok(()) => format!("the update safety backup failed: {error}"),
-                Err(restart) => format!(
-                    "the update safety backup failed: {error}; the original server also failed to restart: {restart}"
-                ),
-            });
-        }
-        let jar = data_path.join(manifest.artifact_name());
-        let rollback = data_path.join(format!("{}.rollback", manifest.artifact_name()));
-        if rollback.exists() {
-            let restart = self.restart_if_previously_running(manifest, running);
-            let _ = fs::remove_file(&update_path);
-            return Err(match restart {
-                Ok(()) => "a previous server update rollback file still needs attention".to_owned(),
-                Err(restart) => format!(
-                    "a previous server update rollback file still needs attention; the original server also failed to restart: {restart}"
-                ),
-            });
-        }
-        let mut updated = manifest.clone();
-        updated.build = artifact.build;
-        updated.artifact_url = artifact.url;
-        updated.artifact_sha256 = sha256;
-        let activation = (|| {
-            fs::rename(&jar, &rollback)
-                .map_err(|_| "could not stage the current server for rollback".to_owned())?;
-            fs::rename(&update_path, &jar)
-                .map_err(|error| format!("could not activate the update: {error}"))?;
-            self.protect_instance_artifacts(&data_path, manifest.run_uid)?;
-            write_manifest(&self.manifest_path(&manifest.id)?, &updated)?;
-            if running {
-                self.docker(["start", updated.container_name.as_str()], 90)?;
-                self.wait_until_ready(&updated, self.ready_timeout(&updated), |_| {})?;
-            }
-            Ok::<(), String>(())
-        })();
-        if let Err(error) = activation {
-            let _ = self.docker(
-                ["stop", "--time", "15", updated.container_name.as_str()],
-                30,
-            );
-            if rollback.is_file() {
-                if jar.is_file() {
-                    let _ = fs::rename(&jar, &update_path);
-                }
-                let _ = fs::rename(&rollback, &jar);
-            }
-            let _ = write_manifest(&self.manifest_path(&manifest.id)?, manifest);
-            let restart = self.restart_if_previously_running(manifest, running);
-            let _ = fs::remove_file(&update_path);
-            return Err(format!(
-                "the update failed validation and was rolled back: {error}{}",
-                restart
-                    .err()
-                    .map(|restart| format!("; the original server failed to restart: {restart}"))
-                    .unwrap_or_default()
-            ));
-        }
-        let _ = fs::remove_file(rollback);
+        self.activate_runtime(manifest, artifact, &mut |_, _| {})?;
         Ok(true)
     }
 

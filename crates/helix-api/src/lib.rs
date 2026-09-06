@@ -445,6 +445,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             put(set_native_start_on_boot),
         )
         .route("/servers/{instance_id}/memory", put(set_native_memory))
+        .route(
+            "/servers/{instance_id}/runtime",
+            post(change_native_runtime),
+        )
         .route("/servers/{instance_id}/cpu", put(set_native_cpu))
         .route(
             "/servers/{instance_id}/browser-listing",
@@ -3167,6 +3171,22 @@ async fn set_native_start_on_boot(
             instance_id,
             enabled: body.enabled,
         },
+    )
+    .await
+}
+
+async fn change_native_runtime(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<helix_privd::NativeRuntimeChangeSpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(spec) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::ChangeNativeRuntime { instance_id, spec },
     )
     .await
 }

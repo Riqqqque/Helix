@@ -21,6 +21,11 @@ function storage() {
 const id = '12345678-1234-4234-8234-123456789abc';
 
 describe('operation continuity journal', () => {
+  it('keeps runtime changes discoverable after a refresh', () => {
+    const memory = storage();
+    rememberOperationDispatch('/api/v1/servers/helix%3Atest/runtime', { job_id: id }, memory, 1_000);
+    expect(readResumableOperations(memory, 1_001)[0]).toMatchObject({ id, label: 'Server runtime change', status: 'queued' });
+  });
   it('captures only an opaque accepted job receipt', () => {
     const memory = storage();
     rememberOperationDispatch('/api/v1/servers/minecraft/modpacks', { jobId: id, secret: 'not stored' }, memory, 1_000);
