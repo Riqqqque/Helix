@@ -24,6 +24,44 @@ fn validate_version_change(current: &str, target: &str) -> Result<(), String> {
 }
 
 impl NativeManager {
+    fn runtime_running_checked(&self, manifest: &InstanceManifest) -> Result<bool, String> {
+        let Some((managed, id)) = self.exact_container_identity(&manifest.container_name)? else {
+            return Ok(false);
+        };
+        if managed != "true" || id != manifest.id {
+            return Err("The container identity does not match this Helix server; no runtime files were changed.".to_owned());
+        }
+        let state = self.docker(
+            [
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
+                &manifest.container_name,
+            ],
+            20,
+        )?;
+        match state.trim() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(
+                "Docker returned an unknown running state; runtime files cannot safely be changed."
+                    .to_owned(),
+            ),
+        }
+    }
+
+    fn stop_runtime_for_files(&self, manifest: &InstanceManifest) -> Result<(), String> {
+        if self.runtime_running_checked(manifest)? {
+            self.docker(["stop", "--time", "45", &manifest.container_name], 75)?;
+        }
+        if self.runtime_running_checked(manifest)? {
+            return Err(
+                "The server is still running; its runtime files were left alone.".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn change_runtime<F>(
         &self,
         id: &str,
@@ -118,11 +156,9 @@ impl NativeManager {
                 )?);
             }
             let data = self.instance_path(&manifest.id)?;
-            let running = self.container_running(&manifest.container_name);
+            let running = self.runtime_running_checked(manifest)?;
             progress("Stopping this server and making a full safety backup", 55);
-            if running {
-                self.terminate_container(&manifest.container_name, false)?;
-            }
+            self.stop_runtime_for_files(manifest)?;
             let backup = match self.archive_data(manifest) {
                 Ok(path) => path,
                 Err(error) => {
@@ -164,9 +200,7 @@ impl NativeManager {
             if let Err(error) = activation {
                 progress("Restoring the complete safety backup", 95);
                 let rollback = (|| {
-                    if self.container_running(&updated.container_name) {
-                        self.terminate_container(&updated.container_name, false)?;
-                    }
+                    self.stop_runtime_for_files(&updated)?;
                     self.restore_modpack_safety_backup(manifest, &data, &backup)?;
                     write_manifest(&self.manifest_path(&manifest.id)?, manifest)?;
                     self.republish_minecraft_container(manifest, &data, running)?;
