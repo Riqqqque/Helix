@@ -13,4 +13,6 @@
 *.helix-genome
 *.log
 coverage/
+__pycache__/
+*.pyc
 /.cursor/

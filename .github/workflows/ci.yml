@@ -50,6 +50,10 @@ jobs:
       - name: Run tests
         run: cargo test --locked --workspace --all-targets --all-features
 
+      - name: Test server discovery
+        if: matrix.toolchain == 'stable'
+        run: python3 -m unittest discover -s scripts -p test_helix_servers.py -v
+
       - name: Test privileged backup rollback
         shell: bash
         run: |
