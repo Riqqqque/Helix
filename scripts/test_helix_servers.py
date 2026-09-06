@@ -89,6 +89,10 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaises(OSError):
             discovery.inventory(self.root / "missing.json")
 
+    def test_port_policy_is_not_a_server(self):
+        (self.state / "port-policy-minecraft.json").write_text('{"ports": [25565]}')
+        self.assertEqual(len(discovery.inventory(self.config)), 1)
+
     def test_symlink_definition_rejected(self):
         with patch.object(Path, "is_symlink", return_value=True):
             with self.assertRaises(ValueError):
