@@ -1,5 +1,10 @@
 # Servers and Marketplace
 
+For SSH, scripts, and external tools, see
+[Finding and editing a Helix server](https://github.com/Riqqqque/Helix/blob/main/docs/SERVER-AUTOMATION.md).
+It explains exact name/UUID discovery, host file paths, and safe file replacement
+without exposing server credentials.
+
 For the native Rust server, see [Pumpkin setup, compatibility, ports, and recovery](Pumpkin).
 
 ## Choosing a game
