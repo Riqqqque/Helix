@@ -7,6 +7,7 @@ import {
   requestJson,
 } from './api';
 import { parseServerAppearance, type ServerAppearance } from './server-appearance-api';
+import { parseModpackIconUrl } from './server-icon-source';
 
 export interface HostInventory {
   disks: BlockDevice[];
@@ -256,6 +257,7 @@ export interface ManagedServer {
   manager: 'helix' | 'amp_import';
   executionBackend: 'docker' | 'external';
   appearance: ServerAppearance;
+  modpackIconUrl?: string | null;
 }
 
 export type ServerAction = 'start' | 'stop' | 'restart' | 'kill' | 'update' | 'backup';
@@ -768,6 +770,7 @@ export function parseServers(value: unknown): ManagedServer[] {
       manager,
       executionBackend,
       appearance: parseServerAppearance(item.appearance),
+      modpackIconUrl: parseModpackIconUrl(item.modpack_icon_url),
     };
   });
 }

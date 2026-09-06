@@ -9,6 +9,12 @@ For the native Rust server, see [Pumpkin setup, compatibility, ports, and recove
 
 ## Choosing a game
 
+New CurseForge and Modrinth modpack servers use the pack's catalog artwork as
+their default icon. Uploaded icons and selected presets take priority. Choose
+**Restore default** to return to the pack artwork. If the pack has no supported
+image or its artwork cannot load, Helix shows the usual game icon. Existing
+servers without saved artwork keep their current default.
+
 Choose **New Server** and then a game. Native Minecraft, V Rising, Valheim, and
 Terraria all run in isolated Helix containers. Nothing is installed on the host
 OS. The chooser uses original Helix marks, not publisher artwork. Create lets

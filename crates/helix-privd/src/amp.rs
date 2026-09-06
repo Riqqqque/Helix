@@ -54,6 +54,7 @@ impl Drop for AmpOperationGuard<'_> {
 
 #[derive(Debug, Serialize)]
 pub struct AmpServer {
+    pub modpack_icon_url: Option<String>,
     pub id: String,
     pub name: String,
     pub instance_name: String,
@@ -555,6 +556,7 @@ impl AmpClient {
         let game_port = minecraft_port_from_config(&config)
             .or_else(|| self.instance_minecraft_listen_port(&instance_name));
         Ok(AmpServer {
+            modpack_icon_url: None,
             id: format!("amp:{id}"),
             name,
             instance_name,

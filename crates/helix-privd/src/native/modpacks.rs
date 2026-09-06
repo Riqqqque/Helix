@@ -39,6 +39,7 @@ const MAX_CURSEFORGE_COMPRESSION_RATIO: u64 = 250;
 
 #[derive(Clone)]
 struct ResolvedVersion {
+    icon_url: Option<String>,
     project_id: String,
     project_slug: String,
     project_title: String,
@@ -493,6 +494,7 @@ impl NativeManager {
             let installed_modpack = InstalledModpack {
                 schema_version: 1,
                 provider: helix_privd::ModpackProvider::Modrinth,
+                icon_url: resolved.icon_url.clone(),
                 project_id: resolved.project_id.clone(),
                 project_title: resolved.project_title.clone(),
                 version_id: resolved.version_id.clone(),
@@ -669,6 +671,7 @@ impl NativeManager {
         let result = (|| -> Result<Value, String> {
             ensure_before(deadline)?;
             progress("Resolving the CurseForge file", 8);
+            let icon_url = self.curseforge_pack_icon(project_id);
             let file = self.curseforge_v1(&format!("mods/{project_id}/files/{file_id}"))?;
             let file = file.get("data").cloned().unwrap_or(file);
             let resolved_project_id = file
@@ -825,6 +828,7 @@ impl NativeManager {
             let installed_modpack = InstalledModpack {
                 schema_version: 1,
                 provider: helix_privd::ModpackProvider::Curseforge,
+                icon_url,
                 project_id: project_id.to_owned(),
                 project_title: pack.name.clone(),
                 version_id: file_id.to_owned(),
@@ -1518,6 +1522,7 @@ impl NativeManager {
         let metadata = InstalledModpack {
             schema_version: 1,
             provider: helix_privd::ModpackProvider::Modrinth,
+            icon_url: resolved.icon_url.or_else(|| installed.icon_url.clone()),
             project_id: resolved.project_id,
             project_title: resolved.project_title,
             version_id: resolved.version_id,
@@ -1661,6 +1666,7 @@ impl NativeManager {
         let metadata = InstalledModpack {
             schema_version: 1,
             provider: helix_privd::ModpackProvider::Curseforge,
+            icon_url: installed.icon_url.clone(),
             project_id: project_id.to_owned(),
             project_title: if pack.name == "CurseForge pack" {
                 installed.project_title.clone()
@@ -1775,6 +1781,15 @@ impl NativeManager {
         Ok(())
     }
 
+    fn curseforge_pack_icon(&self, project_id: &str) -> Option<String> {
+        let project = self.curseforge_v1(&format!("mods/{project_id}")).ok()?;
+        let project = project.get("data").unwrap_or(&project);
+        if project.get("id").and_then(json_u64)?.to_string() != project_id {
+            return None;
+        }
+        curseforge_icon_proxy_url(project.pointer("/logo/url").and_then(Value::as_str))
+    }
+
     fn resolve_modpack_version(
         &self,
         project_id: &str,
@@ -1807,6 +1822,7 @@ impl NativeManager {
         let slug = required_text(&project, "slug", 128)?;
         validate_slug(&slug)?;
         Ok(ResolvedVersion {
+            icon_url: modrinth_icon_proxy_url(project.get("icon_url").and_then(Value::as_str)),
             project_id: project_id.to_owned(),
             project_slug: slug,
             project_title: required_text(&project, "title", 256)?,
@@ -3397,6 +3413,7 @@ mod tests {
 
     fn installed(version_id: &str) -> InstalledModpack {
         InstalledModpack {
+            icon_url: None,
             schema_version: 1,
             provider: helix_privd::ModpackProvider::Curseforge,
             project_id: "925200".to_owned(),
@@ -3407,6 +3424,26 @@ mod tests {
             minecraft_version: "1.21.1".to_owned(),
             loader: "neoforge".to_owned(),
             loader_version: "21.1.249".to_owned(),
+        }
+    }
+
+    #[test]
+    fn pack_artwork_roundtrips_and_older_manifests_still_load() {
+        let original = installed("123");
+        let old = serde_json::to_value(&original).unwrap();
+        assert!(old.get("icon_url").is_none());
+        let loaded: InstalledModpack = serde_json::from_value(old).unwrap();
+        assert!(loaded.icon_url.is_none());
+        for icon in [
+            modrinth_icon_proxy_url(Some("https://cdn.modrinth.com/data/pack/icon.png")),
+            curseforge_icon_proxy_url(Some("https://media.forgecdn.net/avatars/12/345/icon.png")),
+        ] {
+            let mut pack = original.clone();
+            assert!(icon.is_some());
+            pack.icon_url = icon;
+            let stored = serde_json::to_vec(&pack).unwrap();
+            let restored: InstalledModpack = serde_json::from_slice(&stored).unwrap();
+            assert_eq!(restored.icon_url, pack.icon_url);
         }
     }
 
