@@ -8,6 +8,10 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Native Minecraft runtime repair and version selection in Advanced, with full
+  safety backups, loader-library installation and rollback after failed startup.
+  See [Server software versions and repairs](docs/SERVER-RUNTIME.md).
+
 - Pumpkin native servers with verified releases, separate Java and Bedrock ports,
   console commands, settings, backups, and guarded updates. See the Pumpkin guide
   for plugin and world compatibility limits.

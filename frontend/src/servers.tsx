@@ -85,6 +85,7 @@ import {
   formatTimestamp,
 } from "./format";
 import { ServerReadySummary } from "./server-ready";
+import { ServerRuntimeControls } from "./server-runtime";
 import { CreateJobProgress, migrateCreateJobCopy, steamCreateJobCopy } from "./create-job-progress";
 import { GameMark } from "./game-marks";
 import { Icon, type IconName } from "./icons";
@@ -5611,6 +5612,7 @@ function NativeServerPage({
                 </button>
               </div>
             </div>
+            <ServerRuntimeControls detail={detail} csrfToken={csrfToken} canManage={canManageServers} onComplete={refresh} onSessionExpired={onSessionExpired} onBackups={() => setTab("backups")} />
             {isReadyMarkerGame && (
               <>
                 <AllocatedMemoryEditor

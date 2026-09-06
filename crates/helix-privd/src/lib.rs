@@ -305,6 +305,10 @@ pub enum BrokerRequest {
         instance_id: String,
         memory_mb: u32,
     },
+    ChangeNativeRuntime {
+        instance_id: String,
+        spec: NativeRuntimeChangeSpec,
+    },
     SetNativeCpu {
         instance_id: String,
         cpu_millis: u32,
@@ -1026,6 +1030,15 @@ pub fn validate_cpu_millis(cpu_millis: u32) -> Result<(), String> {
     } else {
         Err("CPU limit must be off, or between 0.25 and 128 cores".to_owned())
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeRuntimeChangeSpec {
+    pub version: Option<String>,
+    pub expected_version: String,
+    pub expected_build: String,
+    pub confirmation_name: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
