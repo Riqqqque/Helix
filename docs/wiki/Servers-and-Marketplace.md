@@ -11,6 +11,23 @@ For the native Rust server, see [Pumpkin setup, compatibility, ports, and recove
 
 ## Runtime versions and repairs
 
+### Applying Minecraft settings
+
+Flip a switch or edit a value, then choose **Save settings** to apply it on the
+next restart, or **Save & restart** to do both. Unsaved edits are not applied by
+the ordinary server Restart button. Helix protects saved settings against
+shutdown rewrites and checks their file values after startup. If a mod or startup
+script overwrites a setting, the job names it instead of reporting success.
+The editor refreshes from the server after restart and keeps unsaved drafts
+during background refreshes. Controls are locked while saving.
+
+**Allow flight** stops flight-related kicks. It does not give Survival players
+a fly ability. Creative mode or a compatible mod/plugin must provide that.
+Pumpkin does not expose this setting through its current settings API.
+Game mode is the default for new players; existing players and world difficulty
+can also be controlled by world data or plugins. File verification is not a
+guarantee that third-party mods respect a setting.
+
 Open a native Minecraft server and choose **Advanced → Server software**.
 **Repair current runtime** reinstalls the exact runtime and loader libraries.
 **Choose version / update build** lets you select a published version without

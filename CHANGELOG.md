@@ -8,6 +8,9 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Minecraft settings now refresh after restart, offer Save & restart, and check
+  saved values after startup. Shutdown writes no longer discard saved settings.
+
 - Native Minecraft runtime repair and version selection in Advanced, with full
   safety backups, loader-library installation and rollback after failed startup.
   See [Server software versions and repairs](docs/SERVER-RUNTIME.md).

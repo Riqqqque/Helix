@@ -1908,11 +1908,12 @@ impl NativeManager {
             ));
         }
         let _operation = self.begin_instance_operation(&manifest.id, "settings update")?;
+        manifest = self.load_manifest(&manifest.id)?;
         let path = self
             .instance_path(&manifest.id)?
             .join(manifest.settings_name());
         let original = read_small_regular_file(&path, MAX_PROPERTIES_BYTES, "server settings")?;
-        let revision = file_sha256(&path)?;
+        let revision = format!("{:x}", Sha256::digest(original.as_bytes()));
         if revision != settings.expected_revision {
             return Err(
                 "server settings changed since this page was opened; reload before saving"
@@ -1968,6 +1969,7 @@ impl NativeManager {
         ));
         let previous = manifest.clone();
         let data_path = self.instance_path(&manifest.id)?;
+        let running = self.runtime_running_checked(&manifest)?;
         if updated != original {
             write_managed_file(&backup, original.as_bytes(), 0o600, 0, 0)?;
             write_managed_file(&path, updated.as_bytes(), 0o660, 0, manifest.run_uid)?;
@@ -1981,7 +1983,6 @@ impl NativeManager {
             }
             return Err(error);
         }
-        let running = self.container_running(&manifest.container_name);
         let needs_republish = port_changed || memory_changed;
         if needs_republish
             && let Err(error) = self.republish_minecraft_container(&manifest, &data_path, running)
@@ -2614,7 +2615,7 @@ impl NativeManager {
             parse_properties(&content)
         };
         Ok(json!({
-            "expected_revision": file_sha256(&path)?,
+            "expected_revision": format!("{:x}", Sha256::digest(content.as_bytes())),
             "motd": property_text(&properties, "motd", &manifest.name),
             "game_mode": property_choice(&properties, "gamemode", &["survival", "creative", "adventure", "spectator"], "survival"),
             "difficulty": property_choice(&properties, "difficulty", &["peaceful", "easy", "normal", "hard"], "easy"),
@@ -2658,33 +2659,33 @@ impl NativeManager {
     ) -> Result<Value, String> {
         let _operation = self.begin_instance_operation(&manifest.id, "server action")?;
         self.ensure_console_archiver(manifest)?;
-        let was_running = self.container_running(&manifest.container_name);
+        let was_running = self.runtime_running_checked(manifest)?;
         let detail = match action {
             ServerAction::Start => {
+                let expected = self.minecraft_settings_snapshot(manifest)?;
                 if !was_running {
                     self.clear_ready_marker(manifest)?;
                     self.docker(["start", manifest.container_name.as_str()], 90)?;
                 }
                 self.wait_until_ready(manifest, self.ready_timeout(manifest), |_| {})?;
+                self.verify_minecraft_settings(manifest, expected)?;
                 json!({"online": true, "already_running": was_running})
             }
             ServerAction::Stop => {
                 if was_running {
-                    self.terminate_container(&manifest.container_name, false)?;
+                    self.stop_preserving_minecraft_settings(manifest)?;
                 }
                 json!({"online": false, "already_stopped": !was_running})
             }
             ServerAction::Restart => {
                 self.clear_ready_marker(manifest)?;
                 if was_running {
-                    self.docker(
-                        ["restart", "--time", "45", manifest.container_name.as_str()],
-                        90,
-                    )?;
-                } else {
-                    self.docker(["start", manifest.container_name.as_str()], 90)?;
+                    self.stop_preserving_minecraft_settings(manifest)?;
                 }
+                let expected = self.minecraft_settings_snapshot(manifest)?;
+                self.docker(["start", manifest.container_name.as_str()], 90)?;
                 self.wait_until_ready(manifest, self.ready_timeout(manifest), |_| {})?;
+                self.verify_minecraft_settings(manifest, expected)?;
                 json!({"online": true, "previously_running": was_running})
             }
             ServerAction::Backup => {
@@ -2794,7 +2795,7 @@ impl NativeManager {
             .is_some()
         {
             if was_running || self.container_running(&manifest.container_name) {
-                self.terminate_container(&manifest.container_name, false)?;
+                self.stop_preserving_minecraft_settings(manifest)?;
             }
             self.docker(["rm", manifest.container_name.as_str()], 60)?;
         }
@@ -2802,6 +2803,70 @@ impl NativeManager {
         if was_running {
             self.clear_ready_marker(manifest)?;
             self.docker(["start", manifest.container_name.as_str()], 90)?;
+        }
+        Ok(())
+    }
+
+    fn stop_preserving_minecraft_settings(
+        &self,
+        manifest: &InstanceManifest,
+    ) -> Result<(), String> {
+        if !manifest.is_minecraft() {
+            return self.terminate_container(&manifest.container_name, false);
+        }
+        if !self.runtime_running_checked(manifest)? {
+            return Ok(());
+        }
+        let path = self
+            .instance_path(&manifest.id)?
+            .join(manifest.settings_name());
+        let saved = read_small_regular_file(&path, MAX_PROPERTIES_BYTES, "server settings")?;
+        self.docker(
+            ["stop", "--time", "45", manifest.container_name.as_str()],
+            75,
+        )?;
+        if self.runtime_running_checked(manifest)? {
+            return Err("Minecraft did not stop; saved settings were not replaced.".to_owned());
+        }
+        preserve_settings_after_stop(&path, &saved, manifest.run_uid)
+    }
+
+    fn minecraft_settings_snapshot(
+        &self,
+        manifest: &InstanceManifest,
+    ) -> Result<Option<HashMap<String, String>>, String> {
+        if !manifest.is_minecraft() {
+            return Ok(None);
+        }
+        let content = read_small_regular_file(
+            &self
+                .instance_path(&manifest.id)?
+                .join(manifest.settings_name()),
+            MAX_PROPERTIES_BYTES,
+            "server settings",
+        )?;
+        if manifest.is_pumpkin() {
+            pumpkin::properties(&content).map(Some)
+        } else {
+            Ok(Some(parse_properties(&content)))
+        }
+    }
+
+    fn verify_minecraft_settings(
+        &self,
+        manifest: &InstanceManifest,
+        expected: Option<HashMap<String, String>>,
+    ) -> Result<(), String> {
+        if let (Some(expected), Some(actual)) =
+            (expected, self.minecraft_settings_snapshot(manifest)?)
+        {
+            let changed = overwritten_settings(&expected, &actual);
+            if !changed.is_empty() {
+                return Err(format!(
+                    "Minecraft started, but these saved settings were overwritten during startup: {}. Check the server's mods, plugins and startup configuration before retrying.",
+                    changed.join(", ")
+                ));
+            }
         }
         Ok(())
     }
@@ -5467,12 +5532,9 @@ impl NativeManager {
     }
 
     fn backup(&self, manifest: &InstanceManifest) -> Result<PathBuf, String> {
-        let running = self.container_running(&manifest.container_name);
+        let running = self.runtime_running_checked(manifest)?;
         if running {
-            self.docker(
-                ["stop", "--time", "45", manifest.container_name.as_str()],
-                75,
-            )?;
+            self.stop_preserving_minecraft_settings(manifest)?;
         }
         let archive_result = self.archive_data(manifest);
         let restart_result = if running {
@@ -7973,6 +8035,48 @@ fn write_new_file(path: &Path, content: &[u8], mode: u32) -> Result<(), String> 
         .map_err(|_| format!("could not write {}", path.display()))
 }
 
+fn overwritten_settings(
+    expected: &HashMap<String, String>,
+    actual: &HashMap<String, String>,
+) -> Vec<&'static str> {
+    [
+        "motd",
+        "gamemode",
+        "difficulty",
+        "max-players",
+        "view-distance",
+        "simulation-distance",
+        "player-idle-timeout",
+        "online-mode",
+        "pvp",
+        "allow-flight",
+        "white-list",
+        "enforce-whitelist",
+        "spawn-protection",
+        "server-port",
+    ]
+    .into_iter()
+    .filter(|key| expected.contains_key(*key) && expected.get(*key) != actual.get(*key))
+    .collect()
+}
+
+fn preserve_settings_after_stop(path: &Path, saved: &str, run_uid: u32) -> Result<(), String> {
+    let stopped = read_small_regular_file(path, MAX_PROPERTIES_BYTES, "stopped server settings")?;
+    if stopped == saved {
+        return Ok(());
+    }
+    let backup = path.with_extension(format!("shutdown-{}.bak", Uuid::new_v4().simple()));
+    write_managed_file(&backup, stopped.as_bytes(), 0o600, 0, 0)?;
+    write_managed_file(path, saved.as_bytes(), 0o660, 0, run_uid)?;
+    if read_small_regular_file(path, MAX_PROPERTIES_BYTES, "restored settings")? != saved {
+        return Err(
+            "Saved settings could not be verified after shutdown. The server was left stopped."
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 fn write_managed_file(
     path: &Path,
     content: &[u8],
@@ -8004,7 +8108,8 @@ fn write_managed_file(
         )?;
         fs::set_permissions(&temporary, fs::Permissions::from_mode(mode))
             .map_err(|_| "could not protect the managed file".to_owned())?;
-        fs::rename(&temporary, path).map_err(|_| "could not commit the managed file".to_owned())
+        fs::rename(&temporary, path).map_err(|_| "could not commit the managed file".to_owned())?;
+        sync_directory(parent)
     })();
     if result.is_err() {
         let _ = fs::remove_file(temporary);
@@ -8251,9 +8356,41 @@ fn parse_properties(content: &str) -> HashMap<String, String> {
                 return None;
             }
             let (key, value) = line.split_once('=')?;
-            Some((key.trim().to_owned(), value.trim().to_owned()))
+            Some((key.trim().to_owned(), decode_property_value(value.trim())))
         })
         .collect()
+}
+
+fn decode_property_value(value: &str) -> String {
+    let mut chars = value.chars();
+    let mut units = Vec::new();
+    while let Some(c) = chars.next() {
+        let c = if c == '\\' {
+            match chars.next() {
+                Some('u') => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    if hex.len() == 4
+                        && let Ok(unit) = u16::from_str_radix(&hex, 16)
+                    {
+                        units.push(unit);
+                        continue;
+                    }
+                    units.extend(format!("\\u{hex}").encode_utf16());
+                    continue;
+                }
+                Some('n') => '\n',
+                Some('r') => '\r',
+                Some('t') => '\t',
+                Some('f') => '\u{000c}',
+                Some(other) => other,
+                None => '\\',
+            }
+        } else {
+            c
+        };
+        units.extend(c.encode_utf16(&mut [0; 2]).iter().copied());
+    }
+    String::from_utf16_lossy(&units)
 }
 
 fn property_text(properties: &HashMap<String, String>, key: &str, fallback: &str) -> String {
@@ -8400,7 +8537,7 @@ fn update_properties(original: &str, settings: &MinecraftSettingsPatch) -> Strin
     let new_port = settings.game_port.to_string();
     let current_server_port = properties.get("server-port");
     let mut replacements = vec![
-        ("motd", settings.motd.trim().to_owned()),
+        ("motd", settings.motd.trim().replace('\\', "\\\\")),
         ("gamemode", game_mode_name(settings.game_mode).to_owned()),
         (
             "difficulty",
@@ -9840,6 +9977,37 @@ mod tests {
         assert!(updated.contains("rcon.password=secret"));
         assert!(updated.contains("motd=Survival night"));
         assert!(updated.contains("difficulty=hard"));
+        assert!(changed_setting_fields(&parse_properties(&updated), &settings).is_empty());
+        for allow in [true, false, true] {
+            let mut toggled = settings.clone();
+            toggled.allow_flight = allow;
+            toggled.online_mode = allow;
+            toggled.pvp = allow;
+            toggled.white_list = allow;
+            toggled.enforce_white_list = allow;
+            let content = update_properties(&updated, &toggled);
+            assert!(changed_setting_fields(&parse_properties(&content), &toggled).is_empty());
+            assert_eq!(
+                parse_properties(&content)["allow-flight"],
+                allow.to_string()
+            );
+            let mut overwritten = parse_properties(&content);
+            overwritten.insert("allow-flight".to_owned(), (!allow).to_string());
+            assert_eq!(
+                overwritten_settings(&parse_properties(&content), &overwritten),
+                vec!["allow-flight"]
+            );
+        }
+        let mut escaped = settings.clone();
+        escaped.motd = r"Welcome \ literal\n text = fine: §a".to_owned();
+        assert_eq!(
+            parse_properties(&update_properties(original, &escaped))["motd"],
+            escaped.motd
+        );
+        assert_eq!(
+            decode_property_value(r"Welcome\: \u00a7a \ud83d\ude00"),
+            "Welcome: §a 😀"
+        );
         assert_eq!(updated.matches("motd=").count(), 1);
         let changed = changed_setting_fields(&parse_properties(original), &settings);
         assert!(changed.contains(&"motd"));
@@ -9856,6 +10024,30 @@ mod tests {
         assert!(
             changed_setting_fields(&parse_properties(original), &retarget).contains(&"game_port")
         );
+    }
+
+    #[test]
+    #[ignore = "requires root for managed-file ownership"]
+    fn shutdown_write_cannot_revert_saved_minecraft_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("server.properties");
+        let desired = "allow-flight=true\npvp=false\nmax-players=23\ncustom-value=keep\n";
+        fs::write(
+            &path,
+            "allow-flight=false\npvp=true\nmax-players=20\ncustom-value=keep\n",
+        )
+        .unwrap();
+        preserve_settings_after_stop(&path, desired, 0).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), desired);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+        preserve_settings_after_stop(&path, desired, 0).unwrap();
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+        let target = root.path().join("outside");
+        fs::write(&target, "untouched").unwrap();
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(preserve_settings_after_stop(&path, desired, 0).is_err());
+        assert_eq!(fs::read_to_string(target).unwrap(), "untouched");
     }
 
     #[test]
