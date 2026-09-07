@@ -1,6 +1,6 @@
 import render from 'preact-render-to-string';
 import { describe, expect, it } from 'vitest';
-import { SettingsPanel } from './servers';
+import { SettingsPanel, minecraftPvpUsesGameRule } from './servers';
 import type { MinecraftSettings, NativeServerDetail } from './control-api';
 
 const settings: MinecraftSettings = {
@@ -10,9 +10,17 @@ const settings: MinecraftSettings = {
   spawnProtection: 16, gamePort: 25565, memoryMb: 4096,
   restartBehavior: { activation: 'server_restart', restartRequiredFields: ['allow_flight'], message: 'Restart to apply' },
 };
-const detail = { id: 'helix:test', name: 'Survival', kind: 'minecraft', software: 'Paper', settings, status: 'online' } as NativeServerDetail & { settings: MinecraftSettings };
+const detail = { id: 'helix:test', name: 'Survival', kind: 'minecraft', software: 'Paper', minecraftVersion: '1.21.1', settings, status: 'online' } as NativeServerDetail & { settings: MinecraftSettings };
 const props = { detail, csrfToken: 'test', servers: [], canManageServers: true, canManageNetwork: false, restartSuccessRevision: 0, onRestart: () => {}, onSaved: () => {}, onSessionExpired: () => {} };
 describe('Minecraft settings controls', () => {
+  it('uses game-rule guidance for modern PvP instead of an ineffective toggle', () => {
+    expect(minecraftPvpUsesGameRule('Paper', '1.21.8')).toBe(false);
+    for (const version of ['1.21.9', '1.21.11', '26.2']) {
+      expect(minecraftPvpUsesGameRule('Paper', version)).toBe(true);
+    }
+    expect(minecraftPvpUsesGameRule('Pumpkin', '26.2')).toBe(false);
+    expect(render(<SettingsPanel {...props} detail={{ ...detail, minecraftVersion: '26.2' }} />)).toContain('gamerule pvp false');
+  });
   it('shows the saved toggle and separates save from restart', () => {
     const html = render(<SettingsPanel {...props} />);
     expect(html).toContain('Save &amp; restart');

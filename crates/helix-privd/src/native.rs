@@ -1927,6 +1927,12 @@ impl NativeManager {
                 parse_properties(&original)
             };
             let mut fields = changed_setting_fields(&properties, settings);
+            if !manifest.is_pumpkin() && !legacy_pvp_property(&manifest.minecraft_version) {
+                if settings.pvp != property_bool(&properties, "pvp", true) {
+                    return Err("This Minecraft version uses the pvp game rule, not server.properties. Use Console: gamerule pvp true (or false).".to_owned());
+                }
+                fields.retain(|field| *field != "pvp");
+            }
             if settings.memory_mb != manifest.memory_mb {
                 fields.push("memory_mb");
             }
@@ -1935,7 +1941,11 @@ impl NativeManager {
         let updated = if manifest.is_pumpkin() {
             pumpkin::update_config(&original, settings)?
         } else {
-            update_properties(&original, settings)
+            update_properties_with_pvp(
+                &original,
+                settings,
+                legacy_pvp_property(&manifest.minecraft_version),
+            )
         };
         let port_changed = settings.game_port != manifest.game_port;
         if manifest.is_pumpkin() && settings.game_port == manifest.query_port {
@@ -2848,7 +2858,11 @@ impl NativeManager {
         if manifest.is_pumpkin() {
             pumpkin::properties(&content).map(Some)
         } else {
-            Ok(Some(parse_properties(&content)))
+            let mut properties = parse_properties(&content);
+            if !legacy_pvp_property(&manifest.minecraft_version) {
+                properties.remove("pvp");
+            }
+            Ok(Some(properties))
         }
     }
 
@@ -8541,6 +8555,23 @@ fn changed_setting_fields(
 }
 
 fn update_properties(original: &str, settings: &MinecraftSettingsPatch) -> String {
+    update_properties_with_pvp(original, settings, true)
+}
+
+fn legacy_pvp_property(version: &str) -> bool {
+    let parts = version
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>();
+    matches!(parts.as_deref(), Ok([1, minor]) if *minor <= 21)
+        || matches!(parts.as_deref(), Ok([1, minor, patch]) if *minor < 21 || (*minor == 21 && *patch < 9))
+}
+
+fn update_properties_with_pvp(
+    original: &str,
+    settings: &MinecraftSettingsPatch,
+    legacy_pvp: bool,
+) -> String {
     let properties = parse_properties(original);
     let new_port = settings.game_port.to_string();
     let current_server_port = properties.get("server-port");
@@ -8569,6 +8600,9 @@ fn update_properties(original: &str, settings: &MinecraftSettingsPatch) -> Strin
         ("spawn-protection", settings.spawn_protection.to_string()),
         ("server-port", new_port.clone()),
     ];
+    if !legacy_pvp {
+        replacements.retain(|(key, _)| *key != "pvp");
+    }
     if current_server_port.map(String::as_str) != Some(new_port.as_str()) {
         let current_query = properties.get("query.port");
         if current_query.is_none() || current_query == current_server_port {
@@ -9980,6 +10014,11 @@ mod tests {
         };
         assert!(validate_settings(&settings).is_ok());
         let updated = update_properties(original, &settings);
+        assert!(legacy_pvp_property("1.21.8"));
+        for version in ["1.21.9", "1.21.11", "26.1", "26.2", "snapshot"] {
+            assert!(!legacy_pvp_property(version));
+        }
+        assert!(!update_properties_with_pvp(original, &settings, false).contains("\npvp="));
         assert!(updated.contains("# custom comment"));
         assert!(updated.contains("custom-setting=yes"));
         assert!(updated.contains("rcon.password=secret"));

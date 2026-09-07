@@ -3061,6 +3061,15 @@ function ConsolePanel({
   );
 }
 
+export function minecraftPvpUsesGameRule(software: string, version: string): boolean {
+  if (software.toLowerCase() === "pumpkin") return false;
+  const parts = version.split(".").map(Number);
+  const [major, minor, patch = 0] = parts;
+  const legacy = parts.length >= 2 && parts.length <= 3 && parts.every(Number.isInteger) && major === 1 && minor !== undefined &&
+    (minor < 21 || (minor === 21 && patch < 9));
+  return !legacy;
+}
+
 export function SettingsPanel({
   detail,
   csrfToken,
@@ -3091,6 +3100,7 @@ export function SettingsPanel({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const observedRestartSuccess = useRef(restartSuccessRevision);
+  const pvpUsesGameRule = minecraftPvpUsesGameRule(detail.software, detail.minecraftVersion);
   const dirty = JSON.stringify(settings) !== JSON.stringify(saved);
   const restartFields = new Set(settings.restartBehavior.restartRequiredFields);
   const update = <K extends keyof MinecraftSettings>(
@@ -3429,7 +3439,9 @@ export function SettingsPanel({
               detail: "Remove online players when they are no longer approved.",
             },
           ] as const
-        ).map((item) => (
+        ).map((item) => item.key === "pvp" && pvpUsesGameRule ? (
+          <div class="setting-toggle" key={item.key}><span><strong>Player combat · Game rule</strong><small>This version does not use the pvp property. In Console, use <code>gamerule pvp</code> to read it, or <code>gamerule pvp true</code> / <code>gamerule pvp false</code> to change it without restarting.</small></span></div>
+        ) : (
           <label class="setting-toggle" key={item.key}>
             <input
               type="checkbox"

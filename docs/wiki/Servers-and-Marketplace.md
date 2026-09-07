@@ -24,6 +24,10 @@ during background refreshes. Controls are locked while saving.
 **Allow flight** stops flight-related kicks. It does not give Survival players
 a fly ability. Creative mode or a compatible mod/plugin must provide that.
 Pumpkin does not expose this setting through its current settings API.
+Minecraft 1.21.9 and newer use the `pvp` game rule instead of the old property.
+The panel shows Console commands to read or change it without a restart; it does
+not present the ignored property as an effective toggle. Pumpkin keeps its own
+supported PvP configuration.
 Game mode is the default for new players; existing players and world difficulty
 can also be controlled by world data or plugins. File verification is not a
 guarantee that third-party mods respect a setting.
