@@ -63,6 +63,7 @@ jobs:
           test -n "$test_binary"
           test -x "$test_binary"
           sudo "$test_binary" --ignored --exact native::modpacks::tests::failed_boot_rollback_restores_the_complete_backup_including_world_data
+          sudo "$test_binary" --ignored --exact native::tests::shutdown_write_cannot_revert_saved_minecraft_settings
 
       - name: Check packaging shell syntax
         if: matrix.toolchain == 'stable'

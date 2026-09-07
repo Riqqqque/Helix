@@ -3061,7 +3061,16 @@ function ConsolePanel({
   );
 }
 
-function SettingsPanel({
+export function minecraftPvpUsesGameRule(software: string, version: string): boolean {
+  if (software.toLowerCase() === "pumpkin") return false;
+  const parts = version.split(".").map(Number);
+  const [major, minor, patch = 0] = parts;
+  const legacy = parts.length >= 2 && parts.length <= 3 && parts.every(Number.isInteger) && major === 1 && minor !== undefined &&
+    (minor < 21 || (minor === 21 && patch < 9));
+  return !legacy;
+}
+
+export function SettingsPanel({
   detail,
   csrfToken,
   servers,
@@ -3091,6 +3100,7 @@ function SettingsPanel({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const observedRestartSuccess = useRef(restartSuccessRevision);
+  const pvpUsesGameRule = minecraftPvpUsesGameRule(detail.software, detail.minecraftVersion);
   const dirty = JSON.stringify(settings) !== JSON.stringify(saved);
   const restartFields = new Set(settings.restartBehavior.restartRequiredFields);
   const update = <K extends keyof MinecraftSettings>(
@@ -3099,7 +3109,7 @@ function SettingsPanel({
   ): void => setSettings((current) => ({ ...current, [key]: value }));
   const restartLabel = (field: MinecraftSettingField): ComponentChildren =>
     restartFields.has(field) ? <em class="restart-field">Restart</em> : null;
-  const save = async (): Promise<void> => {
+  const save = async (restartAfterSave = false): Promise<void> => {
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -3129,6 +3139,7 @@ function SettingsPanel({
         setNotice(notes.length > 0 ? notes.join(" ") : null);
         await onSaved();
       }
+      if (restartAfterSave && !result.containerRepublished) onRestart();
     } catch (requestError) {
       if (isSessionError(requestError)) onSessionExpired();
       else setError(describeError(requestError));
@@ -3146,7 +3157,16 @@ function SettingsPanel({
     setRestartPending(false);
     setShowRestartChoice(false);
     setChangedFields([]);
+    if (!dirty) {
+      setSettings(detail.settings);
+      setSaved(detail.settings);
+    }
   }, [restartSuccessRevision]);
+  useEffect(() => {
+    if (dirty || busy) return;
+    setSettings(detail.settings);
+    setSaved(detail.settings);
+  }, [detail.settings.expectedRevision, detail.settings.memoryMb, dirty, busy]);
   const manageTitle = canManageServers
     ? undefined
     : "Requires games.manage permission";
@@ -3201,7 +3221,7 @@ function SettingsPanel({
                 : `${changedFields.length} changes`}
               ?
             </strong>
-            <p>Saved safely. The reminder stays until a restart succeeds.</p>
+            <p>Saved to disk. Restart to load these values into Minecraft. Save any new edits first.</p>
           </div>
           <div>
             <button
@@ -3214,7 +3234,7 @@ function SettingsPanel({
             <button
               class="button button--primary"
               type="button"
-              disabled={!canManageServers}
+              disabled={!canManageServers || busy || dirty}
               title={manageTitle}
               onClick={restartNow}
             >
@@ -3223,6 +3243,7 @@ function SettingsPanel({
           </div>
         </div>
       )}
+      <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <div class="settings-grid">
         <label class="field field--wide">
           <span>Message of the day {restartLabel("motd")}</span>
@@ -3403,7 +3424,7 @@ function SettingsPanel({
               field: "allow_flight",
               title: "Allow flight",
               detail:
-                "Do not kick players when a mod or plugin enables flight.",
+                "Prevent flight-related kicks. This does not grant flying; players still need a mod, plugin, or Creative mode.",
             },
             {
               key: "whiteList",
@@ -3418,7 +3439,9 @@ function SettingsPanel({
               detail: "Remove online players when they are no longer approved.",
             },
           ] as const
-        ).map((item) => (
+        ).map((item) => item.key === "pvp" && pvpUsesGameRule ? (
+          <div class="setting-toggle" key={item.key}><span><strong>Player combat · Game rule</strong><small>This version does not use the pvp property. In Console, use <code>gamerule pvp</code> to read it, or <code>gamerule pvp true</code> / <code>gamerule pvp false</code> to change it without restarting.</small></span></div>
+        ) : (
           <label class="setting-toggle" key={item.key}>
             <input
               type="checkbox"
@@ -3466,7 +3489,10 @@ function SettingsPanel({
         >
           {busy ? "Saving…" : "Save settings"}
         </button>
+        <button class="button button--quiet" type="button" disabled={!canManageServers || !dirty || busy} onClick={() => void save(true)}>Save &amp; restart</button>
+        <button class="button button--quiet" type="button" disabled={!dirty || busy} onClick={() => { setSettings(detail.settings); setSaved(detail.settings); setError(null); }}>Discard edits</button>
       </div>
+      </fieldset>
     </section>
   );
 }
@@ -4870,7 +4896,9 @@ function NativeServerPage({
     detailController.current = controller;
     const request = (async (): Promise<void> => {
     try {
-      setDetail(await getServerDetail(server.id, csrfToken, controller.signal));
+      const next = await getServerDetail(server.id, csrfToken, controller.signal);
+      if (controller.signal.aborted || detailController.current !== controller) return;
+      setDetail(next);
       setError(null);
     } catch (requestError) {
       if (controller.signal.aborted) return;
@@ -4962,8 +4990,8 @@ function NativeServerPage({
     setRefreshKey((value) => value + 1);
   }, [load, onRefresh]);
   const completePendingAction = useCallback(async (): Promise<void> => {
-    if (pending === "restart") setRestartSuccessRevision((value) => value + 1);
     await refresh();
+    if (pending === "restart") setRestartSuccessRevision((value) => value + 1);
   }, [pending, refresh]);
   if (detail === null)
     return (
