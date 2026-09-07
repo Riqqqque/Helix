@@ -1913,7 +1913,7 @@ impl NativeManager {
             .instance_path(&manifest.id)?
             .join(manifest.settings_name());
         let original = read_small_regular_file(&path, MAX_PROPERTIES_BYTES, "server settings")?;
-        let revision = format!("{:x}", Sha256::digest(original.as_bytes()));
+        let revision = settings_revision(&original);
         if revision != settings.expected_revision {
             return Err(
                 "server settings changed since this page was opened; reload before saving"
@@ -2615,7 +2615,7 @@ impl NativeManager {
             parse_properties(&content)
         };
         Ok(json!({
-            "expected_revision": format!("{:x}", Sha256::digest(content.as_bytes())),
+            "expected_revision": settings_revision(&content),
             "motd": property_text(&properties, "motd", &manifest.name),
             "game_mode": property_choice(&properties, "gamemode", &["survival", "creative", "adventure", "spectator"], "survival"),
             "difficulty": property_choice(&properties, "difficulty", &["peaceful", "easy", "normal", "hard"], "easy"),
@@ -8033,6 +8033,14 @@ fn write_new_file(path: &Path, content: &[u8], mode: u32) -> Result<(), String> 
     file.write_all(content)
         .and_then(|()| file.sync_all())
         .map_err(|_| format!("could not write {}", path.display()))
+}
+
+fn settings_revision(content: &str) -> String {
+    let mut revision = String::with_capacity(64);
+    for byte in Sha256::digest(content.as_bytes()) {
+        let _ = write!(revision, "{byte:02x}");
+    }
+    revision
 }
 
 fn overwritten_settings(
