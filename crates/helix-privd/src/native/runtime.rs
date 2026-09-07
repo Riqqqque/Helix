@@ -24,7 +24,10 @@ fn validate_version_change(current: &str, target: &str) -> Result<(), String> {
 }
 
 impl NativeManager {
-    fn runtime_running_checked(&self, manifest: &InstanceManifest) -> Result<bool, String> {
+    pub(super) fn runtime_running_checked(
+        &self,
+        manifest: &InstanceManifest,
+    ) -> Result<bool, String> {
         let Some((managed, id)) = self.exact_container_identity(&manifest.container_name)? else {
             return Ok(false);
         };
@@ -52,7 +55,7 @@ impl NativeManager {
 
     fn stop_runtime_for_files(&self, manifest: &InstanceManifest) -> Result<(), String> {
         if self.runtime_running_checked(manifest)? {
-            self.docker(["stop", "--time", "45", &manifest.container_name], 75)?;
+            self.stop_preserving_minecraft_settings(manifest)?;
         }
         if self.runtime_running_checked(manifest)? {
             return Err(
