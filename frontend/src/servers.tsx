@@ -3147,8 +3147,10 @@ export function SettingsPanel({
     setRestartPending(false);
     setShowRestartChoice(false);
     setChangedFields([]);
-    setSettings(detail.settings);
-    setSaved(detail.settings);
+    if (!dirty) {
+      setSettings(detail.settings);
+      setSaved(detail.settings);
+    }
   }, [restartSuccessRevision]);
   useEffect(() => {
     if (dirty || busy) return;
@@ -3476,6 +3478,7 @@ export function SettingsPanel({
           {busy ? "Saving…" : "Save settings"}
         </button>
         <button class="button button--quiet" type="button" disabled={!canManageServers || !dirty || busy} onClick={() => void save(true)}>Save &amp; restart</button>
+        <button class="button button--quiet" type="button" disabled={!dirty || busy} onClick={() => { setSettings(detail.settings); setSaved(detail.settings); setError(null); }}>Discard edits</button>
       </div>
       </fieldset>
     </section>
