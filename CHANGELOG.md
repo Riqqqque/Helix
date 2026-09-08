@@ -8,6 +8,10 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Server-scoped API tokens in Settings, with individual permissions, expiration,
+  revocation and audit records. Headless tools can use a token for server files,
+  lifecycle actions and token-owned jobs without borrowing an owner session.
+
 - Server-relative file APIs for native games: paged listings, text edits,
   rename/move, recoverable deletion, checked uploads/downloads and backup export.
   The Python client can transfer files between servers. OpenAPI now lists all

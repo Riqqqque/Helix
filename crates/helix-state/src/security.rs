@@ -1104,7 +1104,7 @@ fn checked_deadline(
         .ok_or(StateError::InvalidSecurityInput(message))
 }
 
-fn append_audit(
+pub(super) fn append_audit(
     transaction: &Transaction<'_>,
     now_unix_ms: i64,
     actor_user_id: Option<&str>,
@@ -1113,11 +1113,28 @@ fn append_audit(
     target_id: Option<&str>,
     outcome: &str,
 ) -> Result<(), StateError> {
+    append_audit_detail(
+        transaction,
+        now_unix_ms,
+        actor_user_id,
+        action,
+        (target_type, target_id, outcome, "{}"),
+    )
+}
+
+pub(super) fn append_audit_detail(
+    transaction: &Transaction<'_>,
+    now_unix_ms: i64,
+    actor_user_id: Option<&str>,
+    action: &str,
+    target: (Option<&str>, Option<&str>, &str, &str),
+) -> Result<(), StateError> {
+    let (target_type, target_id, outcome, detail) = target;
     transaction.execute(
         "INSERT INTO audit_events (
             id, occurred_at_unix_ms, actor_user_id, action, target_type,
             target_id, outcome, correlation_id, detail_json
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '{}')",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             random_uuid_v4()?.to_string(),
             now_unix_ms,
@@ -1126,7 +1143,8 @@ fn append_audit(
             target_type,
             target_id,
             outcome,
-            random_uuid_v4()?.to_string()
+            random_uuid_v4()?.to_string(),
+            detail
         ],
     )?;
     prune_authentication_audit_in(transaction, now_unix_ms, AUDIT_RETENTION_POLICY)?;
@@ -2565,6 +2583,69 @@ mod tests {
         let temp = crate::private_test_directory("temporary directory");
         let databases = DatabaseSet::open_for_daemon(temp.path()).expect("open databases");
         (temp, databases)
+    }
+
+    #[test]
+    fn server_tokens_and_job_scopes_survive_restart_and_follow_account_revocation() {
+        let (temp, databases) = open_databases();
+        let owner = claim_owner(databases.state(), NOW);
+        let credential = databases
+            .state()
+            .credential_by_login("owner", NOW)
+            .unwrap()
+            .unwrap();
+        let id = databases
+            .state()
+            .create_api_token(crate::NewApiToken {
+                user_id: owner.user_id.clone(),
+                auth_version: credential.auth_version,
+                verifier: [7; 32],
+                name: "deploy".into(),
+                servers: vec!["helix:one".into()],
+                permissions: vec!["stop".into()],
+                now: NOW,
+                expires_at: NOW + 60000,
+            })
+            .unwrap();
+        databases
+            .state()
+            .track_api_token_job(&id, "job-one", "helix:one", NOW)
+            .unwrap();
+        assert!(
+            databases
+                .state()
+                .api_token_jobs("another-token")
+                .unwrap()
+                .is_empty()
+        );
+        drop(databases);
+        let databases = DatabaseSet::open_for_daemon(temp.path()).unwrap();
+        let record = databases
+            .state()
+            .authenticate_api_token(&[7; 32], NOW + 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.id, id);
+        assert_eq!(
+            databases.state().api_token_jobs(&id).unwrap(),
+            vec![("job-one".into(), "helix:one".into())]
+        );
+        databases
+            .state()
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE users SET auth_version=auth_version+1 WHERE id=?1",
+                [owner.user_id],
+            )
+            .unwrap();
+        assert!(
+            databases
+                .state()
+                .authenticate_api_token(&[7; 32], NOW + 2)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub enum TokenDomain {
     Session,
     Csrf,
     TerminalTicket,
+    ServerApi,
 }
 
 impl TokenDomain {
@@ -22,6 +23,7 @@ impl TokenDomain {
             Self::Session => b"helix/session/v1\0",
             Self::Csrf => b"helix/csrf/v1\0",
             Self::TerminalTicket => b"helix/terminal-ticket/v1\0",
+            Self::ServerApi => b"helix/server-api/v1\0",
         }
     }
 }
@@ -160,6 +162,10 @@ mod tests {
         let session = token.verification_hash(TokenDomain::Session);
         let csrf = token.verification_hash(TokenDomain::Csrf);
         let terminal = token.verification_hash(TokenDomain::TerminalTicket);
+        let api = token.verification_hash(TokenDomain::ServerApi);
+        for other in [&bootstrap, &session, &csrf, &terminal] {
+            assert_ne!(api.as_bytes(), other.as_bytes());
+        }
         let session_again = token.verification_hash(TokenDomain::Session);
 
         assert_ne!(bootstrap.as_bytes(), session.as_bytes());

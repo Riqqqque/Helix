@@ -28,8 +28,10 @@ pub(crate) async fn discovery(
                 "mode": "session_cookie_and_csrf",
                 "csrf_header": "X-Helix-CSRF",
                 "mutation_origin_required": true,
-                "delegated_tokens_supported": false,
-                "per_server_credentials_supported": false
+                "delegated_tokens_supported": true,
+                "per_server_credentials_supported": true,
+                "token_endpoint": "/api/v1/automation/server",
+                "token_transport": "Authorization: Bearer; no Cookie or Origin"
             },
             "conventions": {
                 "server_identity": "id",
