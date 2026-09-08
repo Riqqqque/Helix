@@ -14,8 +14,9 @@ and safe automation workflows. `GET /api/v1/discovery` reports the current
 session's capabilities and supported conventions; `GET /api/v1/openapi.json`
 serves the [server OpenAPI contract](openapi.json). Both require the session
 cookie and CSRF proof. Every server route and method is listed; some response
-objects and non-server routes are not fully typed. Dedicated API tokens and
-per-server credentials are not implemented. See [server files and transfers](SERVER-API.md).
+objects and non-server routes are not fully typed. For headless server access,
+use [server-scoped tokens](SERVER-TOKENS.md) and the separate `/automation`
+endpoints. See [server files and transfers](SERVER-API.md).
 
 ## Transport boundary
 
