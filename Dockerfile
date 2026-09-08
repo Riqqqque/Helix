@@ -31,7 +31,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     rustup component add rustfmt clippy && \
     cargo fmt --all -- --check && \
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings && \
-    cargo test --locked --workspace --all-targets --all-features -- --include-ignored
+    cargo test --locked --workspace --all-targets --all-features -- --include-ignored && \
+    HELIX_DISPOSABLE_API_TEST=1 python3 examples/integrations/server_api_http_smoke.py
 
 FROM scratch AS privd
 COPY --from=rust-build /tmp/helix-privd /helix-privd

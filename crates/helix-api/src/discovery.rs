@@ -22,7 +22,7 @@ pub(crate) async fn discovery(
             "api_version": "v1",
             "helix_version": env!("CARGO_PKG_VERSION"),
             "openapi_url": "/api/v1/openapi.json",
-            "contract_scope": "core-server-integration",
+            "contract_scope": "server-management",
             "capabilities": session.capabilities,
             "authentication": {
                 "mode": "session_cookie_and_csrf",
@@ -43,6 +43,8 @@ pub(crate) async fn discovery(
                 "session": "/api/v1/auth/me",
                 "servers": "/api/v1/servers",
                 "server_readiness": "/api/v1/servers/manager/readiness",
+                "server_capabilities_template": "/api/v1/servers/{instance_id}/capabilities",
+                "server_files_template": "/api/v1/servers/{instance_id}/files",
                 "job_template": "/api/v1/jobs/{job_id}"
             }
         })),
