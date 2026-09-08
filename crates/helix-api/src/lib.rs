@@ -4023,6 +4023,10 @@ mod tests {
             .unwrap();
         for (body, expected) in [
             (
+                json!({"operation":"server_action","instance_id":"x".repeat(4096),"action":"stop"}),
+                StatusCode::FORBIDDEN,
+            ),
+            (
                 json!({"operation":"server_action","instance_id":"helix:two","action":"stop"}),
                 StatusCode::FORBIDDEN,
             ),

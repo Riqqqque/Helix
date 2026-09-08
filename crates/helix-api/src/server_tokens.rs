@@ -302,6 +302,14 @@ async fn execute(
             None => return denied_operation(&state, token).await,
         }
     };
+    if server.is_empty()
+        || server.len() > 128
+        || !server
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
+    {
+        return denied_operation(&state, token).await;
+    }
     let allowed = token.servers.iter().any(|s| s == server)
         && (permission == "jobs" || token.permissions.iter().any(|p| p == permission));
     let db = Arc::clone(&state.databases);
