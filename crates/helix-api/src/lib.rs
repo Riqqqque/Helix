@@ -78,6 +78,7 @@ pub struct ApiState {
     weather_workers: Arc<tokio::sync::Semaphore>,
     marketplace_media_workers: Arc<tokio::sync::Semaphore>,
     application_request_slots: Arc<tokio::sync::Semaphore>,
+    server_token_workers: Arc<tokio::sync::Semaphore>,
     pub(crate) dummy_password_phc: Arc<str>,
     pub(crate) attempt_limiter: auth::AttemptLimiter,
     pub(crate) blocking_tasks: BlockingTaskTracker,
@@ -111,6 +112,7 @@ impl ApiState {
             password_workers,
             weather_workers: Arc::new(tokio::sync::Semaphore::new(2)),
             marketplace_media_workers: Arc::new(tokio::sync::Semaphore::new(8)),
+            server_token_workers: Arc::new(tokio::sync::Semaphore::new(2)),
             application_request_slots: Arc::new(tokio::sync::Semaphore::new(
                 MAX_CONCURRENT_APPLICATION_REQUESTS,
             )),

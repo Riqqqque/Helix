@@ -277,6 +277,9 @@ async fn execute(
     headers: HeaderMap,
     body: Result<Json<BrokerRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
+    let permit = Arc::clone(&state.server_token_workers)
+        .try_acquire_owned()
+        .map_err(|_| ApiError::ApplicationCapacityExhausted)?;
     let token = authenticate_token(&state, &headers).await?;
     let Json(request) = body.map_err(auth::map_json_rejection)?;
     let owned_job_server;
@@ -333,6 +336,7 @@ async fn execute(
     let guard = state.blocking_tasks.start();
     tokio::spawn(async move {
         let _guard = guard;
+        let _permit = permit;
         complete_request(state, token, request, server).await
     })
     .await
