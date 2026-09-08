@@ -1,6 +1,6 @@
 # Helix Progress
 
-Last updated: 2026-08-30
+Last updated: 2026-09-08
 
 This is the implementation ledger. [ROADMAP.md](ROADMAP.md) describes intended
 ordering; it is not evidence that a feature works.
@@ -25,6 +25,7 @@ review remain open. Public-internet release status is **BLOCKED**.
 
 | Area | Status | Current evidence and limits |
 | --- | --- | --- |
+| Core integration API | TESTED | Authenticated discovery and OpenAPI subset, consistent framework error JSON, and a stdlib Python client with session/URL/job safety tests. No delegated tokens, per-server credentials, general idempotency or full typed schema coverage. See docs/INTEGRATIONS.md. |
 | Repository, license, and build policy | TESTED | The Rust workspace and Preact frontend use locked dependencies, formatting/lint/test/build gates, secret scanning policy, and `AGPL-3.0-or-later`. Passing source checks is not a signed release. |
 | Authentication and preferences | TESTED | Race-safe owner enrollment, Argon2id login, revocable bounded sessions, session-bound CSRF, capability checks, username/password changes, and revision-guarded dashboard preferences have focused state/API/frontend tests. MFA, production remote-access review, and independent authentication review remain open. |
 | Critical state and recovery foundation | TESTED | SQLite integrity checks, migrations, exclusive writer lease, unclean-shutdown handling, verified state snapshots, and data-preserving package skeletons exist. Full broker/native-data restore drills, power-loss matrices, independent key recovery, and signed upgrade rollback remain open. |

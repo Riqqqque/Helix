@@ -16,7 +16,8 @@ coverage
 *.db-wal
 *.log
 *.helix-genome
-docs
+docs/*
+!docs/openapi.json
 wiki
 adr
 assets

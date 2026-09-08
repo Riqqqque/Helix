@@ -8,6 +8,10 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Authenticated API discovery, a core-server OpenAPI contract, and a tested
+  Python integration client. Framework errors now return JSON too. The guide
+  covers session permissions, server IDs, jobs, timeouts and safe file updates.
+
 - Minecraft settings now refresh after restart, offer Save & restart, and check
   saved values after startup. Shutdown writes no longer discard saved settings.
 

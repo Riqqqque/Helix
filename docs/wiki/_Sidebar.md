@@ -19,6 +19,7 @@
 - [Development and Testing](https://github.com/Riqqqque/Helix/wiki/Development-and-Testing)
 - [Game Hosting and Capacity](https://github.com/Riqqqque/Helix/wiki/Game-Hosting-and-Capacity)
 - [Building Strands](https://github.com/Riqqqque/Helix/wiki/Building-Strands)
+- [API and Integrations](https://github.com/Riqqqque/Helix/wiki/API-and-Integrations)
 - [Roadmap and Status](https://github.com/Riqqqque/Helix/wiki/Roadmap-and-Status)
 
 ---
