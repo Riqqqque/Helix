@@ -1,0 +1,135 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Helix core server integration API",
+    "version": "1.0.0",
+    "description": "Implemented core integration subset, not the entire dashboard API. Private deployment only. Session cookie AND CSRF proof are required together. Mutations also require the exact configured Origin. Credentials carry the user's capabilities, NOT a server-specific scope. Never automatically retry mutations: a timeout does not prove failure. Additive response fields are allowed. See docs/API.md for the wider surface and docs/INTEGRATIONS.md for safe workflows."
+  },
+  "servers": [{"url": "/api/v1"}],
+  "security": [{"SessionCookie": [], "CsrfProof": []}],
+  "tags": [{"name": "Discovery"}, {"name": "Session"}, {"name": "Servers"}, {"name": "Jobs"}],
+  "paths": {
+    "/discovery": {
+      "get": {
+        "operationId": "getDiscovery", "tags": ["Discovery"],
+        "summary": "Read the API contract and this session's capabilities",
+        "responses": {"200": {"description": "API conventions; capabilities are grants, not live broker readiness", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Discovery"}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApi", "tags": ["Discovery"], "summary": "Download this OpenAPI document",
+        "responses": {"200": {"description": "OpenAPI 3.1.1 document", "content": {"application/json": {"schema": {"type": "object"}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "login", "tags": ["Session"], "security": [],
+        "summary": "Create an ordinary Helix session; not a restricted service credential",
+        "parameters": [{"$ref": "#/components/parameters/Origin"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "required": ["loginName", "password"], "properties": {"loginName": {"type": "string"}, "password": {"type": "string", "writeOnly": true}}}}}},
+        "responses": {"200": {"description": "Retain the HttpOnly session cookie and csrfToken together in memory; never log them", "headers": {"Set-Cookie": {"schema": {"type": "string"}}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Login"}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "operationId": "getSession", "tags": ["Session"], "summary": "Verify the current session and CSRF proof",
+        "responses": {"200": {"description": "Current session", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Session"}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logout", "tags": ["Session"], "summary": "Revoke this session",
+        "parameters": [{"$ref": "#/components/parameters/Origin"}],
+        "responses": {"204": {"description": "Session revoked; clear local credentials"}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/servers": {
+      "get": {
+        "operationId": "listServers", "tags": ["Servers"], "x-helix-capability": "games.view",
+        "summary": "Discover server identities; never target a server by list order or version",
+        "description": "Use each item's id unchanged in the instance_id path parameter. Imported servers belong to their external manager. Names may be duplicated. Check manager/readiness and server detail before writing. Do not infer permissions from the presence of an item.",
+        "responses": {"200": {"description": "Server inventory array", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Server"}}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/servers/manager/readiness": {
+      "get": {
+        "operationId": "getServerReadiness", "tags": ["Servers"], "x-helix-capability": "games.view",
+        "summary": "Check hosting availability and blockers before an operation",
+        "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/servers/{instance_id}": {
+      "parameters": [{"$ref": "#/components/parameters/InstanceId"}],
+      "get": {
+        "operationId": "getServer", "tags": ["Servers"], "x-helix-capability": "games.view", "summary": "Read the exact discovered server",
+        "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/servers/{instance_id}/logs": {
+      "parameters": [{"$ref": "#/components/parameters/InstanceId"}],
+      "get": {
+        "operationId": "getServerLogs", "tags": ["Servers"], "x-helix-capability": "games.view", "summary": "Read a bounded recent console tail",
+        "parameters": [{"name": "lines", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 300}, "description": "The broker applies its own smaller output cap; not a promise to return all requested lines."}],
+        "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/servers/{instance_id}/logs/history": {
+      "parameters": [{"$ref": "#/components/parameters/InstanceId"}],
+      "get": {
+        "operationId": "getServerLogHistory", "tags": ["Servers"], "x-helix-capability": "games.view", "summary": "Read persistent console history using the returned cursor",
+        "parameters": [{"name": "lines", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 200}}, {"name": "cursor", "in": "query", "schema": {"type": "string"}, "description": "Opaque server-issued cursor; do not parse or invent it."}],
+        "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/servers/{instance_id}/backups": {
+      "parameters": [{"$ref": "#/components/parameters/InstanceId"}],
+      "get": {
+        "operationId": "listServerBackups", "tags": ["Servers"], "x-helix-capability": "games.view", "summary": "List backups before modifying a server",
+        "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/servers/{instance_id}/actions": {
+      "parameters": [{"$ref": "#/components/parameters/InstanceId"}],
+      "post": {
+        "operationId": "runServerAction", "tags": ["Servers"], "x-helix-capability": "games.manage",
+        "summary": "Submit one explicit server action",
+        "description": "Do not replay on timeout, connection loss, or 5xx. Keep the returned job ID and poll it. An accepted job is not a completed operation. Kill is forceful; prefer stop. Update compatibility depends on the selected server software.",
+        "parameters": [{"$ref": "#/components/parameters/Origin"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "required": ["action"], "properties": {"action": {"type": "string", "enum": ["start", "stop", "restart", "kill", "update", "backup"]}}}}}},
+        "responses": {"200": {"description": "Native actions return job_id; external-manager actions may complete synchronously without one. Always refetch the server afterward.", "content": {"application/json": {"schema": {"type": "object", "properties": {"job_id": {"type": "string", "format": "uuid"}, "reused": {"type": "boolean"}}}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    },
+    "/jobs/{job_id}": {
+      "get": {
+        "operationId": "getJob", "tags": ["Jobs"], "x-helix-capability": "games.view", "summary": "Poll a previously returned job ID",
+        "parameters": [{"name": "job_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "description": "Poll with a bounded deadline and delay. HTTP 200 only means the job status was read, not that the job succeeded. Reaching a client deadline does not cancel the job. Retention is finite; an unknown job is not permission to repeat a mutation.",
+        "responses": {"200": {"description": "Job status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Job"}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "SessionCookie": {"type": "apiKey", "in": "cookie", "name": "helix_session"},
+      "CsrfProof": {"type": "apiKey", "in": "header", "name": "X-Helix-CSRF"}
+    },
+    "parameters": {
+      "Origin": {"name": "Origin", "in": "header", "required": true, "schema": {"type": "string", "format": "uri"}, "description": "Exact configured Helix origin: scheme, host and port, without a trailing slash. Never spoof a different service's origin."},
+      "InstanceId": {"name": "instance_id", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Exact id returned by server inventory, including its manager prefix. Native IDs are helix:UUID. Never substitute a display name, bare registry UUID or filesystem path."}
+    },
+    "responses": {
+      "Problem": {"description": "Error; branch on HTTP status and code, not message text. A mutation's outcome may be unknown after a timeout or transport error.", "headers": {"X-Request-ID": {"schema": {"type": "string"}}, "Retry-After": {"schema": {"type": "string"}, "description": "Present on selected capacity/rate errors. Does not make a mutation safe to replay."}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Problem"}}}},
+      "BrokerObject": {"description": "Broker result. The exact resource-specific fields remain documented in docs/API.md and tested in frontend adapters; this schema deliberately does not claim full generated-client coverage.", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}}
+    },
+    "schemas": {
+      "Server": {"type": "object", "required": ["id", "name", "instance_name", "manager", "software", "version", "status"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "instance_name": {"type": "string"}, "manager": {"type": "string"}, "software": {"type": "string"}, "version": {"type": "string"}, "status": {"type": "string"}, "kind": {"type": "string"}, "game_port": {"type": ["integer", "null"]}, "warnings": {"type": "array", "items": {"type": "string"}}}},
+      "Job": {"type": "object", "required": ["id", "kind", "status", "stage", "progress_percent", "created_at_unix_ms", "updated_at_unix_ms", "result", "error"], "properties": {"id": {"type": "string", "format": "uuid"}, "kind": {"type": "string"}, "status": {"type": "string", "enum": ["queued", "running", "complete", "failed"]}, "stage": {"type": "string"}, "progress_percent": {"type": "integer", "minimum": 0, "maximum": 100}, "created_at_unix_ms": {"type": "integer", "minimum": 0}, "updated_at_unix_ms": {"type": "integer", "minimum": 0}, "result": {}, "error": {"type": ["string", "null"]}}},
+      "Problem": {"type": "object", "required": ["code", "message"], "properties": {"code": {"type": "string"}, "message": {"type": "string"}}, "additionalProperties": true},
+      "User": {"type": "object", "required": ["id", "loginName", "displayName", "capabilities"], "properties": {"id": {"type": "string"}, "loginName": {"type": "string"}, "displayName": {"type": "string"}, "capabilities": {"type": "array", "items": {"type": "string"}}}},
+      "Session": {"type": "object", "required": ["user", "expiresAtUnixMs", "sessionExpires"], "properties": {"user": {"$ref": "#/components/schemas/User"}, "expiresAtUnixMs": {"type": "integer", "format": "int64"}, "sessionExpires": {"type": "boolean"}}},
+      "Login": {"allOf": [{"$ref": "#/components/schemas/Session"}, {"type": "object", "required": ["csrfToken"], "properties": {"csrfToken": {"type": "string"}}}]},
+      "Discovery": {"type": "object", "required": ["schema_version", "api_version", "helix_version", "openapi_url", "contract_scope", "capabilities", "authentication", "conventions", "links"], "properties": {"schema_version": {"const": 1}, "api_version": {"const": "v1"}, "helix_version": {"type": "string"}, "openapi_url": {"const": "/api/v1/openapi.json"}, "contract_scope": {"const": "core-server-integration"}, "capabilities": {"type": "array", "items": {"type": "string"}}, "authentication": {"type": "object"}, "conventions": {"type": "object"}, "links": {"type": "object"}}}
+    }
+  }
+}

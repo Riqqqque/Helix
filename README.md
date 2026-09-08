@@ -29,7 +29,8 @@ rearrange. AMP and other connected services stay independent.
 
 **Start here:** [Install](#install-on-linux) · [User guide](https://github.com/Riqqqque/Helix/wiki) ·
 [Minecraft and modpacks](docs/wiki/Servers-and-Marketplace.md) ·
-[Pumpkin](docs/wiki/Pumpkin.md) · [Build a Strand](docs/wiki/Building-Strands.md)
+[Pumpkin](docs/wiki/Pumpkin.md) · [Build a Strand](docs/wiki/Building-Strands.md) ·
+[API integrations](docs/INTEGRATIONS.md)
 
 Helix combines a responsive web dashboard, an unprivileged Rust service, and a
 narrow typed Linux broker. It gives the browser useful host controls without

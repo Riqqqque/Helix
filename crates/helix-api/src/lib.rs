@@ -1,6 +1,7 @@
 //! Versioned HTTP API and static frontend composition.
 
 mod auth;
+mod discovery;
 mod marketplace_media;
 mod server_media;
 mod static_root;
@@ -467,6 +468,8 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .layer(DefaultBodyLimit::max(80 * 1024));
     let strand_api = strands::routes();
     let api = Router::new()
+        .route("/discovery", get(discovery::discovery))
+        .route("/openapi.json", get(discovery::openapi))
         .route("/health", get(detailed_health))
         .route("/system/overview", get(system_overview))
         .route("/weather", get(weather_forecast))
@@ -559,6 +562,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .layer(TraceLayer::new_for_http())
         .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
         .layer(CatchPanicLayer::new())
+        .layer(middleware::from_fn(discovery::normalize_api_errors))
         .layer(CompressionLayer::new())
         .layer(middleware::from_fn(require_loopback_host)))
 }
@@ -3838,6 +3842,136 @@ mod tests {
 
     async fn test_app(metrics: DatabaseStatus) -> TestApp {
         test_app_with_state(metrics, |state| state).await
+    }
+
+    #[tokio::test]
+    async fn integration_discovery_requires_both_session_proofs_and_reports_real_grants() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        for path in ["/api/v1/discovery", "/api/v1/openapi.json"] {
+            let response = context.app.clone().oneshot(get(path)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let connection =
+            rusqlite::Connection::open(context.data.path().join("state/helix-state.db")).unwrap();
+        connection
+            .execute("DELETE FROM role_capabilities", [])
+            .unwrap();
+        let bootstrap = install_bootstrap(&context);
+        let client = claim_owner(&context, &bootstrap).await;
+        for path in ["/api/v1/discovery", "/api/v1/openapi.json"] {
+            let response = context
+                .app
+                .clone()
+                .oneshot(with_cookie(get(path), &client.cookie))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let response = context
+                .app
+                .clone()
+                .oneshot(with_csrf(
+                    with_cookie(get(path), &client.cookie),
+                    &client.csrf,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert!(response.headers().contains_key("x-request-id"));
+            let body = response_json(response).await;
+            if path.ends_with("discovery") {
+                assert_eq!(body["capabilities"], json!([]));
+                assert_eq!(body["authentication"]["delegated_tokens_supported"], false);
+                assert_eq!(body["conventions"]["idempotency_keys_supported"], false);
+            } else {
+                assert_eq!(body["openapi"], "3.1.1");
+                assert_eq!(
+                    body["security"],
+                    json!([{"SessionCookie": [], "CsrfProof": []}])
+                );
+            }
+        }
+        // Discovery is not an authorization bypass for a zero-capability session.
+        let response = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(get("/api/v1/servers"), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn integration_contract_operations_resolve_to_real_routes() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let document: Value = serde_json::from_str(discovery::OPENAPI).unwrap();
+        let mut operation_ids = std::collections::HashSet::new();
+        for (path, item) in document["paths"].as_object().unwrap() {
+            for method in ["get", "post", "put", "delete", "patch"] {
+                let Some(operation) = item.get(method) else {
+                    continue;
+                };
+                assert!(operation_ids.insert(operation["operationId"].as_str().unwrap()));
+                let path = path
+                    .replace("{instance_id}", "12345678-1234-4234-8234-123456789abc")
+                    .replace("{job_id}", "12345678-1234-4234-8234-123456789abc");
+                let mut request = get(&format!("/api/v1{path}"));
+                *request.method_mut() = method.to_uppercase().parse().unwrap();
+                let response = context.app.clone().oneshot(request).await.unwrap();
+                assert_ne!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+                assert_ne!(
+                    response.status(),
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "{method} {path}"
+                );
+                assert!(
+                    response.headers()[header::CONTENT_TYPE]
+                        .to_str()
+                        .unwrap()
+                        .starts_with("application/json")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn integration_method_and_query_errors_are_json_without_touching_spa() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let response = context
+            .app
+            .clone()
+            .oneshot(post_json("/api/v1/discovery", &json!({}), 1))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert!(
+            response.headers()[header::ALLOW]
+                .to_str()
+                .unwrap()
+                .contains("GET")
+        );
+        assert_eq!(response_json(response).await["code"], "method_not_allowed");
+        let response = context
+            .app
+            .clone()
+            .oneshot(get(
+                "/api/v1/servers/12345678-1234-4234-8234-123456789abc/logs?lines=not-a-number",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_json(response).await["code"], "invalid_request");
+        let response = context.app.clone().oneshot(get("/servers")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.headers()[header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html")
+        );
     }
 
     async fn test_app_with_state(

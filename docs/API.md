@@ -9,6 +9,13 @@ remain authoritative when this document and code disagree.
 The API is versioned under `/api/v1`. Unknown `/api` routes return JSON errors;
 only non-API routes use the single-page application fallback.
 
+[Integration guide](INTEGRATIONS.md) includes a standard-library Python client
+and safe automation workflows. `GET /api/v1/discovery` reports the current
+session's capabilities and supported conventions; `GET /api/v1/openapi.json`
+serves the [core-server OpenAPI contract](openapi.json). Both require the session
+cookie and CSRF proof. This is a documented subset, not full typed coverage of
+every route. Dedicated API tokens and per-server credentials are not implemented.
+
 ## Transport boundary
 
 Source-development configuration defaults to loopback. The container deployment
@@ -63,6 +70,8 @@ malformed, stale, or wrong proof returns `403` with code `csrf_rejected`.
 | `POST` | `/api/v1/setup/owner` | Single race-safe owner claim |
 | `POST` | `/api/v1/auth/login` | Password login |
 | `GET` | `/api/v1/auth/me` | Current protected user/session state |
+| `GET` | `/api/v1/discovery` | Current session capabilities, API links, authentication and retry conventions |
+| `GET` | `/api/v1/openapi.json` | Machine-readable core server integration contract |
 | `POST` | `/api/v1/auth/csrf` | Compare-and-swap CSRF rotation |
 | `GET` | `/api/v1/auth/session-expiry` | Current idle/absolute expiry setting |
 | `PUT` | `/api/v1/auth/session-expiry` | Turn idle/absolute session expiry on or off; requires `users.manage` |
@@ -528,6 +537,10 @@ Common status classes:
 - `503` broker/dependency unavailable or protective maintenance state.
 
 Retryable errors include `Retry-After` where the current handler defines it.
+Framework method, query, body-limit, timeout and panic errors also use the JSON
+problem shape. A timeout returns `request_timeout`; an accepted job may still
+be running. Keep `X-Request-ID` for diagnostics and never replay mutations merely
+because a response was lost. Generic idempotency keys are not supported.
 Clients must refetch authoritative state after a mutation; they must not assume
 an optimistic frontend transition succeeded.
 
