@@ -54,6 +54,10 @@ jobs:
         if: matrix.toolchain == 'stable'
         run: python3 -m unittest discover -s scripts -p test_helix_servers.py -v
 
+      - name: Test integration client and contract
+        if: matrix.toolchain == 'stable'
+        run: python3 -m unittest discover -s examples/integrations -p 'test_*.py' -v
+
       - name: Test privileged backup rollback
         shell: bash
         run: |

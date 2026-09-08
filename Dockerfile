@@ -13,6 +13,7 @@ FROM rust:1.88-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96c
 WORKDIR /build
 COPY Cargo.toml Cargo.lock rustfmt.toml ./
 COPY crates ./crates
+COPY docs/openapi.json ./docs/openapi.json
 COPY examples ./examples
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

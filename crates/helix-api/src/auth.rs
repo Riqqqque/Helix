@@ -1359,6 +1359,13 @@ async fn logout(
     Ok(response)
 }
 
+pub(crate) async fn require_session(
+    state: &ApiState,
+    headers: &HeaderMap,
+) -> Result<AuthenticatedSession, ApiError> {
+    authenticate(state, headers, SessionAuthorization::Authenticated, true).await
+}
+
 pub(crate) async fn require_capability(
     state: &ApiState,
     headers: &HeaderMap,
