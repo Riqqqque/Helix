@@ -23,7 +23,8 @@ Keep the returned session cookie and `csrfToken` together. Every protected
 request needs both the cookie and `X-Helix-CSRF`. Mutations additionally need
 the exact configured `Origin` and the documented content type. Do not relax
 Host/Origin checks, add wildcard CORS, or copy browser cookies to work around
-authentication failures. Revoke the session with `POST /api/v1/auth/logout`.
+authentication failures. Revoke the session with `POST /api/v1/auth/logout`,
+`Content-Type: application/json` and the body `{}`.
 
 **There are no delegated API keys or per-server credentials yet.** A session
 has its user's permissions. Filtering a list in a client does not restrict

@@ -41,6 +41,7 @@
       "post": {
         "operationId": "logout", "tags": ["Session"], "summary": "Revoke this session",
         "parameters": [{"$ref": "#/components/parameters/Origin"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}, "example": {}}}},
         "responses": {"204": {"description": "Session revoked; clear local credentials"}, "default": {"$ref": "#/components/responses/Problem"}}
       }
     },

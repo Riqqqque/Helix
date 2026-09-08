@@ -127,7 +127,7 @@ class HelixClient:
 
     def logout(self):
         try:
-            self.request("POST", "/api/v1/auth/logout")
+            self.request("POST", "/api/v1/auth/logout", {})
         finally:
             self.close()
 

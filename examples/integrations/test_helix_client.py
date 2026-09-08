@@ -48,6 +48,8 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(inventory["type"], "array")
         action = document["paths"]["/servers/{instance_id}/actions"]["post"]
         self.assertIn("job_id", action["responses"]["200"]["content"]["application/json"]["schema"]["properties"])
+        logout = document["paths"]["/auth/logout"]["post"]
+        self.assertTrue(logout["requestBody"]["required"])
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -64,11 +66,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def respond(self):
         type(self).requests.append((self.command, self.path, dict(self.headers)))
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         if self.path.endswith("/auth/login"):
             self.send_response(200)
             self.send_header("Set-Cookie", "helix_session=fixture; HttpOnly; Path=/")
             value = {"csrfToken": "A" * 43, "user": {"id": "fixture"}}
         elif self.path.endswith("/auth/logout"):
+            if body != b"{}":
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"code":"invalid_json"}')
+                return
             self.send_response(204)
             self.end_headers()
             return
