@@ -383,6 +383,14 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/servers/migrate", post(migrate_server))
         .route("/servers/{instance_id}", get(server_detail))
         .route(
+            "/servers/{instance_id}/capabilities",
+            get(server_capabilities),
+        )
+        .route(
+            "/servers/{instance_id}/files",
+            post(server_files).layer(tower::limit::ConcurrencyLimitLayer::new(2)),
+        )
+        .route(
             "/servers/{instance_id}/appearance",
             get(server_appearance)
                 .put(set_server_appearance)
@@ -416,6 +424,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             post(install_server_marketplace_content),
         )
         .route("/servers/{instance_id}/backups", get(list_server_backups))
+        .route(
+            "/servers/{instance_id}/backups/{backup_id}/download",
+            post(server_backup_download).layer(tower::limit::ConcurrencyLimitLayer::new(2)),
+        )
         .route(
             "/servers/{instance_id}/backup-policy",
             put(set_server_backup_policy).post(prune_server_backups),
@@ -2892,6 +2904,26 @@ async fn restore_server_backup(
     .await
 }
 
+async fn server_backup_download(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath((instance_id, backup_id)): RoutePath<(String, String)>,
+    body: Result<Json<helix_privd::ServerBackupDownloadRequest>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.backups.manage").await?;
+    let Json(request) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::ServerBackupDownload {
+            instance_id,
+            backup_id,
+            request,
+        },
+    )
+    .await
+}
+
 async fn trash_server_backup(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -2987,6 +3019,36 @@ async fn server_action(
         BrokerRequest::ServerAction {
             instance_id,
             action: body.action,
+        },
+    )
+    .await
+}
+
+async fn server_capabilities(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    broker_json(&state, BrokerRequest::ServerCapabilities { instance_id }).await
+}
+
+async fn server_files(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<helix_privd::ServerFileRequest>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.view").await?;
+    let Json(request) = body.map_err(auth::map_json_rejection)?;
+    // Server files can contain RCON and plugin secrets; viewing inventory is not enough.
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    broker_json(
+        &state,
+        BrokerRequest::ServerFiles {
+            instance_id,
+            request,
         },
     )
     .await
@@ -3938,6 +4000,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn server_file_api_requires_management_even_for_downloads() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let connection =
+            rusqlite::Connection::open(context.data.path().join("state/helix-state.db")).unwrap();
+        connection
+            .execute(
+                "DELETE FROM role_capabilities WHERE capability = 'games.manage'",
+                [],
+            )
+            .unwrap();
+        let bootstrap = install_bootstrap(&context);
+        let client = claim_owner(&context, &bootstrap).await;
+        for action in [
+            json!({"action":"stat","path":"server.properties"}),
+            json!({"action":"create","path":"new.txt"}),
+            json!({"action":"upload_status","upload_id":"other"}),
+        ] {
+            let request = with_csrf(
+                with_cookie(
+                    post_json(
+                        "/api/v1/servers/helix:12345678-1234-4234-8234-123456789abc/files",
+                        &action,
+                        1,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            );
+            let response = context.app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+    }
+
+    #[tokio::test]
     async fn integration_method_and_query_errors_are_json_without_touching_spa() {
         let context = test_app(DatabaseStatus::Ok).await;
         let response = context
@@ -4112,7 +4208,8 @@ mod tests {
     }
 
     async fn response_json(response: Response) -> Value {
-        let body = to_bytes(response.into_body(), 64 * 1024)
+        // The full server contract is larger than an ordinary inventory response.
+        let body = to_bytes(response.into_body(), 256 * 1024)
             .await
             .expect("response body");
         serde_json::from_slice(&body).expect("JSON response")

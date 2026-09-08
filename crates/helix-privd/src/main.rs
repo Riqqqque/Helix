@@ -25,6 +25,8 @@ mod packages;
 #[cfg(target_os = "linux")]
 mod security;
 #[cfg(target_os = "linux")]
+mod server_files;
+#[cfg(target_os = "linux")]
 mod upnp;
 
 #[cfg(target_os = "linux")]
@@ -448,6 +450,34 @@ impl BrokerContext {
                 .files
                 .list(&path, cursor.as_deref(), limit)
                 .and_then(to_value),
+            BrokerRequest::ServerCapabilities { instance_id } => {
+                if instance_id.starts_with("helix:") {
+                    self.native_manager(&instance_id)
+                        .and_then(|native| native.api_capabilities(&instance_id))
+                } else {
+                    self.list_servers().and_then(|inventory| {
+                    let server = inventory.as_array().and_then(|servers| servers.iter().find(|s| s["id"] == instance_id))
+                        .ok_or_else(|| "the selected server no longer exists".to_owned())?;
+                    Ok(json!({"instance_id": instance_id, "manager": server["manager"],
+                        "actions": ["start", "stop", "restart", "update", "backup"],
+                        "files": false, "console_commands": false, "kill": false,
+                        "reason": "This imported server belongs to AMP. Use its panel for files, console and force-stop, or migrate a stopped copy to Helix."}))
+                    })
+                }
+            }
+            BrokerRequest::ServerFiles {
+                instance_id,
+                request,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.api_files(&instance_id, request)),
+            BrokerRequest::ServerBackupDownload {
+                instance_id,
+                backup_id,
+                request,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.api_backup_download(&instance_id, &backup_id, request)),
             BrokerRequest::CreateDirectory { parent, name } => self
                 .files
                 .create_directory(&parent, &name)

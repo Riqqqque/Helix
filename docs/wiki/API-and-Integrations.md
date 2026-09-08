@@ -11,10 +11,19 @@ point; this feature does not publish your dashboard to the internet.
    or the authenticated `/api/v1/openapi.json` endpoint.
 5. Start with the [Python reference client](https://github.com/Riqqqque/Helix/blob/main/examples/integrations/helix_client.py).
 
-The contract covers core discovery, sessions, server inventory, logs, backups,
-actions and jobs. The [full route guide](https://github.com/Riqqqque/Helix/blob/main/docs/API.md)
-also documents settings, files, hosting, marketplace and host operations.
+The contract lists every server route and method: creation, lifecycle actions,
+console, files, uploads, downloads, settings, ports, marketplace, runtime,
+backups, artwork and removal. Read each server's `/capabilities` response first.
+The [server API guide](https://github.com/Riqqqque/Helix/blob/main/docs/SERVER-API.md)
+includes the game/manager matrix, request fields, transfer examples and recovery.
 Some broker responses are still open objects, not complete generated-client schemas.
+
+Native Minecraft (including Pumpkin/custom), V Rising, Valheim and Terraria use
+the same relative file commands. Uploads verify SHA-256 before publication;
+replacement and deletion retain recoverable files. Upload staging can run while
+online, but changes to live server files require a stopped server. Chunked backup
+export is also available. Imported AMP servers keep the adapter's actual limits;
+unsupported controls are not advertised as native features.
 
 ## The important safety rules
 

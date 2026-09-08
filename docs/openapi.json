@@ -1,136 +1,3793 @@
 {
   "openapi": "3.1.1",
   "info": {
-    "title": "Helix core server integration API",
+    "title": "Helix server integration API",
     "version": "1.0.0",
-    "description": "Implemented core integration subset, not the entire dashboard API. Private deployment only. Session cookie AND CSRF proof are required together. Mutations also require the exact configured Origin. Credentials carry the user's capabilities, NOT a server-specific scope. Never automatically retry mutations: a timeout does not prove failure. Additive response fields are allowed. See docs/API.md for the wider surface and docs/INTEGRATIONS.md for safe workflows."
+    "description": "Private-LAN server management API. Session cookie AND CSRF proof are required together; mutations and file commands require exact Origin. Account capabilities are not per-server credentials. All server routes are listed; broker response objects are not yet all fully typed. Consult per-server capabilities before acting. Do not automatically replay mutations or treat a job ID as completion."
   },
-  "servers": [{"url": "/api/v1"}],
-  "security": [{"SessionCookie": [], "CsrfProof": []}],
-  "tags": [{"name": "Discovery"}, {"name": "Session"}, {"name": "Servers"}, {"name": "Jobs"}],
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "security": [
+    {
+      "SessionCookie": [],
+      "CsrfProof": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Discovery"
+    },
+    {
+      "name": "Session"
+    },
+    {
+      "name": "Servers"
+    },
+    {
+      "name": "Jobs"
+    }
+  ],
   "paths": {
     "/discovery": {
       "get": {
-        "operationId": "getDiscovery", "tags": ["Discovery"],
+        "operationId": "getDiscovery",
+        "tags": [
+          "Discovery"
+        ],
         "summary": "Read the API contract and this session's capabilities",
-        "responses": {"200": {"description": "API conventions; capabilities are grants, not live broker readiness", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Discovery"}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+        "responses": {
+          "200": {
+            "description": "API conventions; capabilities are grants, not live broker readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/openapi.json": {
       "get": {
-        "operationId": "getOpenApi", "tags": ["Discovery"], "summary": "Download this OpenAPI document",
-        "responses": {"200": {"description": "OpenAPI 3.1.1 document", "content": {"application/json": {"schema": {"type": "object"}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+        "operationId": "getOpenApi",
+        "tags": [
+          "Discovery"
+        ],
+        "summary": "Download this OpenAPI document",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/auth/login": {
       "post": {
-        "operationId": "login", "tags": ["Session"], "security": [],
+        "operationId": "login",
+        "tags": [
+          "Session"
+        ],
+        "security": [],
         "summary": "Create an ordinary Helix session; not a restricted service credential",
-        "parameters": [{"$ref": "#/components/parameters/Origin"}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "required": ["loginName", "password"], "properties": {"loginName": {"type": "string"}, "password": {"type": "string", "writeOnly": true}}}}}},
-        "responses": {"200": {"description": "Retain the HttpOnly session cookie and csrfToken together in memory; never log them", "headers": {"Set-Cookie": {"schema": {"type": "string"}}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Login"}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "loginName",
+                  "password"
+                ],
+                "properties": {
+                  "loginName": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Retain the HttpOnly session cookie and csrfToken together in memory; never log them",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Login"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/auth/me": {
       "get": {
-        "operationId": "getSession", "tags": ["Session"], "summary": "Verify the current session and CSRF proof",
-        "responses": {"200": {"description": "Current session", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Session"}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+        "operationId": "getSession",
+        "tags": [
+          "Session"
+        ],
+        "summary": "Verify the current session and CSRF proof",
+        "responses": {
+          "200": {
+            "description": "Current session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/auth/logout": {
       "post": {
-        "operationId": "logout", "tags": ["Session"], "summary": "Revoke this session",
-        "parameters": [{"$ref": "#/components/parameters/Origin"}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}, "example": {}}}},
-        "responses": {"204": {"description": "Session revoked; clear local credentials"}, "default": {"$ref": "#/components/responses/Problem"}}
+        "operationId": "logout",
+        "tags": [
+          "Session"
+        ],
+        "summary": "Revoke this session",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Session revoked; clear local credentials"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/servers": {
       "get": {
-        "operationId": "listServers", "tags": ["Servers"], "x-helix-capability": "games.view",
+        "operationId": "listServers",
+        "tags": [
+          "Servers"
+        ],
+        "x-helix-capability": "games.view",
         "summary": "Discover server identities; never target a server by list order or version",
         "description": "Use each item's id unchanged in the instance_id path parameter. Imported servers belong to their external manager. Names may be duplicated. Check manager/readiness and server detail before writing. Do not infer permissions from the presence of an item.",
-        "responses": {"200": {"description": "Server inventory array", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Server"}}}}}, "default": {"$ref": "#/components/responses/Problem"}}
-      }
+        "responses": {
+          "200": {
+            "description": "Server inventory array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Server"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "parameters": []
     },
     "/servers/manager/readiness": {
       "get": {
-        "operationId": "getServerReadiness", "tags": ["Servers"], "x-helix-capability": "games.view",
+        "operationId": "getServerReadiness",
+        "tags": [
+          "Servers"
+        ],
+        "x-helix-capability": "games.view",
         "summary": "Check hosting availability and blockers before an operation",
-        "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}
-      }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "parameters": []
     },
     "/servers/{instance_id}": {
-      "parameters": [{"$ref": "#/components/parameters/InstanceId"}],
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
-        "operationId": "getServer", "tags": ["Servers"], "x-helix-capability": "games.view", "summary": "Read the exact discovered server",
-        "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}
+        "operationId": "getServer",
+        "tags": [
+          "Servers"
+        ],
+        "x-helix-capability": "games.view",
+        "summary": "Read a native server; imported servers use inventory and capabilities",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/servers/{instance_id}/logs": {
-      "parameters": [{"$ref": "#/components/parameters/InstanceId"}],
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
-        "operationId": "getServerLogs", "tags": ["Servers"], "x-helix-capability": "games.view", "summary": "Read a bounded recent console tail",
-        "parameters": [{"name": "lines", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 300}, "description": "The broker applies its own smaller output cap; not a promise to return all requested lines."}],
-        "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}
+        "operationId": "getServerLogs",
+        "tags": [
+          "Servers"
+        ],
+        "x-helix-capability": "games.view",
+        "summary": "Read a bounded recent console tail",
+        "parameters": [
+          {
+            "name": "lines",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "default": 300
+            },
+            "description": "The broker applies its own smaller output cap; not a promise to return all requested lines."
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/servers/{instance_id}/logs/history": {
-      "parameters": [{"$ref": "#/components/parameters/InstanceId"}],
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
-        "operationId": "getServerLogHistory", "tags": ["Servers"], "x-helix-capability": "games.view", "summary": "Read persistent console history using the returned cursor",
-        "parameters": [{"name": "lines", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 200}}, {"name": "cursor", "in": "query", "schema": {"type": "string"}, "description": "Opaque server-issued cursor; do not parse or invent it."}],
-        "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}
+        "operationId": "getServerLogHistory",
+        "tags": [
+          "Servers"
+        ],
+        "x-helix-capability": "games.view",
+        "summary": "Read persistent console history using the returned cursor",
+        "parameters": [
+          {
+            "name": "lines",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "default": 200
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque server-issued cursor; do not parse or invent it."
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/servers/{instance_id}/backups": {
-      "parameters": [{"$ref": "#/components/parameters/InstanceId"}],
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "get": {
-        "operationId": "listServerBackups", "tags": ["Servers"], "x-helix-capability": "games.view", "summary": "List backups before modifying a server",
-        "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}
+        "operationId": "listServerBackups",
+        "tags": [
+          "Servers"
+        ],
+        "x-helix-capability": "games.view",
+        "summary": "List backups before modifying a server",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/servers/{instance_id}/actions": {
-      "parameters": [{"$ref": "#/components/parameters/InstanceId"}],
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
       "post": {
-        "operationId": "runServerAction", "tags": ["Servers"], "x-helix-capability": "games.manage",
+        "operationId": "runServerAction",
+        "tags": [
+          "Servers"
+        ],
+        "x-helix-capability": "games.manage",
         "summary": "Submit one explicit server action",
         "description": "Do not replay on timeout, connection loss, or 5xx. Keep the returned job ID and poll it. An accepted job is not a completed operation. Kill is forceful; prefer stop. Update compatibility depends on the selected server software.",
-        "parameters": [{"$ref": "#/components/parameters/Origin"}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "required": ["action"], "properties": {"action": {"type": "string", "enum": ["start", "stop", "restart", "kill", "update", "backup"]}}}}}},
-        "responses": {"200": {"description": "Native actions return job_id; external-manager actions may complete synchronously without one. Always refetch the server afterward.", "content": {"application/json": {"schema": {"type": "object", "properties": {"job_id": {"type": "string", "format": "uuid"}, "reused": {"type": "boolean"}}}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart",
+                      "kill",
+                      "update",
+                      "backup"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Native actions return job_id; external-manager actions may complete synchronously without one. Always refetch the server afterward.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "reused": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/jobs/{job_id}": {
       "get": {
-        "operationId": "getJob", "tags": ["Jobs"], "x-helix-capability": "games.view", "summary": "Poll a previously returned job ID",
-        "parameters": [{"name": "job_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "operationId": "getJob",
+        "tags": [
+          "Jobs"
+        ],
+        "x-helix-capability": "games.view",
+        "summary": "Poll a previously returned job ID",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
         "description": "Poll with a bounded deadline and delay. HTTP 200 only means the job status was read, not that the job succeeded. Reaching a client deadline does not cancel the job. Retention is finite; an unknown job is not permission to repeat a mutation.",
-        "responses": {"200": {"description": "Job status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Job"}}}}, "default": {"$ref": "#/components/responses/Problem"}}
+        "responses": {
+          "200": {
+            "description": "Job status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/servers/inventory-health": {
+      "parameters": [],
+      "get": {
+        "operationId": "getServersInventoryHealth",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Typed AMP compatibility-inventory health, bounded unverified-instance details, and unavailable/degraded state",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/servers/minecraft/versions": {
+      "parameters": [],
+      "get": {
+        "operationId": "getServersMinecraftVersions",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Bounded published Minecraft releases for one installable software choice",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "software",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/MinecraftSoftware"
+            }
+          }
+        ]
+      }
+    },
+    "/servers/port-policies/minecraft": {
+      "parameters": [],
+      "get": {
+        "operationId": "getServersPortPoliciesMinecraft",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Read the normalized Minecraft ranges, priority ports, capacity, assignments, AMP-claimed numbers in the pool, and next free port",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putServersPortPoliciesMinecraft",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Persist bounded ranges, individual priority ports, and the public-setup default",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GamePortPolicySpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/port-policies/vrising": {
+      "parameters": [],
+      "get": {
+        "operationId": "getServersPortPoliciesVrising",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Read the V Rising UDP pool (game + query pairs)",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putServersPortPoliciesVrising",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Persist the V Rising UDP pool and optional public-setup default",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GamePortPolicySpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/port-policies/valheim": {
+      "parameters": [],
+      "get": {
+        "operationId": "getServersPortPoliciesValheim",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Read the Valheim UDP pool (game + next two)",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putServersPortPoliciesValheim",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Persist the Valheim UDP pool and optional public-setup default",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GamePortPolicySpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/port-policies/terraria": {
+      "parameters": [],
+      "get": {
+        "operationId": "getServersPortPoliciesTerraria",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Read the Terraria TCP pool",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putServersPortPoliciesTerraria",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Persist the Terraria TCP pool and optional public-setup default",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GamePortPolicySpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/minecraft": {
+      "parameters": [],
+      "post": {
+        "operationId": "postServersMinecraft",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Start a native Minecraft creation job",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MinecraftCreateSpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/vrising": {
+      "parameters": [],
+      "post": {
+        "operationId": "postServersVrising",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Start a native V Rising creation job",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VRisingCreateSpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/valheim": {
+      "parameters": [],
+      "post": {
+        "operationId": "postServersValheim",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Start a native Valheim creation job",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValheimCreateSpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/terraria": {
+      "parameters": [],
+      "post": {
+        "operationId": "postServersTerraria",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Start a native Terraria creation job",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerrariaCreateSpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/migrate/preflight": {
+      "parameters": [],
+      "post": {
+        "operationId": "postServersMigratePreflight",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Inspect an AMP instance or managed folder before copying into a new native server",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerMigrateSource"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/migrate": {
+      "parameters": [],
+      "post": {
+        "operationId": "postServersMigrate",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Start a copy job into a new native server; public exposure also needs network.firewall.write",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerMigrateSpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/minecraft/modpacks/search": {
+      "parameters": [],
+      "get": {
+        "operationId": "getServersMinecraftModpacksSearch",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Search Modrinth or CurseForge modpack previews (provider=modrinth or curseforge)",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ModpackProvider"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 255
+            }
+          }
+        ]
+      }
+    },
+    "/servers/minecraft/modpacks/projects/{project_id}": {
+      "parameters": [
+        {
+          "name": "project_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getServersMinecraftModpacksProjectsProjectId",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Read bounded project/version compatibility detail (provider=modrinth or curseforge)",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ModpackProvider"
+            }
+          }
+        ]
+      }
+    },
+    "/servers/minecraft/modpacks": {
+      "parameters": [],
+      "post": {
+        "operationId": "postServersMinecraftModpacks",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Start a server-safe modpack creation job",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MinecraftModpackCreateSpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/removed": {
+      "parameters": [],
+      "get": {
+        "operationId": "getServersRemoved",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Recoverable removed native servers and retention policy",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/servers/removed/{trash_id}/restore": {
+      "parameters": [
+        {
+          "name": "trash_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersRemovedTrashIdRestore",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Restore an exact removed native server",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/servers/removed/{trash_id}": {
+      "parameters": [
+        {
+          "name": "trash_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteServersRemovedTrashId",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Permanently delete an exact removed native server after typing its name; wipes world files, backups, and console history",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "confirmation_name"
+                ],
+                "properties": {
+                  "confirmation_name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/start-on-boot": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "putServersInstanceIdStartOnBoot",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Set Docker restart policy on one native game container without starting or stopping it now",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "enabled"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/memory": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "putServersInstanceIdMemory",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Set allocated memory on one native game container; recreates the published container with the new limit",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "memory_mb"
+                ],
+                "properties": {
+                  "memory_mb": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/cpu": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "putServersInstanceIdCpu",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Set Docker --cpus on one native game container (cpu_millis: 0 = no extra cap, else 250–128000); recreates the published container",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "cpu_millis"
+                ],
+                "properties": {
+                  "cpu_millis": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/browser-listing": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "putServersInstanceIdBrowserListing",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Set V Rising ListOnEOS / ListOnSteam / HideIPAddress; restart_required when the container is running",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "list_on_browser"
+                ],
+                "properties": {
+                  "list_on_browser": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/network": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "putServersInstanceIdNetwork",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Prepare owned host firewall rules; never change the router",
+        "x-helix-capability": "games.manage + network.firewall.write",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "enabled"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/remove": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdRemove",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Stop/remove exact native workload and move data to recoverable trash",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "confirmation_name"
+                ],
+                "properties": {
+                  "confirmation_name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/console": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdConsole",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Send one bounded native console command",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "command"
+                ],
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "maxLength": 512
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/appearance": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getServersInstanceIdAppearance",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Read revisioned uploaded/preset server artwork state",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putServersInstanceIdAppearance",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Set a validated preset or optimized PNG/JPEG icon",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "expected_revision",
+                      "preset"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "preset"
+                      },
+                      "expected_revision": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "preset": {
+                        "type": "string",
+                        "enum": [
+                          "grass",
+                          "portal",
+                          "crystal",
+                          "fortress",
+                          "ember",
+                          "ocean"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "expected_revision",
+                      "content_type",
+                      "image_base64"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "custom"
+                      },
+                      "expected_revision": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "content_type": {
+                        "type": "string",
+                        "enum": [
+                          "image/png",
+                          "image/jpeg"
+                        ]
+                      },
+                      "image_base64": {
+                        "type": "string",
+                        "contentEncoding": "base64"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteServersInstanceIdAppearance",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Return to the default server artwork",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expected_revision"
+                ],
+                "properties": {
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/appearance/image": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getServersInstanceIdAppearanceImage",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Serve the stored same-origin icon bytes",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "description": "Stored icon",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "revision",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ]
+      }
+    },
+    "/servers/{instance_id}/settings": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getServersInstanceIdSettings",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Read settings, revision, field metadata, and restart state",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "postServersInstanceIdSettings",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Revision-guarded settings update",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MinecraftSettingsPatch"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/marketplace/search": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getServersInstanceIdMarketplaceSearch",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Compatibility-filtered Modrinth or CurseForge search (provider, catalog=content\\|modpacks)",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ModpackProvider"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 255
+            }
+          },
+          {
+            "name": "catalog",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "content",
+                "modpacks"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/servers/{instance_id}/marketplace/projects/{project_id}": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "project_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getServersInstanceIdMarketplaceProjectsProjectId",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Bounded project/version detail (provider)",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ModpackProvider"
+            }
+          }
+        ]
+      }
+    },
+    "/servers/{instance_id}/marketplace/install": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdMarketplaceInstall",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Start an exact compatible content install job (files only; no restart)",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "project_id"
+                ],
+                "properties": {
+                  "project_id": {
+                    "type": "string"
+                  },
+                  "version_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "provider": {
+                    "$ref": "#/components/schemas/ModpackProvider"
+                  },
+                  "restart_server": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/backup-policy": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "putServersInstanceIdBackupPolicy",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Set keep-count (0–50) and keep-days (0–365); 0 means no limit; extras move to trash",
+        "x-helix-capability": "games.backups.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "keep_count",
+                  "keep_days"
+                ],
+                "properties": {
+                  "keep_count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 50
+                  },
+                  "keep_days": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 365
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "postServersInstanceIdBackupPolicy",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Apply the saved keep rules now",
+        "x-helix-capability": "games.backups.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/servers/{instance_id}/backups/{backup_id}/restore": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "backup_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdBackupsBackupIdRestore",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Restore an exact backup",
+        "x-helix-capability": "games.backups.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/servers/{instance_id}/backups/{backup_id}": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "backup_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteServersInstanceIdBackupsBackupId",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Move an exact backup into protected trash",
+        "x-helix-capability": "games.backups.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/servers/{instance_id}/backups/trash/{trash_id}/restore": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "trash_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdBackupsTrashTrashIdRestore",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Undo an exact recoverable deletion",
+        "x-helix-capability": "games.backups.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/servers/{instance_id}/backups/trash/{trash_id}": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "trash_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteServersInstanceIdBackupsTrashTrashId",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Delete a trashed backup forever",
+        "x-helix-capability": "games.backups.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/servers/{instance_id}/capabilities": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getServersInstanceIdCapabilities",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Read game-specific and manager-specific supported operations",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/files": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdFiles",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Run a server-relative file operation",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerFileRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/runtime": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdRuntime",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Repair or change the server runtime with an expected version and build",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeRuntimeChangeSpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/backups/{backup_id}/download": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "backup_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "downloadServerBackup",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Stat or download an exact backup archive in revision-checked chunks",
+        "x-helix-capability": "games.backups.manage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerBackupDownloadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     }
   },
   "components": {
     "securitySchemes": {
-      "SessionCookie": {"type": "apiKey", "in": "cookie", "name": "helix_session"},
-      "CsrfProof": {"type": "apiKey", "in": "header", "name": "X-Helix-CSRF"}
+      "SessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "helix_session"
+      },
+      "CsrfProof": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Helix-CSRF"
+      }
     },
     "parameters": {
-      "Origin": {"name": "Origin", "in": "header", "required": true, "schema": {"type": "string", "format": "uri"}, "description": "Exact configured Helix origin: scheme, host and port, without a trailing slash. Never spoof a different service's origin."},
-      "InstanceId": {"name": "instance_id", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Exact id returned by server inventory, including its manager prefix. Native IDs are helix:UUID. Never substitute a display name, bare registry UUID or filesystem path."}
+      "Origin": {
+        "name": "Origin",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uri"
+        },
+        "description": "Exact configured Helix origin: scheme, host and port, without a trailing slash. Never spoof a different service's origin."
+      },
+      "InstanceId": {
+        "name": "instance_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Exact id returned by server inventory, including its manager prefix. Native IDs are helix:UUID. Never substitute a display name, bare registry UUID or filesystem path."
+      }
     },
     "responses": {
-      "Problem": {"description": "Error; branch on HTTP status and code, not message text. A mutation's outcome may be unknown after a timeout or transport error.", "headers": {"X-Request-ID": {"schema": {"type": "string"}}, "Retry-After": {"schema": {"type": "string"}, "description": "Present on selected capacity/rate errors. Does not make a mutation safe to replay."}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Problem"}}}},
-      "BrokerObject": {"description": "Broker result. The exact resource-specific fields remain documented in docs/API.md and tested in frontend adapters; this schema deliberately does not claim full generated-client coverage.", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}}
+      "Problem": {
+        "description": "Error; branch on HTTP status and code, not message text. A mutation's outcome may be unknown after a timeout or transport error.",
+        "headers": {
+          "X-Request-ID": {
+            "schema": {
+              "type": "string"
+            }
+          },
+          "Retry-After": {
+            "schema": {
+              "type": "string"
+            },
+            "description": "Present on selected capacity/rate errors. Does not make a mutation safe to replay."
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "BrokerObject": {
+        "description": "Broker result. The exact resource-specific fields remain documented in docs/API.md and tested in frontend adapters; this schema deliberately does not claim full generated-client coverage.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      }
     },
     "schemas": {
-      "Server": {"type": "object", "required": ["id", "name", "instance_name", "manager", "software", "version", "status"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "instance_name": {"type": "string"}, "manager": {"type": "string"}, "software": {"type": "string"}, "version": {"type": "string"}, "status": {"type": "string"}, "kind": {"type": "string"}, "game_port": {"type": ["integer", "null"]}, "warnings": {"type": "array", "items": {"type": "string"}}}},
-      "Job": {"type": "object", "required": ["id", "kind", "status", "stage", "progress_percent", "created_at_unix_ms", "updated_at_unix_ms", "result", "error"], "properties": {"id": {"type": "string", "format": "uuid"}, "kind": {"type": "string"}, "status": {"type": "string", "enum": ["queued", "running", "complete", "failed"]}, "stage": {"type": "string"}, "progress_percent": {"type": "integer", "minimum": 0, "maximum": 100}, "created_at_unix_ms": {"type": "integer", "minimum": 0}, "updated_at_unix_ms": {"type": "integer", "minimum": 0}, "result": {}, "error": {"type": ["string", "null"]}}},
-      "Problem": {"type": "object", "required": ["code", "message"], "properties": {"code": {"type": "string"}, "message": {"type": "string"}}, "additionalProperties": true},
-      "User": {"type": "object", "required": ["id", "loginName", "displayName", "capabilities"], "properties": {"id": {"type": "string"}, "loginName": {"type": "string"}, "displayName": {"type": "string"}, "capabilities": {"type": "array", "items": {"type": "string"}}}},
-      "Session": {"type": "object", "required": ["user", "expiresAtUnixMs", "sessionExpires"], "properties": {"user": {"$ref": "#/components/schemas/User"}, "expiresAtUnixMs": {"type": "integer", "format": "int64"}, "sessionExpires": {"type": "boolean"}}},
-      "Login": {"allOf": [{"$ref": "#/components/schemas/Session"}, {"type": "object", "required": ["csrfToken"], "properties": {"csrfToken": {"type": "string"}}}]},
-      "Discovery": {"type": "object", "required": ["schema_version", "api_version", "helix_version", "openapi_url", "contract_scope", "capabilities", "authentication", "conventions", "links"], "properties": {"schema_version": {"const": 1}, "api_version": {"const": "v1"}, "helix_version": {"type": "string"}, "openapi_url": {"const": "/api/v1/openapi.json"}, "contract_scope": {"const": "core-server-integration"}, "capabilities": {"type": "array", "items": {"type": "string"}}, "authentication": {"type": "object"}, "conventions": {"type": "object"}, "links": {"type": "object"}}}
+      "Server": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "instance_name",
+          "manager",
+          "software",
+          "version",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "instance_name": {
+            "type": "string"
+          },
+          "manager": {
+            "type": "string"
+          },
+          "software": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "game_port": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "stage",
+          "progress_percent",
+          "created_at_unix_ms",
+          "updated_at_unix_ms",
+          "result",
+          "error"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "complete",
+              "failed"
+            ]
+          },
+          "stage": {
+            "type": "string"
+          },
+          "progress_percent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "created_at_unix_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updated_at_unix_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result": {},
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "loginName",
+          "displayName",
+          "capabilities"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "loginName": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "required": [
+          "user",
+          "expiresAtUnixMs",
+          "sessionExpires"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "expiresAtUnixMs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sessionExpires": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Login": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Session"
+          },
+          {
+            "type": "object",
+            "required": [
+              "csrfToken"
+            ],
+            "properties": {
+              "csrfToken": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "Discovery": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "api_version",
+          "helix_version",
+          "openapi_url",
+          "contract_scope",
+          "capabilities",
+          "authentication",
+          "conventions",
+          "links"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": 1
+          },
+          "api_version": {
+            "const": "v1"
+          },
+          "helix_version": {
+            "type": "string"
+          },
+          "openapi_url": {
+            "const": "/api/v1/openapi.json"
+          },
+          "contract_scope": {
+            "const": "server-management"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "authentication": {
+            "type": "object"
+          },
+          "conventions": {
+            "type": "object"
+          },
+          "links": {
+            "type": "object"
+          }
+        }
+      },
+      "MinecraftSoftware": {
+        "type": "string",
+        "enum": [
+          "pumpkin",
+          "custom",
+          "vanilla",
+          "paper",
+          "purpur",
+          "folia",
+          "leaves",
+          "fabric",
+          "neo_forge",
+          "forge",
+          "quilt",
+          "pufferfish"
+        ]
+      },
+      "TerrariaSoftware": {
+        "type": "string",
+        "enum": [
+          "vanilla",
+          "tmodloader"
+        ]
+      },
+      "GameKind": {
+        "type": "string",
+        "enum": [
+          "minecraft",
+          "vrising",
+          "valheim",
+          "terraria"
+        ]
+      },
+      "ServerNetworkExposure": {
+        "type": "string",
+        "enum": [
+          "private",
+          "public"
+        ],
+        "description": "Public requests host firewall preparation only, never router forwarding."
+      },
+      "ModpackProvider": {
+        "type": "string",
+        "enum": [
+          "modrinth",
+          "curseforge"
+        ]
+      },
+      "MinecraftGameMode": {
+        "type": "string",
+        "enum": [
+          "survival",
+          "creative",
+          "adventure",
+          "spectator"
+        ]
+      },
+      "MinecraftDifficulty": {
+        "type": "string",
+        "enum": [
+          "peaceful",
+          "easy",
+          "normal",
+          "hard"
+        ]
+      },
+      "ServerMigrateSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "instance_id"
+            ],
+            "properties": {
+              "kind": {
+                "const": "amp"
+              },
+              "instance_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "path"
+            ],
+            "properties": {
+              "kind": {
+                "const": "folder"
+              },
+              "path": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "GamePortRangeSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "start",
+          "end"
+        ],
+        "properties": {
+          "start": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "end": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          }
+        }
+      },
+      "GamePortPolicySpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "game",
+          "ranges",
+          "ports",
+          "auto_forward_on_create"
+        ],
+        "properties": {
+          "game": {
+            "$ref": "#/components/schemas/GameKind"
+          },
+          "ranges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GamePortRangeSpec"
+            }
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          },
+          "auto_forward_on_create": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MinecraftSettingsPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expected_revision",
+          "motd",
+          "game_mode",
+          "difficulty",
+          "max_players",
+          "view_distance",
+          "simulation_distance",
+          "player_idle_timeout",
+          "online_mode",
+          "pvp",
+          "allow_flight",
+          "white_list",
+          "enforce_white_list",
+          "spawn_protection",
+          "game_port",
+          "memory_mb"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": "string"
+          },
+          "motd": {
+            "type": "string"
+          },
+          "game_mode": {
+            "$ref": "#/components/schemas/MinecraftGameMode"
+          },
+          "difficulty": {
+            "$ref": "#/components/schemas/MinecraftDifficulty"
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "view_distance": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "simulation_distance": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "player_idle_timeout": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "online_mode": {
+            "type": "boolean"
+          },
+          "pvp": {
+            "type": "boolean"
+          },
+          "allow_flight": {
+            "type": "boolean"
+          },
+          "white_list": {
+            "type": "boolean"
+          },
+          "enforce_white_list": {
+            "type": "boolean"
+          },
+          "spawn_protection": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "game_port": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        }
+      },
+      "MinecraftCreateSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "software",
+          "version",
+          "memory_mb",
+          "max_players",
+          "start_on_boot",
+          "eula_accepted"
+        ],
+        "properties": {
+          "pumpkin_bedrock_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "software": {
+            "$ref": "#/components/schemas/MinecraftSoftware"
+          },
+          "version": {
+            "type": "string"
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "cpu_millis": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "game_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network_exposure": {
+            "$ref": "#/components/schemas/ServerNetworkExposure"
+          },
+          "start_on_boot": {
+            "type": "boolean"
+          },
+          "eula_accepted": {
+            "type": "boolean"
+          },
+          "custom_jar": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomMinecraftJarSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "CustomMinecraftJarSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_path",
+          "java_version"
+        ],
+        "properties": {
+          "source_path": {
+            "type": "string"
+          },
+          "java_version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          }
+        }
+      },
+      "ServerMigrateSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "name",
+          "memory_mb",
+          "max_players",
+          "start_on_boot",
+          "eula_accepted",
+          "source_stopped",
+          "copy_acknowledged"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/ServerMigrateSource"
+          },
+          "name": {
+            "type": "string"
+          },
+          "game": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GameKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "software": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MinecraftSoftware"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "cpu_millis": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "game_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network_exposure": {
+            "$ref": "#/components/schemas/ServerNetworkExposure"
+          },
+          "start_on_boot": {
+            "type": "boolean"
+          },
+          "eula_accepted": {
+            "type": "boolean"
+          },
+          "source_stopped": {
+            "type": "boolean"
+          },
+          "copy_acknowledged": {
+            "type": "boolean"
+          },
+          "list_on_browser": {
+            "type": "boolean"
+          },
+          "wine_runtime_acknowledged": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VRisingCreateSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "memory_mb",
+          "max_players",
+          "start_on_boot",
+          "wine_runtime_acknowledged"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "cpu_millis": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "game_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network_exposure": {
+            "$ref": "#/components/schemas/ServerNetworkExposure"
+          },
+          "list_on_browser": {
+            "type": "boolean"
+          },
+          "start_on_boot": {
+            "type": "boolean"
+          },
+          "wine_runtime_acknowledged": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ValheimCreateSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "memory_mb",
+          "max_players",
+          "start_on_boot"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "cpu_millis": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "game_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network_exposure": {
+            "$ref": "#/components/schemas/ServerNetworkExposure"
+          },
+          "start_on_boot": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TerrariaCreateSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "software",
+          "memory_mb",
+          "max_players",
+          "start_on_boot"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "software": {
+            "$ref": "#/components/schemas/TerrariaSoftware"
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "cpu_millis": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "game_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network_exposure": {
+            "$ref": "#/components/schemas/ServerNetworkExposure"
+          },
+          "start_on_boot": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MinecraftModpackCreateSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "memory_mb",
+          "max_players",
+          "start_on_boot",
+          "eula_accepted",
+          "project_id",
+          "version_id"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "cpu_millis": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "game_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network_exposure": {
+            "$ref": "#/components/schemas/ServerNetworkExposure"
+          },
+          "start_on_boot": {
+            "type": "boolean"
+          },
+          "eula_accepted": {
+            "type": "boolean"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ModpackProvider"
+          }
+        }
+      },
+      "NativeRuntimeChangeSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expected_version",
+          "expected_build",
+          "confirmation_name"
+        ],
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_version": {
+            "type": "string"
+          },
+          "expected_build": {
+            "type": "string"
+          },
+          "confirmation_name": {
+            "type": "string"
+          }
+        }
+      },
+      "ServerFileRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path",
+              "limit"
+            ],
+            "properties": {
+              "action": {
+                "const": "list"
+              },
+              "path": {
+                "type": "string"
+              },
+              "cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path"
+            ],
+            "properties": {
+              "action": {
+                "const": "stat"
+              },
+              "path": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path"
+            ],
+            "properties": {
+              "action": {
+                "const": "read"
+              },
+              "path": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path"
+            ],
+            "properties": {
+              "action": {
+                "const": "create"
+              },
+              "path": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path"
+            ],
+            "properties": {
+              "action": {
+                "const": "mkdir"
+              },
+              "path": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path",
+              "content",
+              "expected_revision"
+            ],
+            "properties": {
+              "action": {
+                "const": "write"
+              },
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "expected_revision": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path",
+              "destination",
+              "expected_revision"
+            ],
+            "properties": {
+              "action": {
+                "const": "move"
+              },
+              "path": {
+                "type": "string"
+              },
+              "destination": {
+                "type": "string"
+              },
+              "expected_revision": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path",
+              "expected_revision"
+            ],
+            "properties": {
+              "action": {
+                "const": "trash"
+              },
+              "path": {
+                "type": "string"
+              },
+              "expected_revision": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path",
+              "offset",
+              "length",
+              "expected_revision"
+            ],
+            "properties": {
+              "action": {
+                "const": "download"
+              },
+              "path": {
+                "type": "string"
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "length": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048576
+              },
+              "expected_revision": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path",
+              "size",
+              "sha256"
+            ],
+            "properties": {
+              "action": {
+                "const": "upload_begin"
+              },
+              "path": {
+                "type": "string"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 8589934592
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              },
+              "expected_revision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "upload_id",
+              "offset",
+              "data_base64"
+            ],
+            "properties": {
+              "action": {
+                "const": "upload_chunk"
+              },
+              "upload_id": {
+                "type": "string"
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "data_base64": {
+                "type": "string",
+                "contentEncoding": "base64",
+                "maxLength": 1398104
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "upload_id"
+            ],
+            "properties": {
+              "action": {
+                "const": "upload_status"
+              },
+              "upload_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "upload_id"
+            ],
+            "properties": {
+              "action": {
+                "const": "upload_finish"
+              },
+              "upload_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "upload_id"
+            ],
+            "properties": {
+              "action": {
+                "const": "upload_abort"
+              },
+              "upload_id": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Relative paths only; empty path lists the server root. File access requires games.manage since files can contain secrets. Mutations to server files and upload_finish require a stopped native server; upload staging can run while online. Uploads use anonymous staging and checksum verification. See SERVER-API.md for recovery, limits and conflict handling."
+      },
+      "ServerBackupDownloadRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "const": "stat"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "offset",
+              "length",
+              "expected_revision"
+            ],
+            "properties": {
+              "action": {
+                "const": "download"
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "length": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048576
+              },
+              "expected_revision": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
     }
   }
 }

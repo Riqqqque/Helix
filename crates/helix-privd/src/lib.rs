@@ -27,6 +27,18 @@ pub enum StorageAnalysisMode {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BrokerRequest {
+    ServerBackupDownload {
+        instance_id: String,
+        backup_id: String,
+        request: ServerBackupDownloadRequest,
+    },
+    ServerCapabilities {
+        instance_id: String,
+    },
+    ServerFiles {
+        instance_id: String,
+        request: ServerFileRequest,
+    },
     HostInventory {},
     NetworkInventory {},
     GlobeSnapshot {},
@@ -631,6 +643,94 @@ pub enum ServerAction {
     Kill,
     Update,
     Backup,
+}
+
+/// Paths are relative to the selected server, never host filesystem paths.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ServerFileRequest {
+    List {
+        path: String,
+        cursor: Option<String>,
+        limit: u16,
+    },
+    Stat {
+        path: String,
+    },
+    Read {
+        path: String,
+    },
+    Write {
+        path: String,
+        content: String,
+        expected_revision: String,
+    },
+    Create {
+        path: String,
+    },
+    Mkdir {
+        path: String,
+    },
+    Move {
+        path: String,
+        destination: String,
+        expected_revision: String,
+    },
+    Trash {
+        path: String,
+        expected_revision: String,
+    },
+    Download {
+        path: String,
+        offset: u64,
+        length: u32,
+        expected_revision: String,
+    },
+    UploadBegin {
+        path: String,
+        size: u64,
+        sha256: String,
+        expected_revision: Option<String>,
+    },
+    UploadChunk {
+        upload_id: String,
+        offset: u64,
+        data_base64: String,
+    },
+    UploadStatus {
+        upload_id: String,
+    },
+    UploadFinish {
+        upload_id: String,
+    },
+    UploadAbort {
+        upload_id: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ServerBackupDownloadRequest {
+    Stat {},
+    Download {
+        offset: u64,
+        length: u32,
+        expected_revision: String,
+    },
+}
+
+impl ServerFileRequest {
+    pub fn requires_stopped(&self) -> bool {
+        matches!(
+            self,
+            Self::Write { .. }
+                | Self::Create { .. }
+                | Self::Mkdir { .. }
+                | Self::Move { .. }
+                | Self::Trash { .. }
+                | Self::UploadFinish { .. }
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]

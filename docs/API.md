@@ -12,9 +12,10 @@ only non-API routes use the single-page application fallback.
 [Integration guide](INTEGRATIONS.md) includes a standard-library Python client
 and safe automation workflows. `GET /api/v1/discovery` reports the current
 session's capabilities and supported conventions; `GET /api/v1/openapi.json`
-serves the [core-server OpenAPI contract](openapi.json). Both require the session
-cookie and CSRF proof. This is a documented subset, not full typed coverage of
-every route. Dedicated API tokens and per-server credentials are not implemented.
+serves the [server OpenAPI contract](openapi.json). Both require the session
+cookie and CSRF proof. Every server route and method is listed; some response
+objects and non-server routes are not fully typed. Dedicated API tokens and
+per-server credentials are not implemented. See [server files and transfers](SERVER-API.md).
 
 ## Transport boundary
 
@@ -301,6 +302,12 @@ or output. Disconnect ends the PTY.
 
 ### Servers and jobs
 
+Server-relative file commands live at `POST /api/v1/servers/{instance_id}/files`.
+Read `/api/v1/servers/{instance_id}/capabilities` before selecting operations.
+Backup export uses `POST /api/v1/servers/{instance_id}/backups/{backup_id}/download`.
+See [Server API](SERVER-API.md) for typed actions, limits, stopped-server guards,
+revisions, recovery and game/manager coverage.
+
 | Method | Route | Capability | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/servers` | `games.view` | List native and separate AMP-managed instances |
@@ -325,7 +332,7 @@ or output. Disconnect ends the PTY.
 | `GET` | `/api/v1/servers/minecraft/modpacks/search` | `games.view` | Search Modrinth or CurseForge modpack previews (`provider=modrinth` or `curseforge`) |
 | `GET` | `/api/v1/servers/minecraft/modpacks/projects/{project_id}` | `games.view` | Read bounded project/version compatibility detail (`provider=modrinth` or `curseforge`) |
 | `POST` | `/api/v1/servers/minecraft/modpacks` | `games.manage` | Start a server-safe modpack creation job |
-| `GET` | `/api/v1/servers/{instance_id}` | `games.view` | Native or AMP detail |
+| `GET` | `/api/v1/servers/{instance_id}` | `games.view` | Native detail; imported servers use inventory and capabilities |
 | `GET` | `/api/v1/servers/removed` | `games.view` | Recoverable removed native servers and retention policy |
 | `POST` | `/api/v1/servers/removed/{trash_id}/restore` | `games.manage` | Restore an exact removed native server |
 | `DELETE` | `/api/v1/servers/removed/{trash_id}` | `games.manage` | Permanently delete an exact removed native server after typing its name; wipes world files, backups, and console history |
@@ -334,7 +341,7 @@ or output. Disconnect ends the PTY.
 | `PUT` | `/api/v1/servers/{instance_id}/memory` | `games.manage` | Set allocated memory on one native game container; recreates the published container with the new limit |
 | `PUT` | `/api/v1/servers/{instance_id}/cpu` | `games.manage` | Set Docker `--cpus` on one native game container (`cpu_millis`: `0` = no extra cap, else 250–128000); recreates the published container |
 | `PUT` | `/api/v1/servers/{instance_id}/browser-listing` | `games.manage` | Set V Rising `ListOnEOS` / `ListOnSteam` / `HideIPAddress`; `restart_required` when the container is running |
-| `PUT` | `/api/v1/servers/{instance_id}/network` | `games.manage` + `network.firewall.write` | Create or remove the exact verified Helix-owned TCP or UDP router/UFW exposure for a native server |
+| `PUT` | `/api/v1/servers/{instance_id}/network` | `games.manage` + `network.firewall.write` | Create or remove exact Helix-owned host firewall allowances; no router changes |
 | `POST` | `/api/v1/servers/{instance_id}/remove` | `games.manage` | Stop/remove exact native workload and move data to recoverable trash |
 | `GET` | `/api/v1/jobs/{job_id}` | `games.view` | Read current bounded job state/log |
 
