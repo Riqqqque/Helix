@@ -27,8 +27,10 @@ unsupported controls are not advertised as native features.
 
 ## The important safety rules
 
-- An owner session carries owner permissions. There are **no server-scoped API
-  credentials yet**. Do not give an owner login to an untrusted integration.
+- An owner session carries owner permissions. For automation, create a token
+  in **Settings → Server API tokens**, choosing exact servers and permissions.
+  Read the [token guide](https://github.com/Riqqqque/Helix/blob/main/docs/SERVER-TOKENS.md)
+  for headless uploads, lifecycle actions, expiration and revocation.
 - Use the inventory item's `id` exactly, including `helix:` or another manager
   prefix. A display name, port or Minecraft version does not identify a server.
 - A returned job ID means the operation was accepted, not that it completed.

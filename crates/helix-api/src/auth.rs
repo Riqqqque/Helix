@@ -123,6 +123,7 @@ enum AttemptScope {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum AttemptKey {
+    ApiToken(String),
     GlobalLogin,
     GlobalSetup,
     Peer {
@@ -194,6 +195,12 @@ impl Drop for AttemptReservation {
 }
 
 impl AttemptLimiter {
+    pub(crate) fn allow_api_token(&self, id: &str) -> bool {
+        self.consume_bounded_request(
+            &[(AttemptKey::ApiToken(id.to_owned()), 600)],
+            Duration::from_secs(60),
+        )
+    }
     pub(crate) fn production() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),

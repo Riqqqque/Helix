@@ -13,7 +13,7 @@ import uuid
 if os.environ.get('HELIX_DISPOSABLE_API_TEST') != '1':
     raise SystemExit('Run only in the disposable linux-test Docker target, with HELIX_DISPOSABLE_API_TEST=1')
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from helix_client import HelixClient, HelixError
+from helix_client import HelixClient, HelixTokenClient, HelixError
 
 root = Path('/dev/shm/server-api-probe')
 general_storage = Path('/probe-general-storage')
@@ -120,6 +120,18 @@ with open('/probe-api.log','w') as log:
         expect_failure(lambda:client.server_files(ids[1],'upload_status',upload_id=started['upload_id']))
         client.server_files(ids[0],'upload_abort',upload_id=started['upload_id'])
         expect_failure(lambda:client.server_files('amp:unrelated','read',path='config.txt'))
+        issued=client.request('POST','/api/v1/auth/server-tokens',{'name':'smoke','servers':[ids[0]],'permissions':['view','files.read','files.write'],'expires_in_days':1})
+        scoped=HelixTokenClient('http://127.0.0.1:8080',issued['token'])
+        assert scoped.server_capabilities(ids[0])['files'] is True
+        scoped.upload_file(ids[0],local,'scoped.bin')
+        scoped.download_file(ids[0],'scoped.bin','/probe-scoped-download')
+        assert Path('/probe-scoped-download').read_bytes()==local.read_bytes()
+        expect_failure(lambda:scoped.server_capabilities(ids[1]),403)
+        expect_failure(lambda:scoped.server_action(ids[0],'kill'),403)
+        expect_failure(lambda:scoped.execute('host_inventory'),403)
+        expect_failure(lambda:scoped.execute('job_status',job_id='not-owned'),403)
+        client.request('DELETE','/api/v1/auth/server-tokens/'+issued['id'],{})
+        expect_failure(lambda:scoped.server_capabilities(ids[0]),401)
         client.logout()
         expect_failure(lambda:client.server_capabilities(ids[0]),401)
         print('PASS: actual HTTP, sessions, broker, all six native game/software cases, multi-chunk uploads/downloads, cross-server transfer, revisions, recovery, backup export, path and upload-scope rejection.')
