@@ -10,8 +10,10 @@ fetch `GET /api/v1/openapi.json`, or use [the checked-in contract](openapi.json)
 Both endpoints require authentication. They work even when the host broker is
 unavailable; discovery is not a health check or a promise that hosting is ready.
 
-The OpenAPI document covers the core server integration subset. It does not
-yet describe every dashboard operation or fully type every broker response.
+The OpenAPI document lists every server route and method, with typed request
+bodies. It does not yet describe every host/dashboard operation or fully type
+every broker response. [Server automation API](SERVER-API.md) covers per-game
+capabilities, relative files, upload/download, transfers and backup exports.
 [API.md](API.md) documents the wider file, settings, marketplace, runtime,
 backup and host routes. Existing response fields retain their meaning within
 v1; clients should accept extra fields and fail safely on unknown job states.
@@ -110,9 +112,9 @@ could contain secrets, file contents or console output.
   means reload and reconcile; do not overwrite another user's changes blindly.
 - Treat settings save and restart as distinct operations. Read settings again
   after the restart; a successful HTTP response alone is not runtime proof.
-- File APIs retain their configured-root and capability checks. The general
-  file API is not a server-scoped sandbox. Use its returned revision/mtime
-  checks, bounded uploads and trash/restore paths as documented in API.md.
+- Prefer `/servers/{instance_id}/files` for server files: relative paths,
+  revision checks, atomic replacement, recoverable trash and chunked transfers.
+  The general Storage API uses host paths and is not a server-scoped sandbox.
 - Resolve the exact server and verify loader/game/plugin compatibility before
   installing a JAR or mod. Back up, stop the selected server, stage and verify
   the replacement, then start and inspect its logs. Never overwrite live worlds.
@@ -135,6 +137,6 @@ cargo test --locked -p helix-api
 python3 -m unittest discover -s examples/integrations -p 'test_*.py' -v
 ```
 
-Delegated credentials, server-scoped authorization, a complete typed OpenAPI
-surface, webhooks and generic idempotency are not implemented by this pass.
+Delegated credentials, server-scoped credentials, complete typed response
+coverage, webhooks and generic idempotency are not implemented by this pass.
 Do not advertise them as available or weaken the current checks to imitate them.

@@ -8,6 +8,11 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Server-relative file APIs for native games: paged listings, text edits,
+  rename/move, recoverable deletion, checked uploads/downloads and backup export.
+  The Python client can transfer files between servers. OpenAPI now lists all
+  server routes, and each server reports its actual supported controls.
+
 - Authenticated API discovery, a core-server OpenAPI contract, and a tested
   Python integration client. Framework errors now return JSON too. The guide
   covers session permissions, server IDs, jobs, timeouts and safe file updates.

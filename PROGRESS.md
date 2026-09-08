@@ -10,6 +10,13 @@ Status vocabulary: **NOT STARTED**, **DESIGNING**, **IMPLEMENTING**,
 
 ## Overall status
 
+Server integration API expansion: **TESTED** in isolated Linux HTTP/broker and
+filesystem fixtures. Server-relative files, checked chunked uploads/downloads,
+recoverable replacement/deletion, backup export and client-side server transfers
+cover native games. OpenAPI lists every server route/method; per-server
+capabilities report adapter limits. This is not server-scoped credential support,
+universal imported-manager control, or a live game-boot compatibility claim.
+
 Helix is a **private-LAN 1.0 release**. The authenticated dashboard, typed Linux broker,
 native Minecraft manager, optional AMP bridge, Hooks, multi-layout Home,
 storage tools, selected package updates, host controls, optional

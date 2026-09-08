@@ -1,5 +1,9 @@
 import http.server
 import json
+import base64
+import hashlib
+import re
+import tempfile
 from pathlib import Path
 import threading
 import unittest
@@ -9,6 +13,21 @@ from helix_client import HelixClient, HelixError
 
 
 class ContractTests(unittest.TestCase):
+    def test_every_server_route_and_method_has_a_contract_entry(self):
+        root = Path(__file__).resolve().parents[2]
+        source = (root / "crates/helix-api/src/lib.rs").read_text(encoding="utf-8")
+        contract = json.loads((root / "docs/openapi.json").read_text(encoding="utf-8"))
+        for match in re.finditer(r'\.route\(\s*"(/servers[^"\n]*)"\s*,', source):
+            route = match[1]
+            position, depth = match.end(), 1
+            end = position
+            while depth:
+                depth += (source[end] == "(") - (source[end] == ")")
+                end += 1
+            methods = set(re.findall(r'\b(get|post|put|delete|patch)\(', source[position:end]))
+            self.assertIn(route, contract["paths"], route)
+            self.assertTrue(methods <= contract["paths"][route].keys(), (route, methods))
+
     def test_contract_references_and_path_parameters_resolve(self):
         document = json.loads((Path(__file__).resolve().parents[2] / "docs/openapi.json").read_text(encoding="utf-8"))
 
@@ -197,6 +216,45 @@ class ClientTests(unittest.TestCase):
             self.client.wait_for_job("job", timeout=1)
         self.assertEqual(caught.exception.code, "job_deadline_reached_not_cancelled")
         request.assert_not_called()
+
+    def test_upload_streams_chunks_and_never_replays_finish(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "plugin.jar"
+            source.write_bytes(b"plugin")
+            with patch.object(self.client, "server_files", side_effect=[{"upload_id":"u"}, {"bytes_written":6}, {"path":"mods/plugin.jar"}]) as request:
+                self.client.upload_file("exact", source, "mods/plugin.jar")
+                self.assertEqual([c.args[1] for c in request.call_args_list], ["upload_begin", "upload_chunk", "upload_finish"])
+                self.assertEqual(request.call_args_list[0].kwargs["sha256"], hashlib.sha256(b"plugin").hexdigest())
+            with patch.object(self.client, "server_files", side_effect=[{"upload_id":"u"}, {"bytes_written":6}, HelixError(None,"transport_error_outcome_unknown"), {"aborted":True}]) as request:
+                with self.assertRaises(HelixError):
+                    self.client.upload_file("exact", source, "mods/plugin.jar")
+                self.assertEqual(sum(c.args[1] == "upload_finish" for c in request.call_args_list), 1)
+
+    def test_download_checks_bytes_and_never_overwrites_local_files(self):
+        stat = {"size":3,"revision":"r","kind":"file"}
+        chunk = {"data_base64":base64.b64encode(b"abc").decode(), "offset":0,"next_offset":3,
+                 "size":3,"revision":"r","sha256":hashlib.sha256(b"abc").hexdigest()}
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "world.dat"
+            with patch.object(self.client,"server_files",side_effect=[stat,chunk,stat]):
+                self.client.download_file("exact","world.dat",destination)
+            self.assertEqual(destination.read_bytes(),b"abc")
+            with patch.object(self.client,"server_files",side_effect=[stat,chunk,stat]), self.assertRaises(FileExistsError):
+                self.client.download_file("exact","world.dat",destination)
+            self.assertEqual(destination.read_bytes(),b"abc")
+            chunk["sha256"] = "wrong"
+            with patch.object(self.client,"server_files",side_effect=[stat,chunk]), self.assertRaises(HelixError):
+                self.client.download_file("exact","world.dat",Path(directory)/"bad")
+            self.assertEqual([p.name for p in Path(directory).iterdir()],["world.dat"])
+
+    def test_transfer_checks_source_revision_before_committing_destination(self):
+        stat = {"size":3,"revision":"r","kind":"file"}
+        chunk = {"data_base64":base64.b64encode(b"abc").decode(), "offset":0,"next_offset":3,
+                 "size":3,"revision":"r","sha256":hashlib.sha256(b"abc").hexdigest()}
+        with patch.object(self.client,"server_files",side_effect=[stat,chunk,stat,{"upload_id":"u"},chunk,{"bytes_written":3},{"revision":"changed"},{"aborted":True}]) as request:
+            with self.assertRaises(HelixError):
+                self.client.transfer_file("source","source.dat","destination","copy.dat")
+            self.assertFalse(any(c.args[1] == "upload_finish" for c in request.call_args_list))
 
 
 if __name__ == "__main__":

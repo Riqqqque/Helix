@@ -100,6 +100,7 @@ pub struct NativeConfig {
 }
 
 pub struct NativeManager {
+    api_files: crate::server_files::ServerFiles,
     state_root: PathBuf,
     instance_root: PathBuf,
     backup_root: PathBuf,
@@ -561,6 +562,7 @@ impl NativeManager {
             custom_artifact_roots.insert(0, custom_import_root.clone());
         }
         let manager = Self {
+            api_files: crate::server_files::ServerFiles::default(),
             state_root: canonical_directory(&config.state_root)?,
             instance_root: canonical_directory(&config.instance_root)?,
             backup_root: canonical_directory(&config.backup_root)?,
@@ -1603,7 +1605,6 @@ impl NativeManager {
             "stopped"
         };
         let mut capabilities = vec![
-            "console",
             "files",
             "backups",
             "restore",
@@ -1613,6 +1614,7 @@ impl NativeManager {
             "advanced",
         ];
         if manifest.is_minecraft() {
+            capabilities.insert(0, "console");
             capabilities.insert(1, "settings");
         }
         let tps = if state.running && manifest.is_minecraft() {
@@ -1698,6 +1700,79 @@ impl NativeManager {
             "lines": history,
             "collected_at_unix_ms": now_unix_ms()
         }))
+    }
+
+    pub fn api_capabilities(&self, id: &str) -> Result<Value, String> {
+        let manifest = self.load_manifest(native_id(id))?;
+        let custom = manifest.is_minecraft() && manifest.software == MinecraftSoftware::Custom;
+        let mut actions = vec!["start", "stop", "restart", "kill", "backup"];
+        if !custom {
+            actions.push("update");
+        }
+        Ok(
+            json!({"instance_id": format!("helix:{}", manifest.id), "manager": "helix",
+            "game": manifest.kind_slug(), "actions": actions,
+            "files": true, "file_actions": crate::server_files::ACTIONS,
+            "file_mutations_require_stopped": true, "max_upload_bytes": crate::server_files::MAX_UPLOAD,
+            "max_chunk_bytes": crate::server_files::CHUNK, "console_commands": manifest.is_minecraft(),
+            "settings": manifest.is_minecraft(), "logs": true, "backups": true, "backup_download": true,
+            "runtime_changes": manifest.is_minecraft() && !custom, "server_scoped_credentials": false}),
+        )
+    }
+
+    pub fn api_backup_download(
+        &self,
+        id: &str,
+        backup_id: &str,
+        request: helix_privd::ServerBackupDownloadRequest,
+    ) -> Result<Value, String> {
+        if !valid_backup_id(backup_id) {
+            return Err("backup ID is invalid".into());
+        }
+        let manifest = self.load_manifest(native_id(id))?;
+        let _operation = self.begin_instance_operation(&manifest.id, "backup download")?;
+        let path = format!("{backup_id}.tar.gz");
+        let request = match request {
+            helix_privd::ServerBackupDownloadRequest::Stat {} => {
+                helix_privd::ServerFileRequest::Stat { path }
+            }
+            helix_privd::ServerBackupDownloadRequest::Download {
+                offset,
+                length,
+                expected_revision,
+            } => helix_privd::ServerFileRequest::Download {
+                path,
+                offset,
+                length,
+                expected_revision,
+            },
+        };
+        self.api_files.execute(
+            &manifest.id,
+            &self.backup_path(&manifest.id)?,
+            manifest.run_uid,
+            request,
+        )
+    }
+
+    pub fn api_files(
+        &self,
+        id: &str,
+        request: helix_privd::ServerFileRequest,
+    ) -> Result<Value, String> {
+        let manifest = self.load_manifest(native_id(id))?;
+        let _operation = self.begin_instance_operation(&manifest.id, "server files")?;
+        if request.requires_stopped() && self.runtime_running_checked(&manifest)? {
+            return Err(
+                "stop this server and wait for its stop job before changing files".to_owned(),
+            );
+        }
+        self.api_files.execute(
+            &manifest.id,
+            &self.instance_path(&manifest.id)?,
+            manifest.run_uid,
+            request,
+        )
     }
 
     pub fn server_log_history(
@@ -9519,6 +9594,7 @@ mod tests {
             "created_at_unix_ms": 1
         });
         let manifest: InstanceManifest = serde_json::from_value(minecraft).unwrap();
+        assert_server_api_game_coverage(&manifest);
         assert!(manifest.is_minecraft());
         assert_eq!(manifest.query_port, 0);
         let encoded = serde_json::to_value(&manifest).unwrap();
@@ -9588,6 +9664,116 @@ mod tests {
         assert_eq!(statuses.len(), targets.len());
         assert!(peak.load(Ordering::Acquire) > 1);
         assert!(peak.load(Ordering::Acquire) <= MAX_MINECRAFT_STATUS_WORKERS);
+    }
+
+    fn assert_server_api_game_coverage(base: &InstanceManifest) {
+        let temporary = tempfile::tempdir_in("/dev/shm").unwrap();
+        let manager = NativeManager::new(NativeConfig {
+            state_root: temporary.path().join("state"),
+            instance_root: temporary.path().join("instances"),
+            backup_root: temporary.path().join("backups"),
+            docker_binary: PathBuf::from("/bin/true"),
+            console_history_max_bytes: default_console_history_max_bytes(),
+            console_history_files: default_console_history_files(),
+            backup_trash_retention_days: 30,
+            custom_artifact_roots: Vec::new(),
+        })
+        .unwrap();
+        let path = manager.instance_path(&base.id).unwrap();
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("example.txt"), "preserved").unwrap();
+        let backups = manager.backup_path(&base.id).unwrap();
+        fs::create_dir_all(&backups).unwrap();
+        fs::write(backups.join("1787799939239.tar.gz"), "backup bytes").unwrap();
+        for (kind, software) in [
+            (GameKind::Minecraft, MinecraftSoftware::Paper),
+            (GameKind::Minecraft, MinecraftSoftware::Pumpkin),
+            (GameKind::Minecraft, MinecraftSoftware::Custom),
+            (GameKind::VRising, MinecraftSoftware::Vanilla),
+            (GameKind::Valheim, MinecraftSoftware::Vanilla),
+            (GameKind::Terraria, MinecraftSoftware::Vanilla),
+        ] {
+            let manifest = InstanceManifest {
+                kind,
+                software,
+                run_uid: rustix::process::getuid().as_raw(),
+                ..base.clone()
+            };
+            write_manifest(&manager.manifest_path(&manifest.id).unwrap(), &manifest).unwrap();
+            let id = format!("helix:{}", manifest.id);
+            let capabilities = manager.api_capabilities(&id).unwrap();
+            assert_eq!(capabilities["files"], true);
+            assert_eq!(capabilities["game"], manifest.kind_slug());
+            assert_eq!(capabilities["console_commands"], manifest.is_minecraft());
+            assert_eq!(
+                capabilities["runtime_changes"],
+                manifest.is_minecraft() && software != MinecraftSoftware::Custom
+            );
+            let read = manager
+                .api_files(
+                    &id,
+                    helix_privd::ServerFileRequest::Read {
+                        path: "example.txt".into(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(read["content"], "preserved");
+            manager
+                .api_files(
+                    &id,
+                    helix_privd::ServerFileRequest::Create {
+                        path: "new-file".into(),
+                    },
+                )
+                .unwrap();
+            let entry = manager
+                .api_files(
+                    &id,
+                    helix_privd::ServerFileRequest::Stat {
+                        path: "new-file".into(),
+                    },
+                )
+                .unwrap();
+            manager
+                .api_files(
+                    &id,
+                    helix_privd::ServerFileRequest::Trash {
+                        path: "new-file".into(),
+                        expected_revision: entry["revision"].as_str().unwrap().into(),
+                    },
+                )
+                .unwrap();
+            let archive = manager
+                .api_backup_download(
+                    &id,
+                    "1787799939239",
+                    helix_privd::ServerBackupDownloadRequest::Stat {},
+                )
+                .unwrap();
+            assert_eq!(archive["size"], 12);
+            assert!(
+                manager
+                    .api_backup_download(
+                        &id,
+                        "../../secret",
+                        helix_privd::ServerBackupDownloadRequest::Stat {}
+                    )
+                    .is_err()
+            );
+            let _operation = manager
+                .begin_instance_operation(&manifest.id, "fixture backup")
+                .unwrap();
+            assert!(
+                manager
+                    .api_files(
+                        &id,
+                        helix_privd::ServerFileRequest::Read {
+                            path: "example.txt".into()
+                        }
+                    )
+                    .is_err()
+            );
+        }
     }
 
     #[test]
@@ -9667,6 +9853,7 @@ mod tests {
         fs::write(&jar, vec![0x5a; 16 * 1024]).unwrap();
         fs::write(&outside_jar, vec![0x5a; 16 * 1024]).unwrap();
         let manager = NativeManager {
+            api_files: crate::server_files::ServerFiles::default(),
             state_root: temporary.path().join("state"),
             instance_root: temporary.path().join("instances"),
             backup_root: temporary.path().join("backups"),
@@ -10380,6 +10567,7 @@ mod tests {
         fs::set_permissions(&docker, fs::Permissions::from_mode(0o700)).unwrap();
 
         let manager = NativeManager {
+            api_files: crate::server_files::ServerFiles::default(),
             state_root: state_root.clone(),
             instance_root: instance_root.clone(),
             backup_root,
@@ -10441,6 +10629,7 @@ mod tests {
         fs::create_dir_all(&instance_root).unwrap();
         fs::create_dir_all(backup_root.join(".trash")).unwrap();
         let manager = NativeManager {
+            api_files: crate::server_files::ServerFiles::default(),
             state_root: state_root.clone(),
             instance_root,
             backup_root: backup_root.clone(),
@@ -10579,6 +10768,7 @@ mod tests {
         fs::create_dir_all(&instance_root).unwrap();
         fs::create_dir_all(backup_root.join(".trash")).unwrap();
         let manager = NativeManager {
+            api_files: crate::server_files::ServerFiles::default(),
             state_root: state_root.clone(),
             instance_root,
             backup_root: backup_root.clone(),
@@ -10682,6 +10872,7 @@ mod tests {
         fs::create_dir_all(instance_root.join(".trash")).unwrap();
         fs::create_dir_all(backup_root.join(".trash")).unwrap();
         let manager = NativeManager {
+            api_files: crate::server_files::ServerFiles::default(),
             state_root: state_root.clone(),
             instance_root: instance_root.clone(),
             backup_root: backup_root.clone(),

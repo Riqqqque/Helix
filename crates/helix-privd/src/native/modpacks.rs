@@ -3566,6 +3566,7 @@ mod tests {
             fs::create_dir_all(path).expect("managed root");
         }
         let manager = NativeManager {
+            api_files: crate::server_files::ServerFiles::default(),
             state_root,
             instance_root: instance_root.clone(),
             backup_root: backup_root.clone(),
