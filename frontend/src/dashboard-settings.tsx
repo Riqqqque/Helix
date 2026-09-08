@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
+import { ServerTokenSettings } from './server-token-settings';
 import { updateAccount } from './api';
 import type { DashboardResource } from './dashboard-model';
 import {
@@ -1117,6 +1118,7 @@ export function DashboardSettingsPage({
           </div>
         </section>
         <CatalogsSettings user={user} csrfToken={csrfToken} />
+        {user.capabilities.includes('system.settings.write') && user.capabilities.includes('games.manage') && <ServerTokenSettings csrfToken={csrfToken} servers={servers} />}
         <section class="settings-card">
           <div class="settings-card__head"><div><Icon name="moon" /><span><h2>Appearance</h2><p>Choose the contrast that works best on this screen.</p></span></div></div>
           <div class="theme-choice-grid">{(['system', 'midnight', 'oled', 'light'] as const).map((option) => <button key={option} class={theme === option ? 'is-active' : ''} type="button" aria-pressed={theme === option} onClick={() => onThemeChange(option)}><span class={`theme-preview theme-preview--${option}`}><i /><i /><i /></span><strong>{themeLabels[option]}</strong><small>{option === 'system' ? 'Follow this device' : option === 'oled' ? 'True black surfaces' : `${themeLabels[option]} palette`}</small>{theme === option && <Icon name="check" size={14} />}</button>)}</div>

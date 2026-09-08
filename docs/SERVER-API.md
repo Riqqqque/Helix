@@ -4,7 +4,8 @@ Start with [authentication and the Python client](INTEGRATIONS.md), then read
 `GET /api/v1/servers`. Keep the exact returned `id`, including its manager prefix.
 `GET /api/v1/servers/{instance_id}/capabilities` reports the operations available
 for that game and manager. Permissions still belong to the logged-in account;
-these routes do not create per-server credentials.
+these routes do not create per-server credentials. For restricted headless
+access, use [server tokens](SERVER-TOKENS.md) through the automation endpoint.
 
 The [OpenAPI document](openapi.json) lists every current server route and method,
 including creation, ports, artwork, console, settings, marketplace, runtime,

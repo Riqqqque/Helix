@@ -28,11 +28,10 @@ Host/Origin checks, add wildcard CORS, or copy browser cookies to work around
 authentication failures. Revoke the session with `POST /api/v1/auth/logout`,
 `Content-Type: application/json` and the body `{}`.
 
-**There are no delegated API keys or per-server credentials yet.** A session
-has its user's permissions. Filtering a list in a client does not restrict
-those permissions. Do not give an owner login to an untrusted plugin or a tool
-that should manage only one server. Discovery reports these missing features
-explicitly, so a caller that needs them can refuse to connect.
+For headless server management, create a [server-scoped token](SERVER-TOKENS.md)
+in Settings. These use a separate bearer-only automation endpoint, not the
+browser session routes. A normal session still has its user's full permissions;
+do not share an owner login with a tool that should manage only one server.
 
 Use a trusted private connection. The reference client verifies TLS, rejects
 redirects, ignores ambient proxy settings and keeps credentials in memory.

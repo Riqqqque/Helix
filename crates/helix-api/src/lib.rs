@@ -4,6 +4,7 @@ mod auth;
 mod discovery;
 mod marketplace_media;
 mod server_media;
+mod server_tokens;
 mod static_root;
 mod strand_net;
 mod strands;
@@ -77,6 +78,7 @@ pub struct ApiState {
     weather_workers: Arc<tokio::sync::Semaphore>,
     marketplace_media_workers: Arc<tokio::sync::Semaphore>,
     application_request_slots: Arc<tokio::sync::Semaphore>,
+    server_token_workers: Arc<tokio::sync::Semaphore>,
     pub(crate) dummy_password_phc: Arc<str>,
     pub(crate) attempt_limiter: auth::AttemptLimiter,
     pub(crate) blocking_tasks: BlockingTaskTracker,
@@ -110,6 +112,7 @@ impl ApiState {
             password_workers,
             weather_workers: Arc::new(tokio::sync::Semaphore::new(2)),
             marketplace_media_workers: Arc::new(tokio::sync::Semaphore::new(8)),
+            server_token_workers: Arc::new(tokio::sync::Semaphore::new(2)),
             application_request_slots: Arc::new(tokio::sync::Semaphore::new(
                 MAX_CONCURRENT_APPLICATION_REQUESTS,
             )),
@@ -491,6 +494,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .merge(terminal_api)
         .merge(settings_api)
         .merge(strand_api)
+        .merge(server_tokens::routes())
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(50),
@@ -3902,6 +3906,202 @@ mod tests {
         csrf: String,
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn disconnected_token_request_still_registers_its_job() {
+        use std::io::{Read, Write};
+        let temp = private_test_directory("broker fixture");
+        let socket = temp.path().join("broker.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut len = [0; 4];
+            stream.read_exact(&mut len).unwrap();
+            let mut body = vec![0; u32::from_be_bytes(len) as usize];
+            stream.read_exact(&mut body).unwrap();
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            let reply = br#"{"ok":true,"data":{"job_id":"scoped-job"}}"#;
+            stream
+                .write_all(&(reply.len() as u32).to_be_bytes())
+                .unwrap();
+            stream.write_all(reply).unwrap();
+        });
+        let context = test_app_with_state(DatabaseStatus::Ok, |mut state| {
+            state.broker = Some(BrokerClient::new(socket));
+            state
+        })
+        .await;
+        claim_owner(&context, &install_bootstrap(&context)).await;
+        let now = unix_timestamp_ms() as i64;
+        let owner = context
+            .databases
+            .state()
+            .credential_by_login("owner", now)
+            .unwrap()
+            .unwrap();
+        let token = OpaqueToken::generate().unwrap();
+        let id = context
+            .databases
+            .state()
+            .create_api_token(helix_state::NewApiToken {
+                user_id: owner.user_id,
+                auth_version: owner.auth_version,
+                verifier: *token.verification_hash(TokenDomain::ServerApi).as_bytes(),
+                name: "disconnect".into(),
+                servers: vec!["helix:one".into()],
+                permissions: vec!["stop".into()],
+                now,
+                expires_at: now + 60000,
+            })
+            .unwrap();
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri("/api/v1/automation/server")
+            .header("Host", "localhost")
+            .header("Content-Type", "application/json")
+            .header(
+                "Authorization",
+                format!("Bearer {}", token.encode().expose_secret()),
+            )
+            .body(Body::from(
+                r#"{"operation":"server_action","instance_id":"helix:one","action":"stop"}"#,
+            ))
+            .unwrap();
+        let pending = tokio::spawn(context.app.clone().oneshot(request));
+        tokio::time::timeout(Duration::from_secs(5), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        pending.abort();
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if !context
+                    .databases
+                    .state()
+                    .api_token_jobs(&id)
+                    .unwrap()
+                    .is_empty()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("disconnected job registered");
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn scoped_tokens_reject_wrong_servers_permissions_and_revocation() {
+        let context = test_app(DatabaseStatus::Ok).await;
+        let client = claim_owner(&context, &install_bootstrap(&context)).await;
+        let now = i64::try_from(unix_timestamp_ms()).unwrap();
+        let owner = context
+            .databases
+            .state()
+            .credential_by_login("owner", now)
+            .unwrap()
+            .unwrap();
+        let token = OpaqueToken::generate().unwrap();
+        let verifier = *token.verification_hash(TokenDomain::ServerApi).as_bytes();
+        let id = context
+            .databases
+            .state()
+            .create_api_token(helix_state::NewApiToken {
+                user_id: owner.user_id.clone(),
+                auth_version: owner.auth_version,
+                verifier,
+                name: "deploy".into(),
+                servers: vec!["helix:one".into()],
+                permissions: vec!["stop".into()],
+                now,
+                expires_at: now + 60000,
+            })
+            .unwrap();
+        for (body, expected) in [
+            (
+                json!({"operation":"server_action","instance_id":"x".repeat(4096),"action":"stop"}),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                json!({"operation":"server_action","instance_id":"helix:two","action":"stop"}),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                json!({"operation":"server_action","instance_id":"helix:one","action":"kill"}),
+                StatusCode::FORBIDDEN,
+            ),
+            (json!({"operation":"host_inventory"}), StatusCode::FORBIDDEN),
+            (
+                json!({"operation":"server_action","instance_id":"helix:one","action":"stop"}),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            let request = HttpRequest::builder()
+                .method("POST")
+                .uri("/api/v1/automation/server")
+                .header("Host", "127.0.0.1")
+                .header("Content-Type", "application/json")
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", token.encode().expose_secret()),
+                )
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            let result = context.app.clone().oneshot(request).await.unwrap();
+            assert_eq!(result.status(), expected);
+        }
+        assert!(
+            context
+                .databases
+                .state()
+                .authenticate_api_token(&verifier, now + 60000)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            context
+                .databases
+                .state()
+                .authenticate_api_token(&[0; 32], now)
+                .unwrap()
+                .is_none()
+        );
+        let listing = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(get("/api/v1/auth/server-tokens"), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(listing.status(), StatusCode::OK);
+        let listing = response_json(listing).await;
+        assert_eq!(listing["tokens"][0]["id"], id);
+        assert!(!listing.to_string().contains(token.encode().expose_secret()));
+        assert!(
+            context
+                .databases
+                .state()
+                .revoke_api_token(&owner.user_id, &id, now)
+                .unwrap()
+        );
+        assert!(
+            context
+                .databases
+                .state()
+                .authenticate_api_token(&verifier, now)
+                .unwrap()
+                .is_none()
+        );
+    }
+
     async fn test_app(metrics: DatabaseStatus) -> TestApp {
         test_app_with_state(metrics, |state| state).await
     }
@@ -3943,7 +4143,7 @@ mod tests {
             let body = response_json(response).await;
             if path.ends_with("discovery") {
                 assert_eq!(body["capabilities"], json!([]));
-                assert_eq!(body["authentication"]["delegated_tokens_supported"], false);
+                assert_eq!(body["authentication"]["delegated_tokens_supported"], true);
                 assert_eq!(body["conventions"]["idempotency_keys_supported"], false);
             } else {
                 assert_eq!(body["openapi"], "3.1.1");

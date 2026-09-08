@@ -31,6 +31,19 @@
     }
   ],
   "paths": {
+    "/auth/server-tokens": {
+      "get": {"operationId":"listServerTokens","summary":"List token metadata and permission names; never returns secrets","responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token catalog"}}},
+      "post": {"operationId":"createServerToken","summary":"Issue a 1–90 day token for exact server IDs; owner session only","parameters":[{"$ref":"#/components/parameters/Origin"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":["name","servers","permissions","expires_in_days"],"properties":{"name":{"type":"string","minLength":1,"maxLength":80},"servers":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string"}},"permissions":{"type":"array","minItems":1,"items":{"type":"string","enum":["view","logs","files.read","files.write","start","stop","restart","kill","console","settings","update","backups.read","backups.write"]}},"expires_in_days":{"type":"integer","minimum":1,"maximum":90}}}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token secret shown once; store securely"},"403":{"description":"Invalid scope or insufficient owner permissions"}}}
+    },
+    "/auth/server-tokens/{id}": {
+      "delete":{"operationId":"revokeServerToken","summary":"Revoke a token without cancelling accepted jobs","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}},{"$ref":"#/components/parameters/Origin"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","maxProperties":0}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Revoked"},"404":{"description":"Unknown token"}}}
+    },
+    "/automation/server": {
+      "post":{"operationId":"executeScopedServerRequest","summary":"Run a permitted operation on a token-scoped server","description":"Bearer token only. Cookie and Origin headers are rejected. See SERVER-TOKENS.md for operation fields and permissions. No host/global operations are allowed; job_status is restricted to this token's accepted jobs.","security":[{"ServerToken":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["operation"],"properties":{"operation":{"type":"string","enum":["server_capabilities","server_detail","server_logs","server_log_history","server_files","server_action","server_console","server_settings","update_server_settings","set_native_memory","set_native_cpu","set_native_start_on_boot","set_native_browser_listing","change_native_runtime","list_backups","server_backup_download","restore_backup","trash_backup","restore_trashed_backup","set_backup_policy","prune_backups","job_status"]},"instance_id":{"type":"string"},"job_id":{"type":"string"}}},"examples":{"stop":{"value":{"operation":"server_action","instance_id":"helix:EXACT-UUID","action":"stop"}},"files":{"value":{"operation":"server_files","instance_id":"helix:EXACT-UUID","request":{"action":"list","path":"","limit":50}}}}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Operation response or job ID; check job completion separately"},"401":{"description":"Invalid, expired or revoked token"},"403":{"description":"Server, operation or permission is outside token scope"},"429":{"description":"Token request rate exceeded"}}}
+    },
+    "/automation/jobs": {
+      "get":{"operationId":"listScopedServerJobs","summary":"List the last 256 jobs accepted through this token","security":[{"ServerToken":[]}],"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token-owned job IDs and server IDs"},"401":{"description":"Invalid token"}}}
+    },
     "/discovery": {
       "get": {
         "operationId": "getDiscovery",
@@ -2429,6 +2442,7 @@
   },
   "components": {
     "securitySchemes": {
+      "ServerToken": {"type":"http","scheme":"bearer","description":"Server-scoped token; accepted only by /automation endpoints."},
       "SessionCookie": {
         "type": "apiKey",
         "in": "cookie",

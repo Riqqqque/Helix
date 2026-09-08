@@ -78,10 +78,16 @@ class HelixClient:
         if method == "GET" and body is not None:
             raise ValueError("GET requests cannot have a body")
         headers = {"Accept": "application/json"}
+        api_token = getattr(self, "_api_token", None)
+        if api_token is not None:
+            if path not in ("/api/v1/automation/server", "/api/v1/automation/jobs"):
+                raise ValueError("Server tokens can only call the automation API")
+            headers["Authorization"] = "Bearer " + api_token
         if self._csrf:
             headers["X-Helix-CSRF"] = self._csrf
         if method != "GET":
-            headers["Origin"] = self.origin
+            if api_token is None:
+                headers["Origin"] = self.origin
             headers["Content-Type"] = "application/json"
         payload = None if body is None else json.dumps(body, allow_nan=False).encode("utf-8")
         request = urllib.request.Request(self.origin + path, data=payload, headers=headers, method=method)
@@ -283,7 +289,7 @@ class HelixClient:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise HelixError(None, "job_deadline_reached_not_cancelled")
-            job = self.request("GET", "/api/v1/jobs/" + urllib.parse.quote(job_id, safe=""), _timeout=min(self.timeout, remaining))
+            job = self.job_status(job_id, timeout=min(self.timeout, remaining))
             if not isinstance(job, dict) or job.get("id") != job_id:
                 raise HelixError(200, "invalid_job_response")
             status = job.get("status")
@@ -294,3 +300,37 @@ class HelixClient:
             if status not in ("queued", "running"):
                 raise HelixError(200, "unknown_job_status")
             time.sleep(min(interval, max(0, deadline - time.monotonic())))
+
+    def job_status(self, job_id, *, timeout=None):
+        return self.request("GET", "/api/v1/jobs/" + urllib.parse.quote(job_id, safe=""), _timeout=timeout)
+
+
+class HelixTokenClient(HelixClient):
+    """Server-scoped automation. Use HTTPS or an SSH-forwarded loopback origin."""
+
+    def __init__(self, origin, token, *, timeout=30):
+        if not isinstance(token, str) or len(token) != 43 or not all(c.isascii() and (c.isalnum() or c in "-_") for c in token):
+            raise ValueError("Invalid server token encoding")
+        super().__init__(origin, timeout=timeout)
+        self._api_token = token
+
+    def close(self):
+        super().close()
+        self._api_token = None
+
+    def execute(self, operation, **fields):
+        if self._api_token is None:
+            raise ValueError("This token client is closed")
+        return self.request("POST", "/api/v1/automation/server", {"operation": operation, **fields})
+
+    def server_capabilities(self, server_id):
+        return self.execute("server_capabilities", instance_id=server_id)
+
+    def server_files(self, server_id, action, **fields):
+        return self.execute("server_files", instance_id=server_id, request={"action": action, **fields})
+
+    def server_action(self, server_id, action):
+        return self.execute("server_action", instance_id=server_id, action=action)
+
+    def job_status(self, job_id, *, timeout=None):
+        return self.request("POST", "/api/v1/automation/server", {"operation": "job_status", "job_id": job_id}, _timeout=timeout)

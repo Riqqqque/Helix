@@ -1,9 +1,11 @@
 //! SQLite durability domains and startup recovery primitives.
 
+mod api_tokens;
 mod appearance;
 mod secrets;
 mod security;
 mod strands;
+pub use api_tokens::{ApiTokenRecord, NewApiToken};
 
 #[cfg(test)]
 pub(crate) fn private_test_directory(description: &str) -> tempfile::TempDir {
@@ -55,7 +57,7 @@ pub use strands::{
     StrandInstallInput, StrandKvEntry, StrandOrigin, StrandPackageRecord, StrandPackageSummary,
 };
 
-pub const STATE_SCHEMA_VERSION: i64 = 9;
+pub const STATE_SCHEMA_VERSION: i64 = 10;
 pub const METRICS_SCHEMA_VERSION: i64 = 1;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DAEMON_LEASE_FILE: &str = ".helixd.lock";
@@ -727,6 +729,9 @@ fn migrate_state(
     }
     if current < 9 {
         security::migrate_session_expiry(connection)?;
+    }
+    if current < 10 {
+        api_tokens::migrate(connection)?;
     }
     Ok(())
 }
@@ -1432,6 +1437,9 @@ fn validate_state_semantics(
     if expected_schema_version >= 8 {
         required_tables.extend(["strand_packages", "strand_kv"]);
     }
+    if expected_schema_version >= 10 {
+        required_tables.extend(["server_api_tokens", "server_api_jobs"]);
+    }
     for table in required_tables {
         let strict = connection
             .query_row(
@@ -1510,7 +1518,7 @@ fn validate_state_semantics(
             (7, "terminal-capability".to_owned()),
             (8, "installable-ui-strands".to_owned()),
         ],
-        9 => vec![
+        9 | 10 => vec![
             (1, "foundational-state".to_owned()),
             (2, "owner-authentication".to_owned()),
             (3, "recoverable-secret-storage".to_owned()),
@@ -1529,6 +1537,10 @@ fn validate_state_semantics(
             });
         }
     };
+    let mut expected_migrations = expected_migrations;
+    if expected_schema_version >= 10 {
+        expected_migrations.push((10, "server-api-tokens".to_owned()));
+    }
     if migration_rows != expected_migrations {
         failures.push("schema_migrations rows do not match the declared state schema".to_owned());
     }

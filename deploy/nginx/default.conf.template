@@ -9,6 +9,17 @@ map "$request_method|$http_origin" $helix_origin_allowed {
     "DELETE|${HELIX_SECONDARY_BROWSER_ORIGIN}" 1;
 }
 
+map "$request_method|$uri|$http_origin|$http_cookie" $helix_request_allowed {
+    default $helix_origin_allowed;
+    "POST|/api/v1/automation/server||" 1;
+}
+
+map "$uri" $helix_upstream_origin {
+    default "http://127.0.0.1:8080";
+    /api/v1/automation/server $http_origin;
+    /api/v1/automation/jobs $http_origin;
+}
+
 map "$host" $helix_host_allowed {
     default 0;
     "${HELIX_GATEWAY_HOST}" 1;
@@ -39,7 +50,7 @@ server {
         return 421;
     }
 
-    if ($helix_origin_allowed = 0) {
+    if ($helix_request_allowed = 0) {
         return 403;
     }
 
@@ -112,7 +123,7 @@ server {
         proxy_max_temp_file_size 0;
 
         proxy_set_header Host "127.0.0.1:8080";
-        proxy_set_header Origin "http://127.0.0.1:8080";
+        proxy_set_header Origin $helix_upstream_origin;
         proxy_set_header Connection "";
         proxy_set_header Forwarded "";
         proxy_set_header X-Forwarded-For "";
