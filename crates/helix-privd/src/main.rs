@@ -569,6 +569,17 @@ impl BrokerContext {
             BrokerRequest::ServerSettings { instance_id } => self
                 .native_manager(&instance_id)
                 .and_then(|native| native.server_settings(&instance_id)),
+            BrokerRequest::ValheimManage {
+                instance_id,
+                request,
+            } => {
+                if request.is_job() {
+                    self.start_valheim_manage_job(instance_id, request)
+                } else {
+                    self.native_manager(&instance_id)
+                        .and_then(|native| native.valheim_manage(&instance_id, &request, |_, _| {}))
+                }
+            }
             BrokerRequest::ServerMarketplaceSearch {
                 instance_id,
                 query,
@@ -1594,6 +1605,52 @@ impl BrokerContext {
         Ok(json!({"job_id": job_id, "reused": false}))
     }
 
+    fn start_valheim_manage_job(
+        self: &Arc<Self>,
+        instance_id: String,
+        request: helix_privd::valheim_config::ValheimRequest,
+    ) -> Result<Value, String> {
+        self.native_manager(&instance_id)?;
+        let native = Arc::clone(self.native.as_ref().ok_or("Server manager unavailable")?);
+        let reuse = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+        let (job_id, reused) = self.queue_job(
+            "valheim_manage",
+            Some(&format!("server:{instance_id}")),
+            Some(&reuse),
+        )?;
+        if reused {
+            return Ok(json!({"job_id": job_id, "reused": true}));
+        }
+        let context = Arc::clone(self);
+        let worker_id = job_id.clone();
+        if thread::Builder::new()
+            .name(format!("valheim-{}", &job_id[..8]))
+            .spawn(move || {
+                let result = native.valheim_manage(&instance_id, &request, |stage, percent| {
+                    context.update_job(&worker_id, |job| {
+                        job.status = JobState::Running;
+                        job.stage = stage.into();
+                        job.progress_percent = percent;
+                    });
+                });
+                context.finish_job(
+                    &worker_id,
+                    result,
+                    if request.changes_files() {
+                        "Valheim changes saved; start the server when ready"
+                    } else {
+                        "Mod update check complete"
+                    },
+                );
+            })
+            .is_err()
+        {
+            self.finish_job(&job_id, Err("Could not start Valheim job".into()), "");
+            return Err("Could not start Valheim job".into());
+        }
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
     fn start_runtime_job(
         self: &Arc<Self>,
         instance_id: String,
@@ -2155,6 +2212,7 @@ impl BrokerContext {
         F: FnMut(&str, u8),
     {
         let create = ValheimCreateSpec {
+            settings: Default::default(),
             name: spec.name.clone(),
             memory_mb: spec.memory_mb,
             cpu_millis: spec.cpu_millis,

@@ -2,6 +2,7 @@
 
 pub mod migrate_plan;
 pub mod mrpack;
+pub mod valheim_config;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,6 +28,10 @@ pub enum StorageAnalysisMode {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BrokerRequest {
+    ValheimManage {
+        instance_id: String,
+        request: valheim_config::ValheimRequest,
+    },
     ServerBackupDownload {
         instance_id: String,
         backup_id: String,
@@ -925,6 +930,7 @@ impl ServerMigrateSpec {
             }
             .validate(),
             GameKind::Valheim => ValheimCreateSpec {
+                settings: Default::default(),
                 name: self.name.clone(),
                 memory_mb: self.memory_mb,
                 cpu_millis: self.cpu_millis,
@@ -1010,6 +1016,8 @@ impl VRisingCreateSpec {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ValheimCreateSpec {
+    #[serde(default)]
+    pub settings: valheim_config::ValheimSettings,
     pub name: String,
     pub memory_mb: u32,
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -1025,12 +1033,16 @@ pub struct ValheimCreateSpec {
 impl ValheimCreateSpec {
     pub fn validate(&self) -> Result<(), String> {
         validate_dedicated_name(&self.name)?;
+        self.settings.validate(&self.name, true)?;
         if !(1_024..=16_384).contains(&self.memory_mb) {
             return Err("Valheim memory must be between 1 and 16 GiB".to_owned());
         }
         validate_cpu_millis(self.cpu_millis)?;
-        if !(1..=64).contains(&self.max_players) {
-            return Err("Valheim player limit must be between 1 and 64".to_owned());
+        if self.max_players != 10 {
+            return Err(
+                "Vanilla Valheim supports 10 players; higher limits require a compatible mod"
+                    .to_owned(),
+            );
         }
         if self.game_port.is_some_and(|port| port < 1_024) {
             return Err("game port must be at least 1024".to_owned());

@@ -101,10 +101,7 @@ pub fn exposure_ports(
                 .filter(|port| *port != game_port)
                 .collect(),
         ),
-        "valheim" => (
-            FirewallProtocol::Udp,
-            vec![game_port.saturating_add(1), game_port.saturating_add(2)],
-        ),
+        "valheim" => (FirewallProtocol::Udp, vec![game_port.saturating_add(1)]),
         _ => (FirewallProtocol::Tcp, Vec::new()),
     }
 }
@@ -2417,7 +2414,7 @@ mod tests {
         assert_eq!(extra, vec![9_877]);
         let (protocol, extra) = exposure_ports("valheim", 2_456, None);
         assert_eq!(protocol, FirewallProtocol::Udp);
-        assert_eq!(extra, vec![2_457, 2_458]);
+        assert_eq!(extra, vec![2_457]);
         let (protocol, extra) = exposure_ports("minecraft", 25_565, None);
         assert_eq!(protocol, FirewallProtocol::Tcp);
         assert!(extra.is_empty());

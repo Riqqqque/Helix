@@ -41,6 +41,7 @@ mod pumpkin;
 mod runtime;
 mod terraria;
 mod valheim;
+mod valheim_manage;
 mod vrising;
 
 const MANIFEST_VERSION: u32 = 1;
@@ -251,7 +252,10 @@ impl InstanceManifest {
         let mut ports = vec![self.game_port];
         if self.is_valheim() {
             ports.push(self.game_port.saturating_add(1));
-            ports.push(self.game_port.saturating_add(2));
+            // Older runtime images published a third port; keep it reserved until upgraded.
+            if self.runtime_image != valheim::RUNTIME_IMAGE {
+                ports.push(self.game_port.saturating_add(2));
+            }
         } else if self.query_port != 0 && self.query_port != self.game_port {
             ports.push(self.query_port);
         }
@@ -744,8 +748,12 @@ impl NativeManager {
             let (status, players_online, player_count_verified, max_players, version) =
                 if manifest.uses_ready_marker() {
                     (
-                        if state.running {
+                        if state.running
+                            && (!manifest.is_valheim() || data_path.join(READY_MARKER).is_file())
+                        {
                             "online"
+                        } else if state.running {
+                            "offline"
                         } else {
                             "manager_stopped"
                         },
@@ -821,10 +829,16 @@ impl NativeManager {
             .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
         let policy = self.read_game_port_policy(game)?;
         let candidates = policy_candidates(&policy)?;
-        let next_available = candidates
-            .iter()
-            .copied()
-            .find(|port| !used.contains(port) && ensure_port_available(*port, true).is_ok());
+        let next_available = candidates.iter().copied().find(|port| {
+            !used.contains(port)
+                && ensure_port_available(*port, true).is_ok()
+                && (game != GameKind::Valheim
+                    || port.checked_add(1).is_some_and(|next| {
+                        candidates.contains(&next)
+                            && !used.contains(&next)
+                            && ensure_port_available(next, true).is_ok()
+                    }))
+        });
         Ok(game_port_policy_response(
             policy,
             candidates,
@@ -956,15 +970,10 @@ impl NativeManager {
     ) -> Result<(u16, u16, bool), String> {
         let helix = assigned_game_ports(manifests);
         if let Some(game_port) = requested_game_port {
-            let query_port = game_port.saturating_add(1);
-            let steam_port = game_port.saturating_add(2);
-            if steam_port < game_port {
-                return Err(
-                    "that Valheim game port is too high to reserve the next two UDP ports"
-                        .to_owned(),
-                );
-            }
-            for port in [game_port, query_port, steam_port] {
+            let query_port = game_port
+                .checked_add(1)
+                .ok_or("Valheim needs a game port below 65535 and the next UDP port")?;
+            for port in [game_port, query_port] {
                 if let Some(error) = self.port_conflict_error(port, &helix) {
                     return Err(error);
                 }
@@ -985,13 +994,12 @@ impl NativeManager {
             .copied()
             .filter(|port| !used.contains(port) && ensure_port_available(*port, true).is_ok())
             .collect::<Vec<_>>();
-        for window in available.windows(3) {
-            if window[1] == window[0].saturating_add(1) && window[2] == window[0].saturating_add(2)
-            {
+        for window in available.windows(2) {
+            if window[1] == window[0].saturating_add(1) {
                 return Ok((window[0], window[1], true));
             }
         }
-        Err("the Valheim port pool does not have three consecutive free UDP ports; add ports or expand its ranges in Servers > Port pools".to_owned())
+        Err("the Valheim port pool needs two consecutive free UDP ports; add ports or expand its ranges in Servers > Port pools".to_owned())
     }
 
     fn read_game_port_policy(&self, game: GameKind) -> Result<GamePortPolicySpec, String> {
@@ -1596,7 +1604,13 @@ impl NativeManager {
             None
         };
         let detail_status = if manifest.uses_ready_marker() {
-            if state.running { "online" } else { "stopped" }
+            if !state.running {
+                "stopped"
+            } else if manifest.is_valheim() && !data_path.join(READY_MARKER).is_file() {
+                "starting"
+            } else {
+                "online"
+            }
         } else if status.is_some() {
             "online"
         } else if state.running {
@@ -1660,6 +1674,10 @@ impl NativeManager {
             "tps": tps,
             "container_state": inspect,
             "settings": settings,
+            "valheim_crossplay": if manifest.is_valheim() {
+                read_small_regular_file(&data_path.join("valheim.json"), 64 * 1024, "Valheim settings")
+                    .ok().and_then(|text| serde_json::from_str::<helix_privd::valheim_config::ValheimSettings>(&text).ok()).map(|settings| settings.crossplay)
+            } else { None },
             "console_history": {
                 "persistent": true,
                 "retention_bytes": self.console_retention.maximum_bytes,
@@ -1716,6 +1734,7 @@ impl NativeManager {
             "file_mutations_require_stopped": true, "max_upload_bytes": crate::server_files::MAX_UPLOAD,
             "max_chunk_bytes": crate::server_files::CHUNK, "console_commands": manifest.is_minecraft(),
             "settings": manifest.is_minecraft(), "logs": true, "backups": true, "backup_download": true,
+            "valheim_management": manifest.is_valheim(),
             "runtime_changes": manifest.is_minecraft() && !custom, "server_scoped_credentials": false}),
         )
     }
@@ -2896,6 +2915,14 @@ impl NativeManager {
         &self,
         manifest: &InstanceManifest,
     ) -> Result<(), String> {
+        if manifest.is_valheim() {
+            return self
+                .docker(
+                    ["stop", "--time", "120", manifest.container_name.as_str()],
+                    150,
+                )
+                .map(|_| ());
+        }
         if !manifest.is_minecraft() {
             return self.terminate_container(&manifest.container_name, false);
         }
@@ -3398,6 +3425,19 @@ impl NativeManager {
                 fs::create_dir_all(data_path.join(folder))
                     .map_err(|_| "could not create Valheim data folders".to_owned())?;
             }
+            let mut settings = spec.settings.clone();
+            if settings.password.is_empty() {
+                settings.password = Uuid::new_v4().simple().to_string()[..16].to_owned();
+            }
+            write_managed_file(
+                &data_path.join("valheim.json"),
+                serde_json::to_string_pretty(&settings)
+                    .map_err(|e| e.to_string())?
+                    .as_bytes(),
+                0o660,
+                0,
+                run_uid,
+            )?;
 
             let manifest = InstanceManifest {
                 schema_version: MANIFEST_VERSION,
@@ -3460,7 +3500,6 @@ impl NativeManager {
                 "instance_name": instance_name,
                 "game_port": game_port,
                 "query_port": query_port,
-                "steam_port": game_port.saturating_add(2),
                 "port_allocated_automatically": allocated_automatically,
                 "manager": "helix",
                 "execution_backend": "docker",
@@ -5290,7 +5329,6 @@ impl NativeManager {
         let memory_limit = u64::from(manifest.memory_mb).saturating_add(1024);
         let game_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port);
         let query_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port.saturating_add(1));
-        let steam_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port.saturating_add(2));
         let mount = format!("type=bind,src={},dst=/data", data_path.display());
         let user = format!("{}:{}", manifest.run_uid, manifest.run_uid);
         let memory = format!("{memory_limit}m");
@@ -5341,10 +5379,8 @@ impl NativeManager {
             game_udp,
             "--publish".to_owned(),
             query_udp,
-            "--publish".to_owned(),
-            steam_udp,
             "--stop-timeout".to_owned(),
-            "45".to_owned(),
+            "120".to_owned(),
             "--log-opt".to_owned(),
             "max-size=20m".to_owned(),
             "--log-opt".to_owned(),
@@ -5738,6 +5774,74 @@ impl NativeManager {
 
     fn update_ready_marker_game(&self, manifest: &InstanceManifest) -> Result<bool, String> {
         let running = self.container_running(&manifest.container_name);
+        let desired = match manifest.kind {
+            GameKind::VRising => vrising::RUNTIME_IMAGE,
+            GameKind::Valheim => valheim::RUNTIME_IMAGE,
+            GameKind::Terraria => terraria::RUNTIME_IMAGE,
+            GameKind::Minecraft => {
+                return Err("Minecraft does not use a bundled game runtime".into());
+            }
+        };
+        if manifest.runtime_image != desired {
+            if running {
+                return Err("Stop this server through its game console before upgrading the graceful-shutdown runtime".into());
+            }
+            match manifest.kind {
+                GameKind::VRising => {
+                    self.ensure_vrising_runtime_image(&mut |_, _| {})?;
+                }
+                GameKind::Valheim => {
+                    self.ensure_valheim_runtime_image(&mut |_, _| {})?;
+                }
+                GameKind::Terraria => {
+                    self.ensure_terraria_runtime_image(&mut |_, _| {})?;
+                }
+                GameKind::Minecraft => unreachable!(),
+            }
+            if self.exact_container_identity(&manifest.container_name)?
+                != Some(("true".into(), manifest.id.clone()))
+            {
+                return Err("Cannot verify the old runtime container; upgrade blocked".into());
+            }
+            let root = self.instance_path(&manifest.id)?;
+            let mut updated = manifest.clone();
+            updated.runtime_image = desired.into();
+            if manifest.is_valheim() && !root.join("valheim.json").exists() {
+                let settings = helix_privd::valheim_config::ValheimSettings {
+                    password: Uuid::new_v4().simple().to_string()[..16].to_owned(),
+                    ..Default::default()
+                };
+                write_managed_file(
+                    &root.join("valheim.json"),
+                    serde_json::to_string_pretty(&settings)
+                        .map_err(|e| e.to_string())?
+                        .as_bytes(),
+                    0o660,
+                    0,
+                    manifest.run_uid,
+                )?;
+            }
+            self.docker(["rm", manifest.container_name.as_str()], 60)?;
+            let replace = self
+                .create_container(&updated, &root)
+                .and_then(|()| write_manifest(&self.manifest_path(&manifest.id)?, &updated));
+            if let Err(error) = replace {
+                let _ = self.docker(["rm", manifest.container_name.as_str()], 60);
+                let rollback = self.create_container(manifest, &root);
+                return Err(format!(
+                    "Runtime upgrade failed: {error}; previous runtime restoration: {}",
+                    if rollback.is_ok() {
+                        "complete"
+                    } else {
+                        "failed; server data is intact"
+                    }
+                ));
+            }
+            return Ok(true);
+        }
+        if manifest.is_valheim() {
+            return Err("Use Valheim Settings to back up and update or repair the game files; the bundled runtime is already current".into());
+        }
         if !running {
             return Ok(false);
         }
@@ -5848,6 +5952,13 @@ impl NativeManager {
             .map_err(|_| format!("could not protect the {staging_name} build"))?;
         write_new_file(&staging.join("Dockerfile"), dockerfile.as_bytes(), 0o600)?;
         write_new_file(&staging.join("entrypoint.sh"), entrypoint.as_bytes(), 0o755)?;
+        if staging_name == "valheim-runtime" {
+            write_new_file(
+                &staging.join("manage.py"),
+                valheim::MANAGER.as_bytes(),
+                0o644,
+            )?;
+        }
         let result = self.docker_owned(
             &[
                 "build".to_owned(),
@@ -6140,7 +6251,29 @@ impl NativeManager {
                 )?;
             }
             GameKind::Valheim => {
-                if migrate_plan::ensure_named_save(
+                if let Some(world) =
+                    migrate_plan::valheim_chunked_world(&data_path.join("worlds_local"))?
+                {
+                    let path = data_path.join("valheim.json");
+                    let mut settings: helix_privd::valheim_config::ValheimSettings =
+                        serde_json::from_str(&read_small_regular_file(
+                            &path,
+                            64 * 1024,
+                            "Valheim settings",
+                        )?)
+                        .map_err(|_| "Invalid Valheim settings during world import")?;
+                    settings.world = world;
+                    settings.validate("", false)?;
+                    write_managed_file(
+                        &path,
+                        serde_json::to_string_pretty(&settings)
+                            .map_err(|e| e.to_string())?
+                            .as_bytes(),
+                        0o660,
+                        0,
+                        run_uid,
+                    )?;
+                } else if migrate_plan::ensure_named_save(
                     &data_path.join("worlds_local"),
                     "Dedicated",
                     "fwl",
