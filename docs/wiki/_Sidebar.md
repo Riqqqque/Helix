@@ -11,6 +11,7 @@
 - [Storage and Files](https://github.com/Riqqqque/Helix/wiki/Storage-and-Files)
 - [Servers and Marketplace](https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace)
 - [Pumpkin](https://github.com/Riqqqque/Helix/wiki/Pumpkin)
+- [Valheim](https://github.com/Riqqqque/Helix/wiki/Valheim)
 - [Copy a server into Helix](https://github.com/Riqqqque/Helix/wiki/Server-Migration)
 - [Network, Host, and Updates](https://github.com/Riqqqque/Helix/wiki/Network-Host-and-Updates)
 - [Hooks and Terminal](https://github.com/Riqqqque/Helix/wiki/Hooks-and-Terminal)

@@ -29,6 +29,8 @@ Helix brings the common jobs for one server into one place:
 - a native Docker-backed manager for Minecraft (Paper, Purpur, Folia, Leaves,
   Fabric, Forge, NeoForge, Quilt, Pufferfish, Vanilla, custom JAR), V Rising,
   Valheim, and Terraria;
+- [Valheim world settings and mods](https://github.com/Riqqqque/Helix/wiki/Valheim),
+  including crossplay, Thunderstore dependencies, manual updates and full backups;
 - persistent bounded console history, settings with restart guidance, backups,
   a compatibility-aware Modrinth marketplace, and server-safe Modrinth or
   CurseForge modpack create;

@@ -190,6 +190,17 @@ fn bearer(headers: &HeaderMap) -> Result<OpaqueToken, ApiError> {
 fn scope(request: &BrokerRequest) -> Option<(&str, &'static str)> {
     use BrokerRequest::*;
     Some(match request {
+        ValheimManage {
+            instance_id,
+            request,
+        } => (
+            instance_id,
+            match request {
+                helix_privd::valheim_config::ValheimRequest::Status
+                | helix_privd::valheim_config::ValheimRequest::SaveSettings { .. } => "settings",
+                _ => "update",
+            },
+        ),
         ServerCapabilities { instance_id } | ServerDetail { instance_id } => (instance_id, "view"),
         ServerLogs { instance_id, .. } | ServerLogHistory { instance_id, .. } => {
             (instance_id, "logs")

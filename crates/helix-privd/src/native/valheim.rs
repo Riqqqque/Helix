@@ -1,6 +1,7 @@
 use helix_privd::{GameKind, GamePortPolicySpec, GamePortRangeSpec, ValheimCreateSpec};
 
-pub(crate) const RUNTIME_IMAGE: &str = "helix-valheim-runtime:1";
+pub(crate) const RUNTIME_IMAGE: &str = "helix-valheim-runtime:3";
+pub(crate) const MANAGER: &str = include_str!("../../valheim/manage.py");
 pub(crate) const STEAM_APP_ID: &str = "896660";
 pub(crate) const DOCKERFILE: &str = include_str!("../../valheim/Dockerfile");
 pub(crate) const ENTRYPOINT: &str = include_str!("../../valheim/entrypoint.sh");

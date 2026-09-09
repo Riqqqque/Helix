@@ -974,6 +974,36 @@ pub fn ensure_named_save(
     Ok(Some(stem))
 }
 
+pub fn valheim_chunked_world(directory: &Path) -> Result<Option<String>, String> {
+    if !is_real_dir(directory) {
+        return Ok(None);
+    }
+    let mut worlds = Vec::new();
+    for entry in read_real_dir(directory)? {
+        if !is_real_dir(&entry) {
+            continue;
+        }
+        let is_world = read_real_dir(&entry)?.iter().any(|file| {
+            is_real_file(file)
+                && file
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("_main.") && name.ends_with(".fwl2"))
+        });
+        if is_world {
+            let name = entry
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("The copied Valheim world has an unsupported name")?;
+            worlds.push(name.to_owned());
+        }
+    }
+    if worlds.len() > 1 {
+        return Err("Several Valheim 1.0 worlds were found. Import one complete world folder at a time, then choose its name in Valheim Settings".into());
+    }
+    Ok(worlds.pop())
+}
+
 fn is_real_file(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .map(|metadata| metadata.file_type().is_file())
@@ -1126,6 +1156,24 @@ fn is_real_dir(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn identifies_complete_chunked_valheim_world_without_renaming_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join("Midgard");
+        fs::create_dir(&world).unwrap();
+        fs::write(world.join("_main.1.fwl2"), "metadata").unwrap();
+        fs::write(world.join("00_00__0_1.chunk"), "world data").unwrap();
+        assert_eq!(
+            valheim_chunked_world(dir.path()).unwrap(),
+            Some("Midgard".into())
+        );
+        assert!(world.join("00_00__0_1.chunk").is_file());
+        let second = dir.path().join("Another");
+        fs::create_dir(&second).unwrap();
+        fs::write(second.join("_main.2.fwl2"), "metadata").unwrap();
+        assert!(valheim_chunked_world(dir.path()).is_err());
+    }
 
     #[test]
     fn maps_amp_paper_and_refuses_bedrock() {
