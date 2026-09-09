@@ -347,7 +347,7 @@ describe('Servers route', () => {
     expect(publicInternetHint('minecraft', 25565, null)).toContain('TCP 25565');
     expect(publicInternetHint('terraria', 7777, null)).toContain('TCP 7777');
     expect(publicInternetHint('vrising', 9876, 9877)).toContain('UDP 9876 and 9877');
-    expect(publicInternetHint('valheim', 2456, null)).toContain('UDP 2456–2458');
+    expect(publicInternetHint('valheim', 2456, null)).toContain('UDP 2456–2457');
     expect(publicInternetHint('vrising', 9876, 9877, true)).toContain('Host port setup is saved');
     expect(publicInternetHint('minecraft', 25565, null, true)).toContain('does not configure the router');
   });

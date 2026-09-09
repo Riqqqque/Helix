@@ -1,5 +1,8 @@
 # Server automation API
 
+Valheim also has a typed [configuration and mod-management API](VALHEIM.md#api).
+Check `valheim_management` in a native server's capabilities before using it.
+
 Start with [authentication and the Python client](INTEGRATIONS.md), then read
 `GET /api/v1/servers`. Keep the exact returned `id`, including its manager prefix.
 `GET /api/v1/servers/{instance_id}/capabilities` reports the operations available

@@ -7,6 +7,11 @@ RUN dpkg --add-architecture i386 \
       curl \
       lib32gcc-s1 \
       libc6-i386 \
+      libatomic1 \
+      libpulse0 \
+      libpulse-mainloop-glib0 \
+      libnss-wrapper \
+      python3 \
       unzip \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /opt/steamcmd \
@@ -15,6 +20,7 @@ RUN dpkg --add-architecture i386 \
  && rm /tmp/steamcmd_linux.tar.gz \
  && chmod -R a+rX /opt/steamcmd
 COPY entrypoint.sh /usr/local/bin/helix-valheim
+COPY manage.py /usr/local/lib/helix-valheim.py
 RUN chmod 0755 /usr/local/bin/helix-valheim
 WORKDIR /data
 ENTRYPOINT ["/usr/local/bin/helix-valheim"]

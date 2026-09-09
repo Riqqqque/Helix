@@ -414,6 +414,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             "/servers/{instance_id}/settings",
             get(server_settings).post(update_server_settings),
         )
+        .route("/servers/{instance_id}/valheim", post(valheim_manage))
         .route(
             "/servers/{instance_id}/marketplace/search",
             get(server_marketplace_search),
@@ -2877,6 +2878,25 @@ async fn update_server_settings(
         BrokerRequest::UpdateServerSettings {
             instance_id,
             settings,
+        },
+    )
+    .await
+}
+
+async fn valheim_manage(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<helix_privd::valheim_config::ValheimRequest>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(request) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::ValheimManage {
+            instance_id,
+            request,
         },
     )
     .await

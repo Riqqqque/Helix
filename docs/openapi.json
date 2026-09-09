@@ -31,6 +31,45 @@
     }
   ],
   "paths": {
+    "/servers/{instance_id}/valheim": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/InstanceId"
+        }
+      ],
+      "post": {
+        "operationId": "manageValheim",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Valheim world settings, Thunderstore mods and server updates",
+        "x-helix-capability": "games.manage",
+        "description": "File changes require a stopped server. Mod and Steam changes create a verified full backup before work begins. Install, enable/disable, remove, update_game and check_updates return job_id; poll the job. Settings save uses an expected revision. Jobs continue after disconnect.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValheimRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/auth/server-tokens": {
       "get": {"operationId":"listServerTokens","summary":"List token metadata and permission names; never returns secrets","responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token catalog"}}},
       "post": {"operationId":"createServerToken","summary":"Issue a 1–90 day token for exact server IDs; owner session only","parameters":[{"$ref":"#/components/parameters/Origin"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":["name","servers","permissions","expires_in_days"],"properties":{"name":{"type":"string","minLength":1,"maxLength":80},"servers":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string"}},"permissions":{"type":"array","minItems":1,"items":{"type":"string","enum":["view","logs","files.read","files.write","start","stop","restart","kill","console","settings","update","backups.read","backups.write"]}},"expires_in_days":{"type":"integer","minimum":1,"maximum":90}}}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token secret shown once; store securely"},"403":{"description":"Invalid scope or insufficient owner permissions"}}}
@@ -674,7 +713,7 @@
         "tags": [
           "Servers"
         ],
-        "summary": "Read the Valheim UDP pool (game + next two)",
+        "summary": "Read the Valheim UDP pool (game + next port)",
         "x-helix-capability": "games.view",
         "responses": {
           "200": {
@@ -2512,6 +2551,220 @@
       }
     },
     "schemas": {
+      "ValheimSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "world": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "At least five characters; creation may omit it for an automatically generated password."
+          },
+          "public": {
+            "type": "boolean",
+            "default": false
+          },
+          "crossplay": {
+            "type": "boolean",
+            "default": false
+          },
+          "save_interval": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400,
+            "default": 1800
+          },
+          "backups": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 4
+          },
+          "backup_short": {
+            "type": "integer",
+            "minimum": 300,
+            "maximum": 604800,
+            "default": 7200
+          },
+          "backup_long": {
+            "type": "integer",
+            "minimum": 300,
+            "maximum": 2592000,
+            "default": 43200
+          },
+          "preset": {
+            "type": "string",
+            "enum": [
+              "",
+              "normal",
+              "casual",
+              "easy",
+              "hard",
+              "hardcore",
+              "immersive",
+              "hammer"
+            ]
+          },
+          "modifiers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "combat, deathpenalty, resources, raids and portals; publisher-supported values only."
+          },
+          "keys": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "enum": [
+                "nobuildcost",
+                "playerevents",
+                "passivemobs",
+                "nomap"
+              ]
+            }
+          }
+        }
+      },
+      "ValheimRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "const": "status"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "expected_revision",
+              "settings"
+            ],
+            "properties": {
+              "action": {
+                "const": "save_settings"
+              },
+              "expected_revision": {
+                "type": "string"
+              },
+              "settings": {
+                "$ref": "#/components/schemas/ValheimSettings"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "reference"
+            ],
+            "properties": {
+              "action": {
+                "const": "package"
+              },
+              "reference": {
+                "type": "string",
+                "maxLength": 512
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "reference"
+            ],
+            "properties": {
+              "action": {
+                "const": "install"
+              },
+              "reference": {
+                "type": "string",
+                "maxLength": 512
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "package",
+              "enabled"
+            ],
+            "properties": {
+              "action": {
+                "const": "set_mod_enabled"
+              },
+              "package": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "package"
+            ],
+            "properties": {
+              "action": {
+                "const": "remove_mod"
+              },
+              "package": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "const": "check_updates"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "repair"
+            ],
+            "properties": {
+              "action": {
+                "const": "update_game"
+              },
+              "repair": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      },
       "Server": {
         "type": "object",
         "required": [
@@ -3287,26 +3540,24 @@
           },
           "max_players": {
             "type": "integer",
-            "minimum": 0,
-            "maximum": 65535
+            "const": 10
           },
           "game_port": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 65535
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1024,
+            "maximum": 65534
           },
           "network_exposure": {
             "$ref": "#/components/schemas/ServerNetworkExposure"
           },
           "start_on_boot": {
             "type": "boolean"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/ValheimSettings"
           }
         }
       },

@@ -1,0 +1,25 @@
+.valheim-panel { display: grid; gap: 1.25rem; min-width: 0; padding: 1.25rem; }
+.valheim-panel .tool-head { gap: 1rem; flex-wrap: wrap; padding: 0 0 1rem; }
+.valheim-fields { display: grid; gap: 1rem; }
+.valheim-fields .field small, .valheim-options p, .valheim-footnote { color: var(--muted); line-height: 1.6; }
+.valheim-options { border: 1px solid var(--line); border-radius: 10px; padding: 1rem; }
+.valheim-options summary { cursor: pointer; font-weight: 600; }
+.valheim-options[open] summary { margin-bottom: 1rem; }
+.valheim-notice { border-left: 3px solid var(--accent); padding: .8rem 1rem; background: var(--surface-raised); line-height: 1.6; border-radius: 4px; margin: 0; }
+.valheim-tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 1rem; }
+.valheim-tools article, .valheim-mod-card, .valheim-empty { border: 1px solid var(--line); padding: 1.25rem; border-radius: 12px; min-width: 0; }
+.valheim-tools article { display: flex; flex-direction: column; align-items: flex-start; gap: .5rem; }
+.valheim-tools article p { flex: 1; }
+.valheim-panel h3, .valheim-panel p { overflow-wrap: anywhere; }
+.valheim-panel h3 { margin: .25rem 0; }
+.valheim-panel .dialog-actions { margin: 0; }
+.valheim-mod-image { width: 52px; height: 52px; object-fit: contain; border-radius: 10px; flex: 0 0 auto; background: var(--surface-raised); }
+.valheim-lookup { display: flex; align-items: end; flex-wrap: wrap; gap: .75rem; }
+.valheim-lookup .field { flex: 1 1 300px; }
+.valheim-mod-heading, .valheim-mod-card { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.valheim-mod-card > div:first-child { flex: 1 1 300px; }
+.valheim-mod-card .advanced-actions { flex-wrap: wrap; gap: .5rem; }
+.valheim-mod-card p, .valheim-tools p { color: var(--muted); line-height: 1.6; margin-block: .5rem; }
+.valheim-empty { text-align: center; padding: 2rem; }
+.valheim-empty p { max-width: 44rem; margin: 1rem auto; }
+@media (max-width: 640px) { .valheim-panel .form-grid { grid-template-columns: 1fr; } .valheim-mod-card .advanced-actions { width: 100%; } .valheim-lookup > .button { flex: 1; } }

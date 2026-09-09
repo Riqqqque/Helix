@@ -30,6 +30,7 @@ rearrange. AMP and other connected services stay independent.
 **Start here:** [Install](#install-on-linux) · [User guide](https://github.com/Riqqqque/Helix/wiki) ·
 [Minecraft and modpacks](docs/wiki/Servers-and-Marketplace.md) ·
 [Pumpkin](docs/wiki/Pumpkin.md) · [Build a Strand](docs/wiki/Building-Strands.md) ·
+[Valheim](docs/VALHEIM.md) ·
 [API integrations](docs/INTEGRATIONS.md)
 
 Helix combines a responsive web dashboard, an unprivileged Rust service, and a
@@ -65,6 +66,8 @@ is an older snapshot; check its release notes before choosing it over main.
 - Pumpkin's native Rust server with versioned, verified downloads, separate
   Java and Bedrock ports, console commands, settings, backups, and update checks.
   It does not natively run Paper plugins or Forge/Fabric modpacks;
+- native Valheim with world rules, crossplay, access files, manual Steam updates
+  and repair, plus Thunderstore mods, dependency checks and pre-change backups;
 - bounded per-game port pools with collision-safe automatic allocation and
   opt-in host firewall setup. Router forwarding stays manual;
 - start, stop, restart, confirmed native kill when stop hangs, update, backup,

@@ -8,6 +8,7 @@ import {
 } from './api';
 import { parseServerAppearance, type ServerAppearance } from './server-appearance-api';
 import { parseModpackIconUrl } from './server-icon-source';
+import type { ValheimSettings } from './valheim-api';
 
 export interface HostInventory {
   disks: BlockDevice[];
@@ -366,6 +367,7 @@ export interface MinecraftSettingsSaveResult {
 }
 
 export interface NativeServerDetail {
+  valheimCrossplay?: boolean | null;
   id: string;
   name: string;
   instanceName: string;
@@ -912,6 +914,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     memoryUsedMb: number(root, 'memory_used_mb'),
     tps: nullableNumber(root, 'tps'),
     containerState,
+    valheimCrossplay: typeof root.valheim_crossplay === 'boolean' ? root.valheim_crossplay : null,
     settings: kind !== 'minecraft' && (root.settings === null || root.settings === undefined)
       ? null
       : parseMinecraftSettings(root.settings),
@@ -1249,6 +1252,7 @@ export function createVRisingServer(input: {
 }
 
 export function createValheimServer(input: {
+  settings?: ValheimSettings;
   name: string;
   memory_mb: number;
   cpu_millis?: number;

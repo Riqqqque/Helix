@@ -86,6 +86,8 @@ import {
 } from "./format";
 import { ServerReadySummary } from "./server-ready";
 import { ServerRuntimeControls } from "./server-runtime";
+import { ValheimPanelRoute as ValheimPanel, ValheimFieldsRoute as ValheimSettingsFields } from "./valheim-route";
+import { defaultValheimSettings } from "./valheim-api";
 import { CreateJobProgress, migrateCreateJobCopy, steamCreateJobCopy } from "./create-job-progress";
 import { GameMark } from "./game-marks";
 import { Icon, type IconName } from "./icons";
@@ -877,7 +879,7 @@ export function publicInternetHint(
   queryPort: number | null, hostConfigured = false,
 ): string {
   const ports = kind === "vrising" ? `UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`}`
-    : kind === "valheim" ? `UDP ${port}–${port + 2}` : `TCP ${port}`;
+    : kind === "valheim" ? `UDP ${port}–${port + 1}` : `TCP ${port}`;
   return `${hostConfigured ? "Host port setup is saved. " : ""}For internet players, forward ${ports} to this server’s LAN address in your router. Helix does not configure the router or verify internet reachability.`;
 }
 
@@ -5024,6 +5026,7 @@ function NativeServerPage({
     (item) => item.instanceId === detail.id && item.protocol === "udp",
   );
   const joinAddress =
+    detail.kind === "valheim" && detail.valheimCrossplay === true ? "Use the crossplay join code from Console" :
     (usesUdpJoin ? udpEvidence?.privateJoinAddress : tcpEvidence?.privateJoinAddress) ??
     (network?.addresses.privateIpv4 === null || network?.addresses.privateIpv4 === undefined
       ? "Private address unavailable"
@@ -5037,7 +5040,9 @@ function NativeServerPage({
     publicIp === null ? null : formatJoinAddress(publicIp, detail.gamePort);
   const publicInternetNote = detail.software.toLowerCase() === "pumpkin"
     ? `Forward TCP ${detail.gamePort} for Java and TCP + UDP ${detail.queryPort} for Bedrock NetherNet to this host's LAN IP. For Bedrock behind NAT, set networking.bedrock.nethernet.external_ip in pumpkin.toml to your public IP. Router forwarding is manual; internet reachability has not been tested.`
-    : publicInternetHint(
+    : detail.kind === "valheim" && detail.valheimCrossplay === true
+      ? "Crossplay uses PlayFab relays. Join with the code in Console or the in-game server list; LAN and loopback IP connections are not supported. Router forwarding is not required for the relay."
+      : publicInternetHint(
     detail.kind,
     detail.gamePort,
     detail.queryPort,
@@ -5256,9 +5261,9 @@ function NativeServerPage({
       <nav class="server-tabs" aria-label="Server tools">
         {nativeServerTabs
           .filter((item) => {
-            if (item.id === "overview") return true;
-            if (item.id === "marketplace") return supportsMarketplaceSoftware(detail.software);
-            if (item.id === "settings") return detail.settings !== null && detail.capabilities.includes("settings");
+            if (item.id === "overview" || (detail.kind === "valheim" && item.id === "console")) return true;
+            if (item.id === "marketplace") return detail.kind === "valheim" || supportsMarketplaceSoftware(detail.software);
+            if (item.id === "settings") return detail.kind === "valheim" || (detail.settings !== null && detail.capabilities.includes("settings"));
             return detail.capabilities.includes(item.id);
           })
           .map((item) => (
@@ -5275,7 +5280,7 @@ function NativeServerPage({
               onClick={() => setTab(item.id)}
             >
               <Icon name={item.icon} size={16} />
-              {item.label}
+              {detail.kind === "valheim" && item.id === "marketplace" ? "Mods" : item.label}
             </button>
           ))}
       </nav>
@@ -5557,6 +5562,7 @@ function NativeServerPage({
             initialPath={detail.dataPath}
           />
         )}
+        {detail.kind === "valheim" && (tab === "settings" || tab === "marketplace") && <ValheimPanel key={`${detail.id}-${tab}`} detail={detail} csrfToken={csrfToken} canManage={canManageServers} onSessionExpired={onSessionExpired} onBackups={() => setTab("backups")} mode={tab === "settings" ? "settings" : "mods"} />}
         {tab === "backups" && (
           <BackupsPanel
             server={server}
@@ -5606,6 +5612,10 @@ function NativeServerPage({
                     <Icon name="info" size={15} />
                     Manual JAR updates
                   </span>
+                ) : detail.kind === "valheim" && detail.runtimeImage === "helix-valheim-runtime:3" ? (
+                  <button class="button button--quiet" type="button" onClick={() => setTab("settings")}>
+                    <Icon name="update" size={15} /> Software updates &amp; repair
+                  </button>
                 ) : (
                   <button
                     class="button button--quiet"
@@ -6763,7 +6773,7 @@ export function NewServerChooser({
           <span>
             <strong>Valheim</strong>
             <small>
-              Linux dedicated server plus optional BepInEx plugins from Files.
+              World settings, crossplay and Thunderstore mods with backups.
             </small>
           </span>
           <em>Click to install</em>
@@ -7072,7 +7082,7 @@ function CreateVRisingDialog({
   );
 }
 
-function CreateValheimDialog({
+export function CreateValheimDialog({
   csrfToken,
   servers,
   canManageNetwork,
@@ -7092,7 +7102,7 @@ function CreateValheimDialog({
   const [name, setName] = useState("");
   const [memory, setMemory] = useState(4096);
   const [cpuMillis, setCpuMillis] = useState(0);
-  const [players, setPlayers] = useState(10);
+  const [settings, setSettings] = useState(defaultValheimSettings);
   const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
   const [gamePort, setGamePort] = useState(2456);
   const [startOnBoot, setStartOnBoot] = useState(true);
@@ -7134,7 +7144,8 @@ function CreateValheimDialog({
       const result = await createValheimServer({
         name: name.trim(),
         memory_mb: memory,
-        max_players: players,
+        max_players: 10,
+        settings,
         start_on_boot: startOnBoot,
         network_exposure: publicAccess ? "public" : "private",
         ...(portMode === "manual" ? { game_port: gamePort } : {}),
@@ -7186,15 +7197,16 @@ function CreateValheimDialog({
         />
       ) : (
         <>
-          <p class="dialog-intro">Helix installs the Linux dedicated server in an isolated container. Public UDP setup is optional. Mods: put a BepInEx pack zip and plugin files in the server Files tab, then restart.</p>
+          <p class="dialog-intro">A private Valheim world on your Linux server. Steam installs once; updates are manual. Add mods and their dependencies from the Mods tab after setup.</p>
           <div class="form-grid">
             <label class="field field--wide"><span>Server name</span><input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} /></label>
             <label class="field"><span>Memory (MiB)</span><input type="number" min={1024} max={16384} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} /></label>
             <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
-            <label class="field"><span>Player limit</span><input type="number" min={1} max={64} value={players} disabled={busy} onInput={(event) => setPlayers(Number(event.currentTarget.value))} /></label>
-            <label class="field field--wide"><span>Ports</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Valheim pool{portPolicy?.nextAvailablePort ? ` (next ${portPolicy.nextAvailablePort})` : ""}</option><option value="manual">Specific UDP game port (uses +1 and +2 too)</option></select></label>
-            {portMode === "manual" && <label class="field"><span>Game UDP</span><input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} /></label>}
+            <div class="field"><span>Players</span><strong>Up to 10</strong><small>Vanilla Valheim’s limit. Higher limits need a compatible mod on the server and clients.</small></div>
+            <label class="field field--wide"><span>Ports</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Valheim pool{portPolicy?.nextAvailablePort ? ` (next ${portPolicy.nextAvailablePort})` : ""}</option><option value="manual">Specific UDP game port (also uses the next port)</option></select></label>
+            {portMode === "manual" && <label class="field"><span>Game UDP</span><input type="number" min={1024} max={65534} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} /></label>}
           </div>
+          <ValheimSettingsFields value={settings} onChange={setSettings} disabled={busy} creating />
           <label class="check-row"><input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} /><span><strong>{START_WITH_HOST_TITLE}</strong><small>{START_WITH_HOST_CREATE_DETAIL}</small></span></label>
           <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
             <input class="toggle-input" type="checkbox" checked={publicAccess} disabled={busy || !canManageNetwork} onChange={(event) => setPublicAccess(event.currentTarget.checked)} />
