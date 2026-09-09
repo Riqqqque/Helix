@@ -115,6 +115,16 @@ with open('/probe-api.log','w') as log:
             chunk = client.request('POST',backup_path,{'action':'download','offset':0,'length':1024,'expected_revision':stat['revision']})
             assert base64.b64decode(chunk['data_base64'])==b'fixture archive'
         client.transfer_file(ids[0],'assets/plugin.bin',ids[1],'assets/copy.bin')
+        valheim_path = '/api/v1/servers/' + ids[4] + '/valheim'
+        valheim = client.request('POST', valheim_path, {'action': 'status'})
+        assert valheim['settings']['world'] == 'Dedicated'
+        settings = {**valheim['settings'], 'world': 'Persistent world', 'password': 'test-only-password',
+                    'crossplay': True, 'save_interval': 900, 'modifiers': {'resources': 'more'}}
+        saved = client.request('POST', valheim_path, {'action': 'save_settings', 'expected_revision': valheim['expected_revision'], 'settings': settings})
+        assert saved['settings'] == settings
+        assert client.request('POST', valheim_path, {'action': 'status'})['settings'] == settings
+        expect_failure(lambda: client.request('POST', valheim_path, {'action': 'save_settings', 'expected_revision': valheim['expected_revision'], 'settings': settings}))
+        expect_failure(lambda: client.request('POST', '/api/v1/servers/' + ids[0] + '/valheim', {'action': 'status'}))
         assert client.server_files(ids[1],'stat',path='assets/copy.bin')['size']==local.stat().st_size
         started = client.server_files(ids[0],'upload_begin',path='unfinished',size=1,sha256=hashlib.sha256(b'x').hexdigest())
         expect_failure(lambda:client.server_files(ids[1],'upload_status',upload_id=started['upload_id']))
@@ -129,6 +139,7 @@ with open('/probe-api.log','w') as log:
         expect_failure(lambda:scoped.server_capabilities(ids[1]),403)
         expect_failure(lambda:scoped.server_action(ids[0],'kill'),403)
         expect_failure(lambda:scoped.execute('host_inventory'),403)
+        expect_failure(lambda:scoped.execute('valheim_manage',instance_id=ids[4],request={'action':'status'}),403)
         expect_failure(lambda:scoped.execute('job_status',job_id='not-owned'),403)
         client.request('DELETE','/api/v1/auth/server-tokens/'+issued['id'],{})
         expect_failure(lambda:scoped.server_capabilities(ids[0]),401)

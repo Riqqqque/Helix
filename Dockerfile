@@ -18,6 +18,7 @@ COPY examples ./examples
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
+    find crates -type f -exec touch {} + && \
     cargo build --locked --release -p helixd -p helixctl -p helix-privd -p helix-terminal && \
     install -m 0755 target/release/helixd /tmp/helixd && \
     install -m 0755 target/release/helixctl /tmp/helixctl && \

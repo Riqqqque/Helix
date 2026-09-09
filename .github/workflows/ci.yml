@@ -58,6 +58,10 @@ jobs:
         if: matrix.toolchain == 'stable'
         run: python3 -m unittest discover -s examples/integrations -p 'test_*.py' -v
 
+      - name: Test Valheim mod transactions
+        if: matrix.toolchain == 'stable'
+        run: python3 -m unittest discover -s crates/helix-privd/valheim -p 'test_*.py' -v
+
       - name: Test privileged backup rollback
         shell: bash
         run: |

@@ -8,6 +8,14 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Valheim world settings, crossplay, world rules, saves and access-file shortcuts.
+  Thunderstore installs now resolve dependencies, install BepInEx, preserve configs
+  and back up before mod changes. Mods can be updated, disabled or removed.
+  Steam updates and repair are manual; ordinary boots reuse installed files.
+- Valheim readiness follows the game instead of a timer. The runtime now handles
+  its restricted Linux user correctly, saves on stop, and reserves two UDP ports.
+  See the [Valheim guide](docs/VALHEIM.md) for setup, worlds and recovery.
+
 - Server-scoped API tokens in Settings, with individual permissions, expiration,
   revocation and audit records. Headless tools can use a token for server files,
   lifecycle actions and token-owned jobs without borrowing an owner session.
