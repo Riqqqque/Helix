@@ -131,6 +131,8 @@ import {
   saveVRisingPortPolicy,
 } from "./port-policy-api";
 import { Dialog } from "./modal";
+import { ServerConfigNotice } from "./server-config-notice";
+export { ServerConfigNotice } from "./server-config-notice";
 import { purgeTrashedNativeServer } from "./native-server-trash-api";
 import {
   migrateServer,
@@ -3097,20 +3099,29 @@ export function SettingsPanel({
   const [saved, setSaved] = useState(detail.settings);
   const [busy, setBusy] = useState(false);
   const [restartPending, setRestartPending] = useState(false);
-  const [showRestartChoice, setShowRestartChoice] = useState(false);
   const [changedFields, setChangedFields] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const observedRestartSuccess = useRef(restartSuccessRevision);
   const pvpUsesGameRule = minecraftPvpUsesGameRule(detail.software, detail.minecraftVersion);
   const dirty = JSON.stringify(settings) !== JSON.stringify(saved);
+  const savedRestartPending = restartPending || (detail.status === "online" && detail.configChanges?.state === "changed" && detail.configChanges.files.includes("server.properties"));
+  const canSave = canManageServers && dirty && !busy && settings.motd.trim().length > 0 &&
+    Number.isFinite(settings.gamePort) && settings.gamePort >= 1024 && Number.isFinite(settings.memoryMb);
   const restartFields = new Set(settings.restartBehavior.restartRequiredFields);
   const update = <K extends keyof MinecraftSettings>(
     key: K,
     value: MinecraftSettings[K],
   ): void => setSettings((current) => ({ ...current, [key]: value }));
+  const settingKeys: Record<MinecraftSettingField, keyof MinecraftSettings> = {
+    motd: "motd", game_mode: "gameMode", difficulty: "difficulty", max_players: "maxPlayers",
+    view_distance: "viewDistance", simulation_distance: "simulationDistance", player_idle_timeout: "playerIdleTimeout",
+    online_mode: "onlineMode", pvp: "pvp", allow_flight: "allowFlight", white_list: "whiteList",
+    enforce_white_list: "enforceWhiteList", spawn_protection: "spawnProtection", game_port: "gamePort", memory_mb: "memoryMb",
+  };
   const restartLabel = (field: MinecraftSettingField): ComponentChildren =>
-    restartFields.has(field) ? <em class="restart-field">Restart</em> : null;
+    restartFields.has(field) && (settings[settingKeys[field]] !== saved[settingKeys[field]] || (restartPending && changedFields.includes(field)))
+      ? <em class="restart-field" title="This saved value takes effect after a server restart">Restart</em> : null;
   const save = async (restartAfterSave = false): Promise<void> => {
     setBusy(true);
     setError(null);
@@ -3120,9 +3131,8 @@ export function SettingsPanel({
       setSettings(result.settings);
       setSaved(result.settings);
       if (result.changed) {
-        setChangedFields(result.changedFields);
+        setChangedFields(current => result.restartRequired ? [...new Set([...current, ...result.changedFields])] : []);
         setRestartPending(result.restartRequired);
-        setShowRestartChoice(result.restartRequired);
         const notes = [result.exposureNote, result.exposureWarning].filter(
           (value): value is string => value !== null && value.length > 0,
         );
@@ -3149,15 +3159,10 @@ export function SettingsPanel({
       setBusy(false);
     }
   };
-  const restartNow = (): void => {
-    setShowRestartChoice(false);
-    onRestart();
-  };
   useEffect(() => {
     if (observedRestartSuccess.current === restartSuccessRevision) return;
     observedRestartSuccess.current = restartSuccessRevision;
     setRestartPending(false);
-    setShowRestartChoice(false);
     setChangedFields([]);
     if (!dirty) {
       setSettings(detail.settings);
@@ -3169,6 +3174,12 @@ export function SettingsPanel({
     setSettings(detail.settings);
     setSaved(detail.settings);
   }, [detail.settings.expectedRevision, detail.settings.memoryMb, dirty, busy]);
+  useEffect(() => {
+    if (detail.status !== "online" || detail.configChanges?.state === "no_changes") {
+      setRestartPending(false);
+      setChangedFields([]);
+    }
+  }, [detail.status, detail.configChanges?.state]);
   const manageTitle = canManageServers
     ? undefined
     : "Requires games.manage permission";
@@ -3181,22 +3192,9 @@ export function SettingsPanel({
             <InfoTip text={settings.restartBehavior.message} />
           </h2>
           <p>
-            Common options are validated before Helix writes{" "}
-            <code>server.properties</code>.
+            Save changes to <code>server.properties</code>, then restart when you’re ready to apply them.
           </p>
         </div>
-        {restartPending && !showRestartChoice && (
-          <button
-            class="button button--primary"
-            type="button"
-            disabled={!canManageServers}
-            title={manageTitle}
-            onClick={() => setShowRestartChoice(true)}
-          >
-            <Icon name="restart" size={15} />
-            Restart to apply
-          </button>
-        )}
       </div>
       <ServerFault
         message={error}
@@ -3209,41 +3207,6 @@ export function SettingsPanel({
         <p class="settings-port-note" role="status">
           {notice}
         </p>
-      )}
-      {showRestartChoice && (
-        <div class="settings-restart-choice" role="status">
-          <span class="settings-restart-choice__icon">
-            <Icon name="restart" size={20} />
-          </span>
-          <div>
-            <strong>
-              Restart to apply{" "}
-              {changedFields.length === 1
-                ? "this change"
-                : `${changedFields.length} changes`}
-              ?
-            </strong>
-            <p>Saved to disk. Restart to load these values into Minecraft. Save any new edits first.</p>
-          </div>
-          <div>
-            <button
-              class="button button--quiet"
-              type="button"
-              onClick={() => setShowRestartChoice(false)}
-            >
-              Later
-            </button>
-            <button
-              class="button button--primary"
-              type="button"
-              disabled={!canManageServers || busy || dirty}
-              title={manageTitle}
-              onClick={restartNow}
-            >
-              Restart now
-            </button>
-          </div>
-        </div>
       )}
       <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <div class="settings-grid">
@@ -3470,29 +3433,21 @@ export function SettingsPanel({
             ? "View only · games.manage is required to change settings"
             : dirty
               ? "Unsaved changes"
-              : restartPending
+              : savedRestartPending
                 ? "Saved · restart when ready"
                 : "Settings match the saved file"}
         </span>
         <button
           class="button button--primary"
           type="button"
-          disabled={
-            !canManageServers ||
-            !dirty ||
-            busy ||
-            settings.motd.trim().length === 0 ||
-            !Number.isFinite(settings.gamePort) ||
-            settings.gamePort < 1024 ||
-            !Number.isFinite(settings.memoryMb)
-          }
+          disabled={!canSave}
           title={manageTitle}
           onClick={() => void save()}
         >
           {busy ? "Saving…" : "Save settings"}
         </button>
-        <button class="button button--quiet" type="button" disabled={!canManageServers || !dirty || busy} onClick={() => void save(true)}>Save &amp; restart</button>
-        <button class="button button--quiet" type="button" disabled={!dirty || busy} onClick={() => { setSettings(detail.settings); setSaved(detail.settings); setError(null); }}>Discard edits</button>
+        {dirty && <button class="button button--quiet" type="button" disabled={!canSave} onClick={() => void save(true)}>Save &amp; restart</button>}
+        {dirty && <button class="button button--quiet" type="button" disabled={busy} onClick={() => { setSettings(detail.settings); setSaved(detail.settings); setError(null); }}>Discard edits</button>}
       </div>
       </fieldset>
     </section>
@@ -5258,6 +5213,7 @@ function NativeServerPage({
           </div>
         </section>
       )}
+      <ServerConfigNotice detail={detail} />
       <nav class="server-tabs" aria-label="Server tools">
         {nativeServerTabs
           .filter((item) => {

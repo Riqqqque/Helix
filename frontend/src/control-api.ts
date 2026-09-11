@@ -368,6 +368,7 @@ export interface MinecraftSettingsSaveResult {
 
 export interface NativeServerDetail {
   valheimCrossplay?: boolean | null;
+  configChanges?: ServerConfigChanges | null;
   id: string;
   name: string;
   instanceName: string;
@@ -403,6 +404,28 @@ export interface NativeServerDetail {
   capabilities: string[];
   browserListing: NativeBrowserListing | null;
   modpack: NativeInstalledModpack | null;
+}
+
+export interface ServerConfigChanges {
+  state: 'changed' | 'no_changes' | 'unknown' | 'stopped';
+  files: string[];
+  limited: boolean;
+}
+
+export function parseServerConfigChanges(value: unknown): ServerConfigChanges | null {
+  if (value == null) return null;
+  const root = expectRecord(value, 'configuration changes');
+  const state = expectString(root, 'state', 'configuration changes');
+  if (state !== 'changed' && state !== 'no_changes' && state !== 'unknown' && state !== 'stopped') {
+    throw new Error('Invalid configuration change state');
+  }
+  const files = array(root, 'files', 'configuration changes', 32).map((entry) => {
+    if (typeof entry !== 'string' || entry.length === 0 || entry.length > 4096) {
+      throw new Error('Invalid configuration file path');
+    }
+    return entry;
+  });
+  return { state, files, limited: boolean(root, 'limited') };
 }
 
 export interface NativeInstalledModpack {
@@ -914,6 +937,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     memoryUsedMb: number(root, 'memory_used_mb'),
     tps: nullableNumber(root, 'tps'),
     containerState,
+    configChanges: parseServerConfigChanges(root.config_changes),
     valheimCrossplay: typeof root.valheim_crossplay === 'boolean' ? root.valheim_crossplay : null,
     settings: kind !== 'minecraft' && (root.settings === null || root.settings === undefined)
       ? null
