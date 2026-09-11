@@ -6,6 +6,13 @@ release, not a public-internet support promise.
 
 ## Unreleased
 
+### Fixed
+
+- Minecraft settings no longer stack duplicate restart prompts after a save.
+  The server header keeps the restart control, changed-file details stay collapsed,
+  and only edited settings get restart labels. Save & restart shares the same
+  validation as Save settings and disappears once there are no unsaved edits.
+
 ### Added
 
 - Valheim world settings, crossplay, world rules, saves and access-file shortcuts.
