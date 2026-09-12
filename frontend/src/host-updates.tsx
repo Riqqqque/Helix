@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
+import type { ComponentChildren } from "preact";
 import { ApiError, getHealth } from "./api";
 import { InlineError } from "./dashboard-ui";
 import { formatBytes, formatTimestamp } from "./format";
 import { Icon } from "./icons";
 import { InfoTip } from "./info-tip";
 import { Dialog } from "./modal";
+import { HostRebootButton } from "./host-reboot-button";
 import {
   applyHelixUpdate,
   applySystemPackageUpdates,
@@ -20,6 +22,7 @@ import "./infrastructure.css";
 
 export interface HostUpdatesProps {
   csrfToken: string;
+  canPower?: boolean;
   onSessionExpired: () => void;
 }
 
@@ -254,6 +257,7 @@ export function PackageInventoryView({
   onCheckHelix,
   onUpdateHelix,
   mutationBusy,
+  rebootControl,
 }: {
   data: SystemPackageInventory;
   filter: PackageFilter;
@@ -269,6 +273,7 @@ export function PackageInventoryView({
   onCheckHelix: () => void;
   onUpdateHelix: () => void;
   mutationBusy: boolean;
+  rebootControl?: ComponentChildren;
 }) {
   const packages = useMemo(
     () =>
@@ -365,11 +370,10 @@ export function PackageInventoryView({
               {data.hostRestart.packages.length > 0
                 ? `${data.hostRestart.packages.join(", ")} asked for a reboot.`
                 : "A previous update asked for a reboot."}{" "}
-              Helix never reboots Linux for you. Open{" "}
-              <a href="#settings">Settings → Whole-host reboot</a> when you are
-              ready. That disconnects Helix, players, and every other service.
+              Reboot when you are ready. This disconnects Helix, players, and other services.
             </span>
           </div>
+          {rebootControl}
         </div>
       )}
 
@@ -757,6 +761,7 @@ export function PackageInventoryView({
 
 export function HostUpdatesPanel({
   csrfToken,
+  canPower = false,
   onSessionExpired,
 }: HostUpdatesProps) {
   const [data, setData] = useState<SystemPackageInventory | null>(null);
@@ -1104,6 +1109,7 @@ export function HostUpdatesPanel({
           </p>
         </div>
         <div class="package-heading-actions">
+          {canPower && <HostRebootButton csrfToken={csrfToken} disabled={mutationBusy} onSessionExpired={onSessionExpired} />}
           <button
             class="button button--quiet"
             type="button"
@@ -1184,6 +1190,7 @@ export function HostUpdatesPanel({
         </div>
       ) : (
         <PackageInventoryView
+          rebootControl={canPower && <HostRebootButton csrfToken={csrfToken} disabled={mutationBusy} onSessionExpired={onSessionExpired} />}
           data={data}
           filter={filter}
           query={query}
