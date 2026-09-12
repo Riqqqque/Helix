@@ -33,8 +33,10 @@ ticket. Its distinct socket group also checks the dashboard UID through Linux
 `SO_PEERCRED`. Helix records only authorization/lifecycle events, not commands
 or output. Normal `sudo` policy still applies inside that shell.
 
-Host reboot requires exact hostname confirmation, acknowledgement, workload
-preflight, a delay, and a cancellable systemd timer. Firewall writes affect only
+Host reboot requires power permission, a confirmation dialog, and workload
+preflight. The request includes the verified hostname and acknowledgement.
+Immediate reboots have no countdown and cannot be cancelled; delayed API
+requests use a cancellable systemd timer. Firewall writes affect only
 exact Helix-owned UFW rules. A separate flow can enable inactive UFW after
 preserving a verified listening SSH port; it never resets or changes defaults.
 Exact selected APT candidates have a guarded update path with no rollback claim.
