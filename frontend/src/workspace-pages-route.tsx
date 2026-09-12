@@ -88,7 +88,7 @@ export function NetworkPageRoute(props: { data: DashboardData; csrfToken: string
   return <WorkspaceFallback pageClass="page--network" icon="network" label="Network" error={error} onRetry={() => setError(null)} />;
 }
 
-export function HostPageRoute(props: { data: DashboardData; csrfToken: string; canManageDocker: boolean; onSessionExpired: () => void }) {
+export function HostPageRoute(props: { data: DashboardData; csrfToken: string; canManageDocker: boolean; canPower?: boolean; onSessionExpired: () => void }) {
   const [Page, setPage] = useState<HostComponent | null>(() => loadedHost);
   const [error, setError] = useState<string | null>(null);
   const request = typeof document !== 'undefined' && Page === null && error === null ? loadWorkspacePages() : null;

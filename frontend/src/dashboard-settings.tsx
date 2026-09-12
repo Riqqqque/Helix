@@ -395,23 +395,16 @@ function CatalogsSettings({
 }
 
 export function validateHostReboot(
-  hostname: string,
-  confirmation: string,
-  acknowledged: boolean,
-  delaySeconds: number,
   preflight: HostRebootPreflight | null,
 ): string | null {
   if (preflight === null) return 'Wait for Helix to finish the reboot safety check.';
   if (!preflight.canSchedule) return 'Resolve every preflight blocker before scheduling a reboot.';
-  if (confirmation !== hostname) return `Type ${hostname} exactly to confirm this host.`;
-  if (!acknowledged) return 'Acknowledge that every service and player connection will be interrupted.';
-  if (!Number.isInteger(delaySeconds) || delaySeconds < 10 || delaySeconds > 300) return 'Choose a delay from 10 to 300 seconds.';
   return null;
 }
 
 type ActiveReboot = ScheduledReboot | Extract<ScheduledRebootStatus, { state: 'scheduled' | 'executing' }>;
 
-function HostRebootDialog({
+export function HostRebootDialog({
   integration,
   csrfToken,
   onClose,
@@ -426,9 +419,7 @@ function HostRebootDialog({
   const [scheduled, setScheduled] = useState<ActiveReboot | null>(initialScheduled);
   const [preflight, setPreflight] = useState<HostRebootPreflight | null>(initialScheduled === null ? null : integration.rebootPreflight);
   const [loading, setLoading] = useState(initialScheduled === null);
-  const [confirmation, setConfirmation] = useState('');
-  const [acknowledged, setAcknowledged] = useState(false);
-  const [delaySeconds, setDelaySeconds] = useState(30);
+  const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -459,20 +450,20 @@ function HostRebootDialog({
   }, [scheduled]);
 
   const submit = async (): Promise<void> => {
-    const validation = validateHostReboot(integration.hostname, confirmation, acknowledged, delaySeconds, preflight);
+    if (busy || submitted) return;
+    const validation = validateHostReboot(preflight);
     if (validation !== null) {
       setError(validation);
       return;
     }
     setBusy(true);
+    setSubmitted(true);
     setError(null);
     try {
-      const result = await scheduleHostReboot(integration.hostname, delaySeconds, csrfToken);
+      const result = await scheduleHostReboot(integration.hostname, 0, csrfToken);
       setScheduled(result);
-      await onChanged();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Helix could not schedule the host reboot.');
-      await refreshPreflight();
+      setError(`${requestError instanceof Error ? requestError.message : 'The connection closed.'} Check whether the host is restarting before trying again. This request will not be resent automatically.`);
     } finally {
       setBusy(false);
     }
@@ -485,8 +476,6 @@ function HostRebootDialog({
     try {
       await cancelHostReboot(scheduled.operationId, csrfToken);
       setScheduled(null);
-      setConfirmation('');
-      setAcknowledged(false);
       await Promise.all([refreshPreflight(), onChanged()]);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Helix could not cancel the scheduled reboot.');
@@ -498,16 +487,16 @@ function HostRebootDialog({
   if (scheduled !== null) {
     const remaining = Math.max(0, Math.ceil((scheduled.executeAtUnixMs - now) / 1_000));
     return (
-      <Dialog title="Host reboot scheduled" onClose={onClose}>
-        <div class="reboot-countdown" aria-live="polite"><span>Rebooting in</span><strong>{remaining}s</strong><small>{formatTimestamp(scheduled.executeAtUnixMs)}</small></div>
+      <Dialog title={scheduled.delaySeconds === 0 ? 'Restarting host' : 'Host reboot scheduled'} onClose={onClose}>
+        {scheduled.delaySeconds === 0 ? <p role="status">Restart requested. Helix will disconnect while Linux restarts. Reload this page once the host is back online.</p> : <div class="reboot-countdown" aria-live="polite"><span>Rebooting in</span><strong>{remaining}s</strong><small>{formatTimestamp(scheduled.executeAtUnixMs)}</small></div>}
         <div class="reboot-impact-note"><Icon name="warning" size={17} /><span><strong>Every service on {integration.hostname} will stop.</strong><small>Players, media streams, Helix, and other workloads will disconnect until Linux and their start-on-boot policies bring them back.</small></span></div>
         <InlineError message={error} />
-        <div class="dialog-actions"><button class="button button--quiet" type="button" onClick={onClose}>Close</button><button class="button button--danger" type="button" disabled={busy || !scheduled.cancellable || scheduled.state === 'executing'} onClick={() => void cancel()}>{busy ? 'Cancelling…' : scheduled.state === 'executing' ? 'Reboot is executing' : 'Cancel reboot'}</button></div>
+        <div class="dialog-actions"><button class="button button--quiet" type="button" onClick={onClose}>Close</button>{scheduled.delaySeconds > 0 && <button class="button button--danger" type="button" disabled={busy || !scheduled.cancellable || scheduled.state === 'executing'} onClick={() => void cancel()}>{busy ? 'Cancelling…' : scheduled.state === 'executing' ? 'Reboot is executing' : 'Cancel reboot'}</button>}</div>
       </Dialog>
     );
   }
 
-  const validation = validateHostReboot(integration.hostname, confirmation, acknowledged, delaySeconds, preflight);
+  const validation = validateHostReboot(preflight);
   return (
     <Dialog title="Restart the whole host?" onClose={onClose} wide>
       <div class="reboot-dialog-copy"><p>This restarts Linux itself—not just Helix. The browser will disconnect and all running workloads will be interrupted.</p></div>
@@ -516,13 +505,9 @@ function HostRebootDialog({
         {preflight !== null && <p>{preflight.activePlayers} active players · {preflight.activeServerCount} running servers · {preflight.activeJobsTotal} active jobs</p>}
         {preflight !== null && preflight.blockers.length > 0 && <ul>{preflight.blockers.map((blocker) => <li key={blocker.code}><strong>{blocker.code.replaceAll('_', ' ')}</strong><span>{blocker.message}</span></li>)}</ul>}
       </section>
-      <div class="reboot-confirmation-grid">
-        <label><span>Delay before reboot</span><div class="delay-input"><input type="number" min={10} max={300} step={1} value={delaySeconds} onInput={(event) => setDelaySeconds(event.currentTarget.valueAsNumber)} /><small>seconds</small></div><small>10–300 seconds gives you time to cancel.</small></label>
-        <label><span>Type the hostname to confirm</span><input value={confirmation} autocomplete="off" autocapitalize="none" spellcheck={false} placeholder={integration.hostname} onInput={(event) => setConfirmation(event.currentTarget.value)} /><small>Exact value: <code>{integration.hostname}</code></small></label>
-      </div>
-      <label class="reboot-acknowledgement"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.currentTarget.checked)} /><span><strong>I understand this disrupts the entire host.</strong><small>Connected players and every other active service may lose unsaved work.</small></span></label>
+      <p>Reboot <strong>{integration.hostname}</strong> now? This interrupts media streams and other services. Save your work first.</p>
       <InlineError message={error} />
-      <div class="dialog-actions"><button class="button button--quiet" type="button" onClick={onClose}>Cancel</button><button class="button button--danger" type="button" disabled={busy || validation !== null} onClick={() => void submit()}>{busy ? 'Scheduling…' : `Reboot in ${Number.isFinite(delaySeconds) ? delaySeconds : '—'} seconds`}</button></div>
+      <div class="dialog-actions"><button class="button button--quiet" type="button" onClick={onClose}>Cancel</button><button class="button button--danger" type="button" disabled={busy || submitted || loading || validation !== null} onClick={() => void submit()}>{busy ? 'Restarting…' : submitted ? 'Reboot requested' : 'Reboot now'}</button></div>
     </Dialog>
   );
 }

@@ -66,8 +66,9 @@ any removal or new package, preserves current config files, serializes package
 work, verifies the final versions, and never reboots Linux.
 
 If Linux later writes `/var/run/reboot-required`, Host says a reboot is needed
-and names the packages when the OS listed them. Reboot stays a separate Settings
-→ Whole-host reboot action with hostname confirmation. Helix does not reboot as
+and names the packages when the OS listed them. Use **Reboot host** beside the
+notice, in the Host updates toolbar, or in Settings. Confirm **Reboot now** in
+the dialog; there is no hostname to type or countdown. Helix does not reboot as
 a side effect of applying packages.
 
 APT is not transactional. Helix does not claim it can roll back a failed package
@@ -91,8 +92,22 @@ stay running. Independently signed Helix keys remain a public-internet gate.
 The Settings toggle changes only the exact dashboard and gateway container
 restart policies and shows a busy state until the broker verifies both.
 
-Reboot now is actually a cancellable 10–300 second schedule, giving the operator
-time to cancel. It requires the exact hostname and disruption acknowledgement
-and checks active players and jobs. Recurring reboot supports daily or selected
+Reboot now checks active players and jobs, then asks for one confirmation.
+Confirming starts Linux's normal shutdown immediately; it cannot be cancelled.
+Save your work first. Recurring reboot supports daily or selected
 weekdays at one host-local time; the UI shows the Linux timezone and next run.
 Helix never couples package updates to an automatic reboot.
+
+## Plex updates
+
+Plex installed as `plexmediaserver` appears in the Linux package list when its
+official APT repository offers an update. Choose **Check for updates**, search
+for `plexmediaserver`, select it, then review and apply. Updating Plex may restart
+its service and interrupt streams; it does not replace your library or settings.
+Helix rechecks the exact version before installing and verifies it afterward.
+
+If Plex was installed from a standalone DEB without its repository, follow
+[Plex's repository instructions](https://support.plex.tv/articles/235974187-enable-repository-updating-for-supported-linux-server-distributions/)
+first. This list covers installed APT packages, not Docker images, Flatpaks,
+Snaps, or manually downloaded programs. Container updates belong to their
+container manager. Plex beta releases may differ from the public repository.
