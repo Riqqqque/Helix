@@ -98,6 +98,11 @@ Save your work first. Recurring reboot supports daily or selected
 weekdays at one host-local time; the UI shows the Linux timezone and next run.
 Helix never couples package updates to an automatic reboot.
 
+If a server cannot report its player count, a manual reboot shows a warning
+instead of requiring you to repair that integration first. Confirming still
+disconnects any players. Known active players and running jobs block reboot;
+recurring schedules also skip when player counts cannot be verified.
+
 ## Plex updates
 
 Plex installed as `plexmediaserver` appears in the Linux package list when its

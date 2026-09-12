@@ -1233,7 +1233,9 @@ impl BrokerContext {
             .lock()
             .map_err(|_| "host power coordination failed".to_owned())?;
         let preflight = self.host_reboot_preflight()?;
-        if preflight["can_schedule"] != true {
+        if preflight["can_schedule"] != true
+            && !(delay_seconds == 0 && only_player_counts_unverified(&preflight))
+        {
             return Err("host reboot preflight is blocked by active players, running jobs, or unavailable player status".to_owned());
         }
         let mut scheduled = self.host_control()?.schedule_reboot(
@@ -2734,6 +2736,17 @@ fn server_action_completion_stage(
 }
 
 #[cfg(target_os = "linux")]
+fn only_player_counts_unverified(preflight: &Value) -> bool {
+    preflight["active_players"] == 0
+        && preflight["active_jobs_total"] == 0
+        && preflight["blockers"].as_array().is_some_and(|blockers| {
+            !blockers.is_empty()
+                && blockers
+                    .iter()
+                    .all(|blocker| blocker["code"] == "player_status_unverified")
+        })
+}
+
 fn collect_active_players(
     servers: Vec<AmpServer>,
     manager: &str,
@@ -3385,6 +3398,26 @@ mod tests {
             server_action_completion_stage(helix_privd::ServerAction::Stop, &Ok(json!({}))),
             "Stopped"
         );
+    }
+
+    #[test]
+    fn manual_reboot_can_acknowledge_unknown_counts_but_not_other_blockers() {
+        let mut preflight = json!({
+            "active_players": 0, "active_jobs_total": 0,
+            "blockers": [{"code": "player_status_unverified"}]
+        });
+        assert!(only_player_counts_unverified(&preflight));
+        preflight["active_players"] = json!(1);
+        assert!(!only_player_counts_unverified(&preflight));
+        preflight["active_players"] = json!(0);
+        preflight["active_jobs_total"] = json!(1);
+        assert!(!only_player_counts_unverified(&preflight));
+        preflight["active_jobs_total"] = json!(0);
+        preflight["blockers"] = json!([{"code": "amp_player_status_unavailable"}]);
+        assert!(!only_player_counts_unverified(&preflight));
+        preflight["blockers"] = json!([]);
+        assert!(!only_player_counts_unverified(&preflight));
+        assert!(!only_player_counts_unverified(&Value::Null));
     }
 
     #[test]

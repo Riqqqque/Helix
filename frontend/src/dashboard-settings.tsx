@@ -398,7 +398,9 @@ export function validateHostReboot(
   preflight: HostRebootPreflight | null,
 ): string | null {
   if (preflight === null) return 'Wait for Helix to finish the reboot safety check.';
-  if (!preflight.canSchedule) return 'Resolve every preflight blocker before scheduling a reboot.';
+  const onlyUnknownPlayers = preflight.activePlayers === 0 && preflight.activeJobsTotal === 0
+    && preflight.blockers.length > 0 && preflight.blockers.every(blocker => blocker.code === 'player_status_unverified');
+  if (!preflight.canSchedule && !onlyUnknownPlayers) return 'Resolve every preflight blocker before rebooting.';
   return null;
 }
 
@@ -501,7 +503,8 @@ export function HostRebootDialog({
     <Dialog title="Restart the whole host?" onClose={onClose} wide>
       <div class="reboot-dialog-copy"><p>This restarts Linux itself—not just Helix. The browser will disconnect and all running workloads will be interrupted.</p></div>
       <section class={`reboot-preflight ${preflight?.canSchedule === true ? 'is-clear' : ''}`}>
-        <div><span><Icon name={preflight?.canSchedule === true ? 'check' : 'warning'} size={16} /><strong>{loading ? 'Checking the host…' : preflight?.canSchedule === true ? 'Preflight is clear' : 'Reboot is blocked'}</strong></span><button type="button" disabled={loading || busy} onClick={() => void refreshPreflight()}><Icon name="refresh" size={14} />Check again</button></div>
+        <div><span><Icon name={preflight?.canSchedule === true ? 'check' : 'warning'} size={16} /><strong>{loading ? 'Checking the host…' : preflight?.canSchedule === true ? 'Preflight is clear' : validation === null ? 'Player activity could not be confirmed' : 'Reboot is blocked'}</strong></span><button type="button" disabled={loading || busy} onClick={() => void refreshPreflight()}><Icon name="refresh" size={14} />Check again</button></div>
+        {!loading && preflight?.canSchedule === false && validation === null && <p>You can still reboot now. Any connected players will be disconnected.</p>}
         {preflight !== null && <p>{preflight.activePlayers} active players · {preflight.activeServerCount} running servers · {preflight.activeJobsTotal} active jobs</p>}
         {preflight !== null && preflight.blockers.length > 0 && <ul>{preflight.blockers.map((blocker) => <li key={blocker.code}><strong>{blocker.code.replaceAll('_', ' ')}</strong><span>{blocker.message}</span></li>)}</ul>}
       </section>

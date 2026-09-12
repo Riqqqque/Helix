@@ -22,6 +22,11 @@ describe('whole-host reboot confirmation', () => {
     expect(validateHostReboot(null)).toMatch(/safety check/i);
     expect(validateHostReboot({ ...clearPreflight, canSchedule: false })).toMatch(/blocker/i);
     expect(validateHostReboot(clearPreflight)).toBeNull();
+    const unknown = { ...clearPreflight, canSchedule: false, blockers: [{ code: 'player_status_unverified', message: 'Unknown player count' }] };
+    expect(validateHostReboot(unknown)).toBeNull();
+    expect(validateHostReboot({ ...unknown, activePlayers: 1 })).toMatch(/blocker/i);
+    expect(validateHostReboot({ ...unknown, activeJobsTotal: 1 })).toMatch(/blocker/i);
+    expect(validateHostReboot({ ...unknown, blockers: [...unknown.blockers, { code: 'jobs_running', message: 'Backup running' }] })).toMatch(/blocker/i);
   });
 
   it('validates recurring schedules against the verified host timezone and hostname', () => {
