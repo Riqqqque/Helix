@@ -2747,6 +2747,7 @@ fn only_player_counts_unverified(preflight: &Value) -> bool {
         })
 }
 
+#[cfg(target_os = "linux")]
 fn collect_active_players(
     servers: Vec<AmpServer>,
     manager: &str,
