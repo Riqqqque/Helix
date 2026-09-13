@@ -44,6 +44,13 @@ or `failed`. Prefer stop; kill can lose unsaved game progress. Software updates
 have their own compatibility checks and backup/rollback workflow. Do not bypass
 them by editing Helix's private registry.
 
+Native Java Minecraft stops and restarts first request `save-all flush`. If the
+console cannot confirm the save, the server stays running. Graceful shutdown
+does not automatically escalate to a forced kill. Helix checks the actual
+container state after waiting; a timeout does not mean the server stopped.
+Check the job and console before retrying. Use `kill` only when accepting the
+risk of losing unsaved progress.
+
 A lost response is an unknown outcome, not permission to repeat a mutation.
 Reconcile inventory, jobs and file revisions before continuing. General
 idempotency keys and durable upload sessions across broker restarts are not
