@@ -1,6 +1,6 @@
 import render from 'preact-render-to-string';
 import { describe, expect, it } from 'vitest';
-import { defaultMarketplaceVersion, marketplaceInstallRuntimeCopy, MarketplacePanel } from './marketplace';
+import { defaultMarketplaceVersion, marketplaceInstallRuntimeCopy, marketplaceProviderName, MarketplacePanel } from './marketplace';
 import type { MarketplaceVersion } from './marketplace-api';
 
 function version(id: string, versionType: MarketplaceVersion['versionType'], hasPrimaryFile = true): MarketplaceVersion {
@@ -18,6 +18,12 @@ function version(id: string, versionType: MarketplaceVersion['versionType'], has
 }
 
 describe('Marketplace panel', () => {
+  it('identifies the catalog from a parsed hostname', () => {
+    expect(marketplaceProviderName('https://www.curseforge.com/minecraft/mc-mods/example')).toBe('CurseForge');
+    expect(marketplaceProviderName('https://curseforge.com.evil.test/minecraft/mods/example')).toBe('Modrinth');
+    expect(marketplaceProviderName('not a url')).toBe('Modrinth');
+  });
+
   it('defaults to the latest returned release with a usable primary file', () => {
     const versions = [version('new-beta', 'beta'), version('broken-release', 'release', false), version('latest-release', 'release'), version('old-release', 'release')];
     expect(defaultMarketplaceVersion(versions)?.id).toBe('latest-release');

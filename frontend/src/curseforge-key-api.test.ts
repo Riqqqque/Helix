@@ -9,6 +9,7 @@ describe('CurseForge catalog key', () => {
 
   it('recognizes the Settings Catalogs setup message', () => {
     expect(isCurseforgeKeyRequired('CurseForge needs an API key. Open Settings → Catalogs, paste a key from console.curseforge.com, then search again.')).toBe(true);
+    expect(isCurseforgeKeyRequired('console.curseforge.com')).toBe(false);
     expect(isCurseforgeKeyRequired('CurseForge catalog was unreachable.')).toBe(false);
     expect(isCurseforgeKeyRequired("CurseForge's CDN blocked this host's public IP. That is not a bad key. Search needs this host to reach the internet without a VPS or VPN exit they block.")).toBe(false);
   });

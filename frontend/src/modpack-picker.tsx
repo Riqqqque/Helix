@@ -12,6 +12,7 @@ import {
   type ModpackSelection,
 } from './modpack-api';
 import './modpack.css';
+import { isCurseforgeKeyRequired } from './curseforge-key-api';
 
 const PAGE_SIZE = 12;
 
@@ -21,10 +22,6 @@ function errorMessage(error: unknown): string {
 
 function isSessionError(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 401 || error.code === 'csrf_rejected');
-}
-
-function isCurseforgeKeyRequired(message: string): boolean {
-  return message.includes('Settings → Catalogs') || message.includes('console.curseforge.com');
 }
 
 function compactNumber(value: number): string {
