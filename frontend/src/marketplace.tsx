@@ -21,6 +21,7 @@ import {
 import { renderMarketplaceBody } from './marketplace-markdown';
 import type { MarketplaceRouteProps } from './marketplace-route';
 import { InfoTip } from './info-tip';
+import { isCurseforgeKeyRequired } from './curseforge-key-api';
 import './marketplace.css';
 
 const PAGE_SIZE = 20;
@@ -36,10 +37,6 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : 'Helix could not complete that marketplace request.';
 }
 
-function isCurseforgeKeyRequired(message: string): boolean {
-  return message.includes('Settings → Catalogs') || message.includes('console.curseforge.com');
-}
-
 function isSessionError(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 401 || error.code === 'csrf_rejected');
 }
@@ -48,6 +45,15 @@ function formatPublished(value: string | null): string {
   if (value === null) return 'Publish date unavailable';
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? 'Publish date unavailable' : publishedDate.format(date);
+}
+
+export function marketplaceProviderName(webUrl: string): 'CurseForge' | 'Modrinth' {
+  try {
+    const hostname = new URL(webUrl).hostname.toLowerCase();
+    return hostname === 'curseforge.com' || hostname.endsWith('.curseforge.com') ? 'CurseForge' : 'Modrinth';
+  } catch {
+    return 'Modrinth';
+  }
 }
 
 export function defaultMarketplaceVersion(versions: readonly MarketplaceVersion[]): MarketplaceVersion | null {
@@ -403,13 +409,14 @@ function ProjectView({
   const metadataWarning = serverMetadataWarning(detail);
   const body = detail.project.body ?? detail.project.description ?? 'This project did not provide a longer description.';
   const shownBody = bodyExpanded || body.length <= BODY_PREVIEW_CHARS ? body : `${body.slice(0, BODY_PREVIEW_CHARS)}\n\n…`;
+  const providerName = marketplaceProviderName(detail.project.webUrl);
   return (
     <div class="marketplace-project">
       <button class="back-link" type="button" onClick={onBack}><Icon name="back" size={15} />Marketplace</button>
       <header class="marketplace-project-head">
         <ResultLettermark title={detail.project.title} kind={detail.compatibility.contentKind} iconUrl={detail.project.iconUrl ?? hit.iconUrl} />
-        <div><span class="eyebrow">{(detail.project.webUrl.includes('curseforge.com') ? 'CURSEFORGE' : 'MODRINTH')} · {detail.compatibility.contentKind.toUpperCase()}{detail.installed ? ' · INSTALLED' : ''}</span><h2>{detail.project.title}</h2><p>{detail.project.description ?? 'No short description provided.'}</p><span class="marketplace-card__meta"><span>{hit.author ?? 'Unknown author'}</span><span>{compactNumber.format(detail.project.downloads)} downloads</span><span>{compactNumber.format(detail.project.followers)} followers</span></span></div>
-        <a class="button button--quiet" href={detail.project.webUrl} target="_blank" rel="noreferrer">Open on {detail.project.webUrl.includes('curseforge.com') ? 'CurseForge' : 'Modrinth'} <Icon name="external" size={14} /></a>
+        <div><span class="eyebrow">{providerName.toUpperCase()} · {detail.compatibility.contentKind.toUpperCase()}{detail.installed ? ' · INSTALLED' : ''}</span><h2>{detail.project.title}</h2><p>{detail.project.description ?? 'No short description provided.'}</p><span class="marketplace-card__meta"><span>{hit.author ?? 'Unknown author'}</span><span>{compactNumber.format(detail.project.downloads)} downloads</span><span>{compactNumber.format(detail.project.followers)} followers</span></span></div>
+        <a class="button button--quiet" href={detail.project.webUrl} target="_blank" rel="noreferrer">Open on {providerName} <Icon name="external" size={14} /></a>
       </header>
       <div class="marketplace-project-grid">
         <section class="marketplace-project-body"><h3>About</h3><div class="marketplace-markdown-wrap">{renderMarketplaceBody(shownBody, detail.bodyFormat)}{body.length > BODY_PREVIEW_CHARS && <button class="button button--quiet" type="button" onClick={onBodyToggle}>{bodyExpanded ? 'Show less' : 'Read full description'}</button>}</div></section>
