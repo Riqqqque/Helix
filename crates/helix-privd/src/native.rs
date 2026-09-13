@@ -2933,13 +2933,26 @@ impl NativeManager {
             .instance_path(&manifest.id)?
             .join(manifest.settings_name());
         let saved = read_small_regular_file(&path, MAX_PROPERTIES_BYTES, "server settings")?;
-        self.docker(
-            ["stop", "--time", "45", manifest.container_name.as_str()],
-            75,
-        )?;
-        if self.runtime_running_checked(manifest)? {
-            return Err("Minecraft did not stop; saved settings were not replaced.".to_owned());
+        if !manifest.is_pumpkin() {
+            rcon_command_timed(
+                manifest.rcon_port,
+                &manifest.rcon_password,
+                "save-all flush",
+                Duration::from_secs(3),
+                Duration::from_secs(30),
+            )
+            .map_err(|error| format!(
+                "Minecraft could not confirm a world save: {error}. The server was not stopped. Check the console or let startup finish before retrying."
+            ))?;
         }
+        // Docker must mark this as a manual stop so unless-stopped does not
+        // relaunch it. An unlimited grace period prevents an automatic SIGKILL.
+        // The client still has a deadline; losing its reply is not proof of exit.
+        let _stop_response = self.docker(
+            ["stop", "--time", "-1", manifest.container_name.as_str()],
+            180,
+        );
+        wait_for_minecraft_shutdown(|| self.runtime_running_checked(manifest), Duration::ZERO)?;
         preserve_settings_after_stop(&path, &saved, manifest.run_uid)
     }
 
@@ -9082,6 +9095,24 @@ fn software_name(software: MinecraftSoftware) -> &'static str {
     }
 }
 
+fn wait_for_minecraft_shutdown(
+    mut running: impl FnMut() -> Result<bool, String>,
+    timeout: Duration,
+) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        if !running().map_err(|error| format!(
+            "Could not confirm Minecraft stopped: {error}. No forced kill was sent; check the console before retrying."
+        ))? {
+            return Ok(());
+        }
+        let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
+            return Err("Minecraft is still shutting down. No forced kill was sent and saved settings were not replaced. Check the console and wait before retrying; use Kill only as a last resort.".to_owned());
+        };
+        thread::sleep(remaining.min(Duration::from_secs(1)));
+    }
+}
+
 fn rcon_command(port: u16, password: &str, command: &str) -> Result<String, String> {
     rcon_command_timed(
         port,
@@ -10391,6 +10422,37 @@ mod tests {
         assert!(
             changed_setting_fields(&parse_properties(original), &retarget).contains(&"game_port")
         );
+    }
+
+    #[test]
+    fn minecraft_shutdown_requires_confirmed_exit() {
+        assert!(wait_for_minecraft_shutdown(|| Ok(false), Duration::ZERO).is_ok());
+        let error = wait_for_minecraft_shutdown(|| Ok(true), Duration::ZERO).unwrap_err();
+        assert!(error.contains("No forced kill was sent"));
+        assert!(error.contains("saved settings were not replaced"));
+    }
+
+    #[test]
+    fn minecraft_shutdown_inspection_failure_is_not_a_stopped_server() {
+        let error =
+            wait_for_minecraft_shutdown(|| Err("backend timeout".to_owned()), Duration::ZERO)
+                .unwrap_err();
+        assert!(error.contains("Could not confirm Minecraft stopped"));
+        assert!(error.contains("backend timeout"));
+    }
+
+    #[test]
+    fn minecraft_shutdown_waits_for_a_slow_exit() {
+        let mut polls = 0;
+        wait_for_minecraft_shutdown(
+            || {
+                polls += 1;
+                Ok(polls < 2)
+            },
+            Duration::from_secs(3),
+        )
+        .unwrap();
+        assert_eq!(polls, 2);
     }
 
     #[test]
