@@ -38,6 +38,18 @@ describe('marketplace markdown', () => {
     expect(markup).not.toContain('javascript:');
   });
 
+  it('handles malformed tag spacing and decodes entities only once', () => {
+    const markup = render(renderMarketplaceBody(
+      '<p>Before</p><script >bad()</script ><style >hidden</style ><p>&amp;lt;script&amp;gt;safe&amp;lt;/script&amp;gt;</p>',
+      'html',
+    ));
+    expect(markup).toContain('Before');
+    expect(markup).not.toContain('bad()');
+    expect(markup).not.toContain('hidden');
+    expect(markup).not.toContain('<script');
+    expect(markup).toContain('&amp;lt;script&amp;gt;safe');
+  });
+
   it('turns CurseForge html headings, lists, and safe images into readable markup', () => {
     const markup = render(renderMarketplaceBody(
       '<h2>Features</h2><ul><li>One</li><li>Two</li></ul><p><strong>Bold</strong> and <a href="https://www.curseforge.com/minecraft/mc-mods/example">docs</a></p><img src="https://media.forgecdn.net/avatars/1/icon.png" alt="icon">',

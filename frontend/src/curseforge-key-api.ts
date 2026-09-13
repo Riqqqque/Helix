@@ -12,7 +12,7 @@ export interface CurseforgeKeyStatus {
 }
 
 export function isCurseforgeKeyRequired(message: string): boolean {
-  return message.includes(CURSEFORGE_KEY_REQUIRED_HINT) || message.includes('console.curseforge.com');
+  return message.includes(CURSEFORGE_KEY_REQUIRED_HINT);
 }
 
 export function normalizeCurseforgeApiKey(value: string): string {
