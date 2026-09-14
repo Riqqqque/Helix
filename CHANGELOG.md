@@ -15,6 +15,12 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Settings now measures Docker disk use and can run a safe background cleanup
+  immediately or on selected host-local days. It prunes old build cache,
+  dangling images, and unused networks while preserving every container,
+  volume, named image, and active resource. The card shows Docker's data root,
+  backing filesystem, exact last-run result, and a refresh-safe active job.
+
 - Valheim world settings, crossplay, world rules, saves and access-file shortcuts.
   Thunderstore installs now resolve dependencies, install BepInEx, preserve configs
   and back up before mod changes. Mods can be updated, disabled or removed.

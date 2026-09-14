@@ -45,7 +45,8 @@ configured, and installed on the host separately.
   private `{state_root}/imports` directory. Extra Storage paths still need
   explicit `native.custom_artifact_roots` entries.
 - The broker service sandbox grants configured content roots explicitly. Hosts
-  that enable selected APT updates, UFW mutations, or recurring reboot schedules
+  that enable selected APT updates, UFW mutations, recurring reboot schedules,
+  or recurring Docker cleanup
   must also retain the reviewed `/boot`, `/etc`, `/usr`, and `/var` exceptions
   from the service template. Package maintainer scripts and UFW need real host
   write/kernel authority; removing those exceptions makes those mutations fail.
@@ -89,6 +90,13 @@ Before starting anything:
    `deploy/helix-privd.docker-sock.conf` as a drop-in if the unit was customized.
 6. Keep the deployment `.env` operator-owned and mode `0600`.
 7. Keep world data, state, and backups out of the image and source tree.
+
+The broker creates `/var/lib/helix/docker-cleanup` as root-only state. A saved
+schedule also creates `helix-docker-cleanup.service` and
+`helix-docker-cleanup.timer` under the configured systemd unit root. Their
+content hashes are stored with the schedule and rechecked before update,
+removal, or execution. Keep `/var/lib/helix` and the unit root writable in the
+broker sandbox if this feature is enabled.
 
 Install the broker unit and the Helix-update finalize unit:
 
@@ -241,6 +249,8 @@ Confirm on the host that:
 - the broker service and dashboard/gateway containers are active under their
   expected identities;
 - unrelated Docker containers, UFW rules, services, and storage were unchanged;
+- Settings → Docker cleanup reports the daemon's real data root and filesystem,
+  and its schedule reads as none, scheduled, or degraded rather than guessing;
 - the Network page labels outside reachability `unverified`; and
 - Helix Update on Host → Linux updates can check GitHub, and Apply stays disabled
   until a newer digest-pinned tag exists and Compose is detected.

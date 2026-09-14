@@ -69,6 +69,8 @@ describe('whole-host reboot confirmation', () => {
     expect(markup).toContain('Save account changes');
     expect(markup).toContain('Current password');
     expect(markup).toContain('Stay signed in');
+    expect(markup).toContain('Docker cleanup');
+    expect(markup).toContain('Measuring Docker storage');
     expect(markup).not.toContain('>Catalogs<');
   });
 });

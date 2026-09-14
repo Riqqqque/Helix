@@ -1,5 +1,7 @@
 use crate::bounded_command::run_bounded_command;
-use helix_privd::{HookServiceAction, RebootWeekday, RecurringRebootSpec};
+use helix_privd::{
+    DockerCleanupScheduleSpec, HookServiceAction, RebootWeekday, RecurringRebootSpec,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -22,6 +24,10 @@ const RECURRING_RECORD_NAME: &str = "recurring.json";
 const RECURRING_SERVICE_UNIT: &str = "helix-recurring-reboot.service";
 const RECURRING_TIMER_UNIT: &str = "helix-recurring-reboot.timer";
 const RECURRING_UNIT_MARKER: &str = "# Managed by Helix recurring reboot scheduler";
+const DOCKER_CLEANUP_RECORD_NAME: &str = "schedule.json";
+const DOCKER_CLEANUP_SERVICE_UNIT: &str = "helix-docker-cleanup.service";
+const DOCKER_CLEANUP_TIMER_UNIT: &str = "helix-docker-cleanup.timer";
+const DOCKER_CLEANUP_UNIT_MARKER: &str = "# Managed by Helix Docker cleanup scheduler";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,6 +54,8 @@ pub struct HostControlConfig {
     pub power_state_root: PathBuf,
     #[serde(default = "default_recurring_state_root")]
     pub recurring_state_root: PathBuf,
+    #[serde(default = "default_docker_cleanup_state_root")]
+    pub docker_cleanup_state_root: PathBuf,
     #[serde(default = "default_systemd_unit_root")]
     pub systemd_unit_root: PathBuf,
     #[serde(default = "default_broker_binary")]
@@ -79,6 +87,7 @@ impl Default for HostControlConfig {
             broker_unit: default_broker_unit(),
             power_state_root: default_power_state_root(),
             recurring_state_root: default_recurring_state_root(),
+            docker_cleanup_state_root: default_docker_cleanup_state_root(),
             systemd_unit_root: default_systemd_unit_root(),
             broker_binary: default_broker_binary(),
             broker_config_path: default_broker_config_path(),
@@ -195,6 +204,24 @@ struct RecurringRebootRecord {
     updated_at_unix_ms: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DockerCleanupScheduleRecord {
+    schema_version: u32,
+    schedule_id: String,
+    hostname: String,
+    weekdays: Vec<RebootWeekday>,
+    hour: u8,
+    minute: u8,
+    timezone: String,
+    retention_hours: u16,
+    calendar_expression: String,
+    service_sha256: String,
+    timer_sha256: String,
+    created_at_unix_ms: u64,
+    updated_at_unix_ms: u64,
+}
+
 impl HostControl {
     pub fn new(config: HostControlConfig) -> Result<Self, String> {
         validate_config(&config)?;
@@ -210,6 +237,7 @@ impl HostControl {
         fs::set_permissions(&config.power_state_root, fs::Permissions::from_mode(0o700))
             .map_err(|_| "could not protect the host power operation directory".to_owned())?;
         prepare_private_directory(&config.recurring_state_root, "recurring reboot state")?;
+        prepare_private_directory(&config.docker_cleanup_state_root, "Docker cleanup state")?;
         let runner = Arc::new(ProcessRunner {
             timeout_binary: config.timeout_binary.clone(),
         });
@@ -234,6 +262,10 @@ impl HostControl {
             .map_err(|_| "could not create test recurring state".to_owned())?;
         config.recurring_state_root = fs::canonicalize(&config.recurring_state_root)
             .map_err(|_| "could not resolve test recurring state".to_owned())?;
+        fs::create_dir_all(&config.docker_cleanup_state_root)
+            .map_err(|_| "could not create test Docker cleanup state".to_owned())?;
+        config.docker_cleanup_state_root = fs::canonicalize(&config.docker_cleanup_state_root)
+            .map_err(|_| "could not resolve test Docker cleanup state".to_owned())?;
         fs::create_dir_all(&config.systemd_unit_root)
             .map_err(|_| "could not create test systemd unit root".to_owned())?;
         config.systemd_unit_root = fs::canonicalize(&config.systemd_unit_root)
@@ -861,6 +893,230 @@ impl HostControl {
         Ok(record.hostname)
     }
 
+    pub fn set_recurring_docker_cleanup(
+        &self,
+        spec: DockerCleanupScheduleSpec,
+    ) -> Result<Value, String> {
+        let hostname = current_hostname()?;
+        let timezone = read_host_timezone()?;
+        let weekdays = validate_docker_cleanup_schedule(&spec, &timezone)?;
+        let calendar_expression = recurring_calendar(&weekdays, spec.hour, spec.minute, &timezone);
+        let _mutation = self
+            .mutation
+            .lock()
+            .map_err(|_| "Docker cleanup schedule lock failed".to_owned())?;
+        let validation = self.runner.run(
+            &self.config.systemd_analyze_binary,
+            &[
+                "calendar".to_owned(),
+                "--iterations=1".to_owned(),
+                calendar_expression.clone(),
+            ],
+            Duration::from_secs(10),
+        )?;
+        require_success(validation)
+            .map_err(|error| format!("systemd rejected the Docker cleanup schedule: {error}"))?;
+
+        let previous = self.read_docker_cleanup_schedule_optional()?;
+        let service_path = self.docker_cleanup_service_path()?;
+        let timer_path = self.docker_cleanup_timer_path()?;
+        if previous.is_none() && (service_path.exists() || timer_path.exists()) {
+            return Err(
+                "Docker cleanup unit files already exist without a verified Helix record; nothing was overwritten"
+                    .to_owned(),
+            );
+        }
+        if let Some(record) = &previous {
+            self.verify_docker_cleanup_unit_files(record)?;
+        }
+        let schedule_id = previous.as_ref().map_or_else(
+            || Uuid::new_v4().to_string(),
+            |record| record.schedule_id.clone(),
+        );
+        let now = now_unix_ms();
+        let service = docker_cleanup_service_unit(&self.config, &schedule_id)?;
+        let timer = docker_cleanup_timer_unit(&calendar_expression);
+        let record = DockerCleanupScheduleRecord {
+            schema_version: 1,
+            schedule_id: schedule_id.clone(),
+            hostname,
+            weekdays,
+            hour: spec.hour,
+            minute: spec.minute,
+            timezone,
+            retention_hours: spec.retention_hours,
+            calendar_expression: calendar_expression.clone(),
+            service_sha256: sha256_hex(service.as_bytes()),
+            timer_sha256: sha256_hex(timer.as_bytes()),
+            created_at_unix_ms: previous
+                .as_ref()
+                .map_or(now, |record| record.created_at_unix_ms),
+            updated_at_unix_ms: now,
+        };
+        let previous_service = read_docker_cleanup_file(&service_path, 64 * 1024)?;
+        let previous_timer = read_docker_cleanup_file(&timer_path, 64 * 1024)?;
+        write_atomic_file(
+            &service_path,
+            service.as_bytes(),
+            0o644,
+            "Docker cleanup service unit",
+        )?;
+        let activation = write_atomic_file(
+            &timer_path,
+            timer.as_bytes(),
+            0o644,
+            "Docker cleanup timer unit",
+        )
+        .and_then(|()| self.write_docker_cleanup_schedule(&record))
+        .and_then(|()| self.systemctl(&["daemon-reload"]))
+        .and_then(|()| self.systemctl(&["enable", "--now", DOCKER_CLEANUP_TIMER_UNIT]))
+        .and_then(|()| self.verify_docker_cleanup_timer_active())
+        .and_then(|()| {
+            self.docker_cleanup_next_elapse()?
+                .ok_or_else(|| "systemd did not report a next Docker cleanup time".to_owned())
+        });
+        let next_at_unix_ms = match activation {
+            Ok(next) => next,
+            Err(error) => {
+                let rollback = self.rollback_docker_cleanup_files(
+                    previous.as_ref(),
+                    previous_service.as_deref(),
+                    previous_timer.as_deref(),
+                );
+                return Err(match rollback {
+                    Ok(()) => format!("the Docker cleanup schedule was not activated: {error}"),
+                    Err(rollback) => format!(
+                        "the Docker cleanup schedule was not activated: {error}; rollback also needs attention: {rollback}"
+                    ),
+                });
+            }
+        };
+        Ok(docker_cleanup_schedule_json(
+            &record,
+            "scheduled",
+            true,
+            true,
+            Some(next_at_unix_ms),
+        ))
+    }
+
+    pub fn delete_recurring_docker_cleanup(&self) -> Result<Value, String> {
+        let _mutation = self
+            .mutation
+            .lock()
+            .map_err(|_| "Docker cleanup schedule lock failed".to_owned())?;
+        let record = self
+            .read_docker_cleanup_schedule_optional()?
+            .ok_or_else(|| "no recurring Docker cleanup schedule exists".to_owned())?;
+        self.verify_docker_cleanup_unit_files(&record)?;
+        let service_path = self.docker_cleanup_service_path()?;
+        let timer_path = self.docker_cleanup_timer_path()?;
+        let service = read_docker_cleanup_file(&service_path, 64 * 1024)?;
+        let timer = read_docker_cleanup_file(&timer_path, 64 * 1024)?;
+        self.systemctl(&["disable", "--now", DOCKER_CLEANUP_TIMER_UNIT])?;
+        if self.unit_is_active(DOCKER_CLEANUP_TIMER_UNIT)? {
+            return Err(
+                "the Docker cleanup timer remained active; its files were retained".to_owned(),
+            );
+        }
+        let removal = remove_docker_cleanup_file(&service_path)
+            .and_then(|()| remove_docker_cleanup_file(&timer_path))
+            .and_then(|()| remove_docker_cleanup_file(&self.docker_cleanup_schedule_path()))
+            .and_then(|()| self.systemctl(&["daemon-reload"]));
+        if let Err(error) = removal {
+            let rollback = self.rollback_docker_cleanup_files(
+                Some(&record),
+                service.as_deref(),
+                timer.as_deref(),
+            );
+            return Err(match rollback {
+                Ok(()) => format!("the Docker cleanup schedule was not removed: {error}"),
+                Err(rollback) => format!(
+                    "the Docker cleanup schedule removal failed: {error}; rollback also needs attention: {rollback}"
+                ),
+            });
+        }
+        Ok(json!({
+            "state": "removed",
+            "schedule_id": record.schedule_id,
+            "timer_active": false,
+            "timer_enabled": false,
+            "removed_at_unix_ms": now_unix_ms()
+        }))
+    }
+
+    pub fn verify_recurring_docker_cleanup_trigger(
+        &self,
+        schedule_id: &str,
+    ) -> Result<u16, String> {
+        validate_operation_id(schedule_id)?;
+        let _mutation = self
+            .mutation
+            .lock()
+            .map_err(|_| "Docker cleanup schedule lock failed".to_owned())?;
+        let record = self
+            .read_docker_cleanup_schedule_optional()?
+            .ok_or_else(|| "the Docker cleanup schedule no longer exists".to_owned())?;
+        if record.schedule_id != schedule_id || record.hostname != current_hostname()? {
+            return Err("the Docker cleanup trigger does not match the active schedule".to_owned());
+        }
+        self.verify_docker_cleanup_unit_files(&record)?;
+        self.verify_docker_cleanup_timer_active()?;
+        Ok(record.retention_hours)
+    }
+
+    pub(crate) fn docker_cleanup_schedule_status(&self) -> Result<Value, String> {
+        let record = match self.read_docker_cleanup_schedule_optional() {
+            Ok(Some(record)) => record,
+            Ok(None) => {
+                if self.docker_cleanup_service_path()?.exists()
+                    || self.docker_cleanup_timer_path()?.exists()
+                {
+                    return Ok(json!({
+                        "state": "unavailable",
+                        "reason": "unit_files_without_record"
+                    }));
+                }
+                return Ok(json!({
+                    "state": "none",
+                    "timer_active": false,
+                    "timer_enabled": false
+                }));
+            }
+            Err(_) => {
+                return Ok(json!({
+                    "state": "unavailable",
+                    "reason": "record_invalid"
+                }));
+            }
+        };
+        if self.verify_docker_cleanup_unit_files(&record).is_err() {
+            return Ok(json!({
+                "state": "unavailable",
+                "reason": "unit_verification_failed"
+            }));
+        }
+        let timer_active = self
+            .unit_is_active(DOCKER_CLEANUP_TIMER_UNIT)
+            .unwrap_or(false);
+        let timer_enabled = self
+            .systemctl_state("is-enabled", DOCKER_CLEANUP_TIMER_UNIT)
+            .is_ok_and(|state| matches!(state.as_str(), "enabled" | "enabled-runtime" | "linked"));
+        let next = self.docker_cleanup_next_elapse().ok().flatten();
+        let state = if timer_active && timer_enabled && next.is_some() {
+            "scheduled"
+        } else {
+            "degraded"
+        };
+        Ok(docker_cleanup_schedule_json(
+            &record,
+            state,
+            timer_active,
+            timer_enabled,
+            next,
+        ))
+    }
+
     pub fn reboot_pending(&self) -> Result<bool, String> {
         let _mutation = self
             .mutation
@@ -1198,6 +1454,147 @@ impl HostControl {
 
     fn recurring_record_path(&self) -> PathBuf {
         self.config.recurring_state_root.join(RECURRING_RECORD_NAME)
+    }
+
+    fn docker_cleanup_schedule_path(&self) -> PathBuf {
+        self.config
+            .docker_cleanup_state_root
+            .join(DOCKER_CLEANUP_RECORD_NAME)
+    }
+
+    fn docker_cleanup_service_path(&self) -> Result<PathBuf, String> {
+        docker_cleanup_unit_path(&self.config.systemd_unit_root, DOCKER_CLEANUP_SERVICE_UNIT)
+    }
+
+    fn docker_cleanup_timer_path(&self) -> Result<PathBuf, String> {
+        docker_cleanup_unit_path(&self.config.systemd_unit_root, DOCKER_CLEANUP_TIMER_UNIT)
+    }
+
+    fn read_docker_cleanup_schedule_optional(
+        &self,
+    ) -> Result<Option<DockerCleanupScheduleRecord>, String> {
+        let path = self.docker_cleanup_schedule_path();
+        let Some(body) = read_docker_cleanup_file(&path, MAX_POWER_RECORD_BYTES)? else {
+            return Ok(None);
+        };
+        let record = serde_json::from_slice::<DockerCleanupScheduleRecord>(&body)
+            .map_err(|_| "the Docker cleanup schedule record is invalid".to_owned())?;
+        validate_docker_cleanup_schedule_record(&record)?;
+        Ok(Some(record))
+    }
+
+    fn write_docker_cleanup_schedule(
+        &self,
+        record: &DockerCleanupScheduleRecord,
+    ) -> Result<(), String> {
+        validate_docker_cleanup_schedule_record(record)?;
+        let body = serde_json::to_vec_pretty(record)
+            .map_err(|_| "could not encode the Docker cleanup schedule".to_owned())?;
+        write_atomic_file(
+            &self.docker_cleanup_schedule_path(),
+            &body,
+            0o600,
+            "Docker cleanup schedule",
+        )
+    }
+
+    fn verify_docker_cleanup_unit_files(
+        &self,
+        record: &DockerCleanupScheduleRecord,
+    ) -> Result<(), String> {
+        validate_docker_cleanup_schedule_record(record)?;
+        let service = read_docker_cleanup_file(&self.docker_cleanup_service_path()?, 64 * 1024)?
+            .ok_or_else(|| "the Docker cleanup service unit is missing".to_owned())?;
+        let timer = read_docker_cleanup_file(&self.docker_cleanup_timer_path()?, 64 * 1024)?
+            .ok_or_else(|| "the Docker cleanup timer unit is missing".to_owned())?;
+        if sha256_hex(&service) != record.service_sha256
+            || sha256_hex(&timer) != record.timer_sha256
+            || !service.starts_with(DOCKER_CLEANUP_UNIT_MARKER.as_bytes())
+            || !timer.starts_with(DOCKER_CLEANUP_UNIT_MARKER.as_bytes())
+        {
+            return Err(
+                "Docker cleanup unit files no longer match their protected Helix record; nothing was changed"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    fn verify_docker_cleanup_timer_active(&self) -> Result<(), String> {
+        if !self.unit_is_active(DOCKER_CLEANUP_TIMER_UNIT)? {
+            return Err("the Docker cleanup timer is not active".to_owned());
+        }
+        let enabled = self.systemctl_state("is-enabled", DOCKER_CLEANUP_TIMER_UNIT)?;
+        if !matches!(enabled.as_str(), "enabled" | "enabled-runtime" | "linked") {
+            return Err("the Docker cleanup timer is not enabled for future boots".to_owned());
+        }
+        Ok(())
+    }
+
+    fn docker_cleanup_next_elapse(&self) -> Result<Option<u64>, String> {
+        let output = self.runner.run(
+            &self.config.systemctl_binary,
+            &[
+                "list-timers".to_owned(),
+                DOCKER_CLEANUP_TIMER_UNIT.to_owned(),
+                "--all".to_owned(),
+                "--no-pager".to_owned(),
+                "--output=json".to_owned(),
+            ],
+            Duration::from_secs(5),
+        )?;
+        let output = require_success(output)?;
+        let timers = serde_json::from_str::<Vec<Value>>(&output.stdout)
+            .map_err(|_| "systemd returned invalid Docker cleanup timer data".to_owned())?;
+        let Some(timer) = timers.first().filter(|_| timers.len() == 1) else {
+            return Ok(None);
+        };
+        if timer.get("unit").and_then(Value::as_str) != Some(DOCKER_CLEANUP_TIMER_UNIT)
+            || timer.get("activates").and_then(Value::as_str) != Some(DOCKER_CLEANUP_SERVICE_UNIT)
+        {
+            return Err("systemd returned the wrong Docker cleanup timer".to_owned());
+        }
+        let micros = timer
+            .get("next")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "systemd returned an invalid Docker cleanup time".to_owned())?;
+        Ok((micros > 0).then_some(micros / 1_000))
+    }
+
+    fn rollback_docker_cleanup_files(
+        &self,
+        previous: Option<&DockerCleanupScheduleRecord>,
+        previous_service: Option<&[u8]>,
+        previous_timer: Option<&[u8]>,
+    ) -> Result<(), String> {
+        match (previous, previous_service, previous_timer) {
+            (Some(record), Some(service), Some(timer)) => {
+                write_atomic_file(
+                    &self.docker_cleanup_service_path()?,
+                    service,
+                    0o644,
+                    "Docker cleanup service unit",
+                )?;
+                write_atomic_file(
+                    &self.docker_cleanup_timer_path()?,
+                    timer,
+                    0o644,
+                    "Docker cleanup timer unit",
+                )?;
+                self.write_docker_cleanup_schedule(record)?;
+                self.systemctl(&["daemon-reload"])?;
+                self.systemctl(&["enable", "--now", DOCKER_CLEANUP_TIMER_UNIT])?;
+                self.verify_docker_cleanup_timer_active()
+            }
+            (None, _, _) => {
+                let _ = self.systemctl(&["disable", "--now", DOCKER_CLEANUP_TIMER_UNIT]);
+                remove_optional_docker_cleanup_file(&self.docker_cleanup_service_path()?)?;
+                remove_optional_docker_cleanup_file(&self.docker_cleanup_timer_path()?)?;
+                remove_optional_docker_cleanup_file(&self.docker_cleanup_schedule_path())?;
+                self.systemctl(&["daemon-reload"])
+            }
+            _ => Err("the prior Docker cleanup schedule files were incomplete".to_owned()),
+        }
     }
 
     fn recurring_service_path(&self) -> Result<PathBuf, String> {
@@ -1557,6 +1954,9 @@ fn validate_config_shape(config: &HostControlConfig) -> Result<(), String> {
         || !config.recurring_state_root.is_absolute()
         || config.recurring_state_root == Path::new("/")
         || config.recurring_state_root.components().count() < 3
+        || !config.docker_cleanup_state_root.is_absolute()
+        || config.docker_cleanup_state_root == Path::new("/")
+        || config.docker_cleanup_state_root.components().count() < 3
         || !config.systemd_unit_root.is_absolute()
         || config.systemd_unit_root == Path::new("/")
         || !config.broker_binary.is_absolute()
@@ -1565,13 +1965,17 @@ fn validate_config_shape(config: &HostControlConfig) -> Result<(), String> {
     {
         return Err("host control paths must be narrow absolute paths".to_owned());
     }
-    for path in [&config.broker_binary, &config.broker_config_path] {
+    for path in [
+        &config.broker_binary,
+        &config.broker_config_path,
+        &config.docker_cleanup_state_root,
+    ] {
         let value = path.to_string_lossy();
         if value.chars().any(|character| {
             character.is_whitespace() || character.is_control() || matches!(character, '\\' | '"')
         }) {
             return Err(
-                "Helix recurring reboot paths contain unsafe unit-file characters".to_owned(),
+                "Helix managed systemd paths contain unsafe unit-file characters".to_owned(),
             );
         }
     }
@@ -1689,6 +2093,70 @@ fn validate_recurring_record(record: &RecurringRebootRecord) -> Result<(), Strin
     Ok(())
 }
 
+fn validate_docker_cleanup_schedule(
+    spec: &DockerCleanupScheduleSpec,
+    host_timezone: &str,
+) -> Result<Vec<RebootWeekday>, String> {
+    if spec.hour > 23 || spec.minute > 59 {
+        return Err("Docker cleanup time is invalid".to_owned());
+    }
+    if !(24..=8_760).contains(&spec.retention_hours) {
+        return Err("Docker cleanup retention must be between 24 hours and one year".to_owned());
+    }
+    if spec.timezone != host_timezone {
+        return Err(format!(
+            "the Docker cleanup schedule must use this host's verified timezone: {host_timezone}"
+        ));
+    }
+    validate_timezone(host_timezone)?;
+    if spec.weekdays.is_empty() || spec.weekdays.len() > 7 {
+        return Err("choose between one and seven Docker cleanup weekdays".to_owned());
+    }
+    let mut weekdays = spec.weekdays.clone();
+    weekdays.sort_by_key(|day| weekday_index(*day));
+    weekdays.dedup();
+    if weekdays.len() != spec.weekdays.len() {
+        return Err("Docker cleanup weekdays must be unique".to_owned());
+    }
+    Ok(weekdays)
+}
+
+fn validate_docker_cleanup_schedule_record(
+    record: &DockerCleanupScheduleRecord,
+) -> Result<(), String> {
+    validate_operation_id(&record.schedule_id)?;
+    validate_timezone(&record.timezone)?;
+    if record.schema_version != 1
+        || record.hostname.is_empty()
+        || record.hostname.len() > 253
+        || record.hostname.chars().any(char::is_control)
+        || record.hour > 23
+        || record.minute > 59
+        || !(24..=8_760).contains(&record.retention_hours)
+        || record.weekdays.is_empty()
+        || record.weekdays.len() > 7
+        || record.calendar_expression
+            != recurring_calendar(
+                &record.weekdays,
+                record.hour,
+                record.minute,
+                &record.timezone,
+            )
+        || !valid_sha256(&record.service_sha256)
+        || !valid_sha256(&record.timer_sha256)
+        || record.created_at_unix_ms > record.updated_at_unix_ms
+    {
+        return Err("the Docker cleanup schedule record is invalid".to_owned());
+    }
+    let mut sorted = record.weekdays.clone();
+    sorted.sort_by_key(|day| weekday_index(*day));
+    sorted.dedup();
+    if sorted != record.weekdays {
+        return Err("the Docker cleanup schedule record is invalid".to_owned());
+    }
+    Ok(())
+}
+
 fn weekday_index(day: RebootWeekday) -> u8 {
     match day {
         RebootWeekday::Monday => 1,
@@ -1782,6 +2250,101 @@ fn recurring_timer_unit(calendar_expression: &str) -> String {
     )
 }
 
+fn docker_cleanup_service_unit(
+    config: &HostControlConfig,
+    schedule_id: &str,
+) -> Result<String, String> {
+    validate_operation_id(schedule_id)?;
+    Ok(format!(
+        "{DOCKER_CLEANUP_UNIT_MARKER}\n[Unit]\nDescription=Helix safe Docker cleanup\nRequires={} {}\nAfter={} {}\n\n[Service]\nType=oneshot\nExecStart={} --config {} --trigger-docker-cleanup {}\nNoNewPrivileges=yes\nPrivateTmp=yes\nPrivateDevices=yes\nProtectSystem=strict\nProtectHome=yes\nReadWritePaths={}\nRestrictAddressFamilies=AF_UNIX\nLockPersonality=yes\nMemoryDenyWriteExecute=yes\nCapabilityBoundingSet=\n",
+        config.docker_unit,
+        config.broker_unit,
+        config.docker_unit,
+        config.broker_unit,
+        config.broker_binary.display(),
+        config.broker_config_path.display(),
+        schedule_id,
+        config.docker_cleanup_state_root.display(),
+    ))
+}
+
+fn docker_cleanup_timer_unit(calendar_expression: &str) -> String {
+    format!(
+        "{DOCKER_CLEANUP_UNIT_MARKER}\n[Unit]\nDescription=Helix safe Docker cleanup schedule\n\n[Timer]\nOnCalendar={calendar_expression}\nAccuracySec=1min\nRandomizedDelaySec=0\nPersistent=false\nUnit={DOCKER_CLEANUP_SERVICE_UNIT}\n\n[Install]\nWantedBy=timers.target\n"
+    )
+}
+
+fn docker_cleanup_unit_path(root: &Path, name: &str) -> Result<PathBuf, String> {
+    if !root.is_absolute()
+        || !matches!(
+            name,
+            DOCKER_CLEANUP_SERVICE_UNIT | DOCKER_CLEANUP_TIMER_UNIT
+        )
+        || name.contains('/')
+    {
+        return Err("the Docker cleanup unit path is invalid".to_owned());
+    }
+    Ok(root.join(name))
+}
+
+fn docker_cleanup_schedule_json(
+    record: &DockerCleanupScheduleRecord,
+    state: &str,
+    timer_active: bool,
+    timer_enabled: bool,
+    next_at_unix_ms: Option<u64>,
+) -> Value {
+    json!({
+        "state": state,
+        "schedule_id": record.schedule_id,
+        "weekdays": record.weekdays,
+        "hour": record.hour,
+        "minute": record.minute,
+        "timezone": record.timezone,
+        "retention_hours": record.retention_hours,
+        "calendar_expression": record.calendar_expression,
+        "next_at_unix_ms": next_at_unix_ms,
+        "timer_active": timer_active,
+        "timer_enabled": timer_enabled,
+        "missed_runs_catch_up": false,
+        "cleanup_profile": "safe",
+        "created_at_unix_ms": record.created_at_unix_ms,
+        "updated_at_unix_ms": record.updated_at_unix_ms
+    })
+}
+
+fn read_docker_cleanup_file(path: &Path, maximum: u64) -> Result<Option<Vec<u8>>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("could not inspect a Docker cleanup file".to_owned()),
+    };
+    if !metadata.file_type().is_file()
+        || metadata.len() == 0
+        || metadata.len() > maximum
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err("a Docker cleanup file is unsafe".to_owned());
+    }
+    fs::read(path)
+        .map(Some)
+        .map_err(|_| "could not read a Docker cleanup file".to_owned())
+}
+
+fn remove_docker_cleanup_file(path: &Path) -> Result<(), String> {
+    fs::remove_file(path).map_err(|_| "could not remove a Docker cleanup file".to_owned())?;
+    sync_parent(path, "Docker cleanup file")
+}
+
+fn remove_optional_docker_cleanup_file(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => sync_parent(path, "Docker cleanup file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("could not remove a Docker cleanup file".to_owned()),
+    }
+}
+
 fn recurring_unit_path(root: &Path, name: &str) -> Result<PathBuf, String> {
     if !root.is_absolute()
         || !matches!(name, RECURRING_SERVICE_UNIT | RECURRING_TIMER_UNIT)
@@ -1834,7 +2397,12 @@ fn write_private_file(path: &Path, body: &[u8]) -> Result<(), String> {
     write_atomic_file(path, body, 0o600, "recurring reboot state")
 }
 
-fn write_atomic_file(path: &Path, body: &[u8], mode: u32, label: &str) -> Result<(), String> {
+pub(crate) fn write_atomic_file(
+    path: &Path,
+    body: &[u8],
+    mode: u32,
+    label: &str,
+) -> Result<(), String> {
     if body.is_empty() || body.len() > 64 * 1024 {
         return Err(format!("the {label} exceeds supported bounds"));
     }
@@ -2250,6 +2818,10 @@ fn default_recurring_state_root() -> PathBuf {
     PathBuf::from("/var/lib/helix/power")
 }
 
+fn default_docker_cleanup_state_root() -> PathBuf {
+    PathBuf::from("/var/lib/helix/docker-cleanup")
+}
+
 fn default_systemd_unit_root() -> PathBuf {
     PathBuf::from("/etc/systemd/system")
 }
@@ -2355,6 +2927,7 @@ mod tests {
             broker_unit: "helix-privd.service".to_owned(),
             power_state_root: root.join("transient"),
             recurring_state_root: root.join("recurring"),
+            docker_cleanup_state_root: root.join("docker-cleanup"),
             systemd_unit_root: root.join("units"),
             broker_binary: PathBuf::from("/usr/local/libexec/helix-privd"),
             broker_config_path: PathBuf::from("/etc/helix/privd.json"),
@@ -2862,6 +3435,30 @@ mod tests {
         )
     }
 
+    fn docker_cleanup_spec() -> DockerCleanupScheduleSpec {
+        DockerCleanupScheduleSpec {
+            weekdays: vec![RebootWeekday::Tuesday, RebootWeekday::Saturday],
+            hour: 4,
+            minute: 30,
+            timezone: read_host_timezone().unwrap(),
+            retention_hours: 168,
+        }
+    }
+
+    fn docker_cleanup_timer_listing() -> CommandOutput {
+        success(
+            &json!([{
+                "next": 1_800_050_000_000_000_u64,
+                "left": 1_u64,
+                "last": 0_u64,
+                "passed": 0_u64,
+                "unit": DOCKER_CLEANUP_TIMER_UNIT,
+                "activates": DOCKER_CLEANUP_SERVICE_UNIT
+            }])
+            .to_string(),
+        )
+    }
+
     #[test]
     fn recurring_reboot_uses_verified_units_and_the_broker_safety_gate() {
         let temporary = tempfile::tempdir().unwrap();
@@ -2938,6 +3535,87 @@ mod tests {
         assert!(!control.recurring_record_path().exists());
         assert!(!control.recurring_service_path().unwrap().exists());
         assert!(!control.recurring_timer_path().unwrap().exists());
+    }
+
+    #[test]
+    fn recurring_docker_cleanup_uses_verified_units_and_never_catches_up() {
+        let temporary = tempfile::tempdir().unwrap();
+        let runner = Arc::new(MockRunner::default());
+        runner.push(success("calendar valid\n"));
+        runner.push(success(""));
+        runner.push(success(""));
+        runner.push(success("active\n"));
+        runner.push(success("enabled\n"));
+        runner.push(docker_cleanup_timer_listing());
+        runner.push(success("active\n"));
+        runner.push(success("enabled\n"));
+        runner.push(success(""));
+        runner.push(success("inactive\n"));
+        runner.push(success(""));
+        let control =
+            HostControl::with_runner(config(temporary.path().join("power")), runner.clone())
+                .unwrap();
+
+        let scheduled = control
+            .set_recurring_docker_cleanup(docker_cleanup_spec())
+            .unwrap();
+        assert_eq!(scheduled["state"], "scheduled");
+        assert_eq!(scheduled["retention_hours"], 168);
+        assert_eq!(scheduled["next_at_unix_ms"], 1_800_050_000_000_u64);
+        assert_eq!(scheduled["missed_runs_catch_up"], false);
+        let schedule_id = scheduled["schedule_id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            control
+                .verify_recurring_docker_cleanup_trigger(&schedule_id)
+                .unwrap(),
+            168
+        );
+
+        let service = fs::read_to_string(control.docker_cleanup_service_path().unwrap()).unwrap();
+        let timer = fs::read_to_string(control.docker_cleanup_timer_path().unwrap()).unwrap();
+        assert!(service.contains("--trigger-docker-cleanup"));
+        assert!(service.contains("RestrictAddressFamilies=AF_UNIX"));
+        assert!(!service.contains("docker system prune"));
+        assert!(timer.contains("Persistent=false"));
+        assert!(timer.contains("Tue,Sat *-*-* 04:30:00"));
+        assert_eq!(
+            fs::metadata(control.docker_cleanup_schedule_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        let removed = control.delete_recurring_docker_cleanup().unwrap();
+        assert_eq!(removed["state"], "removed");
+        assert!(!control.docker_cleanup_schedule_path().exists());
+        assert!(!control.docker_cleanup_service_path().unwrap().exists());
+        assert!(!control.docker_cleanup_timer_path().unwrap().exists());
+        assert!(
+            runner
+                .calls()
+                .iter()
+                .all(|(program, _)| program != Path::new("/usr/bin/docker"))
+        );
+    }
+
+    #[test]
+    fn docker_cleanup_schedule_validation_rejects_before_writing_units() {
+        let temporary = tempfile::tempdir().unwrap();
+        let runner = Arc::new(MockRunner::default());
+        let control =
+            HostControl::with_runner(config(temporary.path().join("power")), runner.clone())
+                .unwrap();
+        let mut invalid = docker_cleanup_spec();
+        invalid.weekdays.clear();
+        invalid.retention_hours = 1;
+
+        assert!(control.set_recurring_docker_cleanup(invalid).is_err());
+        assert!(runner.calls().is_empty());
+        assert!(!control.docker_cleanup_schedule_path().exists());
+        assert!(!control.docker_cleanup_service_path().unwrap().exists());
+        assert!(!control.docker_cleanup_timer_path().unwrap().exists());
     }
 
     #[test]
