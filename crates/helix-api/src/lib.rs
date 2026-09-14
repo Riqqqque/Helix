@@ -25,12 +25,13 @@ use axum::{
 };
 use helix_core::{DatabaseStatus, HealthReport, HealthStatus, VERSION, unix_timestamp_ms};
 use helix_privd::{
-    BrokerClient, BrokerClientError, BrokerRequest, DockerContainerActionKind, FileUploadPurpose,
-    FileUploadTarget, FirewallRuleSpec, GameKind, GamePortPolicySpec, HookServiceAction,
-    MarketplaceCatalog, MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch,
-    MinecraftSoftware, ModpackProvider, PackageUpdateCandidate, RecurringRebootSpec, ServerAction,
-    ServerMigrateSource, ServerMigrateSpec, ServerNetworkExposure, StorageAnalysisMode,
-    TerrariaCreateSpec, VRisingCreateSpec, ValheimCreateSpec,
+    BrokerClient, BrokerClientError, BrokerRequest, DockerCleanupScheduleSpec,
+    DockerContainerActionKind, FileUploadPurpose, FileUploadTarget, FirewallRuleSpec, GameKind,
+    GamePortPolicySpec, HookServiceAction, MarketplaceCatalog, MinecraftCreateSpec,
+    MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, ModpackProvider,
+    PackageUpdateCandidate, RecurringRebootSpec, ServerAction, ServerMigrateSource,
+    ServerMigrateSpec, ServerNetworkExposure, StorageAnalysisMode, TerrariaCreateSpec,
+    VRisingCreateSpec, ValheimCreateSpec,
 };
 use helix_state::{
     DatabaseSet, ServerAppearanceUpdateOutcome, UserPreferencesRecord, UserPreferencesUpdateInput,
@@ -304,6 +305,13 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/hooks/{hook_id}/actions", post(manage_hook_service))
         .route("/docker/inventory", get(docker_inventory))
         .route("/docker/actions", post(docker_container_action))
+        .route("/docker/cleanup", get(docker_cleanup_status))
+        .route("/docker/cleanup/run", post(start_docker_cleanup))
+        .route(
+            "/docker/cleanup/schedule",
+            put(set_docker_cleanup_schedule).delete(delete_docker_cleanup_schedule),
+        )
+        .route("/docker/cleanup/jobs/{job_id}", get(docker_cleanup_job))
         .route("/docker/homarr", get(homarr_widget_catalog))
         .route("/security", get(security_inventory))
         .route("/security/controls", post(set_security_control))
@@ -1692,6 +1700,12 @@ struct DockerContainerActionBody {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DockerCleanupBody {
+    retention_hours: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SecurityControlBody {
     id: String,
     enabled: bool,
@@ -2168,6 +2182,64 @@ async fn docker_inventory(
 ) -> Result<impl IntoResponse, ApiError> {
     auth::require_capability(&state, &headers, "system.view").await?;
     broker_json(&state, BrokerRequest::DockerInventory {}).await
+}
+
+async fn docker_cleanup_status(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "system.view").await?;
+    broker_json(&state, BrokerRequest::DockerCleanupStatus {}).await
+}
+
+async fn start_docker_cleanup(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<DockerCleanupBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "system.settings.write").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::StartDockerCleanup {
+            retention_hours: body.retention_hours,
+        },
+    )
+    .await
+}
+
+async fn set_docker_cleanup_schedule(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<DockerCleanupScheduleSpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "system.settings.write").await?;
+    let Json(schedule) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetRecurringDockerCleanup { schedule },
+    )
+    .await
+}
+
+async fn delete_docker_cleanup_schedule(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "system.settings.write").await?;
+    broker_json(&state, BrokerRequest::DeleteRecurringDockerCleanup {}).await
+}
+
+async fn docker_cleanup_job(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(job_id): RoutePath<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "system.view").await?;
+    broker_json(&state, BrokerRequest::JobStatus { job_id }).await
 }
 
 async fn docker_container_action(
@@ -5848,6 +5920,8 @@ mod tests {
             "/api/v1/hooks",
             "/api/v1/hooks/tailscale/install/preflight",
             "/api/v1/hooks/jobs/8953dc16-3891-42bf-802f-711b3ba2965a",
+            "/api/v1/docker/cleanup",
+            "/api/v1/docker/cleanup/jobs/8953dc16-3891-42bf-802f-711b3ba2965a",
             "/api/v1/servers/helix:test/logs/history?lines=500",
         ] {
             let response = context
@@ -5881,6 +5955,75 @@ mod tests {
             .expect("missing CSRF response");
         assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
         assert_eq!(response_json(missing_csrf).await["code"], "csrf_rejected");
+
+        let cleanup_without_csrf = context
+            .app
+            .clone()
+            .oneshot(with_cookie(
+                post_json(
+                    "/api/v1/docker/cleanup/run",
+                    &json!({"retention_hours": 168}),
+                    141,
+                ),
+                &client.cookie,
+            ))
+            .await
+            .expect("missing Docker cleanup CSRF response");
+        assert_eq!(cleanup_without_csrf.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response_json(cleanup_without_csrf).await["code"],
+            "csrf_rejected"
+        );
+
+        for request in [
+            with_csrf(
+                with_cookie(
+                    post_json(
+                        "/api/v1/docker/cleanup/run",
+                        &json!({"retention_hours": 168}),
+                        142,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ),
+            with_csrf(
+                with_cookie(
+                    put_json(
+                        "/api/v1/docker/cleanup/schedule",
+                        &json!({
+                            "weekdays": ["monday", "wednesday"],
+                            "hour": 4,
+                            "minute": 30,
+                            "timezone": "America/Denver",
+                            "retention_hours": 168
+                        }),
+                        143,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ),
+            with_csrf(
+                with_cookie(
+                    delete_json("/api/v1/docker/cleanup/schedule", 144),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ),
+        ] {
+            let response = context
+                .app
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("Docker cleanup mutation response");
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response_json(response).await["code"],
+                "host_broker_unavailable"
+            );
+        }
 
         let unauthenticated_malformed = context
             .app

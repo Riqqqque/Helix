@@ -44,6 +44,9 @@ is an older snapshot; check its release notes before choosing it over main.
   protection, and owner username/password changes;
 - live CPU, memory, swap, disk, network, service, process, Docker, and Helix-only
   resource views, plus a Security center for explained host/Helix protections;
+- measured Docker storage with one-click or scheduled safe cleanup of old build
+  cache, dangling images, and unused networks. Containers, volumes, named images,
+  and active resources are never part of that cleanup profile;
 - multiple named Home layouts with drag-and-drop/resizable clock, host, graphs,
   server, storage, docker, weather, paged-note, website-shortcut, and globe widgets,
   Homarr shortcut import, full-screen Home, per-widget color, and JSON export/import;

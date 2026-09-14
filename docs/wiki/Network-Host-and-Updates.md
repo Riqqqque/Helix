@@ -52,6 +52,32 @@ Docker reports them. Empty published ports are normal. Start, stop, and restart
 require the exact container name. Helix dashboard, gateway, and native game
 containers stay protected. Use Servers to restart a Helix game.
 
+## Docker cleanup
+
+Settings → Docker cleanup shows how much space Docker reports for images,
+containers, volumes, and build cache. It also shows Docker's real data root,
+the filesystem that holds it, and available space. There is no drive picker:
+Docker decides that location in its daemon configuration, and moving it is a
+separate host migration.
+
+**Clean Docker now** runs in the background and remains safe to check after a
+page refresh. The fixed cleanup profile removes only:
+
+- build cache older than the chosen retention period;
+- dangling images older than that period; and
+- unused networks older than that period.
+
+It preserves running and stopped containers, every volume, named images, and
+anything Docker considers active. This intentionally reclaims less than the
+headline “reclaimable” number when Docker includes data Helix will not remove.
+The default keeps seven days, and every run keeps at least one day.
+
+**Schedule** can run the same profile on selected weekdays at one Linux-local
+time. The dialog shows the verified host timezone and next activation. Missed
+runs do not catch up after boot. Helix verifies its saved systemd unit hashes
+before changing or executing the schedule, records the exact last result, and
+refuses to start while a host reboot is pending.
+
 ## System packages
 
 Linux updates sit at the top of Host. Opening that page does not refresh APT or

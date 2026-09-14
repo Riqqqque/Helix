@@ -134,6 +134,15 @@ host timezone and the same safety checks. Native game containers cannot be
 started, stopped, or restarted from the Docker inventory page; Servers uses a
 45-second stop and a health check.
 
+Settings measures Docker's configured data root and its backing filesystem. A
+manual or scheduled safe cleanup removes only build cache, dangling images, and
+unused networks older than the selected retention period. Helix keeps all
+containers, volumes, named images, and active resources. Scheduled runs use the
+verified host timezone, skip missed activations after boot, and leave a durable
+last-run record. The dashboard can recover the active background job after a
+page refresh. Docker chooses the storage drive through its daemon configuration;
+cleanup does not pretend it can target an arbitrary folder.
+
 Opening the package page is read-only. Package-list refresh and exact selected-
 candidate Apply are separate confirmed jobs. Apply revalidates versions, holds,
 disk headroom, a no-removal/no-new-package preview, conffile policy, and final

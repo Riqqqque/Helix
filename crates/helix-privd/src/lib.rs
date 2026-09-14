@@ -101,6 +101,17 @@ pub enum BrokerRequest {
         action: HookServiceAction,
     },
     DockerInventory {},
+    DockerCleanupStatus {},
+    StartDockerCleanup {
+        retention_hours: u16,
+    },
+    SetRecurringDockerCleanup {
+        schedule: DockerCleanupScheduleSpec,
+    },
+    DeleteRecurringDockerCleanup {},
+    ExecuteRecurringDockerCleanup {
+        schedule_id: String,
+    },
     DockerContainerAction {
         name: String,
         action: DockerContainerActionKind,
@@ -625,6 +636,16 @@ pub struct RecurringRebootSpec {
     pub timezone: String,
     pub confirmation_hostname: String,
     pub disruption_acknowledged: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DockerCleanupScheduleSpec {
+    pub weekdays: Vec<RebootWeekday>,
+    pub hour: u8,
+    pub minute: u8,
+    pub timezone: String,
+    pub retention_hours: u16,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -2092,6 +2113,50 @@ mod tests {
         assert_eq!(action["action"], "restart");
         assert!(action.get("command").is_none());
         assert!(action.get("arguments").is_none());
+
+        let cleanup = serde_json::to_value(BrokerRequest::StartDockerCleanup {
+            retention_hours: 168,
+        })
+        .expect("serialize Docker cleanup");
+        assert_eq!(cleanup["operation"], "start_docker_cleanup");
+        assert_eq!(cleanup["retention_hours"], 168);
+        assert_eq!(cleanup.as_object().expect("cleanup object").len(), 2);
+        assert!(cleanup.get("volumes").is_none());
+        assert!(cleanup.get("containers").is_none());
+        assert!(cleanup.get("all_images").is_none());
+
+        let schedule = serde_json::to_value(BrokerRequest::SetRecurringDockerCleanup {
+            schedule: DockerCleanupScheduleSpec {
+                weekdays: vec![RebootWeekday::Monday, RebootWeekday::Wednesday],
+                hour: 4,
+                minute: 30,
+                timezone: "America/Denver".to_owned(),
+                retention_hours: 168,
+            },
+        })
+        .expect("serialize Docker cleanup schedule");
+        assert_eq!(schedule["operation"], "set_recurring_docker_cleanup");
+        assert_eq!(
+            schedule["schedule"]["weekdays"],
+            serde_json::json!(["monday", "wednesday"])
+        );
+        assert_eq!(schedule["schedule"]["retention_hours"], 168);
+        assert!(schedule.get("unit").is_none());
+        assert!(schedule.get("command").is_none());
+
+        let scheduled_trigger =
+            serde_json::to_value(BrokerRequest::ExecuteRecurringDockerCleanup {
+                schedule_id: "8953dc16-3891-42bf-802f-711b3ba2965a".to_owned(),
+            })
+            .expect("serialize Docker cleanup trigger");
+        assert_eq!(
+            scheduled_trigger["operation"],
+            "execute_recurring_docker_cleanup"
+        );
+        assert_eq!(
+            scheduled_trigger.as_object().expect("trigger object").len(),
+            2
+        );
 
         let security = serde_json::to_value(BrokerRequest::SecurityInventory {})
             .expect("serialize security inventory");

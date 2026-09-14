@@ -42,6 +42,10 @@ preserving a verified listening SSH port; it never resets or changes defaults.
 Exact selected APT candidates have a guarded update path with no rollback claim.
 Helix self-update can apply a SHA-256-pinned GitHub source archive to the
 dashboard, gateway, and broker, then restore those if health-check fails.
+Docker cleanup is a separate fixed broker operation. It does not expose a shell,
+path, container selector, volume flag, or all-images flag. Scheduled and manual
+runs preserve containers and volumes, use a minimum age, and stop at the first
+failed cleanup step with a durable result record.
 
 ## Security center
 
