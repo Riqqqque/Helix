@@ -95,6 +95,8 @@ struct Args {
     finalize_pending_update: bool,
     #[arg(long, value_name = "SCHEDULE_ID", hide = true)]
     trigger_recurring_reboot: Option<String>,
+    #[arg(long, value_name = "SCHEDULE_ID", hide = true)]
+    trigger_docker_cleanup: Option<String>,
 }
 
 #[cfg(target_os = "linux")]
@@ -400,6 +402,20 @@ impl BrokerContext {
             BrokerRequest::DockerInventory {} => {
                 self.host_control().and_then(|host| host.docker_inventory())
             }
+            BrokerRequest::DockerCleanupStatus {} => self.docker_cleanup_status(),
+            BrokerRequest::StartDockerCleanup { retention_hours } => {
+                self.start_docker_cleanup_job(retention_hours, "manual")
+            }
+            BrokerRequest::SetRecurringDockerCleanup { schedule } => {
+                self.set_docker_cleanup_schedule(schedule)
+            }
+            BrokerRequest::DeleteRecurringDockerCleanup {} => self.delete_docker_cleanup_schedule(),
+            BrokerRequest::ExecuteRecurringDockerCleanup { schedule_id } => self
+                .host_control()
+                .and_then(|host| host.verify_recurring_docker_cleanup_trigger(&schedule_id))
+                .and_then(|retention_hours| {
+                    self.start_docker_cleanup_job(retention_hours, "scheduled")
+                }),
             BrokerRequest::DockerContainerAction {
                 name,
                 action,
@@ -1473,6 +1489,109 @@ impl BrokerContext {
             return Err("could not start the hook installer worker".to_owned());
         }
         Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
+    fn docker_cleanup_status(&self) -> Result<Value, String> {
+        let mut status = self.host_control()?.docker_cleanup_status()?;
+        let active_job = self
+            .jobs
+            .lock()
+            .map_err(|_| "job registry failed".to_owned())?
+            .values()
+            .find(|job| {
+                job.kind == "docker_cleanup"
+                    && matches!(job.status, JobState::Queued | JobState::Running)
+            })
+            .map(to_value)
+            .transpose()?;
+        status["active_job"] = active_job.unwrap_or(Value::Null);
+        Ok(status)
+    }
+
+    fn start_docker_cleanup_job(
+        self: &Arc<Self>,
+        retention_hours: u16,
+        trigger: &str,
+    ) -> Result<Value, String> {
+        if !(24..=8_760).contains(&retention_hours) {
+            return Err(
+                "Docker cleanup retention must be between 24 hours and one year".to_owned(),
+            );
+        }
+        if !matches!(trigger, "manual" | "scheduled") {
+            return Err("Docker cleanup trigger is invalid".to_owned());
+        }
+        let reuse_key = format!("{trigger}:{retention_hours}");
+        let (job_id, reused) =
+            self.queue_job("docker_cleanup", Some("docker:cleanup"), Some(&reuse_key))?;
+        if reused {
+            return Ok(json!({"job_id": job_id, "reused": true}));
+        }
+        let context = Arc::clone(self);
+        let worker_job_id = job_id.clone();
+        let trigger = trigger.to_owned();
+        if thread::Builder::new()
+            .name(format!("docker-cleanup-{}", &job_id[..8]))
+            .spawn(move || {
+                context.update_job(&worker_job_id, |job| {
+                    job.status = JobState::Running;
+                    job.stage = "Measuring Docker storage".to_owned();
+                    job.progress_percent = 5;
+                });
+                context.update_job(&worker_job_id, |job| {
+                    job.stage = "Removing old safe-to-rebuild Docker data".to_owned();
+                    job.progress_percent = 15;
+                });
+                let result = context
+                    .host_control()
+                    .and_then(|host| host.run_safe_docker_cleanup(retention_hours, &trigger));
+                context.finish_job(
+                    &worker_job_id,
+                    result,
+                    "Docker cleanup finished and storage was measured again",
+                );
+            })
+            .is_err()
+        {
+            self.finish_job(
+                &job_id,
+                Err("could not start the Docker cleanup worker".to_owned()),
+                "",
+            );
+            return Err("could not start the Docker cleanup worker".to_owned());
+        }
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
+    fn set_docker_cleanup_schedule(
+        &self,
+        schedule: helix_privd::DockerCleanupScheduleSpec,
+    ) -> Result<Value, String> {
+        let _power_gate = self
+            .power_gate
+            .lock()
+            .map_err(|_| "host power coordination failed".to_owned())?;
+        if self.host_control()?.reboot_pending()? {
+            return Err(
+                "a host reboot is scheduled; the Docker cleanup schedule cannot change yet"
+                    .to_owned(),
+            );
+        }
+        self.host_control()?.set_recurring_docker_cleanup(schedule)
+    }
+
+    fn delete_docker_cleanup_schedule(&self) -> Result<Value, String> {
+        let _power_gate = self
+            .power_gate
+            .lock()
+            .map_err(|_| "host power coordination failed".to_owned())?;
+        if self.host_control()?.reboot_pending()? {
+            return Err(
+                "a host reboot is scheduled; the Docker cleanup schedule cannot change yet"
+                    .to_owned(),
+            );
+        }
+        self.host_control()?.delete_recurring_docker_cleanup()
     }
 
     fn start_package_refresh_job(self: &Arc<Self>) -> Result<Value, String> {
@@ -2614,7 +2733,7 @@ impl BrokerContext {
             && host.reboot_pending()?
         {
             return Err(
-                "a host reboot is scheduled; new server jobs are temporarily unavailable"
+                "a host reboot is scheduled; new background jobs are temporarily unavailable"
                     .to_owned(),
             );
         }
@@ -3013,6 +3132,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         eprintln!(
             "Helix accepted the recurring reboot safety-gate request: {}",
             result["operation_id"].as_str().unwrap_or("unknown")
+        );
+        return Ok(());
+    }
+    if let Some(schedule_id) = args.trigger_docker_cleanup {
+        let result = BrokerClient::new(config.socket.clone())
+            .request(&BrokerRequest::ExecuteRecurringDockerCleanup { schedule_id })?;
+        eprintln!(
+            "Helix accepted the scheduled Docker cleanup job: {}",
+            result["job_id"].as_str().unwrap_or("unknown")
         );
         return Ok(());
     }

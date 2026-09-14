@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ApiError } from './api';
-import { getJob, type BrokerJob } from './control-api';
+import { getJob as getServerJob, type BrokerJob } from './control-api';
 
 export const MAX_AUTOMATIC_JOB_POLL_FAILURES = 3;
 
@@ -39,6 +39,7 @@ interface JobPollingOptions {
   onJob: (job: BrokerJob) => void;
   onComplete: () => void | Promise<void>;
   onSessionExpired: () => void;
+  getJob?: (jobId: string, csrfToken: string, signal?: AbortSignal) => Promise<BrokerJob>;
 }
 
 export interface JobPollingController {
@@ -54,6 +55,7 @@ export function useJobPolling({
   onJob,
   onComplete,
   onSessionExpired,
+  getJob = getServerJob,
 }: JobPollingOptions): JobPollingController {
   const [consecutiveFailures, setConsecutiveFailures] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -100,7 +102,7 @@ export function useJobPolling({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [baseDelayMs, consecutiveFailures, csrfToken, job, paused]);
+  }, [baseDelayMs, consecutiveFailures, csrfToken, getJob, job, paused]);
 
   const resume = (): void => {
     setConsecutiveFailures(0);

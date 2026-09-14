@@ -72,6 +72,7 @@ import {
 } from './start-with-host';
 import { getSessionExpiry, setSessionExpiry } from './session-expiry-api';
 import { savePersistentSessionProof } from './persistent-session';
+import { DockerCleanupSettings } from './docker-cleanup-settings';
 
 const navigationLabels: Record<PrimaryDashboardSectionId, { label: string; icon: IconName }> = {
   overview: { label: 'Overview', icon: 'overview' },
@@ -1148,6 +1149,11 @@ export function DashboardSettingsPage({
         </section>
         <HelixDataSettings servers={servers} csrfToken={csrfToken} canManage={user.capabilities.includes('games.manage')} onRefresh={onHostIntegrationRefresh} />
         <HostIntegrationSettings resource={hostIntegration} user={user} csrfToken={csrfToken} onRefresh={onHostIntegrationRefresh} />
+        <DockerCleanupSettings
+          csrfToken={csrfToken}
+          timezone={hostIntegration.data?.timezone ?? null}
+          canManage={user.capabilities.includes('system.settings.write')}
+        />
         <SessionExpirySettings csrfToken={csrfToken} canManage={user.capabilities.includes('users.manage')} />
         <AccountSettings user={user} csrfToken={csrfToken} onAccountUpdated={onAccountUpdated} />
       </div>

@@ -9,6 +9,9 @@
   "analysis_roots": [
     "/"
   ],
+  "host_control": {
+    "docker_cleanup_state_root": "/var/lib/helix/docker-cleanup"
+  },
   "native": {
     "state_root": "/srv/helix/state/instances",
     "instance_root": "/srv/helix/instances",

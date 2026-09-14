@@ -1,6 +1,7 @@
-use crate::host::{HostControl, parse_human_bytes, require_success};
+use crate::host::{HostControl, parse_human_bytes, require_success, write_atomic_file};
 use helix_privd::DockerContainerActionKind;
 use rusqlite::{Connection, OpenFlags, backup::Backup};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -15,6 +16,34 @@ const DASHBOARD_ICONS_PNG: &str = "https://cdn.jsdelivr.net/gh/homarr-labs/dashb
 const MAX_CONTAINERS: usize = 128;
 const MAX_HOMARR_WIDGETS: usize = 64;
 const MAX_HOMARR_DB_BYTES: u64 = 32 * 1024 * 1024;
+const MIN_DOCKER_CLEANUP_RETENTION_HOURS: u16 = 24;
+const MAX_DOCKER_CLEANUP_RETENTION_HOURS: u16 = 8_760;
+const DOCKER_CLEANUP_LAST_RUN: &str = "last-run.json";
+const MAX_DOCKER_CLEANUP_RECORD_BYTES: u64 = 64 * 1024;
+
+#[derive(Clone, Debug)]
+struct DockerDiskUsage {
+    storage: Value,
+    categories: Vec<Value>,
+    reclaimable_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DockerCleanupRunRecord {
+    schema_version: u32,
+    run_id: String,
+    trigger: String,
+    status: String,
+    retention_hours: u16,
+    started_at_unix_ms: u64,
+    finished_at_unix_ms: Option<u64>,
+    reclaimable_before_bytes: u64,
+    available_before_bytes: u64,
+    available_after_bytes: Option<u64>,
+    completed_steps: Vec<String>,
+    error: Option<String>,
+}
 
 #[derive(Debug)]
 enum HomarrSqliteRead {
@@ -37,6 +66,231 @@ impl HostControl {
 
     pub fn docker_inventory_listing(&self) -> Result<Value, String> {
         self.collect_docker_inventory(false)
+    }
+
+    pub fn docker_cleanup_status(&self) -> Result<Value, String> {
+        let schedule = self.docker_cleanup_schedule_status()?;
+        let last_run = self.read_docker_cleanup_last_run().unwrap_or_else(|error| {
+            json!({
+                "status": "unavailable",
+                "error": sanitize_label(&error, 500)
+            })
+        });
+        match self.collect_docker_disk_usage() {
+            Ok(usage) => Ok(json!({
+                "schema_version": 1,
+                "availability": "ready",
+                "docker_installed": true,
+                "storage": usage.storage,
+                "usage": usage.categories,
+                "reclaimable_bytes": usage.reclaimable_bytes,
+                "policy": docker_cleanup_policy(),
+                "schedule": schedule,
+                "last_run": last_run,
+                "collected_at_unix_ms": now_unix_ms()
+            })),
+            Err(error) => Ok(json!({
+                "schema_version": 1,
+                "availability": "unavailable",
+                "docker_installed": false,
+                "storage": Value::Null,
+                "usage": [],
+                "reclaimable_bytes": 0,
+                "policy": docker_cleanup_policy(),
+                "schedule": schedule,
+                "last_run": last_run,
+                "error": sanitize_label(&error, 500),
+                "collected_at_unix_ms": now_unix_ms()
+            })),
+        }
+    }
+
+    pub fn run_safe_docker_cleanup(
+        &self,
+        retention_hours: u16,
+        trigger: &str,
+    ) -> Result<Value, String> {
+        validate_docker_cleanup_retention(retention_hours)?;
+        if !matches!(trigger, "manual" | "scheduled") {
+            return Err("Docker cleanup trigger is invalid".to_owned());
+        }
+        let _mutation = self
+            .mutation
+            .lock()
+            .map_err(|_| "Docker cleanup lock failed".to_owned())?;
+        let before = self.collect_docker_disk_usage()?;
+        let started = now_unix_ms();
+        let mut record = DockerCleanupRunRecord {
+            schema_version: 1,
+            run_id: Uuid::new_v4().to_string(),
+            trigger: trigger.to_owned(),
+            status: "running".to_owned(),
+            retention_hours,
+            started_at_unix_ms: started,
+            finished_at_unix_ms: None,
+            reclaimable_before_bytes: before.reclaimable_bytes,
+            available_before_bytes: storage_available_bytes(&before.storage),
+            available_after_bytes: None,
+            completed_steps: Vec::new(),
+            error: None,
+        };
+        self.write_docker_cleanup_run(&record)?;
+        let steps = docker_cleanup_steps(retention_hours);
+        for (step, args) in steps {
+            if let Err(error) = self.docker_command(&args, Duration::from_secs(10 * 60)) {
+                record.status = "failed".to_owned();
+                record.finished_at_unix_ms = Some(now_unix_ms());
+                let error = sanitize_label(&error, 500);
+                record.error = Some(if error.is_empty() {
+                    "Docker command failed".to_owned()
+                } else {
+                    error
+                });
+                let history = self.write_docker_cleanup_run(&record);
+                return Err(match history {
+                    Ok(()) => format!(
+                        "Docker cleanup stopped after {} safe step(s): {}",
+                        record.completed_steps.len(),
+                        record.error.as_deref().unwrap_or("Docker command failed")
+                    ),
+                    Err(history) => format!(
+                        "Docker cleanup stopped after {} safe step(s), and its result could not be recorded: {history}",
+                        record.completed_steps.len()
+                    ),
+                });
+            }
+            record.completed_steps.push(step.to_owned());
+        }
+        let after = self.collect_docker_disk_usage().ok();
+        record.status = "complete".to_owned();
+        record.finished_at_unix_ms = Some(now_unix_ms());
+        record.available_after_bytes = after
+            .as_ref()
+            .map(|usage| storage_available_bytes(&usage.storage));
+        self.write_docker_cleanup_run(&record).map_err(|error| {
+            format!("Docker cleanup finished, but Helix could not record its final result: {error}")
+        })?;
+        let available_increase_bytes = record
+            .available_after_bytes
+            .unwrap_or(record.available_before_bytes)
+            .saturating_sub(record.available_before_bytes);
+        Ok(json!({
+            "schema_version": 1,
+            "run_id": record.run_id,
+            "status": "complete",
+            "trigger": trigger,
+            "retention_hours": retention_hours,
+            "completed_steps": record.completed_steps,
+            "reclaimable_before_bytes": record.reclaimable_before_bytes,
+            "available_before_bytes": record.available_before_bytes,
+            "available_after_bytes": record.available_after_bytes,
+            "available_increase_bytes": available_increase_bytes,
+            "history_recorded": true,
+            "excluded": ["containers", "volumes", "named_images", "active_resources"],
+            "finished_at_unix_ms": record.finished_at_unix_ms
+        }))
+    }
+
+    fn collect_docker_disk_usage(&self) -> Result<DockerDiskUsage, String> {
+        let info = self.docker_command(
+            &[
+                "info".to_owned(),
+                "--format".to_owned(),
+                "{{.DockerRootDir}}\t{{.Driver}}".to_owned(),
+            ],
+            Duration::from_secs(20),
+        )?;
+        let mut fields = info.stdout.trim().splitn(2, '\t');
+        let root = fields.next().unwrap_or_default().trim();
+        let driver = sanitize_label(fields.next().unwrap_or_default(), 64);
+        if root.is_empty()
+            || root.len() > 4_096
+            || !Path::new(root).is_absolute()
+            || root.chars().any(char::is_control)
+        {
+            return Err("Docker returned an invalid data-root path".to_owned());
+        }
+        let root_path = Path::new(root);
+        let stats = rustix::fs::statvfs(root_path)
+            .map_err(|_| "Helix could not measure Docker's data-root filesystem".to_owned())?;
+        let (mount_point, source) = mount_for_path(root_path)
+            .unwrap_or_else(|| ("unavailable".to_owned(), "unavailable".to_owned()));
+        let storage = json!({
+            "data_root": root,
+            "storage_driver": driver,
+            "mount_point": mount_point,
+            "source": source,
+            "total_bytes": stats.f_blocks.saturating_mul(stats.f_frsize),
+            "available_bytes": stats.f_bavail.saturating_mul(stats.f_frsize),
+            "location_controlled_by": "docker_daemon"
+        });
+        let usage_output = self.docker_command(
+            &[
+                "system".to_owned(),
+                "df".to_owned(),
+                "--format".to_owned(),
+                "{{json .}}".to_owned(),
+            ],
+            Duration::from_secs(30),
+        )?;
+        let categories = parse_docker_disk_usage(&usage_output.stdout)?;
+        let reclaimable_bytes = categories.iter().fold(0_u64, |total, item| {
+            total.saturating_add(
+                item.get("reclaimable_bytes")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            )
+        });
+        Ok(DockerDiskUsage {
+            storage,
+            categories,
+            reclaimable_bytes,
+        })
+    }
+
+    fn docker_cleanup_last_run_path(&self) -> PathBuf {
+        self.config
+            .docker_cleanup_state_root
+            .join(DOCKER_CLEANUP_LAST_RUN)
+    }
+
+    fn read_docker_cleanup_last_run(&self) -> Result<Value, String> {
+        let path = self.docker_cleanup_last_run_path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Value::Null);
+            }
+            Err(_) => return Err("could not inspect the Docker cleanup history".to_owned()),
+        };
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        if !metadata.file_type().is_file()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.len() == 0
+            || metadata.len() > MAX_DOCKER_CLEANUP_RECORD_BYTES
+        {
+            return Err("the Docker cleanup history is unsafe".to_owned());
+        }
+        let record = serde_json::from_slice::<DockerCleanupRunRecord>(
+            &fs::read(path).map_err(|_| "could not read Docker cleanup history".to_owned())?,
+        )
+        .map_err(|_| "the Docker cleanup history is invalid".to_owned())?;
+        validate_docker_cleanup_run(&record)?;
+        serde_json::to_value(record)
+            .map_err(|_| "could not encode Docker cleanup history".to_owned())
+    }
+
+    fn write_docker_cleanup_run(&self, record: &DockerCleanupRunRecord) -> Result<(), String> {
+        validate_docker_cleanup_run(record)?;
+        let body = serde_json::to_vec_pretty(record)
+            .map_err(|_| "could not encode Docker cleanup history".to_owned())?;
+        write_atomic_file(
+            &self.docker_cleanup_last_run_path(),
+            &body,
+            0o600,
+            "Docker cleanup history",
+        )
     }
 
     fn collect_docker_inventory(&self, include_stats: bool) -> Result<Value, String> {
@@ -1277,9 +1531,289 @@ fn now_unix_ms() -> u64 {
     .unwrap_or(u64::MAX)
 }
 
+fn docker_cleanup_policy() -> Value {
+    json!({
+        "profile": "safe",
+        "default_retention_hours": 168,
+        "minimum_retention_hours": MIN_DOCKER_CLEANUP_RETENTION_HOURS,
+        "maximum_retention_hours": MAX_DOCKER_CLEANUP_RETENTION_HOURS,
+        "removes": ["old_build_cache", "dangling_images", "unused_networks"],
+        "preserves": ["running_and_stopped_containers", "named_images", "all_volumes", "active_resources"],
+        "automatic_volume_cleanup": false,
+        "automatic_container_cleanup": false
+    })
+}
+
+fn validate_docker_cleanup_retention(retention_hours: u16) -> Result<(), String> {
+    if (MIN_DOCKER_CLEANUP_RETENTION_HOURS..=MAX_DOCKER_CLEANUP_RETENTION_HOURS)
+        .contains(&retention_hours)
+    {
+        Ok(())
+    } else {
+        Err("Docker cleanup retention must be between 24 hours and one year".to_owned())
+    }
+}
+
+fn docker_cleanup_steps(retention_hours: u16) -> Vec<(&'static str, Vec<String>)> {
+    let filter = format!("until={retention_hours}h");
+    [
+        (
+            "old_build_cache",
+            ["builder", "prune", "--force", "--filter"],
+        ),
+        ("dangling_images", ["image", "prune", "--force", "--filter"]),
+        (
+            "unused_networks",
+            ["network", "prune", "--force", "--filter"],
+        ),
+    ]
+    .into_iter()
+    .map(|(step, command)| {
+        let mut arguments = command.map(str::to_owned).to_vec();
+        arguments.push(filter.clone());
+        (step, arguments)
+    })
+    .collect()
+}
+
+fn validate_docker_cleanup_run(record: &DockerCleanupRunRecord) -> Result<(), String> {
+    let parsed = Uuid::parse_str(&record.run_id)
+        .map_err(|_| "the Docker cleanup history is invalid".to_owned())?;
+    let allowed_steps = ["old_build_cache", "dangling_images", "unused_networks"];
+    let steps_are_prefix = record.completed_steps.len() <= allowed_steps.len()
+        && record
+            .completed_steps
+            .iter()
+            .zip(allowed_steps)
+            .all(|(actual, expected)| actual == expected);
+    let terminal = record
+        .finished_at_unix_ms
+        .is_some_and(|finished| finished >= record.started_at_unix_ms);
+    let state_valid = match record.status.as_str() {
+        "running" => record.finished_at_unix_ms.is_none() && record.error.is_none(),
+        "complete" => terminal && record.error.is_none() && record.completed_steps.len() == 3,
+        "failed" => {
+            terminal
+                && record.error.as_ref().is_some_and(|error| {
+                    !error.is_empty() && error.len() <= 500 && !error.chars().any(char::is_control)
+                })
+        }
+        _ => false,
+    };
+    if record.schema_version != 1
+        || parsed.to_string() != record.run_id
+        || !matches!(record.trigger.as_str(), "manual" | "scheduled")
+        || validate_docker_cleanup_retention(record.retention_hours).is_err()
+        || !steps_are_prefix
+        || !state_valid
+    {
+        return Err("the Docker cleanup history is invalid".to_owned());
+    }
+    Ok(())
+}
+
+fn parse_docker_disk_usage(stdout: &str) -> Result<Vec<Value>, String> {
+    let mut categories = Vec::new();
+    let mut seen = HashSet::new();
+    for line in stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(16)
+    {
+        let value = serde_json::from_str::<Value>(line)
+            .map_err(|_| "Docker returned invalid disk usage data".to_owned())?;
+        let kind = match value.get("Type").and_then(Value::as_str) {
+            Some("Images") => "images",
+            Some("Containers") => "containers",
+            Some("Local Volumes") => "local_volumes",
+            Some("Build Cache") => "build_cache",
+            _ => continue,
+        };
+        if !seen.insert(kind) {
+            return Err("Docker returned duplicate disk usage categories".to_owned());
+        }
+        let count = |field: &str| {
+            value
+                .get(field)
+                .and_then(Value::as_str)
+                .and_then(|text| text.parse::<u64>().ok())
+                .filter(|count| *count <= 1_000_000_000)
+        };
+        let bytes = |field: &str| {
+            value
+                .get(field)
+                .and_then(Value::as_str)
+                .and_then(|text| text.split_whitespace().next())
+                .and_then(parse_human_bytes)
+        };
+        let total_count = count("TotalCount")
+            .ok_or_else(|| "Docker returned an invalid object count".to_owned())?;
+        let active_count =
+            count("Active").ok_or_else(|| "Docker returned an invalid active count".to_owned())?;
+        let size_bytes =
+            bytes("Size").ok_or_else(|| "Docker returned an invalid disk size".to_owned())?;
+        let reclaimable_bytes = bytes("Reclaimable")
+            .ok_or_else(|| "Docker returned invalid reclaimable space".to_owned())?;
+        categories.push(json!({
+            "kind": kind,
+            "total_count": total_count,
+            "active_count": active_count,
+            "size_bytes": size_bytes,
+            "reclaimable_bytes": reclaimable_bytes
+        }));
+    }
+    if categories.is_empty() {
+        return Err("Docker did not report any disk usage categories".to_owned());
+    }
+    Ok(categories)
+}
+
+fn storage_available_bytes(storage: &Value) -> u64 {
+    storage
+        .get("available_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
+fn mount_for_path(path: &Path) -> Option<(String, String)> {
+    let body = fs::read_to_string("/proc/self/mountinfo").ok()?;
+    if body.len() > 2 * 1024 * 1024 {
+        return None;
+    }
+    let mut best: Option<(PathBuf, String)> = None;
+    for line in body.lines().take(8_192) {
+        let Some((prefix, suffix)) = line.split_once(" - ") else {
+            continue;
+        };
+        let mut fields = prefix.split_whitespace();
+        let Some(mount) = fields.nth(4).and_then(decode_mountinfo_field) else {
+            continue;
+        };
+        let mount_path = PathBuf::from(&mount);
+        if !path.starts_with(&mount_path)
+            || best.as_ref().is_some_and(|(current, _)| {
+                current.components().count() >= mount_path.components().count()
+            })
+        {
+            continue;
+        }
+        let source = suffix
+            .split_whitespace()
+            .nth(1)
+            .and_then(decode_mountinfo_field)
+            .unwrap_or_else(|| "unavailable".to_owned());
+        best = Some((mount_path, sanitize_label(&source, 512)));
+    }
+    best.map(|(mount, source)| (mount.to_string_lossy().into_owned(), source))
+}
+
+fn decode_mountinfo_field(value: &str) -> Option<String> {
+    if value.is_empty() || value.len() > 4_096 || value.chars().any(char::is_control) {
+        return None;
+    }
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' && index + 3 < bytes.len() {
+            let octal = &bytes[index + 1..index + 4];
+            if octal.iter().all(|byte| matches!(byte, b'0'..=b'7')) {
+                let byte = (octal[0] - b'0') * 64 + (octal[1] - b'0') * 8 + (octal[2] - b'0');
+                if byte == 0 || byte.is_ascii_control() {
+                    return None;
+                }
+                decoded.push(byte);
+                index += 4;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(decoded).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docker_disk_usage_parser_keeps_bounded_reclaimable_totals() {
+        let usage = parse_docker_disk_usage(
+            r#"{"Active":"26","Reclaimable":"3.196GB (14%)","Size":"21.5GB","TotalCount":"91","Type":"Images"}
+{"Active":"23","Reclaimable":"10.46GB","Size":"15.97GB","TotalCount":"546","Type":"Build Cache"}"#,
+        )
+        .unwrap();
+        assert_eq!(usage.len(), 2);
+        assert_eq!(usage[0]["kind"], "images");
+        assert_eq!(usage[0]["reclaimable_bytes"], 3_196_000_000_u64);
+        assert_eq!(usage[1]["kind"], "build_cache");
+        assert_eq!(usage[1]["reclaimable_bytes"], 10_460_000_000_u64);
+    }
+
+    #[test]
+    fn cleanup_commands_never_include_containers_volumes_or_all_images() {
+        let steps = docker_cleanup_steps(168);
+        assert_eq!(steps.len(), 3);
+        assert_eq!(
+            steps[0],
+            (
+                "old_build_cache",
+                vec!["builder", "prune", "--force", "--filter", "until=168h"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            )
+        );
+        assert_eq!(steps[1].1[0], "image");
+        assert_eq!(steps[2].1[0], "network");
+        for (_, arguments) in steps {
+            assert!(!arguments.iter().any(|argument| argument == "container"));
+            assert!(!arguments.iter().any(|argument| argument == "volume"));
+            assert!(!arguments.iter().any(|argument| argument == "--all"));
+        }
+    }
+
+    #[test]
+    fn cleanup_history_rejects_skipped_steps_and_unsafe_errors() {
+        let valid = DockerCleanupRunRecord {
+            schema_version: 1,
+            run_id: Uuid::new_v4().to_string(),
+            trigger: "manual".to_owned(),
+            status: "complete".to_owned(),
+            retention_hours: 168,
+            started_at_unix_ms: 10,
+            finished_at_unix_ms: Some(20),
+            reclaimable_before_bytes: 100,
+            available_before_bytes: 1_000,
+            available_after_bytes: Some(1_100),
+            completed_steps: vec![
+                "old_build_cache".to_owned(),
+                "dangling_images".to_owned(),
+                "unused_networks".to_owned(),
+            ],
+            error: None,
+        };
+        assert!(validate_docker_cleanup_run(&valid).is_ok());
+        let mut skipped = valid.clone();
+        skipped.status = "failed".to_owned();
+        skipped.completed_steps = vec!["unused_networks".to_owned()];
+        skipped.error = Some("failed".to_owned());
+        assert!(validate_docker_cleanup_run(&skipped).is_err());
+        let mut unsafe_error = skipped;
+        unsafe_error.completed_steps.clear();
+        unsafe_error.error = Some("bad\nmessage".to_owned());
+        assert!(validate_docker_cleanup_run(&unsafe_error).is_err());
+    }
+
+    #[test]
+    fn mountinfo_decoder_handles_spaces_without_accepting_controls() {
+        assert_eq!(
+            decode_mountinfo_field("/mnt/docker\\040data").as_deref(),
+            Some("/mnt/docker data")
+        );
+        assert!(decode_mountinfo_field("/mnt/bad\\000path").is_none());
+    }
 
     #[test]
     fn parse_docker_ps_keeps_running_state_and_published_ports() {

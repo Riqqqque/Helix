@@ -122,12 +122,30 @@ and next activation. Automated tests never execute a reboot.
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/docker/inventory` | `system.view` | All Docker containers on the host, with CPU/memory when Docker reports them, plus a Portainer hint |
 | `POST` | `/api/v1/docker/actions` | `system.settings.write` | Start, stop, or restart one named container after typing that exact name |
+| `GET` | `/api/v1/docker/cleanup` | `system.view` | Docker data root, backing filesystem, bounded disk-usage categories, safe policy, schedule, last run, and active cleanup job |
+| `POST` | `/api/v1/docker/cleanup/run` | `system.settings.write` | Queue one safe cleanup with a 24–8,760 hour retention window |
+| `PUT` | `/api/v1/docker/cleanup/schedule` | `system.settings.write` | Create or replace the verified host-local cleanup schedule |
+| `DELETE` | `/api/v1/docker/cleanup/schedule` | `system.settings.write` | Remove the exact verified cleanup schedule |
+| `GET` | `/api/v1/docker/cleanup/jobs/{job_id}` | `system.view` | Read one bounded cleanup job so a refresh can recover progress |
 | `GET` | `/api/v1/docker/homarr` | `dashboard.customize` | Import Homarr http(s) shortcuts from classic JSON or a SQLite app catalog |
 
 Helix talks to the Docker engine on the host. It does not proxy Portainer’s API.
 Empty published-port strings are valid; one unreadable container row is skipped
 instead of failing the whole list. Open Portainer uses a published port when a
 Portainer container is detected.
+Docker cleanup deliberately uses three separate typed commands: old BuildKit
+cache, dangling images, then unused networks. It never calls `docker system
+prune`, never passes `--all` or `--volumes`, and never removes a running or
+stopped container. A failed step stops the run and records the completed prefix.
+Manual and scheduled runs share the same 24-hour minimum retention. Only one
+cleanup job can run at a time, and a pending host reboot blocks dispatch.
+
+The storage location is informational. Docker's daemon owns `data-root`, so a
+cleanup does not accept an arbitrary drive or path. Moving Docker storage is a
+separate host-administration change and is not exposed as a cleanup option.
+Schedules are digest-bound to their Helix-created systemd service/timer files,
+use the verified Linux timezone, and set `Persistent=false` so a missed run does
+not unexpectedly fire after boot.
 Dashboard and gateway container names stay protected. Homarr import reads the
 container bind or volume mounts, then classic JSON if present, otherwise a
 read-only snapshot of `db/db.sqlite` when the `app`/`apps` table has `name` and
