@@ -13,6 +13,7 @@ use unicode_normalization::UnicodeNormalization;
 pub const MAX_REQUEST_BYTES: usize = 5 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_FILE_UPLOAD_CHUNK_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_DIRECT_SERVER_FILE_UPLOAD_BYTES: usize = 3 * 1024 * 1024;
 pub const MAX_STORAGE_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_CUSTOM_JAR_UPLOAD_BYTES: u64 = 768 * 1024 * 1024;
 pub const MAX_CONCURRENT_FILE_UPLOADS: usize = 2;
@@ -712,6 +713,12 @@ pub enum ServerFileRequest {
         length: u32,
         expected_revision: String,
     },
+    UploadFile {
+        path: String,
+        data_base64: String,
+        sha256: String,
+        expected_revision: Option<String>,
+    },
     UploadBegin {
         path: String,
         size: u64,
@@ -754,6 +761,7 @@ impl ServerFileRequest {
                 | Self::Mkdir { .. }
                 | Self::Move { .. }
                 | Self::Trash { .. }
+                | Self::UploadFile { .. }
                 | Self::UploadFinish { .. }
         )
     }

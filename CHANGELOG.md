@@ -8,6 +8,13 @@ release, not a public-internet support promise.
 
 ### Fixed
 
+- Server API uploads no longer strand integrations on stale session IDs. Plugin
+  and mod files up to 3 MiB use one content-idempotent request; larger transfers
+  resume matching uploads, accept safe chunk replays, and recover cleanly after
+  a broker restart or lost response.
+
+- The locked Rust TLS stack now includes the fix for RUSTSEC-2026-0285.
+
 - Minecraft settings no longer stack duplicate restart prompts after a save.
   The server header keeps the restart control, changed-file details stay collapsed,
   and only edited settings get restart labels. Save & restart shares the same

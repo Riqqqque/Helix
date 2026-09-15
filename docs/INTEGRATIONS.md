@@ -99,10 +99,13 @@ deduplication, but it does not implement a general `Idempotency-Key` contract.
 Unknown jobs, missing responses and changed broker state require reconciliation,
 not automatic replay. Job retention is finite.
 
-The client does not retry requests automatically. If adding read retries,
-honor `Retry-After`, use bounded backoff and stop on authentication failures.
-Errors contain `code` and `message`; branch on the code, not English text.
-Keep `X-Request-ID` when reporting a failure. Do not log response bodies that
+The client does not retry general mutations. Its file upload helper is the
+exception: small uploads are content-idempotent, and larger uploads resume from
+the server's acknowledged offset after a lost response or replaced broker
+session. If adding other retries, honor `Retry-After`, use bounded backoff and
+stop on authentication failures. Errors contain `code` and `message`; branch on
+the code, not English text. Keep `X-Request-ID` when reporting a failure. Do not
+log response bodies that
 could contain secrets, file contents or console output.
 
 ## Settings, files and plugin deployment
