@@ -25,6 +25,12 @@ online, but changes to live server files require a stopped server. Chunked backu
 export is also available. Imported AMP servers keep the adapter's actual limits;
 unsupported controls are not advertised as native features.
 
+For plugin JARs, mods and other files up to 3 MiB, `upload_file` is a single
+content-idempotent request. A lost response can be repeated safely. Larger files
+use resumable chunks; repeating `upload_begin` finds the matching session and a
+stale session for the same destination cleans itself up. The reference client
+handles those details instead of making integrations track fragile upload state.
+
 ## The important safety rules
 
 - An owner session carries owner permissions. For automation, create a token
@@ -35,8 +41,9 @@ unsupported controls are not advertised as native features.
   prefix. A display name, port or Minecraft version does not identify a server.
 - A returned job ID means the operation was accepted, not that it completed.
   Poll until `complete` or `failed` and verify the server afterward.
-- A timeout does not cancel an operation. Never automatically repeat a restart,
-  installation or file write because its response was lost.
+- A timeout does not cancel an operation. Never automatically repeat a restart
+  or installation because its response was lost. Use the reference client's
+  content-idempotent upload helper for file transfers.
 - Back up before updating files or software. Stop the selected server before
   replacing plugins, mods or worlds. Keep the backup until startup is verified.
 

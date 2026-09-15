@@ -1,4 +1,4 @@
-"""Small stdlib client for trusted Helix integrations; no automatic mutation retries."""
+"""Small stdlib client for trusted Helix integrations; only file uploads retry safely."""
 
 import http.cookiejar
 import base64
@@ -33,6 +33,8 @@ class HelixClient:
     """One origin, one in-memory session. Do not share an instance across threads."""
 
     MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+    DIRECT_UPLOAD_BYTES = 3 * 1024 * 1024
+    UPLOAD_RECOVERY_ATTEMPTS = 3
 
     def __init__(self, origin, *, allow_private_http=False, timeout=30):
         parts = urllib.parse.urlsplit(origin)
@@ -192,22 +194,28 @@ class HelixClient:
             raise HelixError(200, "invalid_file_metadata")
         offset = 0
         while offset < size:
-            chunk = self.server_files(server_id, "download", path=path, offset=offset,
-                                      length=min(1024 * 1024, size - offset), expected_revision=revision)
-            try:
-                data = base64.b64decode(chunk["data_base64"], validate=True)
-            except (KeyError, ValueError, TypeError):
-                raise HelixError(200, "invalid_download_chunk") from None
-            if (not data or len(data) > 1024 * 1024 or chunk.get("offset") != offset
-                    or chunk.get("next_offset") != offset + len(data) or offset + len(data) > size
-                    or chunk.get("size") != size or chunk.get("revision") != revision
-                    or chunk.get("sha256") != hashlib.sha256(data).hexdigest()):
-                raise HelixError(200, "invalid_download_chunk")
+            data = self._download_chunk(server_id, path, stat, offset,
+                                        min(1024 * 1024, size - offset))
             offset += len(data)
             yield data
         # Also catches replacement of an empty file or changes after the last chunk.
         if self.server_files(server_id, "stat", path=path).get("revision") != revision:
             raise HelixError(200, "file_revision_conflict")
+
+    def _download_chunk(self, server_id, path, stat, offset, length):
+        size, revision = stat.get("size"), stat.get("revision")
+        chunk = self.server_files(server_id, "download", path=path, offset=offset,
+                                  length=length, expected_revision=revision)
+        try:
+            data = base64.b64decode(chunk["data_base64"], validate=True)
+        except (KeyError, ValueError, TypeError):
+            raise HelixError(200, "invalid_download_chunk") from None
+        if (not data or len(data) > length or chunk.get("offset") != offset
+                or chunk.get("next_offset") != offset + len(data) or offset + len(data) > size
+                or chunk.get("size") != size or chunk.get("revision") != revision
+                or chunk.get("sha256") != hashlib.sha256(data).hexdigest()):
+            raise HelixError(200, "invalid_download_chunk")
+        return data
 
     def download_file(self, server_id, path, destination, *, max_bytes=8 * 1024**3):
         """Write a new local file atomically; never overwrite an existing destination."""
@@ -245,8 +253,26 @@ class HelixClient:
             if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                 raise ValueError("Source changed while hashing")
             stream.seek(0)
+            if before.st_size <= self.DIRECT_UPLOAD_BYTES:
+                data = stream.read()
+                if len(data) != before.st_size:
+                    raise ValueError("Source changed while reading")
+                return self._upload_direct(server_id, path, data, digest.hexdigest(), expected_revision)
+
+            def read_at(offset, length):
+                stream.seek(offset)
+                data = stream.read(length)
+                if len(data) != length:
+                    raise ValueError("Source changed while reading")
+                return data
+
+            def verify_source():
+                current = os.fstat(stream.fileno())
+                if (before.st_size, before.st_mtime_ns) != (current.st_size, current.st_mtime_ns):
+                    raise ValueError("Source changed during upload")
+
             return self._upload_chunks(server_id, path, before.st_size, digest.hexdigest(),
-                                       iter(lambda: stream.read(1024 * 1024), b""), expected_revision)
+                                       read_at, expected_revision, verify_source)
 
     def transfer_file(self, source_server, source_path, destination_server, destination_path, *, expected_revision=None):
         """Copy through this client in bounded chunks, without granting host-path access."""
@@ -254,32 +280,118 @@ class HelixClient:
         if type(stat.get("size")) is not int or not 0 <= stat["size"] <= 8 * 1024**3:
             raise HelixError(200, "transfer_size_limit")
         digest = hashlib.sha256()
+        direct = bytearray() if stat["size"] <= self.DIRECT_UPLOAD_BYTES else None
         for data in self._download_chunks(source_server, source_path, stat):
             digest.update(data)
-        return self._upload_chunks(destination_server, destination_path, stat["size"], digest.hexdigest(),
-                                   self._download_chunks(source_server, source_path, stat), expected_revision)
+            if direct is not None:
+                direct.extend(data)
+        if direct is not None:
+            return self._upload_direct(destination_server, destination_path, bytes(direct),
+                                       digest.hexdigest(), expected_revision)
 
-    def _upload_chunks(self, server_id, path, size, digest, chunks, expected_revision):
-        started = self.server_files(server_id, "upload_begin", path=path, size=size,
-                                    sha256=digest, expected_revision=expected_revision)
-        upload_id = started.get("upload_id")
-        if not isinstance(upload_id, str) or not upload_id:
-            raise HelixError(200, "invalid_upload_response")
-        offset = 0
-        try:
-            for data in chunks:
-                progress = self.server_files(server_id, "upload_chunk", upload_id=upload_id, offset=offset,
-                                             data_base64=base64.b64encode(data).decode("ascii"))
-                offset += len(data)
-                if progress.get("bytes_written") != offset:
-                    raise HelixError(200, "invalid_upload_progress")
-            return self.server_files(server_id, "upload_finish", upload_id=upload_id)
-        except Exception:
+        def read_at(offset, length):
+            return self._download_chunk(source_server, source_path, stat, offset, length)
+
+        def verify_source():
+            if self.server_files(source_server, "stat", path=source_path).get("revision") != stat["revision"]:
+                raise HelixError(200, "file_revision_conflict")
+
+        return self._upload_chunks(destination_server, destination_path, stat["size"], digest.hexdigest(),
+                                   read_at, expected_revision, verify_source)
+
+    def _upload_direct(self, server_id, path, data, digest, expected_revision):
+        encoded = base64.b64encode(data).decode("ascii")
+        last_error = None
+        for _ in range(self.UPLOAD_RECOVERY_ATTEMPTS):
             try:
-                self.server_files(server_id, "upload_abort", upload_id=upload_id)
+                return self.server_files(server_id, "upload_file", path=path, data_base64=encoded,
+                                         sha256=digest, expected_revision=expected_revision)
+            except HelixError as error:
+                if error.code not in {"transport_error_outcome_unknown", "host_broker_unavailable"}:
+                    raise
+                last_error = error
+        raise last_error
+
+    def _upload_chunks(self, server_id, path, size, digest, read_at, expected_revision,
+                       verify_source=lambda: None):
+        recovery_count = 0
+        while True:
+            try:
+                started = self.server_files(server_id, "upload_begin", path=path, size=size,
+                                            sha256=digest, expected_revision=expected_revision)
+            except HelixError as error:
+                if not self._recoverable_upload_error(error) or recovery_count >= self.UPLOAD_RECOVERY_ATTEMPTS:
+                    raise
+                recovery_count += 1
+                continue
+            if started.get("completed") is True:
+                return started
+            upload_id = started.get("upload_id")
+            offset = started.get("bytes_written")
+            chunk_bytes = started.get("max_chunk_bytes")
+            if (not isinstance(upload_id, str) or not upload_id or type(offset) is not int
+                    or not 0 <= offset <= size or type(chunk_bytes) is not int
+                    or not 1 <= chunk_bytes <= 1024 * 1024):
+                raise HelixError(200, "invalid_upload_response")
+
+            restart = False
+            while offset < size:
+                try:
+                    data = read_at(offset, min(chunk_bytes, size - offset))
+                except Exception:
+                    self._abort_upload(server_id, upload_id)
+                    raise
+                if not isinstance(data, bytes) or not data or len(data) > chunk_bytes or offset + len(data) > size:
+                    self._abort_upload(server_id, upload_id)
+                    raise HelixError(200, "invalid_upload_source")
+                try:
+                    progress = self.server_files(
+                        server_id, "upload_chunk", upload_id=upload_id, offset=offset,
+                        data_base64=base64.b64encode(data).decode("ascii"),
+                    )
+                except HelixError as error:
+                    if not self._recoverable_upload_error(error) or recovery_count >= self.UPLOAD_RECOVERY_ATTEMPTS:
+                        if not self._recoverable_upload_error(error):
+                            self._abort_upload(server_id, upload_id)
+                        raise
+                    recovery_count += 1
+                    restart = True
+                    break
+                acknowledged = progress.get("bytes_written")
+                if type(acknowledged) is not int or not offset + len(data) <= acknowledged <= size:
+                    self._abort_upload(server_id, upload_id)
+                    raise HelixError(200, "invalid_upload_progress")
+                offset = acknowledged
+            if restart:
+                continue
+
+            try:
+                verify_source()
             except Exception:
-                pass  # A completed upload may already be gone; never replay finish.
-            raise
+                self._abort_upload(server_id, upload_id)
+                raise
+            try:
+                return self.server_files(server_id, "upload_finish", upload_id=upload_id)
+            except HelixError as error:
+                if not self._recoverable_upload_error(error) or recovery_count >= self.UPLOAD_RECOVERY_ATTEMPTS:
+                    if not self._recoverable_upload_error(error):
+                        self._abort_upload(server_id, upload_id)
+                    raise
+                recovery_count += 1
+
+    def _abort_upload(self, server_id, upload_id):
+        try:
+            self.server_files(server_id, "upload_abort", upload_id=upload_id)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _recoverable_upload_error(error):
+        return error.code in {
+            "transport_error_outcome_unknown",
+            "host_broker_unavailable",
+            "broker_operation_rejected",
+        }
 
     def wait_for_job(self, job_id, *, timeout=300, interval=2):
         if not all(math.isfinite(value) and value > 0 for value in (timeout, interval)):

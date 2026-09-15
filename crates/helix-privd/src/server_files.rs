@@ -1,6 +1,6 @@
 //! Server-relative, descriptor-anchored file access. No shell or host path input.
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use helix_privd::ServerFileRequest;
+use helix_privd::{MAX_DIRECT_SERVER_FILE_UPLOAD_BYTES, ServerFileRequest};
 use rustix::fs::{self as sys, AtFlags, Mode, OFlags, RenameFlags};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -32,6 +32,7 @@ pub const ACTIONS: &[&str] = &[
     "move",
     "trash",
     "download",
+    "upload_file",
     "upload_begin",
     "upload_chunk",
     "upload_status",
@@ -157,6 +158,53 @@ impl ServerFiles {
                 temp.file.write_all(content.as_bytes()).map_err(error)?;
                 publish(&root, &path, &temp, uid, Some(&expected_revision))
             }
+            R::UploadFile {
+                path,
+                data_base64,
+                sha256,
+                expected_revision,
+            } => {
+                if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err("upload_file needs a SHA-256 digest".into());
+                }
+                if data_base64.len() > MAX_DIRECT_SERVER_FILE_UPLOAD_BYTES.div_ceil(3) * 4 {
+                    return Err(
+                        "upload_file is limited to 3 MiB; use chunked upload for larger files"
+                            .into(),
+                    );
+                }
+                let bytes = STANDARD
+                    .decode(data_base64)
+                    .map_err(|_| "invalid base64 file".to_owned())?;
+                if bytes.len() > MAX_DIRECT_SERVER_FILE_UPLOAD_BYTES {
+                    return Err(
+                        "upload_file is limited to 3 MiB; use chunked upload for larger files"
+                            .into(),
+                    );
+                }
+                let sha256 = sha256.to_ascii_lowercase();
+                if hex(&Sha256::digest(&bytes)) != sha256 {
+                    return Err(
+                        "upload_file SHA-256 does not match; the destination was not changed"
+                            .into(),
+                    );
+                }
+                if let Err(conflict) = check_destination(&root, &path, expected_revision.as_deref())
+                {
+                    if let Some(existing) =
+                        matching_destination(&root, &path, bytes.len() as u64, &sha256)?
+                    {
+                        return Ok(with_upload_state(existing, true));
+                    }
+                    return Err(conflict);
+                }
+                let mut temp = temporary(&root, &path)?;
+                temp.file.write_all(&bytes).map_err(error)?;
+                Ok(with_upload_state(
+                    publish(&root, &path, &temp, uid, expected_revision.as_deref())?,
+                    false,
+                ))
+            }
             R::Move {
                 path,
                 destination,
@@ -210,18 +258,40 @@ impl ServerFiles {
                         "upload needs a SHA-256 digest and a size from zero to 8 GiB".into(),
                     );
                 }
+                let sha256 = sha256.to_ascii_lowercase();
                 let mut uploads = self.uploads.lock().map_err(error)?;
                 uploads.retain(|_, u| u.touched.elapsed() < IDLE);
+                if let Some((id, upload)) = uploads
+                    .iter_mut()
+                    .find(|(_, upload)| upload.server == server && upload.path == path)
+                {
+                    if upload.size == size
+                        && upload.sha256 == sha256
+                        && upload.expected_revision == expected_revision
+                    {
+                        upload.touched = Instant::now();
+                        return Ok(json!({
+                            "upload_id": id,
+                            "bytes_written": upload.written,
+                            "size": size,
+                            "max_chunk_bytes": CHUNK,
+                            "idle_timeout_seconds": 600,
+                            "resumed": true,
+                            "completed": false
+                        }));
+                    }
+                }
+                uploads.retain(|_, upload| !(upload.server == server && upload.path == path));
+                if let Err(conflict) = check_destination(&root, &path, expected_revision.as_deref())
+                {
+                    if let Some(existing) = matching_destination(&root, &path, size, &sha256)? {
+                        return Ok(with_upload_state(existing, true));
+                    }
+                    return Err(conflict);
+                }
                 if uploads.len() >= 2 {
                     return Err("two uploads are already active; finish or abort one first".into());
                 }
-                if uploads
-                    .values()
-                    .any(|u| u.server == server && u.path == path)
-                {
-                    return Err("an upload to this server path is already active".into());
-                }
-                check_destination(&root, &path, expected_revision.as_deref())?;
                 let temporary = temporary(&root, &path)?;
                 let id = Uuid::new_v4().to_string();
                 uploads.insert(
@@ -238,9 +308,15 @@ impl ServerFiles {
                         temporary,
                     },
                 );
-                Ok(
-                    json!({"upload_id": id, "bytes_written": 0, "size": size, "max_chunk_bytes": CHUNK, "idle_timeout_seconds": 600}),
-                )
+                Ok(json!({
+                    "upload_id": id,
+                    "bytes_written": 0,
+                    "size": size,
+                    "max_chunk_bytes": CHUNK,
+                    "idle_timeout_seconds": 600,
+                    "resumed": false,
+                    "completed": false
+                }))
             }
             other => self.upload_request(server, &root, uid, other),
         }
@@ -273,7 +349,7 @@ impl ServerFiles {
         upload.touched = Instant::now();
         match request {
             R::UploadStatus { .. } => Ok(
-                json!({"upload_id": id, "path": upload.path, "bytes_written": upload.written, "size": upload.size}),
+                json!({"upload_id": id, "path": upload.path, "bytes_written": upload.written, "size": upload.size, "sha256": upload.sha256}),
             ),
             R::UploadChunk {
                 offset,
@@ -286,11 +362,30 @@ impl ServerFiles {
                 let bytes = STANDARD
                     .decode(data_base64)
                     .map_err(|_| "invalid base64 chunk".to_owned())?;
-                if bytes.is_empty()
-                    || bytes.len() > CHUNK
-                    || offset != upload.written
-                    || offset.saturating_add(bytes.len() as u64) > upload.size
-                {
+                if bytes.is_empty() || bytes.len() > CHUNK {
+                    return Err("chunk offset or size does not match this upload; read upload_status before resuming".into());
+                }
+                let end = offset.saturating_add(bytes.len() as u64);
+                if offset < upload.written && end <= upload.written {
+                    upload
+                        .temporary
+                        .file
+                        .seek(SeekFrom::Start(offset))
+                        .map_err(error)?;
+                    let mut staged = vec![0; bytes.len()];
+                    upload
+                        .temporary
+                        .file
+                        .read_exact(&mut staged)
+                        .map_err(error)?;
+                    if staged != bytes {
+                        return Err("replayed upload chunk does not match staged data".into());
+                    }
+                    return Ok(
+                        json!({"upload_id": id, "bytes_written": upload.written, "size": upload.size, "replayed": true}),
+                    );
+                }
+                if offset != upload.written || end > upload.size {
                     return Err("chunk offset or size does not match this upload; read upload_status before resuming".into());
                 }
                 // A partial write error is reconciled by seeking and rewriting this same offset.
@@ -307,7 +402,9 @@ impl ServerFiles {
                     .map_err(error)?;
                 upload.hash.update(&bytes);
                 upload.written += bytes.len() as u64;
-                Ok(json!({"upload_id": id, "bytes_written": upload.written, "size": upload.size}))
+                Ok(
+                    json!({"upload_id": id, "bytes_written": upload.written, "size": upload.size, "replayed": false}),
+                )
             }
             R::UploadFinish { .. } => {
                 if upload.written != upload.size
@@ -548,6 +645,52 @@ fn check_destination(root: &OwnedFd, path: &str, expected: Option<&str>) -> Resu
         }
     }
 }
+
+fn matching_destination(
+    root: &OwnedFd,
+    path: &str,
+    expected_size: u64,
+    expected_sha256: &str,
+) -> Result<Option<Value>, String> {
+    let (parent, name) = parent(root, path)?;
+    let metadata = match sys::statat(&parent, &name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(metadata) => metadata,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(cause) => return Err(error(cause)),
+    };
+    if sys::FileType::from_raw_mode(metadata.st_mode) != sys::FileType::RegularFile
+        || metadata.st_nlink != 1
+        || u64::try_from(metadata.st_size).ok() != Some(expected_size)
+    {
+        return Ok(None);
+    }
+    let (_, _, mut file) = existing(root, path)?;
+    let metadata = regular(&file)?;
+    let expected_revision = revision(&metadata);
+    let mut hash = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(error)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    check_revision(&file, &expected_revision)?;
+    if hex(&hash.finalize()) != expected_sha256 {
+        return Ok(None);
+    }
+    Ok(Some(info(path, &metadata)))
+}
+
+fn with_upload_state(mut value: Value, unchanged: bool) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("completed".into(), Value::Bool(true));
+        object.insert("unchanged".into(), Value::Bool(unchanged));
+    }
+    value
+}
+
 fn publish(
     root: &OwnedFd,
     path: &str,
@@ -859,11 +1002,20 @@ mod tests {
             .unwrap()["bytes_written"],
             7
         );
+        let replay = f
+            .call(R::UploadChunk {
+                upload_id: id.clone(),
+                offset: 0,
+                data_base64: STANDARD.encode(b"payload"),
+            })
+            .unwrap();
+        assert_eq!(replay["bytes_written"], 7);
+        assert_eq!(replay["replayed"], true);
         assert!(
             f.call(R::UploadChunk {
                 upload_id: id.clone(),
                 offset: 0,
-                data_base64: STANDARD.encode(b"payload")
+                data_base64: STANDARD.encode(b"different")
             })
             .is_err()
         );
@@ -970,5 +1122,132 @@ mod tests {
         fs::write(f.root.path().join("later"), b"keep").unwrap();
         assert!(f.call(R::UploadFinish { upload_id: id }).is_err());
         assert_eq!(fs::read(f.root.path().join("later")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn upload_begin_resumes_matching_work_and_replaces_abandoned_work() {
+        let f = Fixture::new();
+        let first = f.begin("plugin.jar", b"payload", None);
+        f.call(R::UploadChunk {
+            upload_id: first.clone(),
+            offset: 0,
+            data_base64: STANDARD.encode(b"pay"),
+        })
+        .unwrap();
+        let resumed = f
+            .call(R::UploadBegin {
+                path: "plugin.jar".into(),
+                size: 7,
+                sha256: hex(&Sha256::digest(b"payload")),
+                expected_revision: None,
+            })
+            .unwrap();
+        assert_eq!(resumed["upload_id"], first);
+        assert_eq!(resumed["bytes_written"], 3);
+        assert_eq!(resumed["resumed"], true);
+
+        let replacement = f
+            .call(R::UploadBegin {
+                path: "plugin.jar".into(),
+                size: 3,
+                sha256: hex(&Sha256::digest(b"new")),
+                expected_revision: None,
+            })
+            .unwrap();
+        assert_ne!(replacement["upload_id"], first);
+        assert_eq!(replacement["bytes_written"], 0);
+        assert_eq!(replacement["resumed"], false);
+        assert!(f.call(R::UploadStatus { upload_id: first }).is_err());
+    }
+
+    #[test]
+    fn direct_upload_and_lost_finish_retries_are_idempotent() {
+        let f = Fixture::new();
+        let payload = b"plugin";
+        let digest = hex(&Sha256::digest(payload));
+        assert!(
+            f.call(R::UploadFile {
+                path: "plugin.jar".into(),
+                data_base64: STANDARD.encode(payload),
+                sha256: hex(&Sha256::digest(b"different")),
+                expected_revision: None,
+            })
+            .is_err()
+        );
+        assert!(!f.root.path().join("plugin.jar").exists());
+        let first = f
+            .call(R::UploadFile {
+                path: "plugin.jar".into(),
+                data_base64: STANDARD.encode(payload),
+                sha256: digest.clone(),
+                expected_revision: None,
+            })
+            .unwrap();
+        assert_eq!(first["completed"], true);
+        assert_eq!(first["unchanged"], false);
+        let revision = first["revision"].as_str().unwrap().to_owned();
+
+        let retry = f
+            .call(R::UploadFile {
+                path: "plugin.jar".into(),
+                data_base64: STANDARD.encode(payload),
+                sha256: digest.clone(),
+                expected_revision: None,
+            })
+            .unwrap();
+        assert_eq!(retry["revision"], revision);
+        assert_eq!(retry["unchanged"], true);
+
+        let replacement = b"replacement";
+        let old_revision = f.revision("plugin.jar");
+        let finished = f
+            .call(R::UploadFile {
+                path: "plugin.jar".into(),
+                data_base64: STANDARD.encode(replacement),
+                sha256: hex(&Sha256::digest(replacement)),
+                expected_revision: Some(old_revision.clone()),
+            })
+            .unwrap();
+        assert_eq!(finished["unchanged"], false);
+        let lost_response_retry = f
+            .call(R::UploadFile {
+                path: "plugin.jar".into(),
+                data_base64: STANDARD.encode(replacement),
+                sha256: hex(&Sha256::digest(replacement)),
+                expected_revision: Some(old_revision),
+            })
+            .unwrap();
+        assert_eq!(lost_response_retry["unchanged"], true);
+        assert_eq!(
+            fs::read(f.root.path().join("plugin.jar")).unwrap(),
+            replacement
+        );
+    }
+
+    #[test]
+    fn upload_begin_recognizes_a_completed_publish_after_response_loss() {
+        let f = Fixture::new();
+        let payload = b"large payload";
+        let digest = hex(&Sha256::digest(payload));
+        let id = f.begin("mod.jar", payload, None);
+        f.call(R::UploadChunk {
+            upload_id: id.clone(),
+            offset: 0,
+            data_base64: STANDARD.encode(payload),
+        })
+        .unwrap();
+        f.call(R::UploadFinish { upload_id: id }).unwrap();
+
+        let retry = f
+            .call(R::UploadBegin {
+                path: "mod.jar".into(),
+                size: payload.len() as u64,
+                sha256: digest,
+                expected_revision: None,
+            })
+            .unwrap();
+        assert_eq!(retry["completed"], true);
+        assert_eq!(retry["unchanged"], true);
+        assert!(retry.get("upload_id").is_none());
     }
 }

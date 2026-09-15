@@ -51,10 +51,11 @@ container state after waiting; a timeout does not mean the server stopped.
 Check the job and console before retrying. Use `kill` only when accepting the
 risk of losing unsaved progress.
 
-A lost response is an unknown outcome, not permission to repeat a mutation.
-Reconcile inventory, jobs and file revisions before continuing. General
-idempotency keys and durable upload sessions across broker restarts are not
-implemented.
+A lost response is an unknown outcome, not permission to repeat a general
+mutation. Reconcile inventory, jobs and file revisions before continuing.
+Server file uploads are the exception: `upload_file` is content-idempotent, and
+repeating `upload_begin` with the same path, size, checksum and revision resumes
+the existing staged upload. General idempotency keys are not implemented.
 
 ## Server-relative files
 
@@ -74,6 +75,7 @@ No `storage.files.manage` grant or absolute host path is needed.
 | `move` | `path`, `destination`, `expected_revision` | Rename or move a file/folder inside this server; never overwrites |
 | `trash` | `path`, `expected_revision` | Recoverable removal and `recovery_path` |
 | `download` | `path`, `offset`, `length`, `expected_revision` | Base64 chunk, SHA-256, offsets, size, revision, EOF |
+| `upload_file` | `path`, `data_base64`, `sha256`, optional `expected_revision` | One-request atomic upload up to 3 MiB; safe to repeat after a lost response |
 | `upload_begin` | `path`, `size`, `sha256`, optional `expected_revision` | Upload ID and chunk limit |
 | `upload_chunk` | `upload_id`, `offset`, `data_base64` | Acknowledged `bytes_written` |
 | `upload_status` | `upload_id` | Current offset, target and expected size |
@@ -87,11 +89,12 @@ cannot be renamed or removed. Operations use directory descriptors so replacing
 a path component with a symbolic link does not redirect access to the host.
 Do not concurrently move server directories with external administrator tools.
 
-Create, mkdir, write, move, trash and upload finish require the server to be
-stopped, verified against its exact container identity. Upload staging can run
-while online; it does not change live server files. Each request participates in
-the native operation lock, so a backup/update/restore cannot overlap its file
-operation. Stop and wait for completion before publishing replacement files.
+Create, mkdir, write, move, trash, `upload_file` and upload finish require the
+server to be stopped, verified against its exact container identity. Upload
+staging can run while online; it does not change live server files. Each request
+participates in the native operation lock, so a backup/update/restore cannot
+overlap its file operation. Stop and wait for completion before publishing
+replacement files.
 
 Revisions are opaque, not timestamps to invent or parse. Keep the value from
 `stat` or `read`. A stale revision rejects the operation; reload and reconcile.
@@ -102,17 +105,25 @@ changes while enumerating a tree and inspect `omitted_entries`.
 
 ## Upload, download and copy
 
-Uploads accept zero bytes through 8 GiB, in sequential chunks of at most 1 MiB.
-There are two active upload slots. Inactive sessions expire after ten minutes,
-with cleanup on the next upload request. Finish verifies the declared size and
-SHA-256 before making the file visible. A destination that already exists needs
-its expected revision; accidental overwrite is rejected.
+Use `upload_file` for plugin JARs, mods and other files up to 3 MiB. It sends one
+base64 payload, verifies its SHA-256 and publishes atomically. Repeating the same
+request after a timeout returns the already-published revision instead of
+overwriting it again.
+
+Larger uploads accept zero bytes through 8 GiB, in sequential chunks of at most
+1 MiB. There are two active upload slots. Inactive sessions expire after ten
+minutes, with cleanup on the next upload request. Finish verifies the declared
+size and SHA-256 before making the file visible. A destination that already
+exists needs its expected revision; accidental overwrite is rejected.
 
 Uploads use Linux unnamed temporary files on the destination filesystem.
 Aborting or losing the broker closes them without leaving partial plugin/world
-files. Refreshing the browser does not stop them: retain the upload ID and use
-`upload_status` to reconcile the last acknowledged offset. A broker restart
-invalidates in-flight IDs; start a new upload after checking the destination.
+files. Repeating `upload_begin` with identical metadata returns the active ID and
+acknowledged offset. Repeating an already accepted chunk is safe when its bytes
+match. A different upload to the same path replaces only the abandoned staging,
+never the destination. If the broker restarts, repeat `upload_begin`; it starts
+fresh or reports that the matching file was already published. The reference
+client handles this recovery automatically.
 Filesystems must support `O_TMPFILE`, hard links and atomic exchange for
 replacement (for example ext4 or XFS). Unsupported filesystems fail before
 replacement; Docker writable layers and some network filesystems may not support
