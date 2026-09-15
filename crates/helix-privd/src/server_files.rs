@@ -261,25 +261,23 @@ impl ServerFiles {
                 let sha256 = sha256.to_ascii_lowercase();
                 let mut uploads = self.uploads.lock().map_err(error)?;
                 uploads.retain(|_, u| u.touched.elapsed() < IDLE);
-                if let Some((id, upload)) = uploads
-                    .iter_mut()
-                    .find(|(_, upload)| upload.server == server && upload.path == path)
-                {
-                    if upload.size == size
+                if let Some((id, upload)) = uploads.iter_mut().find(|(_, upload)| {
+                    upload.server == server
+                        && upload.path == path
+                        && upload.size == size
                         && upload.sha256 == sha256
                         && upload.expected_revision == expected_revision
-                    {
-                        upload.touched = Instant::now();
-                        return Ok(json!({
-                            "upload_id": id,
-                            "bytes_written": upload.written,
-                            "size": size,
-                            "max_chunk_bytes": CHUNK,
-                            "idle_timeout_seconds": 600,
-                            "resumed": true,
-                            "completed": false
-                        }));
-                    }
+                }) {
+                    upload.touched = Instant::now();
+                    return Ok(json!({
+                        "upload_id": id,
+                        "bytes_written": upload.written,
+                        "size": size,
+                        "max_chunk_bytes": CHUNK,
+                        "idle_timeout_seconds": 600,
+                        "resumed": true,
+                        "completed": false
+                    }));
                 }
                 uploads.retain(|_, upload| !(upload.server == server && upload.path == path));
                 if let Err(conflict) = check_destination(&root, &path, expected_revision.as_deref())
