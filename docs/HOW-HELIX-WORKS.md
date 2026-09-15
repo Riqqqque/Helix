@@ -126,9 +126,10 @@ port before enabling an installed inactive UFW. Helix never resets or changes
 UFW defaults and cannot open a router.
 
 Start-on-boot changes only the exact configured Helix dashboard and gateway
-container restart policies. Immediate host reboot requires exact hostname
-confirmation, acknowledgement, workload preflight, a 10–300 second delay, and
-a cancellable systemd timer. Recurring daily/weekday schedules use the verified
+container restart policies. Immediate host reboot uses a two-step confirmation
+and workload preflight, with no typed hostname or countdown. The authenticated
+request still includes the verified hostname and interruption acknowledgement.
+Delayed API requests use a cancellable timer. Recurring daily/weekday schedules use the verified
 host timezone and the same safety checks. Native game containers cannot be
 started, stopped, or restarted from the Docker inventory page; Servers uses a
 45-second stop and a health check.

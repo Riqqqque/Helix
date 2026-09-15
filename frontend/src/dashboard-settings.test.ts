@@ -18,14 +18,15 @@ const clearPreflight: HostRebootPreflight = {
 };
 
 describe('whole-host reboot confirmation', () => {
-  it('requires a clear preflight, exact hostname, acknowledgement, and bounded delay', () => {
-    expect(validateHostReboot('helix-host', 'helix-host', true, 30, null)).toMatch(/safety check/i);
-    expect(validateHostReboot('helix-host', 'helix-host', true, 30, { ...clearPreflight, canSchedule: false })).toMatch(/blocker/i);
-    expect(validateHostReboot('helix-host', 'HELIX-HOST', true, 30, clearPreflight)).toMatch(/exactly/i);
-    expect(validateHostReboot('helix-host', 'helix-host', false, 30, clearPreflight)).toMatch(/acknowledge/i);
-    expect(validateHostReboot('helix-host', 'helix-host', true, 9, clearPreflight)).toMatch(/10 to 300/i);
-    expect(validateHostReboot('helix-host', 'helix-host', true, 301, clearPreflight)).toMatch(/10 to 300/i);
-    expect(validateHostReboot('helix-host', 'helix-host', true, 30, clearPreflight)).toBeNull();
+  it('requires a clear preflight without extra typing or a countdown', () => {
+    expect(validateHostReboot(null)).toMatch(/safety check/i);
+    expect(validateHostReboot({ ...clearPreflight, canSchedule: false })).toMatch(/blocker/i);
+    expect(validateHostReboot(clearPreflight)).toBeNull();
+    const unknown = { ...clearPreflight, canSchedule: false, blockers: [{ code: 'player_status_unverified', message: 'Unknown player count' }] };
+    expect(validateHostReboot(unknown)).toBeNull();
+    expect(validateHostReboot({ ...unknown, activePlayers: 1 })).toMatch(/blocker/i);
+    expect(validateHostReboot({ ...unknown, activeJobsTotal: 1 })).toMatch(/blocker/i);
+    expect(validateHostReboot({ ...unknown, blockers: [...unknown.blockers, { code: 'jobs_running', message: 'Backup running' }] })).toMatch(/blocker/i);
   });
 
   it('validates recurring schedules against the verified host timezone and hostname', () => {

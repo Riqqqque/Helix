@@ -248,11 +248,11 @@ dashboard/gateway containers.
 One-shot whole-host reboot requires:
 
 - capability `system.power`;
-- exact current-hostname confirmation;
-- a 10–300 second delay;
-- explicit disruption acknowledgement;
+- exact current hostname in the request (filled by the confirmation dialog);
+- explicit confirmation acknowledging the interruption;
 - active-player and running-job preflight; and
-- an opaque cancellable systemd transient-timer operation.
+- an opaque systemd operation: immediate requests use a transient service;
+  optional API delays of 10–300 seconds use a cancellable timer.
 
 Recurring reboot stores one verified daily or weekday local-time schedule and
 reports the host timezone and next activation. It uses the same hostname,

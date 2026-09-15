@@ -4346,6 +4346,30 @@ textarea:focus {
   color: var(--muted);
   font-size: 12px;
 }
+.server-config-notice {
+  margin: 0;
+}
+.server-config-notice strong {
+  font-size: 13px;
+}
+.server-config-notice p,
+.server-config-notice details {
+  font-size: 12px;
+}
+.server-config-notice details {
+  margin-top: 8px;
+}
+.server-config-notice summary {
+  cursor: pointer;
+}
+.server-config-notice ul {
+  max-height: 160px;
+  overflow: auto;
+  padding-left: 18px;
+}
+.server-config-notice code {
+  overflow-wrap: anywhere;
+}
 .settings-restart-choice > div:last-child {
   display: flex;
   align-items: center;
@@ -8226,6 +8250,46 @@ textarea:focus {
   font-size: 11px;
   font-style: normal;
 }
+.server-restart-schedule { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.server-restart-schedule-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.server-restart-schedule-heading h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; }
+.server-restart-schedule p { margin: 8px 0; font-size: 12px; overflow-wrap: anywhere; }
+.server-restart-schedule-form { display: grid; gap: 16px; min-width: 0; }
+.server-restart-schedule-form label { display: grid; gap: 8px; font-size: 13px; min-width: 0; }
+.server-restart-schedule-form input, .server-restart-schedule-form select { max-width: 100%; min-width: 0; }
+.server-restart-schedule-form input:not([type="checkbox"]), .server-restart-schedule-form select { min-height: 38px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--bg); color: var(--text); }
+.server-restart-schedule-form p { margin: 0; font-size: 12px; }
+.server-restart-schedule-form .server-restart-ack { display: flex; align-items: flex-start; gap: 10px; }
+.server-restart-ack input { flex: 0 0 16px; }
+.modpack-changelog-heading { display: grid; gap: 6px; padding-bottom: 16px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.modpack-changelog-heading strong { font-size: 17px; }
+.modpack-changelog-heading small { color: var(--muted); }
+.modpack-changelog-body { min-height: 120px; max-height: 52vh; overflow: auto; padding-block: 16px; overflow-wrap: anywhere; }
+.modpack-changelog-body .marketplace-markdown { max-width: 100%; }
+.modpack-changelog-body pre { overflow: auto; max-width: 100%; }
+.modpack-changelog-truncated { color: var(--muted); font-size: 12px; }
+.server-restart-fields { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(0, 2fr); align-items: end; gap: 16px; }
+.server-restart-clock { min-width: 0; margin: 0; padding: 0; border: 0; }
+.server-restart-clock legend { padding: 0; margin-bottom: 8px; font-size: 13px; }
+.server-restart-clock > div { display: grid; grid-template-columns: minmax(0, 1fr) 4px minmax(0, 1fr) minmax(0, 1.1fr); gap: 5px; align-items: center; }
+.server-restart-clock select { width: 100%; padding: 7px 5px; }
+.server-restart-schedule-form .server-restart-server { color: var(--muted); overflow-wrap: anywhere; }
+.server-restart-schedule-form .server-restart-timezone { margin-top: -8px; color: var(--muted); }
+.server-restart-preview { display: flex; align-items: center; gap: 12px; padding: 16px 0; border-block: 1px solid var(--line); }
+.server-restart-preview > div { display: grid; gap: 5px; min-width: 0; }
+.server-restart-preview span { color: var(--muted); font-size: 12px; }
+.server-restart-preview strong { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.server-restart-details { font-size: 12px; color: var(--muted); }
+.server-restart-details summary { cursor: pointer; padding-block: 6px; }
+.server-restart-details p { margin-top: 8px; line-height: 1.6; }
+.server-restart-safety { line-height: 1.6; }
+.server-restart-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 8px; flex-wrap: wrap; }
+.server-restart-actions .button--danger-quiet { margin-right: auto; }
+@media (max-width: 480px) {
+  .server-restart-fields { grid-template-columns: 1fr; gap: 14px; }
+  .server-restart-clock > div { grid-template-columns: minmax(0, 1fr) 4px minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+}
+
 @media (max-width: 1100px) {
   .overview-graphs,
   .home-graphs,

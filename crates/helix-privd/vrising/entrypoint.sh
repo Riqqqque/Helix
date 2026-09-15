@@ -41,14 +41,25 @@ fi
 wineboot --init >/data/logs/wineboot.log 2>&1 || true
 
 cd /data/server
-wine VRisingServer.exe \
+env --default-signal=INT,QUIT wine /usr/local/libexec/helix-vrising-launch.exe VRisingServer.exe \
   -persistentDataPath /data/save \
   -logFile /data/logs/VRisingServer.log \
   -serverName "${HELIX_SERVER_NAME:-Helix V Rising}" &
 WINE_PID=$!
+STOPPING=0
+shutdown() {
+  trap '' TERM INT
+  STOPPING=1
+  rm -f "$READY_FILE"
+  if ! wine /usr/local/libexec/helix-vrising-shutdown.exe; then
+    echo "Helix: graceful V Rising shutdown was rejected; no force kill will be sent" >&2
+  fi
+}
+trap shutdown TERM INT
 
 i=0
 while [ "$i" -lt 40 ]; do
+  [ "$STOPPING" -eq 0 ] || break
   if ! kill -0 "$WINE_PID" 2>/dev/null; then
     echo "Helix: V Rising exited during startup" >&2
     wait "$WINE_PID" || true
@@ -59,11 +70,14 @@ while [ "$i" -lt 40 ]; do
   sleep 1
 done
 
-touch "$READY_FILE"
-set +e
-wait "$WINE_PID"
-STATUS=$?
-set -e
+[ "$STOPPING" -ne 0 ] || touch "$READY_FILE"
+while :; do
+  set +e
+  wait "$WINE_PID"
+  STATUS=$?
+  set -e
+  kill -0 "$WINE_PID" 2>/dev/null || break
+done
 rm -f "$READY_FILE"
 kill "$XVFB_PID" 2>/dev/null || true
 wait "$XVFB_PID" 2>/dev/null || true

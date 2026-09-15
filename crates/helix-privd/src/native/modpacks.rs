@@ -12,6 +12,21 @@ use helix_privd::mrpack::{
     require_exact_https_host, validate_relative_path, verify_download, verify_sha512,
 };
 use serde_json::{Value, json};
+
+fn changelog_response(body: &Value, format: &str) -> Result<Value, String> {
+    let text = if body.is_null() {
+        ""
+    } else {
+        body.as_str()
+            .ok_or("The catalog returned invalid release notes")?
+    };
+    let bounded: String = text
+        .chars()
+        .take(100_000)
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+        .collect();
+    Ok(json!({"body": bounded, "format": format, "truncated": text.chars().count() > 100_000}))
+}
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
@@ -289,6 +304,60 @@ impl NativeManager {
             "provider": "modrinth",
             "collected_at_unix_ms": now_unix_ms(),
         }))
+    }
+
+    pub fn minecraft_modpack_changelog(
+        &self,
+        project_id: &str,
+        version_id: &str,
+        provider: helix_privd::ModpackProvider,
+    ) -> Result<Value, String> {
+        let (body, format) = match provider {
+            helix_privd::ModpackProvider::Modrinth => {
+                validate_modrinth_id(project_id, "project")?;
+                validate_modrinth_id(version_id, "version")?;
+                let version = self.fetch_modrinth_json(&format!(
+                    "https://api.modrinth.com/v2/version/{version_id}"
+                ))?;
+                if version["project_id"].as_str() != Some(project_id)
+                    || version["id"].as_str() != Some(version_id)
+                {
+                    return Err("The release does not belong to this modpack".into());
+                }
+                (
+                    version.get("changelog").cloned().unwrap_or(Value::Null),
+                    "markdown",
+                )
+            }
+            helix_privd::ModpackProvider::Curseforge => {
+                for id in [project_id, version_id] {
+                    if id.is_empty()
+                        || id.len() > 20
+                        || !id.bytes().all(|byte| byte.is_ascii_digit())
+                    {
+                        return Err("CurseForge release identifiers must be numeric".into());
+                    }
+                }
+                let file = self.curseforge_v1(&format!("mods/{project_id}/files/{version_id}"))?;
+                let file = file.get("data").unwrap_or(&file);
+                if file["id"].as_u64().map(|id| id.to_string()).as_deref() != Some(version_id)
+                    || file["modId"].as_u64().map(|id| id.to_string()).as_deref()
+                        != Some(project_id)
+                {
+                    return Err("The release does not belong to this modpack".into());
+                }
+                let response =
+                    self.curseforge_v1(&format!("mods/{project_id}/files/{version_id}/changelog"))?;
+                (
+                    response
+                        .get("data")
+                        .cloned()
+                        .ok_or("CurseForge returned an invalid changelog")?,
+                    "html",
+                )
+            }
+        };
+        changelog_response(&body, format)
     }
 
     pub fn create_minecraft_modpack<F>(
@@ -3408,6 +3477,24 @@ fn is_integrity_critical_modpack_path(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn changelog_is_bounded_and_preserves_formatting_without_accepting_invalid_data() {
+        assert_eq!(
+            super::changelog_response(&serde_json::Value::Null, "markdown").unwrap()["body"],
+            ""
+        );
+        assert!(super::changelog_response(&serde_json::json!({"bad":true}), "html").is_err());
+        let notes = super::changelog_response(
+            &serde_json::json!("# Changes\n\n- Fixed\u{0} crash"),
+            "markdown",
+        )
+        .unwrap();
+        assert_eq!(notes["body"], "# Changes\n\n- Fixed crash");
+        let large =
+            super::changelog_response(&serde_json::json!("x".repeat(100_001)), "html").unwrap();
+        assert_eq!(large["truncated"], true);
+        assert_eq!(large["body"].as_str().unwrap().len(), 100_000);
+    }
     use super::*;
     use zip::{ZipWriter, write::SimpleFileOptions};
 

@@ -166,7 +166,7 @@ export interface ScheduledReboot {
   executeAtUnixMs: number;
   delaySeconds: number;
   cancellable: boolean;
-  timerBackend: 'systemd_transient_timer';
+  timerBackend: 'systemd_transient_timer' | 'systemd_transient_service';
   preflight: HostRebootPreflight;
 }
 
@@ -484,7 +484,7 @@ function parseScheduledRebootResult(value: unknown): ScheduledReboot {
     executeAtUnixMs: count(root, 'execute_at_unix_ms'),
     delaySeconds: count(root, 'delay_seconds'),
     cancellable: bool(root, 'cancellable'),
-    timerBackend: literal(root, 'timer_backend', ['systemd_transient_timer'] as const),
+    timerBackend: literal(root, 'timer_backend', ['systemd_transient_timer', 'systemd_transient_service'] as const),
     preflight: parseHostRebootPreflight(root.preflight),
   };
 }

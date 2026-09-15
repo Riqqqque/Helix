@@ -226,6 +226,13 @@ pub enum BrokerRequest {
     ServerSettings {
         instance_id: String,
     },
+    SetServerRestartSchedule {
+        instance_id: String,
+        schedule: Option<ServerRestartSchedule>,
+    },
+    ServerRestartScheduleStatus {
+        instance_id: String,
+    },
     ServerMarketplaceSearch {
         instance_id: String,
         query: String,
@@ -252,6 +259,12 @@ pub enum BrokerRequest {
     MinecraftModpackProject {
         project_id: String,
         #[serde(default, skip_serializing_if = "is_modrinth_provider")]
+        provider: ModpackProvider,
+    },
+    MinecraftModpackChangelog {
+        project_id: String,
+        version_id: String,
+        #[serde(default)]
         provider: ModpackProvider,
     },
     InstallServerMarketplaceContent {
@@ -1228,6 +1241,15 @@ pub enum FileUploadTarget {
     CustomJar,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerRestartSchedule {
+    pub first_at_unix_ms: u64,
+    pub interval_hours: u16,
+    #[serde(default)]
+    pub allow_unwarned_restart: bool,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct BrokerResponse {
     pub ok: bool,
@@ -1360,6 +1382,7 @@ fn request_over_socket(
 #[cfg_attr(not(unix), allow(dead_code))]
 fn broker_read_timeout(request: &BrokerRequest) -> std::time::Duration {
     match request {
+        BrokerRequest::MinecraftModpackChangelog { .. } => std::time::Duration::from_secs(90),
         BrokerRequest::TrashNativeServer { .. }
         | BrokerRequest::RestoreTrashedServer { .. }
         | BrokerRequest::PurgeTrashedServer { .. } => std::time::Duration::from_secs(300),

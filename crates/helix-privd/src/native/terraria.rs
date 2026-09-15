@@ -1,6 +1,6 @@
 use helix_privd::{GameKind, GamePortPolicySpec, GamePortRangeSpec, TerrariaCreateSpec};
 
-pub(crate) const RUNTIME_IMAGE: &str = "helix-terraria-runtime:1";
+pub(crate) const RUNTIME_IMAGE: &str = "helix-terraria-runtime:2";
 pub(crate) const DOCKERFILE: &str = include_str!("../../terraria/Dockerfile");
 pub(crate) const ENTRYPOINT: &str = include_str!("../../terraria/entrypoint.sh");
 pub(crate) const VANILLA_ARTIFACT_URL: &str =

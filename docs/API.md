@@ -103,7 +103,7 @@ overwriting another session's newer revision.
 | `GET` | `/api/v1/host/reboot/preflight` | `system.view` | Active players, native/AMP servers, jobs, and blockers |
 | `PUT` | `/api/v1/host/reboot/recurring` | `system.power` | Create or replace one daily/weekday local-time reboot schedule |
 | `DELETE` | `/api/v1/host/reboot/recurring` | `system.power` | Remove the exact recurring reboot schedule |
-| `POST` | `/api/v1/host/reboot` | `system.power` | Schedule a whole-host reboot after 10–300 seconds |
+| `POST` | `/api/v1/host/reboot` | `system.power` | Reboot now (`delay_seconds: 0`) or schedule after 10–300 seconds; requires hostname, acknowledgement, and clear workload preflight |
 | `DELETE` | `/api/v1/host/reboot/{operation_id}` | `system.power` | Cancel the exact scheduled reboot when still cancellable |
 
 Start-on-boot never enables/disables Docker, changes unrelated containers, or

@@ -296,7 +296,7 @@ describe("infrastructure evidence panels", () => {
     );
     expect(markup).toContain("Linux needs a host reboot");
     expect(markup).toContain("linux-image-generic");
-    expect(markup).toContain("#settings");
+    expect(markup).toContain("Reboot when you are ready");
     expect(markup).not.toMatch(/Simulation/u);
   });
 });

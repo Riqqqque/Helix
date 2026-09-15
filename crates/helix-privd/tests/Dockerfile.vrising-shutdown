@@ -1,0 +1,10 @@
+FROM debian:bookworm-slim AS fixture
+RUN apt-get update && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 && rm -rf /var/lib/apt/lists/*
+COPY tests/vrising_shutdown.c /build/fixture.c
+RUN x86_64-w64-mingw32-gcc -Wall -Wextra -Werror /build/fixture.c -o /build/VRisingServer.exe
+FROM helix-vrising-runtime:2
+COPY --from=fixture /build/VRisingServer.exe /data/server/VRisingServer.exe
+COPY tests/steamcmd_stub.sh /data/steamcmd/steamcmd.sh
+COPY tests/vrising_shutdown.sh /test.sh
+RUN chmod 0755 /data/steamcmd/steamcmd.sh /test.sh
+ENTRYPOINT ["/test.sh"]

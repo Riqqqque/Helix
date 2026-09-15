@@ -35,9 +35,11 @@ use std::{
 };
 use uuid::Uuid;
 
+mod config_changes;
 mod marketplace;
 mod modpacks;
 mod pumpkin;
+mod restart_schedule;
 mod runtime;
 mod terraria;
 mod valheim;
@@ -1618,6 +1620,28 @@ impl NativeManager {
         } else {
             "stopped"
         };
+        let config_changes = if manifest.is_minecraft() {
+            let properties = read_small_regular_file(
+                &data_path.join("server.properties"),
+                MAX_PROPERTIES_BYTES,
+                "server settings",
+            )
+            .map(|content| parse_properties(&content))
+            .unwrap_or_default();
+            let world = property_text(&properties, "level-name", "world");
+            config_changes::inspect(
+                &data_path,
+                &world,
+                &self
+                    .state_root
+                    .join("config-baselines")
+                    .join(format!("{}.json", manifest.id)),
+                inspect.get("StartedAt").and_then(Value::as_str),
+                detail_status == "online",
+            )
+        } else {
+            Value::Null
+        };
         let mut capabilities = vec![
             "files",
             "backups",
@@ -1673,6 +1697,8 @@ impl NativeManager {
             "memory_used_mb": state.memory_used_mb,
             "tps": tps,
             "container_state": inspect,
+            "config_changes": config_changes,
+            "restart_schedule": self.restart_schedule_status(&manifest.id),
             "settings": settings,
             "valheim_crossplay": if manifest.is_valheim() {
                 read_small_regular_file(&data_path.join("valheim.json"), 64 * 1024, "Valheim settings")
@@ -2074,6 +2100,9 @@ impl NativeManager {
         let previous = manifest.clone();
         let data_path = self.instance_path(&manifest.id)?;
         let running = self.runtime_running_checked(&manifest)?;
+        if running {
+            self.observe_config_baseline(&manifest);
+        }
         if updated != original {
             write_managed_file(&backup, original.as_bytes(), 0o600, 0, 0)?;
             write_managed_file(&path, updated.as_bytes(), 0o660, 0, manifest.run_uid)?;
@@ -5484,10 +5513,50 @@ impl NativeManager {
         F: FnMut(u64),
     {
         if manifest.uses_ready_marker() {
-            self.wait_for_ready_marker(manifest, timeout, progress)
+            self.wait_for_ready_marker(manifest, timeout, progress)?;
         } else {
-            self.wait_for_minecraft(manifest, timeout, progress)
+            self.wait_for_minecraft(manifest, timeout, progress)?;
         }
+        self.observe_config_baseline(manifest);
+        Ok(())
+    }
+
+    fn observe_config_baseline(&self, manifest: &InstanceManifest) {
+        if !manifest.is_minecraft() {
+            return;
+        }
+        let Ok(root) = self.instance_path(&manifest.id) else {
+            return;
+        };
+        let Ok(boot) = self.docker(
+            [
+                "inspect",
+                "--format",
+                "{{.State.StartedAt}}",
+                manifest.container_name.as_str(),
+            ],
+            20,
+        ) else {
+            return;
+        };
+        let properties = read_small_regular_file(
+            &root.join("server.properties"),
+            MAX_PROPERTIES_BYTES,
+            "server settings",
+        )
+        .map(|content| parse_properties(&content))
+        .unwrap_or_default();
+        let world = property_text(&properties, "level-name", "world");
+        let _ = config_changes::inspect(
+            &root,
+            &world,
+            &self
+                .state_root
+                .join("config-baselines")
+                .join(format!("{}.json", manifest.id)),
+            Some(boot.trim()),
+            true,
+        );
     }
 
     fn ready_timeout(&self, manifest: &InstanceManifest) -> Duration {
@@ -5883,6 +5952,16 @@ impl NativeManager {
             &staging.join("entrypoint.sh"),
             vrising::ENTRYPOINT.as_bytes(),
             0o755,
+        )?;
+        write_new_file(
+            &staging.join("shutdown.c"),
+            vrising::SHUTDOWN_HELPER.as_bytes(),
+            0o600,
+        )?;
+        write_new_file(
+            &staging.join("launcher.c"),
+            vrising::LAUNCH_HELPER.as_bytes(),
+            0o600,
         )?;
         let result = self.docker_owned(
             &[
