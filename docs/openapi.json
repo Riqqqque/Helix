@@ -1104,6 +1104,20 @@
         ]
       }
     },
+    "/servers/minecraft/modpacks/projects/{project_id}/versions/{version_id}/changelog": {
+      "parameters": [
+        {"name":"project_id","in":"path","required":true,"schema":{"type":"string"}},
+        {"name":"version_id","in":"path","required":true,"schema":{"type":"string"}},
+        {"name":"provider","in":"query","schema":{"$ref":"#/components/schemas/ModpackProvider"}}
+      ],
+      "get": {
+        "operationId":"getModpackVersionChangelog",
+        "tags":["Servers"],
+        "summary":"Read bounded release notes for an exact Modrinth or CurseForge modpack version",
+        "x-helix-capability":"games.view",
+        "responses":{"200":{"$ref":"#/components/responses/BrokerObject"},"default":{"$ref":"#/components/responses/Problem"}}
+      }
+    },
     "/servers/minecraft/modpacks": {
       "parameters": [],
       "post": {
@@ -1820,6 +1834,46 @@
             }
           }
         ]
+      }
+    },
+    "/servers/{instance_id}/restart-schedule": {
+      "parameters": [{ "name": "instance_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "get": {
+        "operationId": "getServersInstanceIdRestartSchedule",
+        "tags": ["Servers"],
+        "summary": "Read restart schedule and shutdown capabilities for a native or AMP game",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": { "$ref": "#/components/responses/BrokerObject" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "put": {
+        "operationId": "putServersInstanceIdRestartSchedule",
+        "tags": ["Servers"],
+        "summary": "Set or disable a recurring restart schedule for a native or AMP game",
+        "x-helix-capability": "games.manage",
+        "parameters": [{ "$ref": "#/components/parameters/Origin" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": {
+            "oneOf": [
+              { "type": "null" },
+              { "type": "object", "additionalProperties": false,
+                "required": ["first_at_unix_ms", "interval_hours"],
+                "properties": {
+                  "first_at_unix_ms": { "type": "integer", "minimum": 1, "description": "At least six minutes ahead and within 366 days" },
+                  "interval_hours": { "type": "integer", "enum": [6, 12, 24, 48, 168] },
+                  "allow_unwarned_restart": { "type": "boolean", "default": false, "description": "Explicit consent required when verified in-game warnings are unavailable" }
+                }
+              }
+            ]
+          } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/BrokerObject" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
       }
     },
     "/servers/{instance_id}/settings": {

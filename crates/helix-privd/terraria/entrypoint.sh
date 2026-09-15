@@ -29,6 +29,11 @@ EOF
 
 write_config
 
+CONSOLE=/data/.helix-console
+rm -f "$CONSOLE"
+mkfifo -m 600 "$CONSOLE"
+exec 3<>"$CONSOLE"
+
 if [ "$FLAVOR" = "tmodloader" ]; then
   if [ ! -x /data/steamcmd/steamcmd.sh ]; then
     cp -a /opt/steamcmd/. /data/steamcmd/
@@ -61,7 +66,7 @@ if [ "$FLAVOR" = "tmodloader" ]; then
   fi
   chmod +x "$START" || true
   cd /data/server
-  sh "$START" -config /data/serverconfig.txt >/data/logs/terraria.log 2>&1 &
+  sh "$START" -config /data/serverconfig.txt <&3 >/data/logs/terraria.log 2>&1 &
   SERVER_PID=$!
 else
   VERSION="${HELIX_TERRARIA_VERSION:-1449}"
@@ -89,12 +94,22 @@ else
   fi
   chmod +x "$BIN"
   cd "$(dirname "$BIN")"
-  "./$(basename "$BIN")" -config /data/serverconfig.txt >/data/logs/terraria.log 2>&1 &
+  "./$(basename "$BIN")" -config /data/serverconfig.txt <&3 >/data/logs/terraria.log 2>&1 &
   SERVER_PID=$!
 fi
 
+STOPPING=0
+shutdown() {
+  trap '' TERM INT
+  STOPPING=1
+  rm -f "$READY_FILE"
+  printf 'exit\n' >&3
+}
+trap shutdown TERM INT
+
 i=0
 while [ "$i" -lt 40 ]; do
+  [ "$STOPPING" -eq 0 ] || break
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "Helix: Terraria exited during startup" >&2
     tail -n 40 /data/logs/terraria.log >&2 || true
@@ -105,10 +120,14 @@ while [ "$i" -lt 40 ]; do
   sleep 1
 done
 
-touch "$READY_FILE"
-set +e
-wait "$SERVER_PID"
-STATUS=$?
-set -e
+[ "$STOPPING" -ne 0 ] || touch "$READY_FILE"
+while :; do
+  set +e
+  wait "$SERVER_PID"
+  STATUS=$?
+  set -e
+  kill -0 "$SERVER_PID" 2>/dev/null || break
+done
 rm -f "$READY_FILE"
+rm -f "$CONSOLE"
 exit "$STATUS"

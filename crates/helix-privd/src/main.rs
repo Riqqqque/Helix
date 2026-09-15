@@ -580,6 +580,19 @@ impl BrokerContext {
                         .and_then(|native| native.valheim_manage(&instance_id, &request, |_, _| {}))
                 }
             }
+            BrokerRequest::SetServerRestartSchedule {
+                instance_id,
+                schedule,
+            } => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "The scheduler is not configured".to_owned())
+                .and_then(|native| native.set_restart_schedule(&instance_id, schedule)),
+            BrokerRequest::ServerRestartScheduleStatus { instance_id } => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "The scheduler is not configured".to_owned())
+                .map(|native| native.restart_schedule_status(&instance_id)),
             BrokerRequest::ServerMarketplaceSearch {
                 instance_id,
                 query,
@@ -617,6 +630,17 @@ impl BrokerContext {
                 .as_deref()
                 .ok_or_else(|| "the Helix server manager is not configured".to_owned())
                 .and_then(|native| native.minecraft_modpack_project(&project_id, provider)),
+            BrokerRequest::MinecraftModpackChangelog {
+                project_id,
+                version_id,
+                provider,
+            } => self
+                .native
+                .as_deref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+                .and_then(|native| {
+                    native.minecraft_modpack_changelog(&project_id, &version_id, provider)
+                }),
             BrokerRequest::InstallServerMarketplaceContent {
                 instance_id,
                 project_id,
@@ -1233,7 +1257,9 @@ impl BrokerContext {
             .lock()
             .map_err(|_| "host power coordination failed".to_owned())?;
         let preflight = self.host_reboot_preflight()?;
-        if preflight["can_schedule"] != true {
+        if preflight["can_schedule"] != true
+            && !(delay_seconds == 0 && only_player_counts_unverified(&preflight))
+        {
             return Err("host reboot preflight is blocked by active players, running jobs, or unavailable player status".to_owned());
         }
         let mut scheduled = self.host_control()?.schedule_reboot(
@@ -2734,6 +2760,17 @@ fn server_action_completion_stage(
 }
 
 #[cfg(target_os = "linux")]
+fn only_player_counts_unverified(preflight: &Value) -> bool {
+    preflight["active_players"] == 0
+        && preflight["active_jobs_total"] == 0
+        && preflight["blockers"].as_array().is_some_and(|blockers| {
+            !blockers.is_empty()
+                && blockers
+                    .iter()
+                    .all(|blocker| blocker["code"] == "player_status_unverified")
+        })
+}
+
 fn collect_active_players(
     servers: Vec<AmpServer>,
     manager: &str,
@@ -3077,6 +3114,68 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::set_permissions(&config.socket, fs::Permissions::from_mode(0o660))?;
     let active = Arc::new(AtomicUsize::new(0));
     eprintln!("helix-privd ready on {}", config.socket.display());
+    if let Some(native) = &context.native {
+        native.recover_restart_schedules();
+        let scheduler = Arc::clone(&context);
+        thread::Builder::new()
+            .name("server-restart-scheduler".into())
+            .spawn(move || {
+                loop {
+                    if let Some(native) = &scheduler.native {
+                        for (id, revision) in native.restart_schedule_tick() {
+                            let instance_id = if id.starts_with("amp:") {
+                                id.clone()
+                            } else {
+                                format!("helix:{id}")
+                            };
+                            let resource = format!("server:{instance_id}");
+                            match scheduler.queue_job(
+                                "server_scheduled_restart",
+                                Some(&resource),
+                                None,
+                            ) {
+                                Ok((job_id, _)) => {
+                                    let worker = Arc::clone(&scheduler);
+                                    let worker_id = id.clone();
+                                    let worker_job = job_id.clone();
+                                    if thread::Builder::new()
+                                        .name("scheduled-restart".into())
+                                        .spawn(move || {
+                                            worker.update_job(&worker_job, |job| {
+                                                job.status = JobState::Running;
+                                                job.stage = "Saving and restarting safely".into();
+                                                job.progress_percent = 10;
+                                            });
+                                            let native =
+                                                worker.native.as_ref().expect("native scheduler");
+                                            let result = native
+                                                .execute_scheduled_restart(&worker_id, &revision);
+                                            worker.finish_job(&worker_job, result, "Online");
+                                        })
+                                        .is_err()
+                                    {
+                                        native.fail_restart_schedule(
+                                            &id,
+                                            "Restart worker could not start",
+                                        );
+                                        scheduler.finish_job(
+                                            &job_id,
+                                            Err("Restart worker could not start".into()),
+                                            "",
+                                        );
+                                    }
+                                }
+                                Err(_) => native.fail_restart_schedule(
+                                    &id,
+                                    "Skipped: another operation or host reboot is pending",
+                                ),
+                            }
+                        }
+                    }
+                    thread::sleep(Duration::from_secs(5));
+                }
+            })?;
+    }
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else {
             continue;
@@ -3385,6 +3484,26 @@ mod tests {
             server_action_completion_stage(helix_privd::ServerAction::Stop, &Ok(json!({}))),
             "Stopped"
         );
+    }
+
+    #[test]
+    fn manual_reboot_can_acknowledge_unknown_counts_but_not_other_blockers() {
+        let mut preflight = json!({
+            "active_players": 0, "active_jobs_total": 0,
+            "blockers": [{"code": "player_status_unverified"}]
+        });
+        assert!(only_player_counts_unverified(&preflight));
+        preflight["active_players"] = json!(1);
+        assert!(!only_player_counts_unverified(&preflight));
+        preflight["active_players"] = json!(0);
+        preflight["active_jobs_total"] = json!(1);
+        assert!(!only_player_counts_unverified(&preflight));
+        preflight["active_jobs_total"] = json!(0);
+        preflight["blockers"] = json!([{"code": "amp_player_status_unavailable"}]);
+        assert!(!only_player_counts_unverified(&preflight));
+        preflight["blockers"] = json!([]);
+        assert!(!only_player_counts_unverified(&preflight));
+        assert!(!only_player_counts_unverified(&Value::Null));
     }
 
     #[test]

@@ -394,7 +394,7 @@ impl AmpClient {
         let mut inventory = AmpInventory::new();
         for instance in instances {
             match instance.get("Module").and_then(Value::as_str) {
-                Some("Minecraft") => match self.map_server(instance) {
+                Some(module) if module != "ADS" => match self.map_server(instance) {
                     Ok(server) => inventory.servers.push(server),
                     Err(MapServerError { code, message }) => {
                         inventory.record_issue(instance, code, message);
@@ -422,8 +422,8 @@ impl AmpClient {
             .iter()
             .find(|instance| text(instance, "InstanceID").as_deref() == Some(instance_id))
             .ok_or_else(|| "the selected server no longer exists".to_owned())?;
-        if text(instance, "Module").as_deref() != Some("Minecraft") {
-            return Err("the selected instance is not a Minecraft server".to_owned());
+        if text(instance, "Module").is_none_or(|module| module == "ADS") {
+            return Err("the selected instance is not a game server".to_owned());
         }
         let instance_name = text(instance, "InstanceName")
             .ok_or_else(|| "the selected AMP instance is invalid".to_owned())?;
@@ -494,6 +494,82 @@ impl AmpClient {
         }))
     }
 
+    pub fn scheduled_target(&self, id: &str) -> Result<u16, String> {
+        let id = id.strip_prefix("amp:").ok_or("Invalid AMP server id")?;
+        validate_instance_identifier(id).map_err(|_| "Invalid AMP server id")?;
+        let instance = self
+            .local_instances()?
+            .into_iter()
+            .find(|value| text(value, "InstanceID").as_deref() == Some(id))
+            .ok_or("AMP server no longer exists")?;
+        let module = text(&instance, "Module").ok_or("AMP workload type unavailable")?;
+        if module == "ADS" {
+            return Err("The AMP controller is not a game server".into());
+        }
+        required_boolean(&instance, "Running").map_err(|_| "Invalid AMP panel state")?;
+        required_u16(&instance, "Port").map_err(|_| "Invalid AMP API port".into())
+    }
+
+    pub fn scheduled_boot(&self, id: &str) -> Result<u64, String> {
+        let port = self.scheduled_target(id)?;
+        let status = self.call(port, "Core", "GetStatus", json!({}))?;
+        if status["State"].as_u64() != Some(20) {
+            return Err("AMP game is not running normally".into());
+        }
+        let uptime = amp_uptime_seconds(
+            status["Uptime"]
+                .as_str()
+                .ok_or("AMP application uptime unavailable")?,
+        )?;
+        // A fresh game is not a suitable automatic-restart target.
+        if uptime < 600 {
+            return Err("AMP game has been online for less than ten minutes".into());
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "Invalid system clock")?
+            .as_secs();
+        now.checked_sub(uptime)
+            .ok_or_else(|| "AMP uptime exceeds the system clock".into())
+    }
+
+    pub fn scheduled_restart(&self, id: &str, expected_boot: u64) -> Result<Value, String> {
+        let _operation =
+            self.begin_operation(id.strip_prefix("amp:").ok_or("Invalid AMP server id")?)?;
+        if self.scheduled_boot(id)?.abs_diff(expected_boot) > 5 {
+            return Err("AMP game restarted during the countdown; restart cancelled".into());
+        }
+        let port = self.scheduled_target(id)?;
+        ensure_action_result(&self.call(port, "Core", "Stop", json!({}))?)?;
+        self.wait_for_application_state(port, 0, Duration::from_secs(180))?;
+        ensure_action_result(&self.call(port, "Core", "Start", json!({}))?)?;
+        self.wait_for_application_state(port, 20, Duration::from_secs(300))?;
+        Ok(json!({"online": true, "scheduled": true, "manager": "amp"}))
+    }
+
+    fn wait_for_application_state(
+        &self,
+        port: u16,
+        wanted: u64,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let status = self.call(port, "Core", "GetStatus", json!({}))?;
+            let state = status["State"]
+                .as_u64()
+                .ok_or("AMP application state unavailable")?;
+            if state == wanted {
+                return Ok(());
+            }
+            if matches!(state, 70 | 75 | 100 | 250) {
+                return Err("AMP entered an update or failure state; restart blocked".into());
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        Err("AMP did not reach the required application state; no force action was sent".into())
+    }
+
     fn map_server(&self, instance: &Value) -> Result<AmpServer, MapServerError> {
         let id = text(instance, "InstanceID").ok_or(MapServerError::invalid_identity())?;
         validate_instance_identifier(&id).map_err(|_| MapServerError::invalid_identity())?;
@@ -519,10 +595,15 @@ impl AmpClient {
                 return Err(MapServerError::invalid_instance_path());
             }
         };
-        let software = config
-            .get("Minecraft.ServerType")
-            .map(|value| display_server_type(value))
-            .unwrap_or_else(|| "Minecraft".to_owned());
+        let module = text(instance, "Module").unwrap_or_else(|| "Unknown".into());
+        let software = if module == "Minecraft" {
+            config
+                .get("Minecraft.ServerType")
+                .map(|value| display_server_type(value))
+                .unwrap_or_else(|| "Minecraft".to_owned())
+        } else {
+            module
+        };
         let version = server_version(&config, &software);
         let max_players = metric(metrics, "Active Users", "MaxValue")
             .or_else(|| {
@@ -1441,6 +1522,21 @@ fn amp_status_from_metrics(
     }
 }
 
+fn amp_uptime_seconds(value: &str) -> Result<u64, String> {
+    let parts = value
+        .split(':')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "Invalid AMP uptime")?;
+    if parts.len() != 4 || parts[1] > 23 || parts[2] > 59 || parts[3] > 59 {
+        return Err("Invalid AMP uptime".into());
+    }
+    parts[0]
+        .checked_mul(86_400)
+        .and_then(|days| days.checked_add(parts[1] * 3600 + parts[2] * 60 + parts[3]))
+        .ok_or_else(|| "AMP uptime overflow".into())
+}
+
 fn amp_app_state_code(instance: &Value) -> Option<i64> {
     let value = instance
         .get("AppState")
@@ -1678,9 +1774,42 @@ mod tests {
 
         assert_eq!(inventory.servers.len(), 1);
         assert_eq!(inventory.servers[0].manager_panel_port, 8080);
-        assert_eq!(inventory.issue_count, 2);
+        assert_eq!(inventory.issue_count, 3);
         assert_eq!(inventory.issues[0].code, "invalid_instance_identity");
         assert_eq!(inventory.issues[1].code, "invalid_instance_module");
+    }
+
+    #[test]
+    fn generic_amp_game_instances_are_visible_but_ads_is_not_a_game() {
+        let root = create_instance_root("generic");
+        let client = test_client(root.path());
+        let mut game = valid_instance("generic");
+        game["Module"] = json!("GenericModule");
+        let inventory = client
+            .parse_inventory(&json!([game, {"Module":"ADS"}]))
+            .unwrap();
+        assert_eq!(inventory.servers.len(), 1);
+        assert_eq!(inventory.servers[0].software, "GenericModule");
+        assert_eq!(inventory.issue_count, 0);
+    }
+
+    #[test]
+    fn application_uptime_is_strict_and_overflow_safe() {
+        assert_eq!(
+            amp_uptime_seconds("7:00:13:43").unwrap(),
+            7 * 86400 + 13 * 60 + 43
+        );
+        for invalid in [
+            "",
+            "1:2:3",
+            "0:24:00:00",
+            "0:00:60:00",
+            "0:00:00:60",
+            "-1:00:00:00",
+            "18446744073709551615:00:00:00",
+        ] {
+            assert!(amp_uptime_seconds(invalid).is_err());
+        }
     }
 
     #[test]

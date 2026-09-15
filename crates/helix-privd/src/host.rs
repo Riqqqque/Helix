@@ -538,8 +538,8 @@ impl HostControl {
         delay_seconds: u16,
         disruption_acknowledged: bool,
     ) -> Result<Value, String> {
-        if !(10..=300).contains(&delay_seconds) {
-            return Err("reboot delay must be between 10 and 300 seconds".to_owned());
+        if delay_seconds != 0 && !(10..=300).contains(&delay_seconds) {
+            return Err("reboot delay must be zero (now) or between 10 and 300 seconds".to_owned());
         }
         if !disruption_acknowledged {
             return Err("reboot disruption must be acknowledged".to_owned());
@@ -570,6 +570,33 @@ impl HostControl {
         let record_path = self.power_record_path(&operation_id)?;
         write_power_record(&record_path, &record)?;
         let service_unit = reboot_service_unit(&operation_id)?;
+        if delay_seconds == 0 {
+            let args = vec![
+                "--quiet".to_owned(),
+                "--collect".to_owned(),
+                "--no-block".to_owned(),
+                format!("--unit={service_unit}"),
+                "--property=Type=oneshot".to_owned(),
+                "--property=NoNewPrivileges=yes".to_owned(),
+                "--property=ProtectSystem=strict".to_owned(),
+                self.config.systemctl_binary.to_string_lossy().into_owned(),
+                "reboot".to_owned(),
+            ];
+            self.runner
+                .run(&self.config.systemd_run_binary, &args, Duration::from_secs(15))
+                .and_then(require_success)
+                .map_err(|error| format!("Could not confirm the reboot request: {error}. Check whether the host is restarting before trying again."))?;
+            return Ok(json!({
+                "operation_id": operation_id,
+                "state": "scheduled",
+                "hostname": hostname,
+                "scheduled_at_unix_ms": scheduled_at_unix_ms,
+                "execute_at_unix_ms": execute_at_unix_ms,
+                "delay_seconds": 0,
+                "cancellable": false,
+                "timer_backend": "systemd_transient_service"
+            }));
+        }
         let timer_unit = format!("{service_unit}.timer");
         let args = vec![
             "--quiet".to_owned(),
@@ -2126,7 +2153,7 @@ fn validate_power_record(record: &PowerOperationRecord, operation_id: &str) -> R
         || record.hostname.is_empty()
         || record.hostname.len() > 253
         || record.hostname.chars().any(char::is_control)
-        || record.delay_seconds < 10
+        || (record.delay_seconds != 0 && record.delay_seconds < 10)
         || record.delay_seconds > 300
         || record.execute_at_unix_ms != expected_execute_at
     {
@@ -2691,6 +2718,28 @@ mod tests {
         assert!(schedule.1.iter().any(|arg| arg == "/usr/bin/systemctl"));
         assert_eq!(schedule.1.last().map(String::as_str), Some("reboot"));
         assert!(schedule.1.iter().all(|arg| arg != "sh" && arg != "bash"));
+    }
+
+    #[test]
+    fn immediate_reboot_dispatches_once_without_a_timer_or_shell() {
+        let temporary = tempfile::tempdir().unwrap();
+        let runner = Arc::new(MockRunner::default());
+        runner.push(success(""));
+        let control =
+            HostControl::with_runner(config(temporary.path().join("power")), runner.clone())
+                .unwrap();
+        let result = control
+            .schedule_reboot(&current_hostname().unwrap(), 0, true)
+            .unwrap();
+        assert_eq!(result["delay_seconds"], 0);
+        assert_eq!(result["cancellable"], false);
+        assert_eq!(result["timer_backend"], "systemd_transient_service");
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].1.iter().any(|arg| arg == "--no-block"));
+        assert!(calls[0].1.iter().all(|arg| !arg.contains("--on-active")));
+        assert_eq!(calls[0].1.last().map(String::as_str), Some("reboot"));
+        assert_eq!(control.power_records().unwrap().len(), 1);
     }
 
     #[test]

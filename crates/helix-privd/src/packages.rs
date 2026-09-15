@@ -1114,6 +1114,9 @@ fn likely_service_restart_package(base: &str) -> bool {
             | "containerd.io"
             | "nginx"
             | "apache2"
+            | "plexmediaserver"
+            | "jellyfin"
+            | "jellyfin-server"
     ) || base.starts_with("libssl")
 }
 
@@ -1572,6 +1575,25 @@ mod tests {
         assert!(message.contains("_apt"));
         assert!(message.contains("root"));
         assert!(!message.to_ascii_lowercase().contains("simulation"));
+    }
+
+    #[test]
+    fn plex_updates_warn_about_stream_interruptions() {
+        assert_eq!(
+            restart_assessment("plexmediaserver", &HashSet::new()),
+            ("likely_service_restart", true)
+        );
+        let candidate = parse_apt_cache_show(
+            "Package: plexmediaserver\nVersion: 1.43.4.10903-e5521bd8c\nArchitecture: amd64\nSize: 100000000\nDescription: Plex Media Server\n",
+        );
+        assert_eq!(
+            candidate["plexmediaserver"].version,
+            "1.43.4.10903-e5521bd8c"
+        );
+        assert_eq!(
+            candidate["plexmediaserver"].download_size_bytes,
+            Some(100000000)
+        );
     }
 
     #[test]

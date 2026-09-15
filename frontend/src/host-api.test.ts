@@ -53,6 +53,19 @@ const integration = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('host integration API', () => {
+  it('accepts immediate non-cancellable reboot dispatch without a timer', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      operation_id: operationId, state: 'scheduled', hostname: 'helix-host',
+      scheduled_at_unix_ms: 1_800_000_000_000, execute_at_unix_ms: 1_800_000_000_000,
+      delay_seconds: 0, cancellable: false, timer_backend: 'systemd_transient_service', preflight,
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await scheduleHostReboot('helix-host', 0, 'csrf')).toMatchObject({ delaySeconds: 0, cancellable: false });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1].body))).toMatchObject({
+      delay_seconds: 0, confirmation_hostname: 'helix-host', disruption_acknowledged: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   it('parses services, containers, Helix-only resources, and reboot state', () => {
     expect(parseHostIntegration(integration)).toMatchObject({
       hostname: 'helix-host',

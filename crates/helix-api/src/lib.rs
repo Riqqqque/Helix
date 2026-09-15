@@ -376,6 +376,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             get(minecraft_modpack_project),
         )
         .route(
+            "/servers/minecraft/modpacks/projects/{project_id}/versions/{version_id}/changelog",
+            get(minecraft_modpack_changelog),
+        )
+        .route(
             "/servers/minecraft/modpacks",
             post(create_minecraft_modpack).layer(DefaultBodyLimit::max(API_BODY_LIMIT_BYTES)),
         )
@@ -410,6 +414,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             get(server_log_history),
         )
         .route("/servers/{instance_id}/console", post(server_console))
+        .route(
+            "/servers/{instance_id}/restart-schedule",
+            get(server_restart_schedule).put(set_server_restart_schedule),
+        )
         .route(
             "/servers/{instance_id}/settings",
             get(server_settings).post(update_server_settings),
@@ -2855,6 +2863,38 @@ async fn server_console(
     .await
 }
 
+async fn server_restart_schedule(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    broker_json(
+        &state,
+        BrokerRequest::ServerRestartScheduleStatus { instance_id },
+    )
+    .await
+}
+
+async fn set_server_restart_schedule(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<Option<helix_privd::ServerRestartSchedule>>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(schedule) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetServerRestartSchedule {
+            instance_id,
+            schedule,
+        },
+    )
+    .await
+}
+
 async fn server_settings(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -3368,6 +3408,24 @@ async fn minecraft_modpack_project(
         &state,
         BrokerRequest::MinecraftModpackProject {
             project_id,
+            provider: query.provider,
+        },
+    )
+    .await
+}
+
+async fn minecraft_modpack_changelog(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath((project_id, version_id)): RoutePath<(String, String)>,
+    Query(query): Query<ServerMarketplaceProjectQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    broker_json(
+        &state,
+        BrokerRequest::MinecraftModpackChangelog {
+            project_id,
+            version_id,
             provider: query.provider,
         },
     )
@@ -5842,6 +5900,52 @@ mod tests {
         let bootstrap = install_bootstrap(&context);
         let client = claim_owner(&context, &bootstrap).await;
 
+        let schedule_uri = "/api/v1/servers/helix:test/restart-schedule";
+        let without_session = context
+            .app
+            .clone()
+            .oneshot(get(schedule_uri))
+            .await
+            .unwrap();
+        assert_eq!(without_session.status(), StatusCode::UNAUTHORIZED);
+        let without_session = context
+            .app
+            .clone()
+            .oneshot(put_raw(schedule_uri, "{", 101))
+            .await
+            .unwrap();
+        assert_eq!(without_session.status(), StatusCode::UNAUTHORIZED);
+        let without_csrf = context
+            .app
+            .clone()
+            .oneshot(with_cookie(
+                put_json(schedule_uri, &json!(null), 102),
+                &client.cookie,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(without_csrf.status(), StatusCode::FORBIDDEN);
+        let malformed = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(put_raw(schedule_uri, "{", 103), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+        let valid = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(put_json(schedule_uri, &json!(null), 104), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(valid.status(), StatusCode::SERVICE_UNAVAILABLE);
+
         for uri in [
             "/api/v1/host/integration",
             "/api/v1/host/reboot/preflight",
@@ -5849,6 +5953,8 @@ mod tests {
             "/api/v1/hooks/tailscale/install/preflight",
             "/api/v1/hooks/jobs/8953dc16-3891-42bf-802f-711b3ba2965a",
             "/api/v1/servers/helix:test/logs/history?lines=500",
+            "/api/v1/servers/helix:test/restart-schedule",
+            "/api/v1/servers/amp:test/restart-schedule",
         ] {
             let response = context
                 .app
@@ -6475,6 +6581,17 @@ mod tests {
 
         for request in [
             with_csrf(
+                with_cookie(
+                    put_json(
+                        "/api/v1/servers/helix:test/restart-schedule",
+                        &json!(null),
+                        105,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ),
+            with_csrf(
                 with_cookie(get("/api/v1/host/integration"), &client.cookie),
                 &client.csrf,
             ),
@@ -6856,6 +6973,7 @@ mod tests {
             "/api/v1/servers/example/marketplace/projects/1bokaNcj",
             "/api/v1/servers/minecraft/modpacks/search?query=adventure",
             "/api/v1/servers/minecraft/modpacks/projects/1bokaNcj",
+            "/api/v1/servers/minecraft/modpacks/projects/1bokaNcj/versions/ABC123/changelog",
             "/api/v1/marketplace/curseforge/key",
         ] {
             let response = context

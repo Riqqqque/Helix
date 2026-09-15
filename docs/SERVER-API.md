@@ -1,7 +1,83 @@
 # Server automation API
 
+## Modpack release notes
+
+`GET /api/v1/servers/minecraft/modpacks/projects/{project_id}/versions/{version_id}/changelog?provider=modrinth`
+requires `games.view`; `provider=curseforge` uses the protected server-side API key.
+The release must belong to the requested project. The response contains `body`,
+`format` (`markdown` or `html`) and `truncated`, with at most 100,000 characters.
+The update notice loads notes only when Changelog is opened, using the exact
+offered release, not the catalog's latest release. Viewing notes does not update
+or restart the server. The UI renders catalog content through the existing safe
+marketplace renderer rather than inserting raw HTML.
+
 Valheim also has a typed [configuration and mod-management API](VALHEIM.md#api).
 Check `valheim_management` in a native server's capabilities before using it.
+
+## Scheduled restarts
+
+Native servers expose `restart_schedule` in their detail response. Native and
+imported AMP games also expose `GET /api/v1/servers/{instance_id}/restart-schedule`
+to browser sessions with `games.view`. Sessions with `games.manage` and CSRF proof can use
+`PUT /api/v1/servers/{instance_id}/restart-schedule` with
+`{"first_at_unix_ms": 1800000000000, "interval_hours": 24}`. Send JSON `null` to
+disable, including cancelling an active warning countdown. This operation is
+deliberately not granted to scoped automation tokens: a temporary token should
+not silently leave permanent restart authority behind after it expires.
+
+Schedules start disabled. API timestamps must be 6 minutes to 366 days ahead;
+intervals are 6, 12, 24, 48 or 168 elapsed hours. The dashboard only asks for an
+interval and a clock time, defaulting to every 24 hours at 5 AM in the browser's
+timezone. It computes the next occurrence automatically, with one extra minute
+of request headroom beyond the warning window. Passed or too-close times advance
+to the next safe occurrence, including across midnight. New intervals of 24 hours
+or longer start at the next eligible clock time, then repeat at that interval.
+Editing an unchanged schedule preserves its existing future anchor. A live preview
+shows the next restart. Fixed-hour recurrence does not preserve local wall-clock
+time across daylight saving changes.
+
+The broker runs schedules without an open dashboard. Private atomic records keep
+the next occurrence, warning phase, runtime identity and last outcome. Warnings
+are sent at roughly 5 minutes, 1 minute, 10 seconds and shutdown. Missed warning
+phases, failed console delivery, stopped/replaced servers, conflicting jobs and
+pending host reboots skip the occurrence. Missed runs never catch up. Broker
+restart abandons an in-progress occurrence rather than replaying it. Disabling is
+blocked once a restart has been claimed; the UI displays that executing state.
+
+Execution uses the existing per-server operation lock and job registry. Java
+Minecraft requires positive `save-all flush` confirmation, requests SIGTERM with Docker's
+infinite stop grace period (no SIGKILL fallback), then verifies stopped/non-OOM
+state and a normal or SIGTERM exit. A 180-second client timeout stops waiting,
+not the game. Hung shutdowns require operator attention. Saved server properties
+are preserved, and startup readiness and settings checks must pass. This is not
+a substitute for backups and cannot guarantee correct persistence inside every
+third-party mod. Neither a failed startup nor an interrupted run is auto-retried.
+
+Read `state`, `next_at_unix_ms`, `interval_hours`, `last_result` and
+`last_at_unix_ms` for status. States are `disabled`, `scheduled`, `warning`,
+`restarting` and `unavailable`; unavailable or corrupt records never authorize a
+restart. Status also includes `player_warnings`, `shutdown_method` and
+`runtime_update_required`.
+
+All current native game types have an explicit shutdown policy. Java Minecraft
+uses the confirmed flush described above. Pumpkin saves during graceful shutdown;
+its asynchronous save command is not treated as proof of a completed flush.
+Valheim uses Ctrl+C, Terraria/tModLoader uses console `exit`, and V Rising uses a
+Windows console Ctrl+C helper. Non-Minecraft servers require runtime version 2;
+older runtimes cannot schedule restarts. Upgrade them while stopped, preserving
+their existing data. Actual persistence still depends on the game and its mods.
+
+Imported AMP games use the registered instance's Core Stop and Start methods,
+with running/stopped state checks and a runtime identity derived from uptime.
+The ADS controller itself is excluded. AMP controls its own shutdown policy;
+Helix does not override AMP timeouts or guarantee that a module never force-stops.
+AMP integration and native schedule storage must both be configured on the broker.
+
+Non-Minecraft and imported AMP schedules do not claim in-game warnings. Enabling
+one requires `"allow_unwarned_restart": true` in the request and explicit consent
+in the UI. They still use the five-minute identity-check countdown and skip
+missed phases. Unknown future native game types must add an explicit policy at
+compile time instead of inheriting generic restart behavior.
 
 Start with [authentication and the Python client](INTEGRATIONS.md), then read
 `GET /api/v1/servers`. Keep the exact returned `id`, including its manager prefix.
@@ -154,6 +230,31 @@ archives is not provided by this route.
 See the existing console, settings, marketplace, runtime, backup-policy and
 removal routes in OpenAPI for the rest of the server controls. Host networking
 still stops at the host firewall; users configure their router themselves.
+
+## Configuration change notices
+
+Minecraft server detail includes `config_changes` with `state`, `files`, and
+`limited`. States are `changed`, `no_changes`, `unknown`, and `stopped`.
+The server page shows saved configuration changes with the existing restart
+confirmation. It never restarts a game automatically.
+
+Helix keeps private file fingerprints for each Docker start, captured after a
+managed start, before a settings save, or when an already-running server is first
+viewed. Later edits remain visible across page refreshes and dashboard restarts,
+including edits saved by an in-game mod screen while the dashboard is closed.
+Writing identical content or reverting an edit does not trigger a notice.
+
+The check covers common root settings, `config`, the selected world's
+`serverconfig`, and plugin files named for config/settings. It skips symlinks,
+world regions, backup files, and plugin player databases. Each scan is bounded
+to 2,048 entries, four directory levels, 512 KiB per file, and 8 MiB total;
+the response lists at most 32 changed paths and never returns their contents.
+Partial scans report `limited`; unavailable checks report `unknown`.
+
+This is saved-file change detection, not a generic mod reload API. It cannot
+observe settings a mod never writes, changes before the first baseline, or
+prove that a running mod applied a value. A new server start resets the baseline
+after readiness; that is not a claim that every mod accepted its configuration.
 
 ## Regression checks
 

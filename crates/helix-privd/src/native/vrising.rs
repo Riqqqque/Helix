@@ -1,7 +1,9 @@
 use helix_privd::{GameKind, GamePortPolicySpec, GamePortRangeSpec, VRisingCreateSpec};
 use serde_json::{Value, json};
 
-pub(crate) const RUNTIME_IMAGE: &str = "helix-vrising-runtime:1";
+pub(crate) const RUNTIME_IMAGE: &str = "helix-vrising-runtime:2";
+pub(crate) const SHUTDOWN_HELPER: &str = include_str!("../../vrising/shutdown.c");
+pub(crate) const LAUNCH_HELPER: &str = include_str!("../../vrising/launcher.c");
 pub(crate) const STEAM_APP_ID: &str = "1829350";
 pub(crate) const DOCKERFILE: &str = include_str!("../../vrising/Dockerfile");
 pub(crate) const ENTRYPOINT: &str = include_str!("../../vrising/entrypoint.sh");
