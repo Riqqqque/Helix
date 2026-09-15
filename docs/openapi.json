@@ -3999,6 +3999,39 @@
             "required": [
               "action",
               "path",
+              "data_base64",
+              "sha256"
+            ],
+            "properties": {
+              "action": {
+                "const": "upload_file"
+              },
+              "path": {
+                "type": "string"
+              },
+              "data_base64": {
+                "type": "string",
+                "contentEncoding": "base64",
+                "maxLength": 4194304
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              },
+              "expected_revision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "path",
               "destination",
               "expected_revision"
             ],
@@ -4177,7 +4210,7 @@
             }
           }
         ],
-        "description": "Relative paths only; empty path lists the server root. File access requires games.manage since files can contain secrets. Mutations to server files and upload_finish require a stopped native server; upload staging can run while online. Uploads use anonymous staging and checksum verification. See SERVER-API.md for recovery, limits and conflict handling."
+        "description": "Relative paths only; empty path lists the server root. File access requires games.manage since files can contain secrets. Mutations to server files, upload_file and upload_finish require a stopped native server; upload staging can run while online. upload_file is content-idempotent up to 3 MiB; larger uploads resume matching staging by path, size, checksum and revision. Uploads use anonymous staging and checksum verification. See SERVER-API.md for recovery, limits and conflict handling."
       },
       "ServerBackupDownloadRequest": {
         "oneOf": [

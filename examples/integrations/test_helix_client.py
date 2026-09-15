@@ -217,18 +217,57 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "job_deadline_reached_not_cancelled")
         request.assert_not_called()
 
-    def test_upload_streams_chunks_and_never_replays_finish(self):
+    def test_small_upload_is_one_idempotent_request(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "plugin.jar"
             source.write_bytes(b"plugin")
-            with patch.object(self.client, "server_files", side_effect=[{"upload_id":"u"}, {"bytes_written":6}, {"path":"mods/plugin.jar"}]) as request:
+            with patch.object(self.client, "server_files", return_value={"path":"mods/plugin.jar"}) as request:
                 self.client.upload_file("exact", source, "mods/plugin.jar")
-                self.assertEqual([c.args[1] for c in request.call_args_list], ["upload_begin", "upload_chunk", "upload_finish"])
-                self.assertEqual(request.call_args_list[0].kwargs["sha256"], hashlib.sha256(b"plugin").hexdigest())
-            with patch.object(self.client, "server_files", side_effect=[{"upload_id":"u"}, {"bytes_written":6}, HelixError(None,"transport_error_outcome_unknown"), {"aborted":True}]) as request:
-                with self.assertRaises(HelixError):
-                    self.client.upload_file("exact", source, "mods/plugin.jar")
-                self.assertEqual(sum(c.args[1] == "upload_finish" for c in request.call_args_list), 1)
+                request.assert_called_once()
+                self.assertEqual(request.call_args.args[1], "upload_file")
+                self.assertEqual(request.call_args.kwargs["sha256"], hashlib.sha256(b"plugin").hexdigest())
+                self.assertEqual(base64.b64decode(request.call_args.kwargs["data_base64"]), b"plugin")
+
+            for error in [
+                HelixError(None, "transport_error_outcome_unknown"),
+                HelixError(503, "host_broker_unavailable"),
+            ]:
+                with self.subTest(error=error.code):
+                    responses = [error, {"path":"mods/plugin.jar", "unchanged":True}]
+                    with patch.object(self.client, "server_files", side_effect=responses) as request:
+                        result = self.client.upload_file("exact", source, "mods/plugin.jar")
+                        self.assertEqual(result["unchanged"], True)
+                        self.assertEqual([call.args[1] for call in request.call_args_list],
+                                         ["upload_file", "upload_file"])
+
+    def test_chunked_upload_recovers_lost_responses_and_stale_sessions(self):
+        payload = b"data"
+
+        def read_at(offset, length):
+            return payload[offset:offset + length]
+
+        recovered = [
+            {"upload_id":"u", "bytes_written":0, "size":4, "max_chunk_bytes":4},
+            HelixError(None, "transport_error_outcome_unknown"),
+            {"upload_id":"u", "bytes_written":4, "size":4, "max_chunk_bytes":4, "resumed":True},
+            {"path":"mod.jar"},
+        ]
+        with patch.object(self.client, "server_files", side_effect=recovered) as request:
+            self.client._upload_chunks("exact", "mod.jar", 4, hashlib.sha256(payload).hexdigest(), read_at, None)
+            self.assertEqual([call.args[1] for call in request.call_args_list],
+                             ["upload_begin", "upload_chunk", "upload_begin", "upload_finish"])
+
+        restarted = [
+            {"upload_id":"old", "bytes_written":0, "size":4, "max_chunk_bytes":4},
+            HelixError(400, "broker_operation_rejected"),
+            {"upload_id":"new", "bytes_written":0, "size":4, "max_chunk_bytes":4},
+            {"upload_id":"new", "bytes_written":4, "size":4},
+            {"path":"mod.jar"},
+        ]
+        with patch.object(self.client, "server_files", side_effect=restarted) as request:
+            self.client._upload_chunks("exact", "mod.jar", 4, hashlib.sha256(payload).hexdigest(), read_at, None)
+            self.assertEqual([call.args[1] for call in request.call_args_list],
+                             ["upload_begin", "upload_chunk", "upload_begin", "upload_chunk", "upload_finish"])
 
     def test_download_checks_bytes_and_never_overwrites_local_files(self):
         stat = {"size":3,"revision":"r","kind":"file"}
@@ -251,10 +290,12 @@ class ClientTests(unittest.TestCase):
         stat = {"size":3,"revision":"r","kind":"file"}
         chunk = {"data_base64":base64.b64encode(b"abc").decode(), "offset":0,"next_offset":3,
                  "size":3,"revision":"r","sha256":hashlib.sha256(b"abc").hexdigest()}
-        with patch.object(self.client,"server_files",side_effect=[stat,chunk,stat,{"upload_id":"u"},chunk,{"bytes_written":3},{"revision":"changed"},{"aborted":True}]) as request:
+        responses = [stat,chunk,stat,{"upload_id":"u","bytes_written":0,"size":3,"max_chunk_bytes":3},chunk,{"bytes_written":3},{"revision":"changed"},{"aborted":True}]
+        with patch.object(self.client,"server_files",side_effect=responses) as request, patch.object(self.client, "DIRECT_UPLOAD_BYTES", 0):
             with self.assertRaises(HelixError):
                 self.client.transfer_file("source","source.dat","destination","copy.dat")
             self.assertFalse(any(c.args[1] == "upload_finish" for c in request.call_args_list))
+            self.assertEqual(request.call_args_list[-1].args[1], "upload_abort")
 
 
 if __name__ == "__main__":
