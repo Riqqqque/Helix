@@ -39,7 +39,8 @@ pub(crate) async fn discovery(
                 "request_id_header": "X-Request-ID",
                 "retry_after_header": "Retry-After",
                 "automatic_mutation_retry_safe": false,
-                "idempotency_keys_supported": false
+                "idempotency_keys_supported": false,
+                "content_idempotent_server_uploads": true
             },
             "links": {
                 "session": "/api/v1/auth/me",

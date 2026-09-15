@@ -54,8 +54,10 @@ are not delegated in this version; upload vetted plugin/mod files instead.
 Poll with `{"operation":"job_status","job_id":"..."}`. A token cannot query
 another token's jobs. A successful submission is not proof of job completion.
 On timeout, inspect jobs and server state; never blindly replay a mutation.
-Job mappings persist across dashboard restarts. Upload staging remains subject
-to the broker's existing expiration and restart rules.
+Job mappings persist across dashboard restarts. Small file uploads are one
+content-idempotent request. Larger uploads automatically resume by path, size,
+checksum and destination revision; a broker restart starts fresh without making
+partial files visible.
 
 ## Python
 
@@ -71,12 +73,14 @@ client.upload_file(server, "plugin.jar", "plugins/plugin.jar")
 client.close()
 ```
 
-The client does not log secrets, follow redirects, use ambient HTTP proxies,
-or automatically retry mutations. Uploads/downloads and cross-server transfers
-reuse the bounded, checksummed client helpers. Both servers must be in scope
-for a transfer. File reads can reveal plugin/RCON secrets; file writes, console
-commands and software updates can substantially change a server. Grant these
-only to trusted tools, not arbitrary downloaded scripts.
+The client does not log secrets, follow redirects, use ambient HTTP proxies, or
+retry general mutations. Its upload helper does safely retry the specifically
+idempotent file-upload protocol after a lost response. Uploads/downloads and
+cross-server transfers reuse the bounded, checksummed client helpers. Both
+servers must be in scope for a transfer. File reads can reveal plugin/RCON
+secrets; file writes, console commands and software updates can substantially
+change a server. Grant these only to trusted tools, not arbitrary downloaded
+scripts.
 
 ## Persistence and limits
 
