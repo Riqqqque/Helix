@@ -13,6 +13,9 @@ import {
   createValheimServer,
   createTerrariaServer,
   createPalworldServer,
+  createManagedGameServer,
+  isManagedGameKind,
+  managedGameKindFromSoftware,
   getDirectory,
   getMinecraftVersions,
   getTrashedNativeServers,
@@ -40,6 +43,8 @@ import {
   type HostInventory,
   type GamePortPolicy,
   type GamePortRange,
+  type ManagedGameCreateInput,
+  type ManagedGameKind,
   type ManagedServer,
   type MinecraftSettings,
   type MinecraftSettingField,
@@ -91,6 +96,7 @@ import { ValheimPanelRoute as ValheimPanel, ValheimFieldsRoute as ValheimSetting
 import { defaultValheimSettings } from "./valheim-api";
 import { CreateJobProgress, migrateCreateJobCopy, steamCreateJobCopy } from "./create-job-progress";
 import { GameMark } from "./game-marks";
+import { MANAGED_GAMES, managedGameInfo, managedGameLabel } from "./managed-games";
 import { Icon, type IconName } from "./icons";
 import { InfoTip } from "./info-tip";
 import {
@@ -122,11 +128,13 @@ import {
 } from "./modpack-api";
 import { ModpackRoute, preloadModpackPicker } from "./modpack-route";
 import {
+  getManagedGamePortPolicy,
   getMinecraftPortPolicy,
   getPalworldPortPolicy,
   getTerrariaPortPolicy,
   getValheimPortPolicy,
   getVRisingPortPolicy,
+  saveManagedGamePortPolicy,
   saveMinecraftPortPolicy,
   savePalworldPortPolicy,
   saveTerrariaPortPolicy,
@@ -825,8 +833,16 @@ function AmpPortClaimHelp({ message, claim, servers }: {
   </div></div>;
 }
 
+export type NativeGameKind =
+  | "minecraft"
+  | "vrising"
+  | "valheim"
+  | "terraria"
+  | "palworld"
+  | ManagedGameKind;
+
 export function memoryBoundsForKind(
-  kind: "minecraft" | "vrising" | "valheim" | "terraria" | "palworld",
+  kind: NativeGameKind,
 ): { min: number; max: number } {
   switch (kind) {
     case "vrising":
@@ -837,17 +853,19 @@ export function memoryBoundsForKind(
       return { min: 512, max: 8_192 };
     case "palworld":
       return { min: 4_096, max: 32_768 };
-    default:
+    case "minecraft":
       return { min: 1_024, max: 24_576 };
+    default:
+      return managedGameInfo(kind).memory;
   }
 }
 
 export function allocatedMemoryOptions(
-  kind: "minecraft" | "vrising" | "valheim" | "terraria" | "palworld",
+  kind: NativeGameKind,
   current: number,
 ): number[] {
   const { min, max } = memoryBoundsForKind(kind);
-  const options = [512, 1_024, 2_048, 4_096, 6_144, 8_192, 12_288, 16_384, 24_576, 32_768].filter(
+  const options = [512, 1_024, 2_048, 4_096, 6_144, 8_192, 12_288, 16_384, 24_576, 32_768, 49_152, 65_536].filter(
     (value) => value >= min && value <= max,
   );
   if (Number.isFinite(current) && current >= min && current <= max && !options.includes(current)) {
@@ -882,12 +900,32 @@ export function recommendedModpackMemoryMb(
 }
 
 export function publicInternetHint(
-  kind: "minecraft" | "vrising" | "valheim" | "terraria" | "palworld", port: number,
+  kind: NativeGameKind, port: number,
   queryPort: number | null, hostConfigured = false,
 ): string {
+  const managed = isManagedGameKind(kind) ? managedGameInfo(kind) : null;
   const ports = kind === "vrising" || kind === "palworld" ? `UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`}`
-    : kind === "valheim" ? `UDP ${port}–${port + 1}` : `TCP ${port}`;
+    : kind === "valheim" ? `UDP ${port}–${port + 1}`
+      : managed !== null ? managedForwardPorts(managed, port)
+    : `TCP ${port}`;
   return `${hostConfigured ? "Host port setup is saved. " : ""}For internet players, forward ${ports} to this server’s LAN address in your router. Helix does not configure the router or verify internet reachability.`;
+}
+
+function managedForwardPorts(info: ReturnType<typeof managedGameInfo>, port: number): string {
+  switch (info.id) {
+    case "satisfactory":
+      return `TCP+UDP ${port} and TCP ${port + 1}`;
+    case "project_zomboid":
+      return `UDP ${port}–${port + 1}`;
+    case "seven_days_to_die":
+      return `TCP+UDP ${port} and UDP ${port + 1}–${port + 2}`;
+    case "rust":
+      return `UDP ${port}–${port + 1} and TCP ${port + 2}`;
+    case "sons_of_the_forest":
+      return `UDP ${port}–${port + 2}`;
+    default:
+      return `${info.joinProtocol === "udp" ? "UDP" : "TCP"} ${port}`;
+  }
 }
 
 function CpuCapField({
@@ -923,12 +961,19 @@ function CpuCapField({
 }
 
 function publicAccessCopy(
-  kind: "minecraft" | "vrising" | "valheim" | "terraria" | "palworld" | "pumpkin", canManageNetwork: boolean,
+  kind: NativeGameKind | "pumpkin", canManageNetwork: boolean,
 ): { title: string; detail: string } {
+  const noun = isManagedGameKind(kind)
+    ? managedGameInfo(kind).portNoun
+    : kind === "pumpkin"
+      ? "the Java TCP port and separate Bedrock TCP/UDP port"
+      : kind === "valheim" || kind === "vrising" || kind === "palworld"
+        ? "UDP game ports"
+        : "the TCP game port";
   return {
     title: "Prepare host firewall",
     detail: canManageNetwork
-      ? `Allow ${kind === "pumpkin" ? "the Java TCP port and separate Bedrock TCP/UDP port" : kind === "valheim" || kind === "vrising" || kind === "palworld" ? "UDP game ports" : "the TCP game port"} when UFW is active. Helix will show the forwarding details for your router; it will not change router settings or enable UFW.`
+      ? `Allow ${noun} when UFW is active. Helix will show the forwarding details for your router; it will not change router settings or enable UFW.`
       : "Requires network.firewall.write permission. You can still create the server and manage host rules in Network.",
   };
 }
@@ -1011,6 +1056,26 @@ function parseIndividualPorts(input: string): number[] {
   });
 }
 
+type PortPoolGame = "minecraft" | "vrising" | "valheim" | "terraria" | "palworld" | ManagedGameKind;
+
+const PORT_POOL_GAMES: ReadonlyArray<{ id: PortPoolGame; label: string }> = [
+  { id: "minecraft", label: "Minecraft" },
+  { id: "vrising", label: "V Rising" },
+  { id: "valheim", label: "Valheim" },
+  { id: "terraria", label: "Terraria" },
+  { id: "palworld", label: "Palworld" },
+  ...MANAGED_GAMES.map((info) => ({ id: info.id as PortPoolGame, label: info.label })),
+];
+
+function portPoolGameLabel(game: PortPoolGame): string {
+  return isManagedGameKind(game) ? managedGameInfo(game).label
+    : game === "vrising" ? "V Rising"
+      : game === "minecraft" ? "Minecraft"
+        : game === "valheim" ? "Valheim"
+          : game === "palworld" ? "Palworld"
+            : "Terraria";
+}
+
 function PortPoolDialog({
   csrfToken,
   canManageNetwork,
@@ -1023,7 +1088,7 @@ function PortPoolDialog({
   onSessionExpired: () => void;
 }) {
   const [policy, setPolicy] = useState<GamePortPolicy | null>(null);
-  const [game, setGame] = useState<"minecraft" | "vrising" | "valheim" | "terraria" | "palworld">("minecraft");
+  const [game, setGame] = useState<PortPoolGame>("minecraft");
   const [ranges, setRanges] = useState("");
   const [ports, setPorts] = useState("");
   const [autoForward, setAutoForward] = useState(false);
@@ -1033,8 +1098,9 @@ function PortPoolDialog({
     const controller = new AbortController();
     setPolicy(null);
     setError(null);
-    const load =
-      game === "minecraft"
+    const load = isManagedGameKind(game)
+      ? (token: string, signal?: AbortSignal) => getManagedGamePortPolicy(game, token, signal)
+      : game === "minecraft"
         ? getMinecraftPortPolicy
         : game === "vrising"
           ? getVRisingPortPolicy
@@ -1067,8 +1133,10 @@ function PortPoolDialog({
       if (parsedRanges.length === 0 && parsedPorts.length === 0) {
         throw new Error("Add at least one port or port range.");
       }
-      const savePolicy =
-        game === "minecraft"
+      const savePolicy = isManagedGameKind(game)
+        ? (input: Pick<GamePortPolicy, "ranges" | "ports" | "autoForwardOnCreate">, token: string) =>
+            saveManagedGamePortPolicy(game, input, token)
+        : game === "minecraft"
           ? saveMinecraftPortPolicy
           : game === "vrising"
             ? saveVRisingPortPolicy
@@ -1100,56 +1168,19 @@ function PortPoolDialog({
   return (
     <Dialog title="Port pools" onClose={onClose} wide>
       <div class="port-pool-game-tabs" role="tablist" aria-label="Game port pool">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={game === "minecraft"}
-          class={game === "minecraft" ? "is-active" : ""}
-          disabled={busy}
-          onClick={() => setGame("minecraft")}
-        >
-          Minecraft
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={game === "vrising"}
-          class={game === "vrising" ? "is-active" : ""}
-          disabled={busy}
-          onClick={() => setGame("vrising")}
-        >
-          V Rising
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={game === "valheim"}
-          class={game === "valheim" ? "is-active" : ""}
-          disabled={busy}
-          onClick={() => setGame("valheim")}
-        >
-          Valheim
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={game === "terraria"}
-          class={game === "terraria" ? "is-active" : ""}
-          disabled={busy}
-          onClick={() => setGame("terraria")}
-        >
-          Terraria
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={game === "palworld"}
-          class={game === "palworld" ? "is-active" : ""}
-          disabled={busy}
-          onClick={() => setGame("palworld")}
-        >
-          Palworld
-        </button>
+        {PORT_POOL_GAMES.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            role="tab"
+            aria-selected={game === entry.id}
+            class={game === entry.id ? "is-active" : ""}
+            disabled={busy}
+            onClick={() => setGame(entry.id)}
+          >
+            {entry.label}
+          </button>
+        ))}
       </div>
       <div class="port-pool-summary">
         <div><strong>{policy?.capacity ?? "—"}</strong><span>configured</span></div>
@@ -1173,15 +1204,17 @@ function PortPoolDialog({
             disabled={busy || policy === null}
             onInput={(event) => setRanges(event.currentTarget.value)}
             placeholder={
-              game === "vrising"
-                ? "9876-9910"
-                : game === "valheim"
-                  ? "2456-2490"
-                  : game === "palworld"
-                    ? "8211-8245"
-                    : game === "terraria"
-                      ? "7777-7796"
-                      : "25565-25599, 25610-25619"
+              isManagedGameKind(game)
+                ? managedGameInfo(game).poolRangeHint
+                : game === "vrising"
+                  ? "9876-9910"
+                  : game === "valheim"
+                    ? "2456-2490"
+                    : game === "palworld"
+                      ? "8211-8245"
+                      : game === "terraria"
+                        ? "7777-7796"
+                        : "25565-25599, 25610-25619"
             }
           />
           <small>Separate ranges with commas or spaces. A single port is accepted here too.</small>
@@ -1193,15 +1226,17 @@ function PortPoolDialog({
             disabled={busy || policy === null}
             onInput={(event) => setPorts(event.currentTarget.value)}
             placeholder={
-              game === "vrising"
-                ? "9876, 9878"
-                : game === "valheim"
-                  ? "2456, 2459"
-                  : game === "palworld"
-                    ? "8211, 8214"
-                    : game === "terraria"
-                      ? "7777, 7778"
-                      : "25565, 25570, 25580"
+              isManagedGameKind(game)
+                ? managedGameInfo(game).poolPortsHint
+                : game === "vrising"
+                  ? "9876, 9878"
+                  : game === "valheim"
+                    ? "2456, 2459"
+                    : game === "palworld"
+                      ? "8211, 8214"
+                      : game === "terraria"
+                        ? "7777, 7778"
+                        : "25565, 25570, 25580"
             }
           />
           <small>Optional. These are tried before the ranges; duplicates are removed safely.</small>
@@ -1217,15 +1252,7 @@ function PortPoolDialog({
         />
         <span>
           <strong>
-            {game === "minecraft"
-              ? "Prepare host ports for new Minecraft servers"
-              : game === "vrising"
-                ? "Prepare host ports for new V Rising servers"
-                : game === "valheim"
-                  ? "Prepare host ports for new Valheim servers"
-                  : game === "palworld"
-                    ? "Prepare host ports for new Palworld servers"
-                    : "Prepare host ports for new Terraria servers"}
+            {`Prepare host ports for new ${portPoolGameLabel(game)} servers`}
           </strong>
           <small>
             {canManageNetwork
@@ -4992,7 +5019,8 @@ function NativeServerPage({
   const online = detail.status === "online";
   const containerUp = detail.status === "online" || detail.status === "starting";
   const isReadyMarkerGame = detail.kind !== "minecraft";
-  const usesUdpJoin = detail.kind === "vrising" || detail.kind === "valheim" || detail.kind === "palworld";
+  const usesUdpJoin = detail.kind === "vrising" || detail.kind === "valheim" || detail.kind === "palworld"
+    || (isManagedGameKind(detail.kind) && managedGameInfo(detail.kind).joinProtocol === "udp");
   const tailscaleAddress =
     hostInventory?.interfaces
       .find((item) => item.name.toLowerCase().startsWith("tailscale"))
@@ -6122,10 +6150,10 @@ function ImportedServerPage({
   );
 }
 
-type ServerFilter = "all" | "helix" | "minecraft" | "vrising" | "valheim" | "terraria" | "palworld" | "imported";
+type ServerFilter = "all" | "helix" | "minecraft" | "vrising" | "valheim" | "terraria" | "palworld" | ManagedGameKind | "imported";
 
 function isMinecraftServer(server: ManagedServer): boolean {
-  if (server.kind === "vrising" || server.kind === "valheim" || server.kind === "terraria" || server.kind === "palworld") return false;
+  if (server.kind !== "minecraft" && server.kind !== "imported") return false;
   if (server.kind === "minecraft") return true;
   return /minecraft|pumpkin|paper|purpur|folia|leaves|fabric|forge|spigot|bukkit|velocity|sponge|quilt|pufferfish|neoforge/iu.test(
     `${server.software} ${server.version}`,
@@ -6148,6 +6176,10 @@ function isPalworldServer(server: ManagedServer): boolean {
   return server.kind === "palworld" || /palworld/iu.test(server.software);
 }
 
+function isManagedGameServer(server: ManagedServer, kind: ManagedGameKind): boolean {
+  return server.kind === kind || managedGameKindFromSoftware(server.software) === kind;
+}
+
 function migrateGameLabel(game: MigrateGame): string {
   switch (game) {
     case "minecraft":
@@ -6160,6 +6192,8 @@ function migrateGameLabel(game: MigrateGame): string {
       return "Terraria";
     case "palworld":
       return "Palworld";
+    default:
+      return managedGameLabel(game);
   }
 }
 
@@ -6175,12 +6209,19 @@ function migratePlayerMax(game: MigrateGame): number {
       return 255;
     case "palworld":
       return 32;
+    default:
+      return managedGameInfo(game).players.max;
   }
+}
+
+function migrateSupportsBrowserListing(game: MigrateGame): boolean {
+  return game === "vrising" || game === "palworld"
+    || (isManagedGameKind(game) && managedGameInfo(game).listOnBrowser);
 }
 
 function migrateMemoryKind(
   game: MigrateGame,
-): "minecraft" | "vrising" | "valheim" | "terraria" | "palworld" {
+): NativeGameKind {
   return game;
 }
 
@@ -6316,7 +6357,7 @@ function MigrateServerDialog({
         payload.software = software;
         payload.version = version.trim();
       }
-      if (preflight.game === "vrising" || preflight.game === "palworld") {
+      if (migrateSupportsBrowserListing(preflight.game)) {
         payload.list_on_browser = listOnBrowser;
       }
       const result = await migrateServer(payload, csrfToken);
@@ -6592,7 +6633,7 @@ function MigrateServerDialog({
                   />
                 </label>
               </div>
-              {(preflight.game === "vrising" || preflight.game === "palworld") && (
+              {migrateSupportsBrowserListing(preflight.game) && (
                 <label class="check-row">
                   <input
                     class="toggle-input"
@@ -6602,8 +6643,8 @@ function MigrateServerDialog({
                     onChange={(event) => setListOnBrowser(event.currentTarget.checked)}
                   />
                   <span>
-                    <strong>{preflight.game === "vrising" ? "Show on the V Rising server list" : "Show on the Palworld community list"}</strong>
-                    <small>{preflight.game === "vrising" ? "Turns on EOS and Steam listing. Direct Connect to a public IP is separate." : "Advertises the server in the in-game community server browser. Direct IP joins still work either way."}</small>
+                    <strong>{preflight.game === "vrising" ? "Show on the V Rising server list" : `Show on the ${migrateGameLabel(preflight.game)} server list`}</strong>
+                    <small>{preflight.game === "vrising" ? "Turns on EOS and Steam listing. Direct Connect to a public IP is separate." : "Advertises the server in the public or community server browser. Direct IP joins still work either way."}</small>
                   </span>
                 </label>
               )}
@@ -6719,6 +6760,7 @@ export function NewServerChooser({
   onValheim,
   onTerraria,
   onPalworld,
+  onManaged,
   onMigrate,
   onClose,
 }: {
@@ -6727,6 +6769,7 @@ export function NewServerChooser({
   onValheim: () => void;
   onTerraria: () => void;
   onPalworld: () => void;
+  onManaged: (game: ManagedGameKind) => void;
   onMigrate: () => void;
   onClose: () => void;
 }) {
@@ -6793,6 +6836,18 @@ export function NewServerChooser({
           </span>
           <em>Click to install</em>
         </button>
+        {MANAGED_GAMES.map((info) => (
+          <button key={info.id} type="button" onClick={() => onManaged(info.id)}>
+            <span class={`game-create-icon game-create-icon--${info.id}`}>
+              <GameMark game={info.id} size={32} />
+            </span>
+            <span>
+              <strong>{info.label}</strong>
+              <small>{info.blurb}</small>
+            </span>
+            <em>Click to install</em>
+          </button>
+        ))}
         <button type="button" onClick={onMigrate}>
           <span class="game-create-icon">
             <Icon name="folder" size={32} />
@@ -7599,6 +7654,321 @@ function CreatePalworldDialog({
   );
 }
 
+function CreateManagedGameDialog({
+  info,
+  csrfToken,
+  servers,
+  canManageNetwork,
+  logicalCores,
+  onClose,
+  onComplete,
+  onSessionExpired,
+}: {
+  info: ReturnType<typeof managedGameInfo>;
+  csrfToken: string;
+  servers: ManagedServer[];
+  canManageNetwork: boolean;
+  logicalCores: number;
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [memory, setMemory] = useState(info.memory.default);
+  const [cpuMillis, setCpuMillis] = useState(0);
+  const [players, setPlayers] = useState(info.players.default);
+  const [serverPassword, setServerPassword] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [clusterToken, setClusterToken] = useState("");
+  const [caves, setCaves] = useState(false);
+  const [worldSeed, setWorldSeed] = useState("");
+  const [worldSize, setWorldSize] = useState(3_500);
+  const [worldName, setWorldName] = useState("");
+  const [wineAcknowledged, setWineAcknowledged] = useState(false);
+  const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
+  const [gamePort, setGamePort] = useState(info.defaultGamePort);
+  const [queryPort, setQueryPort] = useState(info.defaultGamePort + 1);
+  const [startOnBoot, setStartOnBoot] = useState(true);
+  const [listOnBrowser, setListOnBrowser] = useState(true);
+  const [publicAccess, setPublicAccess] = useState(false);
+  const [job, setJob] = useState<BrokerJob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [portPolicy, setPortPolicy] = useState<GamePortPolicy | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getManagedGamePortPolicy(info.id, csrfToken, controller.signal)
+      .then((policy) => {
+        setPortPolicy(policy);
+        if (policy.nextAvailablePort !== null) {
+          setGamePort(policy.nextAvailablePort);
+          setQueryPort(policy.nextAvailablePort + 1);
+        }
+        setPublicAccess(canManageNetwork && policy.autoForwardOnCreate);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (isSessionError(requestError)) onSessionExpired();
+        else setError(describeError(requestError));
+      });
+    return () => controller.abort();
+  }, [canManageNetwork, csrfToken, info.id, onSessionExpired]);
+
+  const polling = useJobPolling({
+    job,
+    csrfToken,
+    onJob: setJob,
+    onComplete,
+    onSessionExpired,
+  });
+
+  const submit = async (): Promise<void> => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const payload: ManagedGameCreateInput = {
+        name: name.trim(),
+        memory_mb: memory,
+        max_players: players,
+        start_on_boot: startOnBoot,
+        network_exposure: publicAccess ? "public" : "private",
+        list_on_browser: info.listOnBrowser ? listOnBrowser : true,
+        ...cpuMillisFields(cpuMillis),
+      };
+      if (portMode === "manual") {
+        payload.game_port = gamePort;
+        if (info.manualQueryPort) payload.query_port = queryPort;
+      }
+      if (info.serverPassword && serverPassword.trim().length > 0) {
+        payload.server_password = serverPassword.trim();
+      }
+      if (info.adminPassword && adminPassword.trim().length > 0) {
+        payload.admin_password = adminPassword.trim();
+      }
+      if (info.clusterToken && clusterToken.trim().length > 0) {
+        payload.cluster_token = clusterToken.trim();
+      }
+      if (info.caves && caves) payload.caves = true;
+      if (info.worldSeed && worldSeed.trim().length > 0) {
+        payload.world_seed = Number(worldSeed);
+      }
+      if (info.worldSize) payload.world_size = worldSize;
+      if (info.worldName && worldName.trim().length > 0) {
+        payload.world_name = worldName.trim();
+      }
+      if (info.wineNotice) payload.wine_runtime_acknowledged = wineAcknowledged;
+      const result = await createManagedGameServer(info.id, payload, csrfToken);
+      setJob({
+        id: result.jobId,
+        kind: `${info.id}_create`,
+        status: "queued",
+        stage: "Queued",
+        progressPercent: 0,
+        createdAtUnixMs: Date.now(),
+        updatedAtUnixMs: Date.now(),
+        result: null,
+        error: null,
+      });
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const installing = job !== null && (job.status === "queued" || job.status === "running");
+  const busy = submitting || installing;
+  const portCount = 1 + info.extraPorts + (info.caves && caves ? 1 : 0);
+  return (
+    <Dialog
+      title={
+        job === null || job.status === "failed"
+          ? `New ${info.label} server`
+          : job.status === "complete"
+            ? "Server ready"
+            : `Installing ${info.label}`
+      }
+      onClose={() => !installing && onClose()}
+      wide
+    >
+      {job !== null && job.status !== "failed" ? (
+        <NativeCreateJobView
+          game={info.label}
+          job={job}
+          polling={polling}
+          csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
+          onClose={onClose}
+          onSessionExpired={onSessionExpired}
+        />
+      ) : (
+        <>
+          <p class="dialog-intro">{info.intro}</p>
+          {info.wineNotice && (
+            <section class="imported-notice">
+              <Icon name="info" />
+              <div>
+                <strong>Runs the Windows server under Wine</strong>
+                <p>
+                  Sons of the Forest only ships a Windows dedicated server. Helix runs it under an
+                  isolated Wine runtime in its container, so first start takes longer and the server
+                  needs the extra memory headroom.
+                </p>
+              </div>
+            </section>
+          )}
+          <div class="form-grid">
+            <label class="field field--wide">
+              <span>Server name</span>
+              <input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} />
+            </label>
+            <label class="field">
+              <span>Memory (MiB)</span>
+              <input type="number" min={info.memory.min} max={info.memory.max} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} />
+            </label>
+            <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
+            <label class="field">
+              <span>Player limit</span>
+              <input type="number" min={info.players.min} max={info.players.max} value={players} disabled={busy} onInput={(event) => setPlayers(Number(event.currentTarget.value))} />
+            </label>
+            {info.serverPassword && (
+              <label class="field field--wide">
+                <span>Join password</span>
+                <input type="password" value={serverPassword} disabled={busy} placeholder="Optional" autocomplete="new-password" onInput={(event) => setServerPassword(event.currentTarget.value)} />
+              </label>
+            )}
+            {info.adminPassword && (
+              <label class="field field--wide">
+                <span>Admin password</span>
+                <input type="password" value={adminPassword} disabled={busy} placeholder="Blank: Helix generates one" autocomplete="new-password" onInput={(event) => setAdminPassword(event.currentTarget.value)} />
+              </label>
+            )}
+            {info.clusterToken && (
+              <label class="field field--wide">
+                <span>Klei cluster token</span>
+                <input type="password" value={clusterToken} disabled={busy} placeholder="Optional — required for public listing" autocomplete="off" onInput={(event) => setClusterToken(event.currentTarget.value)} />
+              </label>
+            )}
+            {info.worldName && (
+              <label class="field">
+                <span>World name</span>
+                <input value={worldName} disabled={busy} placeholder="Helix" maxlength={64} onInput={(event) => setWorldName(event.currentTarget.value)} />
+              </label>
+            )}
+            {info.worldSeed && (
+              <label class="field">
+                <span>World seed</span>
+                <input type="number" min={0} value={worldSeed} disabled={busy} placeholder="Random" onInput={(event) => setWorldSeed(event.currentTarget.value)} />
+              </label>
+            )}
+            {info.worldSize && (
+              <label class="field">
+                <span>World size</span>
+                <input type="number" min={1000} max={6000} step={100} value={worldSize} disabled={busy} onInput={(event) => setWorldSize(Number(event.currentTarget.value))} />
+              </label>
+            )}
+            <label class="field field--wide">
+              <span>Ports</span>
+              <select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}>
+                <option value="automatic">Automatic from the {info.label} pool{portPolicy?.nextAvailablePort ? ` (next ${portPolicy.nextAvailablePort})` : ""}</option>
+                <option value="manual">Specific ports</option>
+              </select>
+              <small>
+                {info.extraPorts === 0 && !info.caves
+                  ? "This game uses a single port."
+                  : `Helix reserves ${portCount} consecutive port${portCount === 1 ? "" : "s"} starting at the game port.`}
+              </small>
+            </label>
+            {portMode === "manual" && (
+              <>
+                <label class="field">
+                  <span>Game port</span>
+                  <input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} />
+                </label>
+                {info.manualQueryPort && (
+                  <label class="field">
+                    <span>{info.queryPortLabel}</span>
+                    <input type="number" min={1024} max={65535} value={queryPort} disabled={busy} onInput={(event) => setQueryPort(Number(event.currentTarget.value))} />
+                  </label>
+                )}
+              </>
+            )}
+          </div>
+          {info.caves && (
+            <label class="check-row">
+              <input class="toggle-input" type="checkbox" checked={caves} disabled={busy} onChange={(event) => setCaves(event.currentTarget.checked)} />
+              <span>
+                <strong>Include the Caves shard</strong>
+                <small>Runs the caves world as a second shard on the next port. Migrated clusters with a Caves folder enable this automatically.</small>
+              </span>
+            </label>
+          )}
+          <label class="check-row">
+            <input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} />
+            <span>
+              <strong>{START_WITH_HOST_TITLE}</strong>
+              <small>{START_WITH_HOST_CREATE_DETAIL}</small>
+            </span>
+          </label>
+          {info.listOnBrowser && (
+            <label class="check-row">
+              <input class="toggle-input" type="checkbox" checked={listOnBrowser} disabled={busy} onChange={(event) => setListOnBrowser(event.currentTarget.checked)} />
+              <span>
+                <strong>Show on the {info.label} server list</strong>
+                <small>Advertises the server in the public or community server browser. Players can still join by direct IP when this is off.</small>
+              </span>
+            </label>
+          )}
+          {info.wineNotice && (
+            <label class="check-row">
+              <input class="toggle-input" type="checkbox" checked={wineAcknowledged} disabled={busy} onChange={(event) => setWineAcknowledged(event.currentTarget.checked)} />
+              <span>
+                <strong>I understand this runs under Wine</strong>
+                <small>The isolated Wine runtime adds startup time and some overhead. Native Windows-only features still work.</small>
+              </span>
+            </label>
+          )}
+          <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
+            <input
+              class="toggle-input"
+              type="checkbox"
+              checked={publicAccess}
+              disabled={busy || !canManageNetwork}
+              onChange={(event) => setPublicAccess(event.currentTarget.checked)}
+            />
+            <span>
+              <strong>{publicAccessCopy(info.id, canManageNetwork).title}</strong>
+              <small>{publicAccessCopy(info.id, canManageNetwork).detail}</small>
+            </span>
+          </label>
+          <ServerFault
+            message={error ?? (job?.error ?? null)}
+            csrfToken={csrfToken}
+            servers={servers}
+            canManageNetwork={canManageNetwork}
+            onSessionExpired={onSessionExpired}
+          />
+          <div class="dialog-actions">
+            <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
+            <button
+              class="button button--primary"
+              type="button"
+              disabled={busy || name.trim().length === 0 || (info.wineNotice && !wineAcknowledged)}
+              onClick={() => void submit()}
+            >
+              {submitting ? "Starting…" : `Create ${info.label} server`}
+            </button>
+          </div>
+        </>
+      )}
+    </Dialog>
+  );
+}
+
 export function ServersPage({
   data,
   csrfToken,
@@ -7620,6 +7990,7 @@ export function ServersPage({
   const [creatingValheim, setCreatingValheim] = useState(false);
   const [creatingTerraria, setCreatingTerraria] = useState(false);
   const [creatingPalworld, setCreatingPalworld] = useState(false);
+  const [creatingManaged, setCreatingManaged] = useState<ManagedGameKind | null>(null);
   const [creatingMigrate, setCreatingMigrate] = useState(false);
   const [migrateAmpId, setMigrateAmpId] = useState<string | null>(null);
   const [portPoolOpen, setPortPoolOpen] = useState(false);
@@ -7788,6 +8159,8 @@ export function ServersPage({
                 ? isTerrariaServer(server)
                 : filter === "palworld"
                   ? isPalworldServer(server)
+                  : isManagedGameKind(filter)
+                    ? isManagedGameServer(server, filter)
                   : server.manager !== "helix"),
   );
   const online = servers.filter((server) => server.status === "online").length;
@@ -7902,6 +8275,16 @@ export function ServersPage({
         >
           Palworld <span>{servers.filter(isPalworldServer).length}</span>
         </button>
+        {MANAGED_GAMES.map((info) => (
+          <button
+            key={info.id}
+            class={filter === info.id ? "is-active" : ""}
+            type="button"
+            onClick={() => setFilter(info.id)}
+          >
+            {info.label} <span>{servers.filter((server) => isManagedGameServer(server, info.id)).length}</span>
+          </button>
+        ))}
         <button
           class={filter === "imported" ? "is-active" : ""}
           type="button"
@@ -8062,6 +8445,10 @@ export function ServersPage({
             setChooseGame(false);
             setCreatingPalworld(true);
           }}
+          onManaged={(managed) => {
+            setChooseGame(false);
+            setCreatingManaged(managed);
+          }}
           onMigrate={() => {
             setChooseGame(false);
             setMigrateAmpId(null);
@@ -8133,6 +8520,21 @@ export function ServersPage({
           canManageNetwork={canManageNetwork}
           logicalCores={logicalCores}
           onClose={() => setCreatingPalworld(false)}
+          onComplete={async () => {
+            await data.refresh();
+            await loadRemoved();
+          }}
+          onSessionExpired={onSessionExpired}
+        />
+      )}
+      {creatingManaged !== null && (
+        <CreateManagedGameDialog
+          info={managedGameInfo(creatingManaged)}
+          csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
+          logicalCores={logicalCores}
+          onClose={() => setCreatingManaged(null)}
           onComplete={async () => {
             await data.refresh();
             await loadRemoved();

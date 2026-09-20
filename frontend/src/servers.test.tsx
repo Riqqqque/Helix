@@ -137,6 +137,7 @@ describe('Servers route', () => {
         onValheim={() => undefined}
         onTerraria={() => undefined}
         onPalworld={() => undefined}
+        onManaged={() => undefined}
         onMigrate={() => undefined}
         onClose={() => undefined}
       />,
@@ -148,6 +149,14 @@ describe('Servers route', () => {
     expect(markup).toContain('Valheim');
     expect(markup).toContain('Terraria');
     expect(markup).toContain('Palworld');
+    expect(markup).toContain('Satisfactory');
+    expect(markup).toContain('Project Zomboid');
+    expect(markup).toContain('7 Days to Die');
+    expect(markup).toContain('Rust');
+    expect(markup).toContain('Sons of the Forest');
+    expect(markup).toContain('Factorio');
+    expect(markup).toContain('Don' + "'" + 't Starve Together');
+    expect(markup).toContain('Vintage Story');
     expect(markup).toContain('Copy an existing server');
     expect(markup).toContain('Click to install');
     expect(markup).toContain('game-mark--minecraft');

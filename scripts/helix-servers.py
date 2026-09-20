@@ -37,7 +37,7 @@ def inventory(config):
     for path in sorted(state.iterdir()):
         if path.suffix != ".json":
             continue
-        if path.name in {f"port-policy-{game}.json" for game in ("minecraft", "vrising", "valheim", "terraria", "palworld")}:
+        if path.name in {f"port-policy-{game}.json" for game in ("minecraft", "vrising", "valheim", "terraria", "palworld", "satisfactory", "project_zomboid", "seven_days_to_die", "rust", "sons_of_the_forest", "factorio", "dont_starve_together", "vintage_story")}:
             continue
         item = read_json(path)
         instance_id = str(uuid.UUID(item["id"]))

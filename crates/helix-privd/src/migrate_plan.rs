@@ -302,10 +302,130 @@ pub fn looks_like_terraria_root(names: &[impl AsRef<str>]) -> bool {
     })
 }
 
+fn lowered_names(names: &[impl AsRef<str>]) -> Vec<String> {
+    names
+        .iter()
+        .map(|name| name.as_ref().to_ascii_lowercase())
+        .collect()
+}
+
+fn has_name(lower: &[String], needle: &str) -> bool {
+    lower.iter().any(|name| name == needle)
+}
+
+fn contains_name(lower: &[String], needle: &str) -> bool {
+    lower.iter().any(|name| name.contains(needle))
+}
+
+#[must_use]
+pub fn looks_like_satisfactory_root(names: &[impl AsRef<str>]) -> bool {
+    let lower = lowered_names(names);
+    has_name(&lower, "factoryserver.sh")
+        || has_name(&lower, "factoryserver.exe")
+        || has_name(&lower, "factoryserver")
+        || (has_name(&lower, "factorygame") && has_name(&lower, "engine"))
+        || contains_name(&lower, "satisfactorydedicated")
+}
+
+#[must_use]
+pub fn looks_like_project_zomboid_root(names: &[impl AsRef<str>]) -> bool {
+    let lower = lowered_names(names);
+    has_name(&lower, "projectzomboid64")
+        || has_name(&lower, "servertest.ini")
+        || has_name(&lower, "zomboid")
+        || (has_name(&lower, "start-server.sh") && has_name(&lower, "projectzomboid64.json"))
+        || contains_name(&lower, "projectzomboid")
+}
+
+#[must_use]
+pub fn looks_like_seven_days_root(names: &[impl AsRef<str>]) -> bool {
+    let lower = lowered_names(names);
+    has_name(&lower, "7daystodieserver.x86_64")
+        || has_name(&lower, "7daystodieserver.exe")
+        || has_name(&lower, "serverconfig.xml")
+        || contains_name(&lower, "7daystodie")
+        || contains_name(&lower, "7dtd")
+}
+
+#[must_use]
+pub fn looks_like_rust_root(names: &[impl AsRef<str>]) -> bool {
+    let lower = lowered_names(names);
+    has_name(&lower, "rustdedicated")
+        || has_name(&lower, "rustdedicated.exe")
+        || contains_name(&lower, "rustdedicated")
+        || (has_name(&lower, "oxide") && has_name(&lower, "server"))
+        || (has_name(&lower, "carbon") && has_name(&lower, "server"))
+}
+
+#[must_use]
+pub fn looks_like_sons_of_the_forest_root(names: &[impl AsRef<str>]) -> bool {
+    let lower = lowered_names(names);
+    has_name(&lower, "sonsoftheforestds.exe")
+        || has_name(&lower, "dedicatedserver.cfg")
+        || contains_name(&lower, "sonsoftheforest")
+}
+
+#[must_use]
+pub fn looks_like_factorio_root(names: &[impl AsRef<str>]) -> bool {
+    let lower = lowered_names(names);
+    has_name(&lower, "server-settings.json")
+        || has_name(&lower, "server-settings.example.json")
+        || contains_name(&lower, "factorio")
+        || (has_name(&lower, "saves") && has_name(&lower, "bin"))
+}
+
+#[must_use]
+pub fn looks_like_dont_starve_together_root(names: &[impl AsRef<str>]) -> bool {
+    let lower = lowered_names(names);
+    has_name(&lower, "cluster.ini")
+        || has_name(&lower, "cluster_token.txt")
+        || has_name(&lower, "dedicated_server_mods_setup.lua")
+        || has_name(&lower, "donotstarvetogether")
+        || contains_name(&lower, "dontstarve")
+        || contains_name(&lower, "donotstarve")
+}
+
+#[must_use]
+pub fn looks_like_vintage_story_root(names: &[impl AsRef<str>]) -> bool {
+    let lower = lowered_names(names);
+    has_name(&lower, "vintagestoryserver.dll")
+        || has_name(&lower, "vintagestoryserver.exe")
+        || has_name(&lower, "vintagestoryserver")
+        || has_name(&lower, "vintagestorydata")
+        || contains_name(&lower, "vintagestory")
+        || contains_name(&lower, "vintage_story")
+}
+
 #[must_use]
 pub fn detect_game_from_names(names: &[impl AsRef<str>]) -> Option<GameKind> {
     if looks_like_bedrock_root(names) {
         return None;
+    }
+    // The managed games have distinctive markers and their roots can contain
+    // `mods`/`world` folders that would otherwise look like Minecraft.
+    if looks_like_satisfactory_root(names) {
+        return Some(GameKind::Satisfactory);
+    }
+    if looks_like_project_zomboid_root(names) {
+        return Some(GameKind::ProjectZomboid);
+    }
+    if looks_like_seven_days_root(names) {
+        return Some(GameKind::SevenDaysToDie);
+    }
+    if looks_like_rust_root(names) {
+        return Some(GameKind::Rust);
+    }
+    if looks_like_sons_of_the_forest_root(names) {
+        return Some(GameKind::SonsOfTheForest);
+    }
+    if looks_like_factorio_root(names) {
+        return Some(GameKind::Factorio);
+    }
+    if looks_like_dont_starve_together_root(names) {
+        return Some(GameKind::DontStarveTogether);
+    }
+    if looks_like_vintage_story_root(names) {
+        return Some(GameKind::VintageStory);
     }
     if looks_like_minecraft_root(names) {
         return Some(GameKind::Minecraft);
@@ -761,6 +881,230 @@ pub fn overlay_relative_for_game(game: GameKind, relative: &str) -> Option<Strin
             }
             None
         }
+        _ => managed_overlay_relative(game, &normalized, &first.to_ascii_lowercase()),
+    }
+}
+
+/// Map a source path into the managed layout for the shared-spec games.
+/// Runtime folders, SteamCMD state, binaries, and logs never copy.
+fn managed_overlay_relative(game: GameKind, normalized: &str, first_lower: &str) -> Option<String> {
+    const COMMON_SKIP: &[&str] = &[
+        "steamcmd",
+        "steamapps",
+        "logs",
+        "log",
+        "backups",
+        "backup",
+        "crashdumps",
+        "dumps",
+    ];
+    if COMMON_SKIP.contains(&first_lower) || first_lower.ends_with(".kvp") {
+        return None;
+    }
+    let rest = normalized.split_once('/').map(|(_, rest)| rest);
+    match game {
+        GameKind::Satisfactory => match first_lower {
+            "factorygame" => {
+                let rest = rest?;
+                if rest.to_ascii_lowercase().starts_with("saved") {
+                    return Some(format!("server/FactoryGame/{rest}"));
+                }
+                None
+            }
+            "saved" | "savegames" => Some(match rest {
+                Some(rest) => format!("server/FactoryGame/Saved/{rest}"),
+                None => "server/FactoryGame/Saved".to_owned(),
+            }),
+            _ if rest.is_none() && first_lower.ends_with(".ini") => Some(format!(
+                "server/FactoryGame/Saved/Config/LinuxServer/{normalized}"
+            )),
+            _ => None,
+        },
+        GameKind::ProjectZomboid => match first_lower {
+            "zomboid" => {
+                let rest = rest?.to_ascii_lowercase();
+                if let Some(inner) = rest.strip_prefix("saves/multiplayer/") {
+                    return Some(format!("zomboid/Saves/Multiplayer/helixserver/{inner}"));
+                }
+                if rest == "saves/multiplayer" {
+                    return Some("zomboid/Saves/Multiplayer/helixserver".to_owned());
+                }
+                if let Some(ini) = rest.strip_prefix("server/") {
+                    if ini.ends_with(".ini") {
+                        return Some("zomboid/Server/helixserver.ini".to_owned());
+                    }
+                    if ini.ends_with("_sandboxvars.lua") {
+                        return Some("zomboid/Server/helixserver_SandboxVars.lua".to_owned());
+                    }
+                    return Some(format!("zomboid/Server/{ini}"));
+                }
+                Some(format!("zomboid/{rest}"))
+            }
+            "server" | "steam" | "jre64" | "java" | "win64" | "linux" => None,
+            _ => None,
+        },
+        GameKind::SevenDaysToDie => match first_lower {
+            "saves" | "save" => Some(match rest {
+                Some(rest) => format!("saves/{rest}"),
+                None => "saves".to_owned(),
+            }),
+            "7daystodie" => {
+                let rest = rest?.to_ascii_lowercase();
+                rest.strip_prefix("saves/")
+                    .map(|inner| format!("saves/{inner}"))
+            }
+            "worlds" => Some(match rest {
+                Some(rest) => format!("server/Data/Worlds/{rest}"),
+                None => "server/Data/Worlds".to_owned(),
+            }),
+            "data" => {
+                if let Some(rest) = rest
+                    && rest.to_ascii_lowercase().starts_with("worlds")
+                {
+                    return Some(format!("server/Data/{rest}"));
+                }
+                None
+            }
+            // The managed config is regenerated by the runtime entrypoint.
+            "serverconfig.xml" => None,
+            _ if rest.is_none() && first_lower.ends_with(".xml") => None,
+            _ => None,
+        },
+        GameKind::Rust => match first_lower {
+            "server" => {
+                // server/<identity>/... flattens to the managed helix identity.
+                let rest = rest?;
+                let mut parts = rest.splitn(2, '/');
+                let identity = parts.next().unwrap_or_default();
+                let inner = parts.next().unwrap_or_default();
+                if inner.is_empty() {
+                    return Some(format!("server/server/{identity}"));
+                }
+                Some(format!("server/server/helix/{inner}"))
+            }
+            "oxide" | "carbon" => Some(match rest {
+                Some(rest) => format!("server/{first_lower}/{rest}"),
+                None => format!("server/{first_lower}"),
+            }),
+            "cfg" => Some(match rest {
+                Some(rest) => format!("server/server/helix/cfg/{rest}"),
+                None => "server/server/helix/cfg".to_owned(),
+            }),
+            "server.cfg" | "users.cfg" | "bans.cfg" => {
+                Some(format!("server/server/helix/cfg/{first_lower}"))
+            }
+            "rustdedicated" | "rustdedicated.exe" | "rustdedicated_data" => None,
+            _ => None,
+        },
+        GameKind::SonsOfTheForest => match first_lower {
+            "userdata" => Some(normalized.to_owned()),
+            "saves" => Some(match rest {
+                Some(rest) => format!("userdata/Saves/{rest}"),
+                None => "userdata/Saves".to_owned(),
+            }),
+            "server" | "wine" | "userdata_backup" | "dedicatedserver.cfg" => None,
+            _ if first_lower.ends_with(".zip") || first_lower.ends_with(".save") => {
+                Some(format!("userdata/Saves/{first_lower}"))
+            }
+            _ => None,
+        },
+        GameKind::Factorio => match first_lower {
+            "saves" | "mods" | "scenarios" => Some(match rest {
+                Some(rest) => format!("{first_lower}/{rest}"),
+                None => first_lower.to_owned(),
+            }),
+            "config" => {
+                let rest = rest?;
+                if rest.eq_ignore_ascii_case("server-settings.json") {
+                    return None;
+                }
+                Some(format!("config/{rest}"))
+            }
+            "script-output" => Some(match rest {
+                Some(rest) => format!("server/factorio/script-output/{rest}"),
+                None => "server/factorio/script-output".to_owned(),
+            }),
+            "server-settings.json" | "server-settings.example.json" => None,
+            "bin" | "data" | "factorio" => None,
+            _ if first_lower.ends_with(".zip") => Some(format!("saves/{first_lower}")),
+            _ => None,
+        },
+        GameKind::DontStarveTogether => {
+            // Any shard content lands under the managed Cluster_1 cluster.
+            let segments: Vec<String> = normalized
+                .split('/')
+                .map(|segment| segment.to_ascii_lowercase())
+                .collect();
+            for (index, segment) in segments.iter().enumerate() {
+                if matches!(segment.as_str(), "master" | "caves") {
+                    let tail = normalized
+                        .split('/')
+                        .skip(index + 1)
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    let shard = if segment == "master" {
+                        "Master"
+                    } else {
+                        "Caves"
+                    };
+                    return Some(if tail.is_empty() {
+                        format!("DoNotStarveTogether/Cluster_1/{shard}")
+                    } else {
+                        format!("DoNotStarveTogether/Cluster_1/{shard}/{tail}")
+                    });
+                }
+            }
+            match first_lower {
+                "cluster.ini" | "cluster_token.txt" | "adminlist.txt" | "whitelist.txt"
+                | "blocklist.txt" => Some(format!("DoNotStarveTogether/Cluster_1/{first_lower}")),
+                "donotstarvetogether" | "klei" => {
+                    let rest = rest?;
+                    managed_overlay_relative(
+                        game,
+                        rest,
+                        &rest
+                            .split('/')
+                            .next()
+                            .unwrap_or_default()
+                            .to_ascii_lowercase(),
+                    )
+                }
+                // Server binaries, downloaded mods, and SteamCMD state never copy.
+                "bin" | "bin64" | "mods" | "ugc_mods" | "steamapps" | "data" => None,
+                _ if first_lower.starts_with("cluster") => {
+                    let rest = rest?;
+                    managed_overlay_relative(
+                        game,
+                        rest,
+                        &rest
+                            .split('/')
+                            .next()
+                            .unwrap_or_default()
+                            .to_ascii_lowercase(),
+                    )
+                }
+                _ => None,
+            }
+        }
+        GameKind::VintageStory => match first_lower {
+            "data" | "vintagestorydata" => Some(match rest {
+                Some(rest) => format!("data/{rest}"),
+                None => "data".to_owned(),
+            }),
+            "saves" => Some(match rest {
+                Some(rest) => format!("data/Saves/{rest}"),
+                None => "data/Saves".to_owned(),
+            }),
+            "mods" => Some(match rest {
+                Some(rest) => format!("data/Mods/{rest}"),
+                None => "data/Mods".to_owned(),
+            }),
+            "serverconfig.json" => Some("data/serverconfig.json".to_owned()),
+            "server" | "assets" | "lib" | "dotnet" => None,
+            _ if first_lower.ends_with(".vcdbs") => Some(format!("data/Saves/{first_lower}")),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -866,6 +1210,24 @@ const NESTED_GAME_ROOTS: &[&str] = &[
     "Worlds",
     "worlds",
     "worlds_local",
+    "Satisfactory",
+    "satisfactory",
+    "SatisfactoryDedicatedServer",
+    "ProjectZomboid",
+    "projectzomboid",
+    "Zomboid",
+    "7DaysToDie",
+    "7daystodie",
+    "Rust",
+    "rust",
+    "SonsOfTheForest",
+    "sonsoftheforest",
+    "Factorio",
+    "factorio",
+    "DoNotStarveTogether",
+    "VintageStory",
+    "vintagestory",
+    "userdata",
 ];
 
 pub fn find_game_root(start: &Path) -> Result<(GameKind, PathBuf), String> {
@@ -912,7 +1274,7 @@ pub fn find_game_root(start: &Path) -> Result<(GameKind, PathBuf), String> {
             return Ok((kind, entry));
         }
     }
-    Err("Helix could not see a Minecraft, V Rising, Valheim, or Terraria folder there. Pick the folder that has the world, plugins, mods, or save files.".to_owned())
+    Err("Helix could not see a supported game server folder there. Pick the folder that has the world, plugins, mods, or save files.".to_owned())
 }
 
 pub fn scan_overlay(
@@ -921,6 +1283,64 @@ pub fn scan_overlay(
     copy_server_jar: bool,
 ) -> Result<OverlayReport, String> {
     walk_overlay(game, root, None, copy_server_jar)
+}
+
+/// Whether a Don't Starve Together source tree carries a Caves shard. Mirrors
+/// the shard rule in `overlay_relative_for_game` (a path segment named
+/// "caves"), bounded so large save trees do not stall migration.
+#[must_use]
+pub fn dst_overlay_has_caves(source: &Path) -> bool {
+    let mut stack = vec![(source.to_path_buf(), 0usize)];
+    let mut visited = 0usize;
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > 6 || visited > 4_096 {
+            return false;
+        }
+        let Ok(entries) = read_real_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            visited = visited.saturating_add(1);
+            if !is_real_dir(&entry) {
+                continue;
+            }
+            let name = entry
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            if name.eq_ignore_ascii_case("caves") && dst_caves_dir_has_content(&entry) {
+                return true;
+            }
+            stack.push((entry, depth.saturating_add(1)));
+        }
+    }
+    false
+}
+
+/// A Caves shard directory is real when it holds shard files or a save tree;
+/// this keeps a stray `mods/caves`-style folder from enabling the shard.
+fn dst_caves_dir_has_content(dir: &Path) -> bool {
+    let Ok(entries) = read_real_dir(dir) else {
+        return false;
+    };
+    entries.iter().any(|entry| {
+        entry
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| {
+                let lower = name.to_ascii_lowercase();
+                matches!(
+                    lower.as_str(),
+                    "server.ini"
+                        | "leveldataoverride.lua"
+                        | "modoverrides.lua"
+                        | "worldgenoverride.lua"
+                        | "save"
+                        | "backup"
+                        | "session"
+                ) || lower.starts_with("server_chat_log")
+            })
+    })
 }
 
 pub fn apply_overlay(
@@ -1171,7 +1591,7 @@ fn walk_overlay(
 fn overlay_decision(game: GameKind, relative: &str, copy_server_jar: bool) -> CopyDecision {
     match game {
         GameKind::Minecraft => should_copy_minecraft_relative(relative, copy_server_jar),
-        GameKind::VRising | GameKind::Valheim | GameKind::Terraria | GameKind::Palworld => {
+        _ => {
             if overlay_relative_for_game(game, relative).is_some() {
                 CopyDecision::Copy
             } else {
@@ -1357,6 +1777,42 @@ mod tests {
             detect_game_from_names(&["world.fwl", "worlds"]),
             Some(GameKind::Valheim)
         );
+        assert_eq!(
+            detect_game_from_names(&["PalServer.sh", "steamapps"]),
+            Some(GameKind::Palworld)
+        );
+        assert_eq!(
+            detect_game_from_names(&["FactoryServer.sh", "Engine"]),
+            Some(GameKind::Satisfactory)
+        );
+        assert_eq!(
+            detect_game_from_names(&["start-server.sh", "ProjectZomboid64.json"]),
+            Some(GameKind::ProjectZomboid)
+        );
+        assert_eq!(
+            detect_game_from_names(&["7DaysToDieServer.x86_64", "serverconfig.xml"]),
+            Some(GameKind::SevenDaysToDie)
+        );
+        assert_eq!(
+            detect_game_from_names(&["RustDedicated", "server", "oxide"]),
+            Some(GameKind::Rust)
+        );
+        assert_eq!(
+            detect_game_from_names(&["SonsOfTheForestDS.exe", "userdata"]),
+            Some(GameKind::SonsOfTheForest)
+        );
+        assert_eq!(
+            detect_game_from_names(&["saves", "bin", "server-settings.json"]),
+            Some(GameKind::Factorio)
+        );
+        assert_eq!(
+            detect_game_from_names(&["cluster.ini", "cluster_token.txt"]),
+            Some(GameKind::DontStarveTogether)
+        );
+        assert_eq!(
+            detect_game_from_names(&["VintagestoryServer.dll", "data"]),
+            Some(GameKind::VintageStory)
+        );
     }
 
     #[test]
@@ -1526,6 +1982,23 @@ mod tests {
         assert_eq!(merged["Password"], "keep-me");
         assert_eq!(merged["Port"], 9876);
         assert_eq!(merged["Name"], "Helix");
+    }
+
+    #[test]
+    fn dst_caves_shard_is_detected_from_real_cluster_layouts() {
+        let root = tempfile::tempdir().expect("temp");
+        let cluster = root.path().join("DoNotStarveTogether").join("Cluster_1");
+        fs::create_dir_all(cluster.join("Master").join("save")).unwrap();
+        fs::write(cluster.join("cluster.ini"), b"[NETWORK]").unwrap();
+        assert!(!dst_overlay_has_caves(root.path()));
+        fs::create_dir_all(cluster.join("Caves").join("save")).unwrap();
+        fs::write(cluster.join("Caves").join("server.ini"), b"[SHARD]").unwrap();
+        assert!(dst_overlay_has_caves(root.path()));
+
+        // A stray folder named caves without shard content does not count.
+        let other = tempfile::tempdir().expect("temp2");
+        fs::create_dir_all(other.path().join("mods").join("caves")).unwrap();
+        assert!(!dst_overlay_has_caves(other.path()));
     }
 
     #[test]

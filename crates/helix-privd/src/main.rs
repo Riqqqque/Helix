@@ -38,10 +38,11 @@ use files::{FileManager, MAX_CONFIGURED_ROOTS, StorageAnalysisManager};
 #[cfg(target_os = "linux")]
 use helix_privd::{
     BrokerClient, BrokerRequest, BrokerResponse, DockerContainerActionKind, FileUploadPurpose,
-    FileUploadTarget, GameKind, HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec,
-    MinecraftSettingsPatch, MinecraftSoftware, PackageUpdateCandidate, PalworldCreateSpec,
-    ServerMigrateSource, ServerMigrateSpec, ServerNetworkExposure, TerrariaCreateSpec,
-    TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec, migrate_plan, read_frame, write_frame,
+    FileUploadTarget, GameCreateSpec, GameKind, HookServiceAction, MinecraftCreateSpec,
+    MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, PackageUpdateCandidate,
+    PalworldCreateSpec, ServerMigrateSource, ServerMigrateSpec, ServerNetworkExposure,
+    TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec, migrate_plan,
+    read_frame, write_frame,
 };
 #[cfg(target_os = "linux")]
 use helix_update::{HelixUpdateConfig, HelixUpdateManager};
@@ -697,6 +698,7 @@ impl BrokerContext {
             BrokerRequest::CreateValheim { spec } => self.start_valheim_job(spec),
             BrokerRequest::CreateTerraria { spec } => self.start_terraria_job(spec),
             BrokerRequest::CreatePalworld { spec } => self.start_palworld_job(spec),
+            BrokerRequest::CreateGame { game, spec } => self.start_managed_game_job(game, spec),
             BrokerRequest::MigrateServerPreflight { source } => self.migrate_preflight(source),
             BrokerRequest::MigrateServer { spec } => self.start_migrate_job(spec),
             BrokerRequest::SetNativeStartOnBoot {
@@ -2020,6 +2022,14 @@ impl BrokerContext {
             GameKind::Palworld => notes.push(
                 "Helix installs the Palworld dedicated server in its isolated runtime, then copies Pal/Saved worlds and settings. SteamCMD folders and server binaries from the source are skipped.".to_owned(),
             ),
+            _ => {
+                let display = native::game_def::game_def(game)
+                    .map(|def| def.display)
+                    .unwrap_or("the game");
+                notes.push(format!(
+                    "Helix installs {display} in its isolated runtime, then copies saves and settings. SteamCMD folders and server binaries from the source are skipped."
+                ));
+            }
         }
         if let Some(mapped) = mapped.as_ref()
             && let Some(warning) = mapped.warning
@@ -2093,6 +2103,9 @@ impl BrokerContext {
                     GameKind::Valheim => 2_048,
                     GameKind::Terraria => 1_024,
                     GameKind::Palworld => 8_192,
+                    _ => native::game_def::game_def(game)
+                        .map(|def| def.defaults.0)
+                        .unwrap_or(4_096),
                 };
                 let max_players = match game {
                     GameKind::Minecraft => 20,
@@ -2100,6 +2113,9 @@ impl BrokerContext {
                     GameKind::Valheim => 10,
                     GameKind::Terraria => 8,
                     GameKind::Palworld => 32,
+                    _ => native::game_def::game_def(game)
+                        .map(|def| def.defaults.1)
+                        .unwrap_or(16),
                 };
                 let software_raw = match game {
                     GameKind::Minecraft => migrate_plan::minecraft_software_label(
@@ -2114,6 +2130,10 @@ impl BrokerContext {
                         TerrariaSoftware::Vanilla => "Terraria".to_owned(),
                     },
                     GameKind::Palworld => "Palworld".to_owned(),
+                    _ => native::game_def::game_def(game)
+                        .map(|def| def.display)
+                        .unwrap_or("Dedicated")
+                        .to_owned(),
                 };
                 Ok(ResolvedMigrate {
                     source_kind: "folder",
@@ -2159,11 +2179,13 @@ impl BrokerContext {
         }
         spec.validate_for_game(game)?;
         let resource = match game {
-            GameKind::Minecraft => "minecraft:create",
-            GameKind::VRising => "vrising:create",
-            GameKind::Valheim => "valheim:create",
-            GameKind::Terraria => "terraria:create",
-            GameKind::Palworld => "palworld:create",
+            GameKind::Minecraft => "minecraft:create".to_owned(),
+            GameKind::VRising => "vrising:create".to_owned(),
+            GameKind::Valheim => "valheim:create".to_owned(),
+            GameKind::Terraria => "terraria:create".to_owned(),
+            GameKind::Palworld => "palworld:create".to_owned(),
+            _ if game.uses_shared_spec() => format!("{}:create", game.slug()),
+            _ => return Err("that game is not natively supported".to_owned()),
         };
         let reuse = format!("migrate:{}", resolved.source_id);
         let native = Arc::clone(
@@ -2171,7 +2193,8 @@ impl BrokerContext {
                 .as_ref()
                 .ok_or_else(|| "the Helix server manager is not configured".to_owned())?,
         );
-        let (job_id, reused) = self.queue_job("server_migrate", Some(resource), Some(&reuse))?;
+        let (job_id, reused) =
+            self.queue_job("server_migrate", Some(resource.as_str()), Some(&reuse))?;
         if reused {
             return Ok(json!({"job_id": job_id, "reused": true}));
         }
@@ -2231,6 +2254,18 @@ impl BrokerContext {
                             });
                         })
                     }
+                    _ => context.migrate_managed_game(
+                        &native,
+                        game,
+                        &spec,
+                        &overlay,
+                        |stage, progress| {
+                            context.update_job(&worker_job_id, |job| {
+                                job.stage = stage.to_owned();
+                                job.progress_percent = progress;
+                            });
+                        },
+                    ),
                 };
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
@@ -2413,6 +2448,112 @@ impl BrokerContext {
         native
             .create_palworld(&create, Some(overlay), progress)
             .map(|value| self.apply_creation_exposure(value, &spec.name, spec.network_exposure))
+    }
+
+    fn migrate_managed_game<F>(
+        &self,
+        native: &NativeManager,
+        game: GameKind,
+        spec: &ServerMigrateSpec,
+        overlay: &Path,
+        progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        let caves =
+            game == GameKind::DontStarveTogether && migrate_plan::dst_overlay_has_caves(overlay);
+        let create = GameCreateSpec {
+            name: spec.name.clone(),
+            memory_mb: spec.memory_mb,
+            cpu_millis: spec.cpu_millis,
+            max_players: spec.max_players,
+            game_port: spec.game_port,
+            query_port: spec.query_port,
+            network_exposure: spec.network_exposure,
+            list_on_browser: spec.list_on_browser,
+            start_on_boot: spec.start_on_boot,
+            server_password: None,
+            admin_password: None,
+            cluster_token: None,
+            caves,
+            world_seed: None,
+            world_size: None,
+            world_name: None,
+            wine_runtime_acknowledged: spec.wine_runtime_acknowledged,
+        };
+        native
+            .create_managed_game(game, &create, Some(overlay), progress)
+            .map(|value| self.apply_creation_exposure(value, &spec.name, spec.network_exposure))
+    }
+
+    fn start_managed_game_job(
+        self: &Arc<Self>,
+        game: GameKind,
+        spec: GameCreateSpec,
+    ) -> Result<Value, String> {
+        if !game.uses_shared_spec() {
+            return Err("that game is not natively supported".to_owned());
+        }
+        spec.validate_for(game)?;
+        let slug = game.slug();
+        let native = Arc::clone(
+            self.native
+                .as_ref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())?,
+        );
+        let (job_id, _) = self.queue_job(
+            &format!("{slug}_create"),
+            Some(&format!("{slug}:create")),
+            None,
+        )?;
+
+        let context = Arc::clone(self);
+        let worker_job_id = job_id.clone();
+        let name = spec.name.clone();
+        if thread::Builder::new()
+            .name(format!("{slug}-job-{}", &job_id[..8]))
+            .spawn(move || {
+                context.update_job(&worker_job_id, |job| {
+                    job.status = JobState::Running;
+                    job.stage = "Preparing".to_owned();
+                    job.progress_percent = 2;
+                });
+                let result = native
+                    .create_managed_game(game, &spec, None, |stage, progress| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = progress;
+                        });
+                    })
+                    .map(|value| {
+                        context.apply_creation_exposure(value, &name, spec.network_exposure)
+                    });
+                context.update_job(&worker_job_id, |job| match result {
+                    Ok(value) => {
+                        job.status = JobState::Complete;
+                        job.stage = "Online".to_owned();
+                        job.progress_percent = 100;
+                        job.result = Some(value);
+                    }
+                    Err(message) => {
+                        job.status = JobState::Failed;
+                        job.stage = "Failed".to_owned();
+                        job.error = Some(message);
+                    }
+                });
+            })
+            .is_err()
+        {
+            self.finish_job(
+                &job_id,
+                Err("could not start the installation job".to_owned()),
+                "",
+            );
+            return Err("could not start the installation job".to_owned());
+        }
+
+        Ok(json!({"job_id": job_id, "reused": false}))
     }
 
     fn start_minecraft_job(self: &Arc<Self>, spec: MinecraftCreateSpec) -> Result<Value, String> {
@@ -3143,6 +3284,7 @@ fn game_port_mapping_from_server(server: &AmpServer, port: u16) -> GamePortMappi
         },
         port,
         server.query_port,
+        None,
     );
     GamePortMapping {
         instance_id: server.id.clone(),
@@ -3176,6 +3318,10 @@ fn game_port_mapping_from_create(
         .get("query_port")
         .and_then(Value::as_u64)
         .and_then(|port| u16::try_from(port).ok());
+    let aux_port = value
+        .get("aux_port")
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok());
     let (protocol, extra_ports) = exposure_ports(
         if value["software"] == "pumpkin" {
             "pumpkin"
@@ -3184,6 +3330,7 @@ fn game_port_mapping_from_create(
         },
         port,
         query_port,
+        aux_port,
     );
     GamePortMapping {
         instance_id,

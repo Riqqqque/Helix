@@ -85,31 +85,77 @@ pub fn exposure_ports(
     kind: &str,
     game_port: u16,
     query_port: Option<u16>,
+    aux_port: Option<u16>,
 ) -> (FirewallProtocol, Vec<u16>) {
+    let extras = |game_port: u16| -> Vec<u16> {
+        query_port
+            .into_iter()
+            .chain(aux_port)
+            .filter(|port| *port != game_port)
+            .collect()
+    };
     match kind {
-        "pumpkin" => (
-            FirewallProtocol::Tcp,
-            query_port
-                .into_iter()
-                .filter(|port| *port != game_port)
-                .collect(),
-        ),
-        "vrising" => (
-            FirewallProtocol::Udp,
-            query_port
-                .into_iter()
-                .filter(|port| *port != game_port)
-                .collect(),
-        ),
-        "valheim" => (FirewallProtocol::Udp, vec![game_port.saturating_add(1)]),
-        "palworld" => (
-            FirewallProtocol::Udp,
-            query_port
-                .into_iter()
-                .filter(|port| *port != game_port)
-                .collect(),
-        ),
+        "pumpkin" => (FirewallProtocol::Tcp, extras(game_port)),
+        "vrising" => (FirewallProtocol::Udp, extras(game_port)),
+        "valheim" => {
+            let mut ports = vec![game_port.saturating_add(1)];
+            ports.extend(extras(game_port));
+            ports.dedup();
+            (FirewallProtocol::Udp, ports)
+        }
+        "palworld" => (FirewallProtocol::Udp, extras(game_port)),
+        "satisfactory" => (FirewallProtocol::Udp, extras(game_port)),
+        "project_zomboid" => (FirewallProtocol::Udp, extras(game_port)),
+        "seven_days_to_die" => (FirewallProtocol::Tcp, extras(game_port)),
+        "rust" => (FirewallProtocol::Udp, extras(game_port)),
+        "sons_of_the_forest" => (FirewallProtocol::Udp, extras(game_port)),
+        "factorio" => (FirewallProtocol::Udp, extras(game_port)),
+        "dont_starve_together" => (FirewallProtocol::Udp, extras(game_port)),
+        "vintage_story" => (FirewallProtocol::Tcp, extras(game_port)),
         _ => (FirewallProtocol::Tcp, Vec::new()),
+    }
+}
+
+/// Firewall protocols that must be opened for one exposed port of a mapping.
+/// Most games use a single protocol; games with mixed TCP/UDP layouts are
+/// listed explicitly.
+fn exposure_port_protocols(mapping: &GamePortMapping, port: u16) -> Vec<FirewallProtocol> {
+    let primary = port == mapping.port;
+    match mapping.kind.as_str() {
+        "pumpkin" => {
+            if primary {
+                vec![FirewallProtocol::Tcp]
+            } else {
+                vec![FirewallProtocol::Tcp, FirewallProtocol::Udp]
+            }
+        }
+        "satisfactory" => {
+            if primary {
+                vec![FirewallProtocol::Tcp, FirewallProtocol::Udp]
+            } else {
+                vec![FirewallProtocol::Udp]
+            }
+        }
+        "seven_days_to_die" => {
+            if primary {
+                vec![FirewallProtocol::Tcp, FirewallProtocol::Udp]
+            } else {
+                vec![FirewallProtocol::Udp]
+            }
+        }
+        "rust" => match mapping.extra_ports.iter().position(|entry| *entry == port) {
+            // The second extra port is the TCP RCON port.
+            Some(1) => vec![FirewallProtocol::Tcp],
+            _ => vec![FirewallProtocol::Udp],
+        },
+        "vrising"
+        | "valheim"
+        | "palworld"
+        | "project_zomboid"
+        | "sons_of_the_forest"
+        | "factorio"
+        | "dont_starve_together" => vec![FirewallProtocol::Udp],
+        _ => vec![FirewallProtocol::Tcp],
     }
 }
 
@@ -700,19 +746,8 @@ impl NetworkManager {
         }
         let firewall_state = if firewall.installed && firewall.active {
             write_exposure_record(&path, &record)?;
-            let protocols = if mapping.kind == "pumpkin" {
-                vec![FirewallProtocol::Tcp, FirewallProtocol::Udp]
-            } else {
-                vec![mapping.protocol]
-            };
-            for protocol in protocols {
-                for port in &ports {
-                    if mapping.kind == "pumpkin"
-                        && protocol == FirewallProtocol::Udp
-                        && *port == mapping.port
-                    {
-                        continue;
-                    }
+            for port in &ports {
+                for protocol in exposure_port_protocols(mapping, *port) {
                     let current = self.require_active_ufw()?;
                     let allowed = current.rules.iter().any(|rule| {
                         rule.action.eq_ignore_ascii_case("ALLOW IN")
@@ -2416,15 +2451,90 @@ mod tests {
 
     #[test]
     fn vrising_and_valheim_expose_udp_query_ports() {
-        let (protocol, extra) = exposure_ports("vrising", 9_876, Some(9_877));
+        let (protocol, extra) = exposure_ports("vrising", 9_876, Some(9_877), None);
         assert_eq!(protocol, FirewallProtocol::Udp);
         assert_eq!(extra, vec![9_877]);
-        let (protocol, extra) = exposure_ports("valheim", 2_456, None);
+        let (protocol, extra) = exposure_ports("valheim", 2_456, None, None);
         assert_eq!(protocol, FirewallProtocol::Udp);
         assert_eq!(extra, vec![2_457]);
-        let (protocol, extra) = exposure_ports("minecraft", 25_565, None);
+        let (protocol, extra) = exposure_ports("minecraft", 25_565, None, None);
         assert_eq!(protocol, FirewallProtocol::Tcp);
         assert!(extra.is_empty());
+    }
+
+    #[test]
+    fn managed_games_expose_their_protocols() {
+        let (protocol, extra) = exposure_ports("rust", 28_015, Some(28_016), Some(28_017));
+        assert_eq!(protocol, FirewallProtocol::Udp);
+        assert_eq!(extra, vec![28_016, 28_017]);
+        let (protocol, extra) = exposure_ports("satisfactory", 7_777, Some(7_778), None);
+        assert_eq!(protocol, FirewallProtocol::Udp);
+        assert_eq!(extra, vec![7_778]);
+        let (protocol, extra) =
+            exposure_ports("seven_days_to_die", 26_900, Some(26_901), Some(26_902));
+        assert_eq!(protocol, FirewallProtocol::Tcp);
+        assert_eq!(extra, vec![26_901, 26_902]);
+        let (protocol, extra) = exposure_ports("factorio", 34_197, None, None);
+        assert_eq!(protocol, FirewallProtocol::Udp);
+        assert!(extra.is_empty());
+        let (protocol, extra) = exposure_ports("vintage_story", 42_420, None, None);
+        assert_eq!(protocol, FirewallProtocol::Tcp);
+        assert!(extra.is_empty());
+    }
+
+    #[test]
+    fn exposure_port_protocols_cover_mixed_layouts() {
+        let mapping = |kind: &str, port: u16, extra_ports: Vec<u16>, protocol| GamePortMapping {
+            instance_id: "i".to_owned(),
+            name: "n".to_owned(),
+            manager: "helix".to_owned(),
+            port,
+            running: true,
+            extra_ports,
+            protocol,
+            kind: kind.to_owned(),
+        };
+        let satisfactory = mapping("satisfactory", 7_777, vec![7_778], FirewallProtocol::Udp);
+        assert_eq!(
+            exposure_port_protocols(&satisfactory, 7_777),
+            vec![FirewallProtocol::Tcp, FirewallProtocol::Udp]
+        );
+        assert_eq!(
+            exposure_port_protocols(&satisfactory, 7_778),
+            vec![FirewallProtocol::Udp]
+        );
+        let seven_days = mapping(
+            "seven_days_to_die",
+            26_900,
+            vec![26_901, 26_902],
+            FirewallProtocol::Tcp,
+        );
+        assert_eq!(
+            exposure_port_protocols(&seven_days, 26_900),
+            vec![FirewallProtocol::Tcp, FirewallProtocol::Udp]
+        );
+        assert_eq!(
+            exposure_port_protocols(&seven_days, 26_902),
+            vec![FirewallProtocol::Udp]
+        );
+        let rust = mapping("rust", 28_015, vec![28_016, 28_017], FirewallProtocol::Udp);
+        assert_eq!(
+            exposure_port_protocols(&rust, 28_015),
+            vec![FirewallProtocol::Udp]
+        );
+        assert_eq!(
+            exposure_port_protocols(&rust, 28_017),
+            vec![FirewallProtocol::Tcp]
+        );
+        let pumpkin = mapping("pumpkin", 25_565, vec![9_001], FirewallProtocol::Tcp);
+        assert_eq!(
+            exposure_port_protocols(&pumpkin, 25_565),
+            vec![FirewallProtocol::Tcp]
+        );
+        assert_eq!(
+            exposure_port_protocols(&pumpkin, 9_001),
+            vec![FirewallProtocol::Tcp, FirewallProtocol::Udp]
+        );
     }
 
     #[derive(Default)]

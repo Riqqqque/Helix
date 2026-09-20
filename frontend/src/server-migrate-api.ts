@@ -10,7 +10,20 @@ import {
 } from './api';
 import type { MinecraftSoftware } from './control-api';
 
-export type MigrateGame = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld';
+export type MigrateGame =
+  | 'minecraft'
+  | 'vrising'
+  | 'valheim'
+  | 'terraria'
+  | 'palworld'
+  | 'satisfactory'
+  | 'project_zomboid'
+  | 'seven_days_to_die'
+  | 'rust'
+  | 'sons_of_the_forest'
+  | 'factorio'
+  | 'dont_starve_together'
+  | 'vintage_story';
 export type TerrariaMigrateSoftware = 'vanilla' | 'tmodloader';
 
 export type ServerMigrateSource =
@@ -63,7 +76,21 @@ export interface ServerMigrateInput {
   list_on_browser?: boolean;
 }
 
-const MIGRATE_GAMES: ReadonlyArray<MigrateGame> = ['minecraft', 'vrising', 'valheim', 'terraria', 'palworld'];
+const MIGRATE_GAMES: ReadonlyArray<MigrateGame> = [
+  'minecraft',
+  'vrising',
+  'valheim',
+  'terraria',
+  'palworld',
+  'satisfactory',
+  'project_zomboid',
+  'seven_days_to_die',
+  'rust',
+  'sons_of_the_forest',
+  'factorio',
+  'dont_starve_together',
+  'vintage_story',
+];
 const MINECRAFT_SOFTWARE: ReadonlyArray<MinecraftSoftware> = [
   'custom',
   'vanilla',
