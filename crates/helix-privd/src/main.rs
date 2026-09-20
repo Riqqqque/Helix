@@ -40,8 +40,8 @@ use helix_privd::{
     BrokerClient, BrokerRequest, BrokerResponse, DockerContainerActionKind, FileUploadPurpose,
     FileUploadTarget, GameKind, HookServiceAction, MinecraftCreateSpec, MinecraftModpackCreateSpec,
     MinecraftSettingsPatch, MinecraftSoftware, PackageUpdateCandidate, ServerMigrateSource,
-    ServerMigrateSpec, ServerNetworkExposure, TerrariaCreateSpec, TerrariaSoftware,
-    VRisingCreateSpec, ValheimCreateSpec, migrate_plan, read_frame, write_frame,
+    PalworldCreateSpec, ServerMigrateSpec, ServerNetworkExposure, TerrariaCreateSpec,
+    TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec, migrate_plan, read_frame, write_frame,
 };
 #[cfg(target_os = "linux")]
 use helix_update::{HelixUpdateConfig, HelixUpdateManager};
@@ -696,6 +696,7 @@ impl BrokerContext {
             BrokerRequest::CreateVRising { spec } => self.start_vrising_job(spec),
             BrokerRequest::CreateValheim { spec } => self.start_valheim_job(spec),
             BrokerRequest::CreateTerraria { spec } => self.start_terraria_job(spec),
+            BrokerRequest::CreatePalworld { spec } => self.start_palworld_job(spec),
             BrokerRequest::MigrateServerPreflight { source } => self.migrate_preflight(source),
             BrokerRequest::MigrateServer { spec } => self.start_migrate_job(spec),
             BrokerRequest::SetNativeStartOnBoot {
@@ -2016,6 +2017,9 @@ impl BrokerContext {
             GameKind::Terraria => notes.push(
                 "Helix installs Terraria or tModLoader, then copies worlds and .tmod files. If the world is not named world.wld, Helix also keeps a copy as world.wld so the dedicated server loads it.".to_owned(),
             ),
+            GameKind::Palworld => notes.push(
+                "Helix installs the Palworld dedicated server in its isolated runtime, then copies Pal/Saved worlds and settings. SteamCMD folders and server binaries from the source are skipped.".to_owned(),
+            ),
         }
         if let Some(mapped) = mapped.as_ref()
             && let Some(warning) = mapped.warning
@@ -2088,12 +2092,14 @@ impl BrokerContext {
                     GameKind::VRising => 4_096,
                     GameKind::Valheim => 2_048,
                     GameKind::Terraria => 1_024,
+                    GameKind::Palworld => 8_192,
                 };
                 let max_players = match game {
                     GameKind::Minecraft => 20,
                     GameKind::VRising => 40,
                     GameKind::Valheim => 10,
                     GameKind::Terraria => 8,
+                    GameKind::Palworld => 32,
                 };
                 let software_raw = match game {
                     GameKind::Minecraft => migrate_plan::minecraft_software_label(
@@ -2107,6 +2113,7 @@ impl BrokerContext {
                         TerrariaSoftware::Tmodloader => "tModLoader".to_owned(),
                         TerrariaSoftware::Vanilla => "Terraria".to_owned(),
                     },
+                    GameKind::Palworld => "Palworld".to_owned(),
                 };
                 Ok(ResolvedMigrate {
                     source_kind: "folder",
@@ -2156,6 +2163,7 @@ impl BrokerContext {
             GameKind::VRising => "vrising:create",
             GameKind::Valheim => "valheim:create",
             GameKind::Terraria => "terraria:create",
+            GameKind::Palworld => "palworld:create",
         };
         let reuse = format!("migrate:{}", resolved.source_id);
         let native = Arc::clone(
@@ -2209,6 +2217,14 @@ impl BrokerContext {
                     }
                     GameKind::Terraria => {
                         context.migrate_terraria(&native, &spec, &overlay, |stage, progress| {
+                            context.update_job(&worker_job_id, |job| {
+                                job.stage = stage.to_owned();
+                                job.progress_percent = progress;
+                            });
+                        })
+                    }
+                    GameKind::Palworld => {
+                        context.migrate_palworld(&native, &spec, &overlay, |stage, progress| {
                             context.update_job(&worker_job_id, |job| {
                                 job.stage = stage.to_owned();
                                 job.progress_percent = progress;
@@ -2369,6 +2385,33 @@ impl BrokerContext {
         };
         native
             .create_terraria(&create, Some(overlay), progress)
+            .map(|value| self.apply_creation_exposure(value, &spec.name, spec.network_exposure))
+    }
+
+    fn migrate_palworld<F>(
+        &self,
+        native: &NativeManager,
+        spec: &ServerMigrateSpec,
+        overlay: &Path,
+        progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        let create = PalworldCreateSpec {
+            name: spec.name.clone(),
+            memory_mb: spec.memory_mb,
+            cpu_millis: spec.cpu_millis,
+            max_players: spec.max_players,
+            game_port: spec.game_port,
+            query_port: spec.query_port,
+            network_exposure: spec.network_exposure,
+            list_on_browser: spec.list_on_browser,
+            start_on_boot: spec.start_on_boot,
+            server_password: None,
+        };
+        native
+            .create_palworld(&create, Some(overlay), progress)
             .map(|value| self.apply_creation_exposure(value, &spec.name, spec.network_exposure))
     }
 
@@ -2587,6 +2630,61 @@ impl BrokerContext {
                 "",
             );
             return Err("could not start the Terraria installation job".to_owned());
+        }
+
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
+    fn start_palworld_job(self: &Arc<Self>, spec: PalworldCreateSpec) -> Result<Value, String> {
+        let native = Arc::clone(
+            self.native
+                .as_ref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())?,
+        );
+        let (job_id, _) = self.queue_job("palworld_create", Some("palworld:create"), None)?;
+
+        let context = Arc::clone(self);
+        let worker_job_id = job_id.clone();
+        if thread::Builder::new()
+            .name(format!("palworld-job-{}", &job_id[..8]))
+            .spawn(move || {
+                context.update_job(&worker_job_id, |job| {
+                    job.status = JobState::Running;
+                    job.stage = "Preparing".to_owned();
+                    job.progress_percent = 2;
+                });
+                let result = native
+                    .create_palworld(&spec, None, |stage, progress| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = progress;
+                        });
+                    })
+                    .map(|value| {
+                        context.apply_creation_exposure(value, &spec.name, spec.network_exposure)
+                    });
+                context.update_job(&worker_job_id, |job| match result {
+                    Ok(value) => {
+                        job.status = JobState::Complete;
+                        job.stage = "Online".to_owned();
+                        job.progress_percent = 100;
+                        job.result = Some(value);
+                    }
+                    Err(message) => {
+                        job.status = JobState::Failed;
+                        job.stage = "Failed".to_owned();
+                        job.error = Some(message);
+                    }
+                });
+            })
+            .is_err()
+        {
+            self.finish_job(
+                &job_id,
+                Err("could not start the Palworld installation job".to_owned()),
+                "",
+            );
+            return Err("could not start the Palworld installation job".to_owned());
         }
 
         Ok(json!({"job_id": job_id, "reused": false}))

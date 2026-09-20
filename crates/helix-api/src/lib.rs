@@ -29,9 +29,9 @@ use helix_privd::{
     DockerContainerActionKind, FileUploadPurpose, FileUploadTarget, FirewallRuleSpec, GameKind,
     GamePortPolicySpec, HookServiceAction, MarketplaceCatalog, MinecraftCreateSpec,
     MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, ModpackProvider,
-    PackageUpdateCandidate, RecurringRebootSpec, ServerAction, ServerMigrateSource,
-    ServerMigrateSpec, ServerNetworkExposure, StorageAnalysisMode, TerrariaCreateSpec,
-    VRisingCreateSpec, ValheimCreateSpec,
+    PackageUpdateCandidate, PalworldCreateSpec, RecurringRebootSpec, ServerAction,
+    ServerMigrateSource, ServerMigrateSpec, ServerNetworkExposure, StorageAnalysisMode,
+    TerrariaCreateSpec, VRisingCreateSpec, ValheimCreateSpec,
 };
 use helix_state::{
     DatabaseSet, ServerAppearanceUpdateOutcome, UserPreferencesRecord, UserPreferencesUpdateInput,
@@ -373,6 +373,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             "/servers/port-policies/terraria",
             get(terraria_port_policy).put(set_terraria_port_policy),
         )
+        .route(
+            "/servers/port-policies/palworld",
+            get(palworld_port_policy).put(set_palworld_port_policy),
+        )
         .route("/servers/minecraft", post(create_minecraft))
         .route("/servers/minecraft/versions", get(list_minecraft_versions))
         .route(
@@ -390,6 +394,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/servers/vrising", post(create_vrising))
         .route("/servers/valheim", post(create_valheim))
         .route("/servers/terraria", post(create_terraria))
+        .route("/servers/palworld", post(create_palworld))
         .route("/servers/migrate/preflight", post(migrate_server_preflight))
         .route("/servers/migrate", post(migrate_server))
         .route("/servers/{instance_id}", get(server_detail))
@@ -1985,6 +1990,36 @@ async fn set_terraria_port_policy(
     broker_json(&state, BrokerRequest::SetGamePortPolicy { policy }).await
 }
 
+async fn palworld_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    broker_json(
+        &state,
+        BrokerRequest::GamePortPolicy {
+            game: GameKind::Palworld,
+        },
+    )
+    .await
+}
+
+async fn set_palworld_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<GamePortPolicySpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(policy) = body.map_err(auth::map_json_rejection)?;
+    if policy.game != GameKind::Palworld {
+        return Err(ApiError::BrokerRejected(
+            "the policy game must match Palworld".to_owned(),
+        ));
+    }
+    broker_json(&state, BrokerRequest::SetGamePortPolicy { policy }).await
+}
+
 async fn create_firewall_rule(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -3289,6 +3324,21 @@ async fn create_terraria(
         auth::require_capability(&state, &headers, "network.firewall.write").await?;
     }
     broker_json(&state, BrokerRequest::CreateTerraria { spec }).await
+}
+
+async fn create_palworld(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Result<Json<PalworldCreateSpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(spec) = body.map_err(auth::map_json_rejection)?;
+    spec.validate().map_err(ApiError::BrokerRejected)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
+    broker_json(&state, BrokerRequest::CreatePalworld { spec }).await
 }
 
 async fn migrate_server_preflight(

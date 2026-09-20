@@ -136,6 +136,7 @@ describe('Servers route', () => {
         onVRising={() => undefined}
         onValheim={() => undefined}
         onTerraria={() => undefined}
+        onPalworld={() => undefined}
         onMigrate={() => undefined}
         onClose={() => undefined}
       />,
@@ -146,10 +147,12 @@ describe('Servers route', () => {
     expect(markup).toContain('V Rising');
     expect(markup).toContain('Valheim');
     expect(markup).toContain('Terraria');
+    expect(markup).toContain('Palworld');
     expect(markup).toContain('Copy an existing server');
     expect(markup).toContain('Click to install');
     expect(markup).toContain('game-mark--minecraft');
     expect(markup).toContain('game-mark--vrising');
+    expect(markup).toContain('game-mark--palworld');
     expect(markup).not.toContain('Not available on Linux');
   });
 
@@ -340,6 +343,8 @@ describe('Servers route', () => {
     expect(allocatedMemoryOptions('vrising', 4096)[0]).toBe(2048);
     expect(allocatedMemoryOptions('valheim', 4096)).not.toContain(24576);
     expect(allocatedMemoryOptions('terraria', 512)[0]).toBe(512);
+    expect(allocatedMemoryOptions('palworld', 8192)[0]).toBe(4096);
+    expect(allocatedMemoryOptions('palworld', 8192)).toContain(32768);
     expect(allocatedMemoryOptions('minecraft', 3072)).toContain(3072);
   });
 
@@ -347,6 +352,7 @@ describe('Servers route', () => {
     expect(publicInternetHint('minecraft', 25565, null)).toContain('TCP 25565');
     expect(publicInternetHint('terraria', 7777, null)).toContain('TCP 7777');
     expect(publicInternetHint('vrising', 9876, 9877)).toContain('UDP 9876 and 9877');
+    expect(publicInternetHint('palworld', 8211, 8212)).toContain('UDP 8211 and 8212');
     expect(publicInternetHint('valheim', 2456, null)).toContain('UDP 2456–2457');
     expect(publicInternetHint('vrising', 9876, 9877, true)).toContain('Host port setup is saved');
     expect(publicInternetHint('minecraft', 25565, null, true)).toContain('does not configure the router');

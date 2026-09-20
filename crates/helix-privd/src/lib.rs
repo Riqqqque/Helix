@@ -326,6 +326,9 @@ pub enum BrokerRequest {
     CreateTerraria {
         spec: TerrariaCreateSpec,
     },
+    CreatePalworld {
+        spec: PalworldCreateSpec,
+    },
     SetNativeStartOnBoot {
         instance_id: String,
         enabled: bool,
@@ -776,6 +779,7 @@ pub enum GameKind {
     VRising,
     Valheim,
     Terraria,
+    Palworld,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -980,6 +984,19 @@ impl ServerMigrateSpec {
                 start_on_boot: self.start_on_boot,
             }
             .validate(),
+            GameKind::Palworld => PalworldCreateSpec {
+                name: self.name.clone(),
+                memory_mb: self.memory_mb,
+                cpu_millis: self.cpu_millis,
+                max_players: self.max_players,
+                game_port: self.game_port,
+                query_port: self.query_port,
+                network_exposure: self.network_exposure,
+                list_on_browser: self.list_on_browser,
+                start_on_boot: self.start_on_boot,
+                server_password: None,
+            }
+            .validate(),
         }
     }
 }
@@ -1108,6 +1125,62 @@ impl TerrariaCreateSpec {
         }
         if self.game_port.is_some_and(|port| port < 1_024) {
             return Err("game port must be at least 1024".to_owned());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PalworldCreateSpec {
+    pub name: String,
+    pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
+    pub max_players: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_port: Option<u16>,
+    #[serde(default)]
+    pub network_exposure: ServerNetworkExposure,
+    #[serde(default = "default_true")]
+    pub list_on_browser: bool,
+    pub start_on_boot: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_password: Option<String>,
+}
+
+impl PalworldCreateSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_dedicated_name(&self.name)?;
+        if !(4_096..=32_768).contains(&self.memory_mb) {
+            return Err("Palworld memory must be between 4 and 32 GiB".to_owned());
+        }
+        validate_cpu_millis(self.cpu_millis)?;
+        if !(1..=32).contains(&self.max_players) {
+            return Err("Palworld player limit must be between 1 and 32".to_owned());
+        }
+        if self.game_port.is_some_and(|port| port < 1_024) {
+            return Err("game port must be at least 1024".to_owned());
+        }
+        if self.query_port.is_some_and(|port| port < 1_024) {
+            return Err("query port must be at least 1024".to_owned());
+        }
+        if let (Some(game_port), Some(query_port)) = (self.game_port, self.query_port)
+            && game_port == query_port
+        {
+            return Err("Palworld game and query ports must be different".to_owned());
+        }
+        if self.query_port.is_some() && self.game_port.is_none() {
+            return Err("a query port also needs a game port".to_owned());
+        }
+        if let Some(password) = &self.server_password {
+            let password = password.trim();
+            if password.is_empty() || password.len() > 128 || password.chars().any(char::is_control)
+            {
+                return Err("server password must be 1–128 ordinary characters".to_owned());
+            }
         }
         Ok(())
     }

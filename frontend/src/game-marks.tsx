@@ -1,6 +1,6 @@
 import type { JSX } from 'preact';
 
-export type GameMarkId = 'minecraft' | 'vrising' | 'valheim' | 'terraria';
+export type GameMarkId = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld';
 
 export function GameMark({
   game,
@@ -17,7 +17,7 @@ export function GameMark({
       viewBox="0 0 32 32"
       aria-hidden="true"
     >
-      {game === 'minecraft' ? <MinecraftMark /> : game === 'vrising' ? <VRisingMark /> : game === 'valheim' ? <ValheimMark /> : <TerrariaMark />}
+      {game === 'minecraft' ? <MinecraftMark /> : game === 'vrising' ? <VRisingMark /> : game === 'valheim' ? <ValheimMark /> : game === 'terraria' ? <TerrariaMark /> : <PalworldMark />}
     </svg>
   );
 }
@@ -76,7 +76,22 @@ function TerrariaMark(): JSX.Element {
   );
 }
 
+function PalworldMark(): JSX.Element {
+  return (
+    <>
+      <rect width="32" height="32" rx="6" fill="#10241f" />
+      <path fill="#2c6e5f" d="M4 22h24v5H4z" />
+      <path fill="#58b98a" d="M9 15c0-5.5 3.1-9 7-9s7 3.5 7 9-3.1 7-7 7-7-1.5-7-7z" />
+      <path fill="#10241f" d="M11 14.4c0-3.6 2.2-6 5-6s5 2.4 5 6-2.2 4.6-5 4.6-5-1-5-4.6z" />
+      <circle cx="13.6" cy="12.6" r="1.5" fill="#9fe8c4" />
+      <circle cx="18.4" cy="12.6" r="1.5" fill="#9fe8c4" />
+      <path fill="#3d8f6f" d="M14.6 16.6h2.8l-1.4 2.2z" />
+    </>
+  );
+}
+
 export function gameMarkForSoftware(software: string, kind?: string): GameMarkId | null {
+  if (kind === 'palworld' || /palworld/iu.test(software)) return 'palworld';
   if (kind === 'vrising' || /v\s*rising/iu.test(software)) return 'vrising';
   if (kind === 'valheim' || /valheim/iu.test(software)) return 'valheim';
   if (kind === 'terraria' || /terraria|tmodloader/iu.test(software)) return 'terraria';

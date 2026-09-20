@@ -231,7 +231,7 @@ export function serverReportsTps(server: Pick<ManagedServer, 'kind'>): boolean {
   return server.kind === 'minecraft' || server.kind === 'imported';
 }
 
-export type ServerKind = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'imported';
+export type ServerKind = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld' | 'imported';
 
 export interface ManagedServer {
   id: string;
@@ -372,7 +372,7 @@ export interface NativeServerDetail {
   id: string;
   name: string;
   instanceName: string;
-  kind: 'minecraft' | 'vrising' | 'valheim' | 'terraria';
+  kind: 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld';
   software: string;
   minecraftVersion: string;
   build: string;
@@ -756,7 +756,7 @@ export function parseServers(value: unknown): ManagedServer[] {
     const software = expectString(item, 'software', 'server');
     const rawKind = typeof item.kind === 'string' ? item.kind : '';
     const kind: ServerKind =
-      rawKind === 'vrising' || rawKind === 'minecraft' || rawKind === 'imported' || rawKind === 'valheim' || rawKind === 'terraria'
+      rawKind === 'vrising' || rawKind === 'minecraft' || rawKind === 'imported' || rawKind === 'valheim' || rawKind === 'terraria' || rawKind === 'palworld'
         ? rawKind
         : /v\s*rising/iu.test(software)
           ? 'vrising'
@@ -764,6 +764,8 @@ export function parseServers(value: unknown): ManagedServer[] {
             ? 'valheim'
             : /terraria|tmodloader/iu.test(software)
               ? 'terraria'
+              : /palworld/iu.test(software)
+                ? 'palworld'
           : manager === 'helix'
             ? 'minecraft'
             : 'imported';
@@ -903,7 +905,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
   const software = expectString(root, 'software', 'server detail');
   const rawKind = typeof root.kind === 'string' ? root.kind : '';
   const kind =
-    rawKind === 'vrising' || rawKind === 'valheim' || rawKind === 'terraria'
+    rawKind === 'vrising' || rawKind === 'valheim' || rawKind === 'terraria' || rawKind === 'palworld'
       ? rawKind
       : 'minecraft';
   const containerState = expectRecord(root.container_state, 'container state');
@@ -1304,6 +1306,24 @@ export function createTerrariaServer(input: {
   return requestJson('/api/v1/servers/terraria', (value) => {
     const root = expectRecord(value, 'Terraria job');
     return { jobId: expectString(root, 'job_id', 'Terraria job') };
+  }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
+}
+
+export function createPalworldServer(input: {
+  name: string;
+  memory_mb: number;
+  cpu_millis?: number;
+  max_players: number;
+  game_port?: number;
+  query_port?: number;
+  start_on_boot: boolean;
+  network_exposure: 'private' | 'public';
+  list_on_browser: boolean;
+  server_password?: string;
+}, csrfToken: string): Promise<{ jobId: string }> {
+  return requestJson('/api/v1/servers/palworld', (value) => {
+    const root = expectRecord(value, 'Palworld job');
+    return { jobId: expectString(root, 'job_id', 'Palworld job') };
   }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
 }
 

@@ -8,7 +8,7 @@ import {
 } from './api';
 import type { GamePortPolicy } from './control-api';
 
-function parseGamePortPolicy(expectedGame: 'minecraft' | 'vrising' | 'valheim' | 'terraria') {
+function parseGamePortPolicy(expectedGame: 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld') {
   return (value: unknown): GamePortPolicy => {
     const root = expectRecord(value, 'game port policy');
     if (expectNumber(root, 'schema_version', 'game port policy', { integer: true, minimum: 0 }) !== 1) {
@@ -122,6 +122,26 @@ export function saveTerrariaPortPolicy(
     method: 'PUT',
     body: {
       game: 'terraria',
+      ranges: input.ranges,
+      ports: input.ports,
+      auto_forward_on_create: input.autoForwardOnCreate,
+    },
+    csrfToken,
+  });
+}
+
+export function getPalworldPortPolicy(csrfToken: string, signal?: AbortSignal): Promise<GamePortPolicy> {
+  return requestJson('/api/v1/servers/port-policies/palworld', parseGamePortPolicy('palworld'), { csrfToken, signal });
+}
+
+export function savePalworldPortPolicy(
+  input: Pick<GamePortPolicy, 'ranges' | 'ports' | 'autoForwardOnCreate'>,
+  csrfToken: string,
+): Promise<GamePortPolicy> {
+  return requestJson('/api/v1/servers/port-policies/palworld', parseGamePortPolicy('palworld'), {
+    method: 'PUT',
+    body: {
+      game: 'palworld',
       ranges: input.ranges,
       ports: input.ports,
       auto_forward_on_create: input.autoForwardOnCreate,
