@@ -102,6 +102,13 @@ pub fn exposure_ports(
                 .collect(),
         ),
         "valheim" => (FirewallProtocol::Udp, vec![game_port.saturating_add(1)]),
+        "palworld" => (
+            FirewallProtocol::Udp,
+            query_port
+                .into_iter()
+                .filter(|port| *port != game_port)
+                .collect(),
+        ),
         _ => (FirewallProtocol::Tcp, Vec::new()),
     }
 }
@@ -345,7 +352,7 @@ impl NetworkManager {
             .iter()
             .flat_map(|mapping| {
                 let protocols: &[&str] = match mapping.kind.as_str() {
-                    "vrising" | "valheim" => &["udp"],
+                    "vrising" | "valheim" | "palworld" => &["udp"],
                     "pumpkin_java" => &["tcp"],
                     _ => &["tcp", "udp"],
                 };

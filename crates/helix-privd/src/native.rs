@@ -9,10 +9,10 @@ use helix_privd::{
     GamePortPolicySpec, GamePortRangeSpec, MAX_CONCURRENT_FILE_UPLOADS,
     MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES, MAX_MINECRAFT_VERSION_CATALOG,
     MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode, MinecraftModpackCreateSpec,
-    MinecraftSettingsPatch, MinecraftSoftware, ModpackProvider, ServerAction, TerrariaCreateSpec,
-    TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec, catalog_fetch_is_non_retryable,
-    classify_curseforge_curl_error, curl_extra_header_file, migrate_plan,
-    validate_curseforge_api_key,
+    MinecraftSettingsPatch, MinecraftSoftware, ModpackProvider, PalworldCreateSpec, ServerAction,
+    TerrariaCreateSpec, TerrariaSoftware, VRisingCreateSpec, ValheimCreateSpec,
+    catalog_fetch_is_non_retryable, classify_curseforge_curl_error, curl_extra_header_file,
+    migrate_plan, validate_curseforge_api_key,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -37,6 +37,7 @@ use uuid::Uuid;
 
 mod marketplace;
 mod modpacks;
+mod palworld;
 mod pumpkin;
 mod runtime;
 mod terraria;
@@ -235,6 +236,10 @@ impl InstanceManifest {
         matches!(self.kind, GameKind::Terraria)
     }
 
+    fn is_palworld(&self) -> bool {
+        matches!(self.kind, GameKind::Palworld)
+    }
+
     fn uses_ready_marker(&self) -> bool {
         !self.is_minecraft()
     }
@@ -245,6 +250,7 @@ impl InstanceManifest {
             GameKind::VRising => "vrising",
             GameKind::Valheim => "valheim",
             GameKind::Terraria => "terraria",
+            GameKind::Palworld => "palworld",
         }
     }
 
@@ -742,6 +748,12 @@ impl NativeManager {
             {
                 warnings.push("Terraria dedicated server files are not installed yet".to_owned());
             }
+            if manifest.is_palworld()
+                && !data_path.join("server").join("PalServer.sh").is_file()
+                && !data_path.join(READY_MARKER).is_file()
+            {
+                warnings.push("Palworld dedicated server files are not installed yet".to_owned());
+            }
             if !states.contains_key(&manifest.container_name) {
                 warnings.push("Execution container is missing".to_owned());
             }
@@ -908,6 +920,7 @@ impl NativeManager {
             GameKind::VRising => "V Rising",
             GameKind::Valheim => "Valheim",
             GameKind::Terraria => "Terraria",
+            GameKind::Palworld => "Palworld",
         };
         Err(format!(
             "the {label} port pool has no available ports; add ports or expand its ranges in Servers > Port pools"
@@ -1002,6 +1015,53 @@ impl NativeManager {
         Err("the Valheim port pool needs two consecutive free UDP ports; add ports or expand its ranges in Servers > Port pools".to_owned())
     }
 
+    fn resolve_palworld_ports(
+        &self,
+        requested_game: Option<u16>,
+        requested_query: Option<u16>,
+        manifests: &[InstanceManifest],
+    ) -> Result<(u16, u16, bool), String> {
+        let helix = assigned_game_ports(manifests);
+        if let Some(game_port) = requested_game {
+            let query_port = requested_query.unwrap_or(game_port.saturating_add(1));
+            if query_port < 1_024 || query_port == game_port {
+                return Err(
+                    "Palworld query port must be at least 1024 and different from the game port"
+                        .to_owned(),
+                );
+            }
+            for port in [game_port, query_port] {
+                if let Some(error) = self.port_conflict_error(port, &helix) {
+                    return Err(error);
+                }
+                ensure_port_available(port, true)?;
+            }
+            return Ok((game_port, query_port, false));
+        }
+        let _policy = self
+            .port_policies
+            .lock()
+            .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
+        let policy = self.read_game_port_policy(GameKind::Palworld)?;
+        let candidates = policy_candidates(&policy)?;
+        let mut used = helix;
+        used.extend(self.amp_occupied_ports());
+        let available = candidates
+            .iter()
+            .copied()
+            .filter(|port| !used.contains(port) && ensure_port_available(*port, true).is_ok())
+            .collect::<Vec<_>>();
+        for window in available.windows(2) {
+            if window[1] == window[0].saturating_add(1) {
+                return Ok((window[0], window[1], true));
+            }
+        }
+        if available.len() >= 2 {
+            return Ok((available[0], available[1], true));
+        }
+        Err("the Palworld port pool does not have two free UDP ports; add ports or expand its ranges in Servers > Port pools".to_owned())
+    }
+
     fn read_game_port_policy(&self, game: GameKind) -> Result<GamePortPolicySpec, String> {
         let path = self.game_port_policy_path(game);
         if !path.exists() {
@@ -1028,6 +1088,7 @@ impl NativeManager {
             GameKind::VRising => "port-policy-vrising.json",
             GameKind::Valheim => "port-policy-valheim.json",
             GameKind::Terraria => "port-policy-terraria.json",
+            GameKind::Palworld => "port-policy-palworld.json",
         })
     }
 
@@ -1407,7 +1468,7 @@ impl NativeManager {
             "manager": "helix",
             "execution_backend": "docker",
             "backend_version": docker_version,
-            "supported_games": ["minecraft", "vrising", "valheim", "terraria"],
+            "supported_games": ["minecraft", "vrising", "valheim", "terraria", "palworld"],
             "supported_minecraft_software": supported_software,
             "minecraft_software_catalog": minecraft_software_catalog(),
             "features": features,
@@ -3682,6 +3743,151 @@ impl NativeManager {
         }
     }
 
+    pub fn create_palworld<F>(
+        &self,
+        spec: &PalworldCreateSpec,
+        overlay: Option<&Path>,
+        mut progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        palworld::validate_create_spec(spec)?;
+        let _operation = self.begin_creation_operation()?;
+        progress("Checking ports, names, and storage", 6);
+        let manifests = self.load_manifests()?;
+        if manifests
+            .iter()
+            .any(|manifest| manifest.name.eq_ignore_ascii_case(spec.name.trim()))
+        {
+            return Err("a Helix server with that name already exists".to_owned());
+        }
+        let (game_port, query_port, allocated_automatically) =
+            self.resolve_palworld_ports(spec.game_port, spec.query_port, &manifests)?;
+        let id = Uuid::new_v4().to_string();
+        let instance_name = instance_name(spec.name.trim(), &id);
+        let container_name = format!("helix-game-{id}");
+        let run_uid = allocate_run_uid(&id, &manifests)?;
+        let data_path = self.instance_path(&id)?;
+        let manifest_path = self.manifest_path(&id)?;
+        let mut container_create_attempted = false;
+
+        let result = (|| -> Result<Value, String> {
+            progress("Building or reusing the isolated Palworld runtime", 14);
+            let runtime_image = self.ensure_palworld_runtime_image(&mut progress)?;
+
+            progress("Preparing the isolated Palworld directory", 28);
+            fs::create_dir(&data_path)
+                .map_err(|_| "could not create the server directory".to_owned())?;
+            fs::set_permissions(&data_path, fs::Permissions::from_mode(0o750))
+                .map_err(|_| "could not protect the server directory".to_owned())?;
+            for folder in ["server", "logs", "steamcmd"] {
+                fs::create_dir_all(data_path.join(folder))
+                    .map_err(|_| "could not create Palworld data folders".to_owned())?;
+            }
+            let admin_password = Uuid::new_v4().simple().to_string();
+            write_managed_file(
+                &data_path.join("palworld.json"),
+                serde_json::to_string_pretty(&json!({
+                    "server_password": spec.server_password.as_deref().unwrap_or(""),
+                    "admin_password": admin_password,
+                    "list_on_browser": spec.list_on_browser,
+                }))
+                .map_err(|e| e.to_string())?
+                .as_bytes(),
+                0o660,
+                0,
+                run_uid,
+            )?;
+
+            let manifest = InstanceManifest {
+                schema_version: MANIFEST_VERSION,
+                kind: GameKind::Palworld,
+                id: id.clone(),
+                name: spec.name.trim().to_owned(),
+                instance_name: instance_name.clone(),
+                container_name: container_name.clone(),
+                software: MinecraftSoftware::Vanilla,
+                minecraft_version: "dedicated".to_owned(),
+                build: palworld::STEAM_APP_ID.to_owned(),
+                java_version: 0,
+                runtime_image,
+                artifact_url: palworld::ARTIFACT_URL.to_owned(),
+                artifact_sha256: palworld::empty_artifact_sha256().to_owned(),
+                memory_mb: spec.memory_mb,
+                cpu_millis: spec.cpu_millis,
+                max_players: spec.max_players,
+                game_port,
+                query_port,
+                rcon_port: 0,
+                rcon_password: admin_password,
+                start_on_boot: spec.start_on_boot,
+                run_uid,
+                created_at_unix_ms: now_unix_ms(),
+                unix_args: None,
+                backup_keep_count: 0,
+                backup_keep_days: 0,
+                modpack: None,
+            };
+            write_manifest(&manifest_path, &manifest)?;
+            self.chown_instance(&data_path, run_uid)?;
+            if let Some(source) = overlay {
+                progress("Copying Palworld saves and settings", 48);
+                self.overlay_migrated_game(GameKind::Palworld, source, &data_path, false, run_uid)?;
+            }
+
+            progress("Creating the isolated Palworld container", 52);
+            container_create_attempted = true;
+            self.create_validation_container(&manifest, &data_path)?;
+
+            progress(
+                "Downloading Palworld through SteamCMD and starting the runtime",
+                62,
+            );
+            self.clear_ready_marker(&manifest)?;
+            self.docker(["start", manifest.container_name.as_str()], 90)?;
+            self.wait_until_ready(&manifest, Duration::from_secs(45 * 60), |elapsed| {
+                let percent = 62_u64.saturating_add((elapsed / 40).min(35));
+                progress(
+                    "Downloading Palworld and waiting for first boot",
+                    u8::try_from(percent).unwrap_or(97),
+                );
+            })?;
+            self.finalize_container_restart_policy(&manifest)?;
+            self.ensure_console_archiver(&manifest)?;
+            progress("Online", 100);
+            Ok(json!({
+                "instance_id": format!("helix:{id}"),
+                "instance_name": instance_name,
+                "game_port": game_port,
+                "query_port": query_port,
+                "port_allocated_automatically": allocated_automatically,
+                "manager": "helix",
+                "execution_backend": "docker",
+                "kind": "palworld",
+                "runtime_image": palworld::RUNTIME_IMAGE
+            }))
+        })();
+
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                progress("Preserving the failed install for recovery", 98);
+                let cleanup_error = self.rollback_creation(
+                    &id,
+                    &container_name,
+                    &data_path,
+                    &manifest_path,
+                    container_create_attempted,
+                );
+                Err(match cleanup_error {
+                    Ok(()) => error,
+                    Err(cleanup) => format!("{error}; cleanup also failed: {cleanup}"),
+                })
+            }
+        }
+    }
+
     pub fn set_start_on_boot(&self, id: &str, enabled: bool) -> Result<Value, String> {
         let mut manifest = self.load_manifest(native_id(id))?;
         let _operation = self.begin_instance_operation(&manifest.id, "start-on-boot")?;
@@ -5107,6 +5313,9 @@ impl NativeManager {
         if manifest.is_terraria() {
             return self.create_terraria_container(manifest, data_path);
         }
+        if manifest.is_palworld() {
+            return self.create_palworld_container(manifest, data_path);
+        }
         let restart = if manifest.start_on_boot {
             "unless-stopped"
         } else {
@@ -5487,6 +5696,108 @@ impl NativeManager {
         Ok(())
     }
 
+    fn create_palworld_container(
+        &self,
+        manifest: &InstanceManifest,
+        data_path: &Path,
+    ) -> Result<(), String> {
+        let restart = if manifest.start_on_boot {
+            "unless-stopped"
+        } else {
+            "no"
+        };
+        let settings = read_palworld_settings(data_path);
+        let server_password = settings
+            .get("server_password")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let admin_password = settings
+            .get("admin_password")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| manifest.rcon_password.clone());
+        let list_on_browser = settings
+            .get("list_on_browser")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let memory_limit = u64::from(manifest.memory_mb).saturating_add(1024);
+        let game_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port);
+        let query_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.query_port);
+        let mount = format!("type=bind,src={},dst=/data", data_path.display());
+        let user = format!("{}:{}", manifest.run_uid, manifest.run_uid);
+        let memory = format!("{memory_limit}m");
+        let instance_label = format!("io.helix.instance={}", manifest.id);
+        let mut args = vec![
+            "create".to_owned(),
+            "--name".to_owned(),
+            manifest.container_name.clone(),
+            "--label".to_owned(),
+            "io.helix.managed=true".to_owned(),
+            "--label".to_owned(),
+            "io.helix.game=palworld".to_owned(),
+            "--label".to_owned(),
+            instance_label,
+            "--label".to_owned(),
+            format!("io.helix.name={}", manifest.name),
+            "--label".to_owned(),
+            format!("io.helix.instance-name={}", manifest.instance_name),
+            "--restart".to_owned(),
+            restart.to_owned(),
+            "--memory".to_owned(),
+            memory.clone(),
+            "--memory-swap".to_owned(),
+            memory,
+            "--pids-limit".to_owned(),
+            "2048".to_owned(),
+            "--cap-drop".to_owned(),
+            "ALL".to_owned(),
+            "--security-opt".to_owned(),
+            "no-new-privileges:true".to_owned(),
+            "--tmpfs".to_owned(),
+            "/tmp:rw,exec,nosuid,nodev,size=512m,mode=1777".to_owned(),
+            "--mount".to_owned(),
+            mount,
+            "--workdir".to_owned(),
+            "/data".to_owned(),
+            "--user".to_owned(),
+            user,
+            "--env".to_owned(),
+            "HOME=/data".to_owned(),
+            "--env".to_owned(),
+            format!("HELIX_SERVER_NAME={}", manifest.name),
+            "--env".to_owned(),
+            format!("HELIX_GAME_PORT={}", manifest.game_port),
+            "--env".to_owned(),
+            format!("HELIX_QUERY_PORT={}", manifest.query_port),
+            "--env".to_owned(),
+            format!("HELIX_MAX_PLAYERS={}", manifest.max_players),
+            "--env".to_owned(),
+            format!("HELIX_LIST_ON_BROWSER={list_on_browser}"),
+            "--env".to_owned(),
+            format!("HELIX_ADMIN_PASSWORD={admin_password}"),
+            "--publish".to_owned(),
+            game_udp,
+            "--publish".to_owned(),
+            query_udp,
+            "--stop-timeout".to_owned(),
+            "120".to_owned(),
+            "--log-opt".to_owned(),
+            "max-size=20m".to_owned(),
+            "--log-opt".to_owned(),
+            "max-file=5".to_owned(),
+            manifest.runtime_image.clone(),
+        ];
+        if !server_password.is_empty() {
+            args.push("--env".to_owned());
+            args.push(format!("HELIX_SERVER_PASSWORD={server_password}"));
+        }
+        insert_cpu_limit(&mut args, manifest.cpu_millis);
+        self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
+        Ok(())
+    }
+
     fn wait_until_ready<F>(
         &self,
         manifest: &InstanceManifest,
@@ -5791,6 +6102,7 @@ impl NativeManager {
             GameKind::VRising => vrising::RUNTIME_IMAGE,
             GameKind::Valheim => valheim::RUNTIME_IMAGE,
             GameKind::Terraria => terraria::RUNTIME_IMAGE,
+            GameKind::Palworld => palworld::RUNTIME_IMAGE,
             GameKind::Minecraft => {
                 return Err("Minecraft does not use a bundled game runtime".into());
             }
@@ -5808,6 +6120,9 @@ impl NativeManager {
                 }
                 GameKind::Terraria => {
                     self.ensure_terraria_runtime_image(&mut |_, _| {})?;
+                }
+                GameKind::Palworld => {
+                    self.ensure_palworld_runtime_image(&mut |_, _| {})?;
                 }
                 GameKind::Minecraft => unreachable!(),
             }
@@ -5941,6 +6256,20 @@ impl NativeManager {
         )
     }
 
+    fn ensure_palworld_runtime_image<F>(&self, progress: &mut F) -> Result<String, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        self.ensure_bundled_runtime_image(
+            palworld::RUNTIME_IMAGE,
+            palworld::DOCKERFILE,
+            palworld::ENTRYPOINT,
+            "palworld-runtime",
+            "Building the isolated Palworld runtime image (one-time)",
+            progress,
+        )
+    }
+
     fn ensure_bundled_runtime_image<F>(
         &self,
         image: &str,
@@ -5993,6 +6322,7 @@ impl NativeManager {
             GameKind::VRising => vrising::RUNTIME_IMAGE,
             GameKind::Valheim => valheim::RUNTIME_IMAGE,
             GameKind::Terraria => terraria::RUNTIME_IMAGE,
+            GameKind::Palworld => palworld::RUNTIME_IMAGE,
             GameKind::Minecraft => return,
         };
         let remaining = self
@@ -6302,7 +6632,7 @@ impl NativeManager {
                     )?;
                 }
             }
-            GameKind::Minecraft | GameKind::VRising => {}
+            GameKind::Minecraft | GameKind::VRising | GameKind::Palworld => {}
         }
         self.chown_instance(data_path, run_uid)?;
         Ok(report)
@@ -7454,6 +7784,7 @@ fn default_game_port_policy(game: GameKind) -> GamePortPolicySpec {
         GameKind::VRising => vrising::default_port_policy(),
         GameKind::Valheim => valheim::default_port_policy(),
         GameKind::Terraria => terraria::default_port_policy(),
+        GameKind::Palworld => palworld::default_port_policy(),
     }
 }
 
@@ -8981,8 +9312,20 @@ fn display_software(manifest: &InstanceManifest) -> &'static str {
                 "Terraria"
             }
         }
+        GameKind::Palworld => "Palworld",
         GameKind::Minecraft => software_name(manifest.software),
     }
+}
+
+fn read_palworld_settings(data_path: &Path) -> Value {
+    read_small_regular_file(
+        &data_path.join("palworld.json"),
+        64 * 1024,
+        "Palworld settings",
+    )
+    .ok()
+    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+    .unwrap_or_else(|| json!({}))
 }
 
 fn insert_cpu_limit(args: &mut Vec<String>, cpu_millis: u32) {

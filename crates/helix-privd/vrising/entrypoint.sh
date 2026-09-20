@@ -47,6 +47,11 @@ wine VRisingServer.exe \
   -serverName "${HELIX_SERVER_NAME:-Helix V Rising}" &
 WINE_PID=$!
 
+forward_stop() {
+  kill -TERM "$WINE_PID" 2>/dev/null || true
+}
+trap forward_stop TERM INT
+
 i=0
 while [ "$i" -lt 40 ]; do
   if ! kill -0 "$WINE_PID" 2>/dev/null; then
@@ -64,6 +69,7 @@ set +e
 wait "$WINE_PID"
 STATUS=$?
 set -e
+trap - TERM INT
 rm -f "$READY_FILE"
 kill "$XVFB_PID" 2>/dev/null || true
 wait "$XVFB_PID" 2>/dev/null || true

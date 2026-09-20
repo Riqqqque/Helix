@@ -60,6 +60,20 @@ describe('server migrate API', () => {
     expect(parsed.software).toBeNull();
   });
 
+  it('parses a Palworld preflight', () => {
+    const parsed = parseMigratePreflight({
+      ...preflight,
+      game: 'palworld',
+      software: null,
+      running: false,
+      status: 'stopped',
+      blockers: [],
+    });
+    expect(parsed.game).toBe('palworld');
+    expect(parsed.software).toBeNull();
+    expect(parsed.terrariaSoftware).toBeNull();
+  });
+
   it('posts inspect and copy requests', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

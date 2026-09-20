@@ -277,6 +277,21 @@ pub fn looks_like_valheim_root(names: &[impl AsRef<str>]) -> bool {
 }
 
 #[must_use]
+pub fn looks_like_palworld_root(names: &[impl AsRef<str>]) -> bool {
+    let lower: Vec<String> = names
+        .iter()
+        .map(|name| name.as_ref().to_ascii_lowercase())
+        .collect();
+    let has = |needle: &str| lower.iter().any(|name| name == needle);
+    let contains = |needle: &str| lower.iter().any(|name| name.contains(needle));
+    has("palserver.sh")
+        || has("palserver.exe")
+        || has("palworldsettings.ini")
+        || (has("pal") && has("engine"))
+        || contains("palworld")
+}
+
+#[must_use]
 pub fn looks_like_terraria_root(names: &[impl AsRef<str>]) -> bool {
     names.iter().any(|name| {
         let lower = name.as_ref().to_ascii_lowercase();
@@ -303,6 +318,9 @@ pub fn detect_game_from_names(names: &[impl AsRef<str>]) -> Option<GameKind> {
     }
     if looks_like_valheim_root(names) {
         return Some(GameKind::Valheim);
+    }
+    if looks_like_palworld_root(names) {
+        return Some(GameKind::Palworld);
     }
     None
 }
@@ -694,6 +712,52 @@ pub fn overlay_relative_for_game(game: GameKind, relative: &str) -> Option<Strin
             }
             if lower.ends_with(".tmod") {
                 return Some(format!("mods/{first}"));
+            }
+            None
+        }
+        GameKind::Palworld => {
+            let lower = first.to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "steamcmd"
+                    | "steamapps"
+                    | "engine"
+                    | "server"
+                    | "logs"
+                    | "palserver"
+                    | "palserver.sh"
+                    | "palserver.exe"
+            ) || first.ends_with(".kvp")
+            {
+                return None;
+            }
+            if lower == "palworldsettings.ini" {
+                return Some("server/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini".to_owned());
+            }
+            if lower == "saved" || lower == "savegames" {
+                let prefix = if lower == "saved" {
+                    "server/Pal/Saved"
+                } else {
+                    "server/Pal/Saved/SaveGames"
+                };
+                return Some(match normalized.split_once('/') {
+                    Some((_, rest)) => format!("{prefix}/{rest}"),
+                    None => prefix.to_owned(),
+                });
+            }
+            if lower == "pal" {
+                let (_, rest) = normalized.split_once('/')?;
+                let (sub, deeper) = match rest.split_once('/') {
+                    Some((sub, deeper)) => (sub, Some(deeper)),
+                    None => (rest, None),
+                };
+                if !sub.eq_ignore_ascii_case("saved") {
+                    return None;
+                }
+                return Some(match deeper {
+                    Some(deeper) => format!("server/Pal/Saved/{deeper}"),
+                    None => "server/Pal/Saved".to_owned(),
+                });
             }
             None
         }
@@ -1107,7 +1171,7 @@ fn walk_overlay(
 fn overlay_decision(game: GameKind, relative: &str, copy_server_jar: bool) -> CopyDecision {
     match game {
         GameKind::Minecraft => should_copy_minecraft_relative(relative, copy_server_jar),
-        GameKind::VRising | GameKind::Valheim | GameKind::Terraria => {
+        GameKind::VRising | GameKind::Valheim | GameKind::Terraria | GameKind::Palworld => {
             if overlay_relative_for_game(game, relative).is_some() {
                 CopyDecision::Copy
             } else {

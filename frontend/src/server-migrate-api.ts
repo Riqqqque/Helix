@@ -10,7 +10,7 @@ import {
 } from './api';
 import type { MinecraftSoftware } from './control-api';
 
-export type MigrateGame = 'minecraft' | 'vrising' | 'valheim' | 'terraria';
+export type MigrateGame = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld';
 export type TerrariaMigrateSoftware = 'vanilla' | 'tmodloader';
 
 export type ServerMigrateSource =
@@ -63,7 +63,7 @@ export interface ServerMigrateInput {
   list_on_browser?: boolean;
 }
 
-const MIGRATE_GAMES: ReadonlyArray<MigrateGame> = ['minecraft', 'vrising', 'valheim', 'terraria'];
+const MIGRATE_GAMES: ReadonlyArray<MigrateGame> = ['minecraft', 'vrising', 'valheim', 'terraria', 'palworld'];
 const MINECRAFT_SOFTWARE: ReadonlyArray<MinecraftSoftware> = [
   'custom',
   'vanilla',

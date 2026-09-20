@@ -12,6 +12,7 @@ import {
   createVRisingServer,
   createValheimServer,
   createTerrariaServer,
+  createPalworldServer,
   getDirectory,
   getMinecraftVersions,
   getTrashedNativeServers,
@@ -122,10 +123,12 @@ import {
 import { ModpackRoute, preloadModpackPicker } from "./modpack-route";
 import {
   getMinecraftPortPolicy,
+  getPalworldPortPolicy,
   getTerrariaPortPolicy,
   getValheimPortPolicy,
   getVRisingPortPolicy,
   saveMinecraftPortPolicy,
+  savePalworldPortPolicy,
   saveTerrariaPortPolicy,
   saveValheimPortPolicy,
   saveVRisingPortPolicy,
@@ -823,7 +826,7 @@ function AmpPortClaimHelp({ message, claim, servers }: {
 }
 
 export function memoryBoundsForKind(
-  kind: "minecraft" | "vrising" | "valheim" | "terraria",
+  kind: "minecraft" | "vrising" | "valheim" | "terraria" | "palworld",
 ): { min: number; max: number } {
   switch (kind) {
     case "vrising":
@@ -832,17 +835,19 @@ export function memoryBoundsForKind(
       return { min: 1_024, max: 16_384 };
     case "terraria":
       return { min: 512, max: 8_192 };
+    case "palworld":
+      return { min: 4_096, max: 32_768 };
     default:
       return { min: 1_024, max: 24_576 };
   }
 }
 
 export function allocatedMemoryOptions(
-  kind: "minecraft" | "vrising" | "valheim" | "terraria",
+  kind: "minecraft" | "vrising" | "valheim" | "terraria" | "palworld",
   current: number,
 ): number[] {
   const { min, max } = memoryBoundsForKind(kind);
-  const options = [512, 1_024, 2_048, 4_096, 6_144, 8_192, 12_288, 16_384, 24_576].filter(
+  const options = [512, 1_024, 2_048, 4_096, 6_144, 8_192, 12_288, 16_384, 24_576, 32_768].filter(
     (value) => value >= min && value <= max,
   );
   if (Number.isFinite(current) && current >= min && current <= max && !options.includes(current)) {
@@ -877,10 +882,10 @@ export function recommendedModpackMemoryMb(
 }
 
 export function publicInternetHint(
-  kind: "minecraft" | "vrising" | "valheim" | "terraria", port: number,
+  kind: "minecraft" | "vrising" | "valheim" | "terraria" | "palworld", port: number,
   queryPort: number | null, hostConfigured = false,
 ): string {
-  const ports = kind === "vrising" ? `UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`}`
+  const ports = kind === "vrising" || kind === "palworld" ? `UDP ${port}${queryPort === null ? "" : ` and ${queryPort}`}`
     : kind === "valheim" ? `UDP ${port}–${port + 1}` : `TCP ${port}`;
   return `${hostConfigured ? "Host port setup is saved. " : ""}For internet players, forward ${ports} to this server’s LAN address in your router. Helix does not configure the router or verify internet reachability.`;
 }
@@ -918,12 +923,12 @@ function CpuCapField({
 }
 
 function publicAccessCopy(
-  kind: "minecraft" | "vrising" | "valheim" | "terraria" | "pumpkin", canManageNetwork: boolean,
+  kind: "minecraft" | "vrising" | "valheim" | "terraria" | "palworld" | "pumpkin", canManageNetwork: boolean,
 ): { title: string; detail: string } {
   return {
     title: "Prepare host firewall",
     detail: canManageNetwork
-      ? `Allow ${kind === "pumpkin" ? "the Java TCP port and separate Bedrock TCP/UDP port" : kind === "valheim" || kind === "vrising" ? "UDP game ports" : "the TCP game port"} when UFW is active. Helix will show the forwarding details for your router; it will not change router settings or enable UFW.`
+      ? `Allow ${kind === "pumpkin" ? "the Java TCP port and separate Bedrock TCP/UDP port" : kind === "valheim" || kind === "vrising" || kind === "palworld" ? "UDP game ports" : "the TCP game port"} when UFW is active. Helix will show the forwarding details for your router; it will not change router settings or enable UFW.`
       : "Requires network.firewall.write permission. You can still create the server and manage host rules in Network.",
   };
 }
@@ -1018,7 +1023,7 @@ function PortPoolDialog({
   onSessionExpired: () => void;
 }) {
   const [policy, setPolicy] = useState<GamePortPolicy | null>(null);
-  const [game, setGame] = useState<"minecraft" | "vrising" | "valheim" | "terraria">("minecraft");
+  const [game, setGame] = useState<"minecraft" | "vrising" | "valheim" | "terraria" | "palworld">("minecraft");
   const [ranges, setRanges] = useState("");
   const [ports, setPorts] = useState("");
   const [autoForward, setAutoForward] = useState(false);
@@ -1035,7 +1040,9 @@ function PortPoolDialog({
           ? getVRisingPortPolicy
           : game === "valheim"
             ? getValheimPortPolicy
-            : getTerrariaPortPolicy;
+            : game === "palworld"
+              ? getPalworldPortPolicy
+              : getTerrariaPortPolicy;
     void load(csrfToken, controller.signal)
       .then((value) => {
         setPolicy(value);
@@ -1067,7 +1074,9 @@ function PortPoolDialog({
             ? saveVRisingPortPolicy
             : game === "valheim"
               ? saveValheimPortPolicy
-              : saveTerrariaPortPolicy;
+              : game === "palworld"
+                ? savePalworldPortPolicy
+                : saveTerrariaPortPolicy;
       const saved = await savePolicy(
         {
           ranges: parsedRanges,
@@ -1131,6 +1140,16 @@ function PortPoolDialog({
         >
           Terraria
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={game === "palworld"}
+          class={game === "palworld" ? "is-active" : ""}
+          disabled={busy}
+          onClick={() => setGame("palworld")}
+        >
+          Palworld
+        </button>
       </div>
       <div class="port-pool-summary">
         <div><strong>{policy?.capacity ?? "—"}</strong><span>configured</span></div>
@@ -1158,9 +1177,11 @@ function PortPoolDialog({
                 ? "9876-9910"
                 : game === "valheim"
                   ? "2456-2490"
-                  : game === "terraria"
-                    ? "7777-7796"
-                    : "25565-25599, 25610-25619"
+                  : game === "palworld"
+                    ? "8211-8245"
+                    : game === "terraria"
+                      ? "7777-7796"
+                      : "25565-25599, 25610-25619"
             }
           />
           <small>Separate ranges with commas or spaces. A single port is accepted here too.</small>
@@ -1176,9 +1197,11 @@ function PortPoolDialog({
                 ? "9876, 9878"
                 : game === "valheim"
                   ? "2456, 2459"
-                  : game === "terraria"
-                    ? "7777, 7778"
-                    : "25565, 25570, 25580"
+                  : game === "palworld"
+                    ? "8211, 8214"
+                    : game === "terraria"
+                      ? "7777, 7778"
+                      : "25565, 25570, 25580"
             }
           />
           <small>Optional. These are tried before the ranges; duplicates are removed safely.</small>
@@ -1200,7 +1223,9 @@ function PortPoolDialog({
                 ? "Prepare host ports for new V Rising servers"
                 : game === "valheim"
                   ? "Prepare host ports for new Valheim servers"
-                  : "Prepare host ports for new Terraria servers"}
+                  : game === "palworld"
+                    ? "Prepare host ports for new Palworld servers"
+                    : "Prepare host ports for new Terraria servers"}
           </strong>
           <small>
             {canManageNetwork
@@ -4967,7 +4992,7 @@ function NativeServerPage({
   const online = detail.status === "online";
   const containerUp = detail.status === "online" || detail.status === "starting";
   const isReadyMarkerGame = detail.kind !== "minecraft";
-  const usesUdpJoin = detail.kind === "vrising" || detail.kind === "valheim";
+  const usesUdpJoin = detail.kind === "vrising" || detail.kind === "valheim" || detail.kind === "palworld";
   const tailscaleAddress =
     hostInventory?.interfaces
       .find((item) => item.name.toLowerCase().startsWith("tailscale"))
@@ -6097,10 +6122,10 @@ function ImportedServerPage({
   );
 }
 
-type ServerFilter = "all" | "helix" | "minecraft" | "vrising" | "valheim" | "terraria" | "imported";
+type ServerFilter = "all" | "helix" | "minecraft" | "vrising" | "valheim" | "terraria" | "palworld" | "imported";
 
 function isMinecraftServer(server: ManagedServer): boolean {
-  if (server.kind === "vrising" || server.kind === "valheim" || server.kind === "terraria") return false;
+  if (server.kind === "vrising" || server.kind === "valheim" || server.kind === "terraria" || server.kind === "palworld") return false;
   if (server.kind === "minecraft") return true;
   return /minecraft|pumpkin|paper|purpur|folia|leaves|fabric|forge|spigot|bukkit|velocity|sponge|quilt|pufferfish|neoforge/iu.test(
     `${server.software} ${server.version}`,
@@ -6119,6 +6144,10 @@ function isTerrariaServer(server: ManagedServer): boolean {
   return server.kind === "terraria" || /terraria|tmodloader/iu.test(server.software);
 }
 
+function isPalworldServer(server: ManagedServer): boolean {
+  return server.kind === "palworld" || /palworld/iu.test(server.software);
+}
+
 function migrateGameLabel(game: MigrateGame): string {
   switch (game) {
     case "minecraft":
@@ -6129,6 +6158,8 @@ function migrateGameLabel(game: MigrateGame): string {
       return "Valheim";
     case "terraria":
       return "Terraria";
+    case "palworld":
+      return "Palworld";
   }
 }
 
@@ -6142,12 +6173,14 @@ function migratePlayerMax(game: MigrateGame): number {
       return 64;
     case "terraria":
       return 255;
+    case "palworld":
+      return 32;
   }
 }
 
 function migrateMemoryKind(
   game: MigrateGame,
-): "minecraft" | "vrising" | "valheim" | "terraria" {
+): "minecraft" | "vrising" | "valheim" | "terraria" | "palworld" {
   return game;
 }
 
@@ -6283,7 +6316,7 @@ function MigrateServerDialog({
         payload.software = software;
         payload.version = version.trim();
       }
-      if (preflight.game === "vrising") {
+      if (preflight.game === "vrising" || preflight.game === "palworld") {
         payload.list_on_browser = listOnBrowser;
       }
       const result = await migrateServer(payload, csrfToken);
@@ -6559,7 +6592,7 @@ function MigrateServerDialog({
                   />
                 </label>
               </div>
-              {preflight.game === "vrising" && (
+              {(preflight.game === "vrising" || preflight.game === "palworld") && (
                 <label class="check-row">
                   <input
                     class="toggle-input"
@@ -6569,8 +6602,8 @@ function MigrateServerDialog({
                     onChange={(event) => setListOnBrowser(event.currentTarget.checked)}
                   />
                   <span>
-                    <strong>Show on the V Rising server list</strong>
-                    <small>Turns on EOS and Steam listing. Direct Connect to a public IP is separate.</small>
+                    <strong>{preflight.game === "vrising" ? "Show on the V Rising server list" : "Show on the Palworld community list"}</strong>
+                    <small>{preflight.game === "vrising" ? "Turns on EOS and Steam listing. Direct Connect to a public IP is separate." : "Advertises the server in the in-game community server browser. Direct IP joins still work either way."}</small>
                   </span>
                 </label>
               )}
@@ -6685,6 +6718,7 @@ export function NewServerChooser({
   onVRising,
   onValheim,
   onTerraria,
+  onPalworld,
   onMigrate,
   onClose,
 }: {
@@ -6692,6 +6726,7 @@ export function NewServerChooser({
   onVRising: () => void;
   onValheim: () => void;
   onTerraria: () => void;
+  onPalworld: () => void;
   onMigrate: () => void;
   onClose: () => void;
 }) {
@@ -6742,6 +6777,18 @@ export function NewServerChooser({
             <strong>Terraria</strong>
             <small>
               Vanilla or tModLoader. Drop `.tmod` files in mods and restart.
+            </small>
+          </span>
+          <em>Click to install</em>
+        </button>
+        <button type="button" onClick={onPalworld}>
+          <span class="game-create-icon game-create-icon--palworld">
+            <GameMark game="palworld" size={32} />
+          </span>
+          <span>
+            <strong>Palworld</strong>
+            <small>
+              SteamCMD dedicated server in an isolated Helix container. Needs 8+ GiB of memory.
             </small>
           </span>
           <em>Click to install</em>
@@ -7339,6 +7386,219 @@ function CreateTerrariaDialog({
   );
 }
 
+function CreatePalworldDialog({
+  csrfToken,
+  servers,
+  canManageNetwork,
+  logicalCores,
+  onClose,
+  onComplete,
+  onSessionExpired,
+}: {
+  csrfToken: string;
+  servers: ManagedServer[];
+  canManageNetwork: boolean;
+  logicalCores: number;
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [memory, setMemory] = useState(8192);
+  const [cpuMillis, setCpuMillis] = useState(0);
+  const [players, setPlayers] = useState(32);
+  const [serverPassword, setServerPassword] = useState("");
+  const [portMode, setPortMode] = useState<"automatic" | "manual">("automatic");
+  const [gamePort, setGamePort] = useState(8211);
+  const [queryPort, setQueryPort] = useState(8212);
+  const [startOnBoot, setStartOnBoot] = useState(true);
+  const [listOnBrowser, setListOnBrowser] = useState(true);
+  const [publicAccess, setPublicAccess] = useState(false);
+  const [job, setJob] = useState<BrokerJob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [portPolicy, setPortPolicy] = useState<GamePortPolicy | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getPalworldPortPolicy(csrfToken, controller.signal)
+      .then((policy) => {
+        setPortPolicy(policy);
+        if (policy.nextAvailablePort !== null) {
+          setGamePort(policy.nextAvailablePort);
+          setQueryPort(policy.nextAvailablePort + 1);
+        }
+        setPublicAccess(canManageNetwork && policy.autoForwardOnCreate);
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        if (isSessionError(requestError)) onSessionExpired();
+        else setError(describeError(requestError));
+      });
+    return () => controller.abort();
+  }, [canManageNetwork, csrfToken, onSessionExpired]);
+
+  const polling = useJobPolling({
+    job,
+    csrfToken,
+    onJob: setJob,
+    onComplete,
+    onSessionExpired,
+  });
+
+  const submit = async (): Promise<void> => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const payload: Parameters<typeof createPalworldServer>[0] = {
+        name: name.trim(),
+        memory_mb: memory,
+        max_players: players,
+        start_on_boot: startOnBoot,
+        network_exposure: publicAccess ? "public" : "private",
+        list_on_browser: listOnBrowser,
+        ...cpuMillisFields(cpuMillis),
+      };
+      if (portMode === "manual") {
+        payload.game_port = gamePort;
+        payload.query_port = queryPort;
+      }
+      if (serverPassword.trim().length > 0) {
+        payload.server_password = serverPassword.trim();
+      }
+      const result = await createPalworldServer(payload, csrfToken);
+      setJob({
+        id: result.jobId,
+        kind: "palworld_create",
+        status: "queued",
+        stage: "Queued",
+        progressPercent: 0,
+        createdAtUnixMs: Date.now(),
+        updatedAtUnixMs: Date.now(),
+        result: null,
+        error: null,
+      });
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const installing = job !== null && (job.status === "queued" || job.status === "running");
+  const busy = submitting || installing;
+  return (
+    <Dialog
+      title={
+        job === null || job.status === "failed"
+          ? "New Palworld server"
+          : job.status === "complete"
+            ? "Server ready"
+            : "Installing Palworld"
+      }
+      onClose={() => !installing && onClose()}
+      wide
+    >
+      {job !== null && job.status !== "failed" ? (
+        <NativeCreateJobView
+          game="Palworld"
+          job={job}
+          polling={polling}
+          csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
+          onClose={onClose}
+          onSessionExpired={onSessionExpired}
+        />
+      ) : (
+        <>
+          <p class="dialog-intro">
+            Helix installs the Palworld dedicated server from Steam in an isolated container. Listing on the community server browser is on by default. Public Direct Connect needs the UDP game and query ports forwarded in your router. Palworld needs 8 GiB of memory or more to run well.
+          </p>
+          <div class="form-grid">
+            <label class="field field--wide">
+              <span>Server name</span>
+              <input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} />
+            </label>
+            <label class="field">
+              <span>Memory (MiB)</span>
+              <input type="number" min={4096} max={32768} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} />
+            </label>
+            <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
+            <label class="field">
+              <span>Player limit</span>
+              <input type="number" min={1} max={32} value={players} disabled={busy} onInput={(event) => setPlayers(Number(event.currentTarget.value))} />
+            </label>
+            <label class="field field--wide">
+              <span>Join password</span>
+              <input type="password" value={serverPassword} disabled={busy} placeholder="Optional" autocomplete="new-password" onInput={(event) => setServerPassword(event.currentTarget.value)} />
+            </label>
+            <label class="field field--wide">
+              <span>Ports</span>
+              <select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}>
+                <option value="automatic">Automatic from the Palworld pool{portPolicy?.nextAvailablePort ? ` (next ${portPolicy.nextAvailablePort})` : ""}</option>
+                <option value="manual">Specific UDP ports</option>
+              </select>
+            </label>
+            {portMode === "manual" && (
+              <>
+                <label class="field">
+                  <span>Game UDP</span>
+                  <input type="number" min={1024} max={65535} value={gamePort} disabled={busy} onInput={(event) => setGamePort(Number(event.currentTarget.value))} />
+                </label>
+                <label class="field">
+                  <span>Query UDP</span>
+                  <input type="number" min={1024} max={65535} value={queryPort} disabled={busy} onInput={(event) => setQueryPort(Number(event.currentTarget.value))} />
+                </label>
+              </>
+            )}
+          </div>
+          <label class="check-row">
+            <input class="toggle-input" type="checkbox" checked={startOnBoot} disabled={busy} onChange={(event) => setStartOnBoot(event.currentTarget.checked)} />
+            <span>
+              <strong>{START_WITH_HOST_TITLE}</strong>
+              <small>{START_WITH_HOST_CREATE_DETAIL}</small>
+            </span>
+          </label>
+          <label class="check-row">
+            <input class="toggle-input" type="checkbox" checked={listOnBrowser} disabled={busy} onChange={(event) => setListOnBrowser(event.currentTarget.checked)} />
+            <span>
+              <strong>Show on the Palworld community list</strong>
+              <small>Advertises the server in the in-game community server browser. Players can still join by direct IP when this is off.</small>
+            </span>
+          </label>
+          <label class={`check-row ${canManageNetwork ? "" : "is-disabled"}`}>
+            <input
+              class="toggle-input"
+              type="checkbox"
+              checked={publicAccess}
+              disabled={busy || !canManageNetwork}
+              onChange={(event) => setPublicAccess(event.currentTarget.checked)}
+            />
+            <span>
+              <strong>{publicAccessCopy("palworld", canManageNetwork).title}</strong>
+              <small>{publicAccessCopy("palworld", canManageNetwork).detail}</small>
+            </span>
+          </label>
+          <ServerFault
+            message={error ?? (job?.error ?? null)}
+            csrfToken={csrfToken}
+            servers={servers}
+            canManageNetwork={canManageNetwork}
+            onSessionExpired={onSessionExpired}
+          />
+          <div class="dialog-actions">
+            <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>Cancel</button>
+            <button class="button button--primary" type="button" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>{submitting ? "Starting…" : "Create Palworld server"}</button>
+          </div>
+        </>
+      )}
+    </Dialog>
+  );
+}
+
 export function ServersPage({
   data,
   csrfToken,
@@ -7359,6 +7619,7 @@ export function ServersPage({
   const [creatingVRising, setCreatingVRising] = useState(false);
   const [creatingValheim, setCreatingValheim] = useState(false);
   const [creatingTerraria, setCreatingTerraria] = useState(false);
+  const [creatingPalworld, setCreatingPalworld] = useState(false);
   const [creatingMigrate, setCreatingMigrate] = useState(false);
   const [migrateAmpId, setMigrateAmpId] = useState<string | null>(null);
   const [portPoolOpen, setPortPoolOpen] = useState(false);
@@ -7525,7 +7786,9 @@ export function ServersPage({
               ? isValheimServer(server)
               : filter === "terraria"
                 ? isTerrariaServer(server)
-                : server.manager !== "helix"),
+                : filter === "palworld"
+                  ? isPalworldServer(server)
+                  : server.manager !== "helix"),
   );
   const online = servers.filter((server) => server.status === "online").length;
   const helixManaged = servers.filter(
@@ -7631,6 +7894,13 @@ export function ServersPage({
           onClick={() => setFilter("terraria")}
         >
           Terraria <span>{servers.filter(isTerrariaServer).length}</span>
+        </button>
+        <button
+          class={filter === "palworld" ? "is-active" : ""}
+          type="button"
+          onClick={() => setFilter("palworld")}
+        >
+          Palworld <span>{servers.filter(isPalworldServer).length}</span>
         </button>
         <button
           class={filter === "imported" ? "is-active" : ""}
@@ -7788,6 +8058,10 @@ export function ServersPage({
             setChooseGame(false);
             setCreatingTerraria(true);
           }}
+          onPalworld={() => {
+            setChooseGame(false);
+            setCreatingPalworld(true);
+          }}
           onMigrate={() => {
             setChooseGame(false);
             setMigrateAmpId(null);
@@ -7845,6 +8119,20 @@ export function ServersPage({
           canManageNetwork={canManageNetwork}
           logicalCores={logicalCores}
           onClose={() => setCreatingTerraria(false)}
+          onComplete={async () => {
+            await data.refresh();
+            await loadRemoved();
+          }}
+          onSessionExpired={onSessionExpired}
+        />
+      )}
+      {creatingPalworld && (
+        <CreatePalworldDialog
+          csrfToken={csrfToken}
+          servers={servers}
+          canManageNetwork={canManageNetwork}
+          logicalCores={logicalCores}
+          onClose={() => setCreatingPalworld(false)}
           onComplete={async () => {
             await data.refresh();
             await loadRemoved();

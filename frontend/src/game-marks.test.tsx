@@ -13,5 +13,8 @@ describe('game marks', () => {
     expect(gameMarkForSoftware('tModLoader', 'terraria')).toBe('terraria');
     expect(render(<GameMark game="valheim" />)).toContain('game-mark--valheim');
     expect(render(<GameMark game="terraria" />)).toContain('game-mark--terraria');
+    expect(gameMarkForSoftware('Palworld', 'palworld')).toBe('palworld');
+    expect(gameMarkForSoftware('Palworld Dedicated Server')).toBe('palworld');
+    expect(render(<GameMark game="palworld" />)).toContain('game-mark--palworld');
   });
 });
