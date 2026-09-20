@@ -6,9 +6,9 @@ import {
   expectString,
   requestJson,
 } from './api';
-import type { GamePortPolicy } from './control-api';
+import type { GamePortPolicy, ManagedGameKind } from './control-api';
 
-function parseGamePortPolicy(expectedGame: 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld') {
+function parseGamePortPolicy(expectedGame: string) {
   return (value: unknown): GamePortPolicy => {
     const root = expectRecord(value, 'game port policy');
     if (expectNumber(root, 'schema_version', 'game port policy', { integer: true, minimum: 0 }) !== 1) {
@@ -148,4 +148,37 @@ export function savePalworldPortPolicy(
     },
     csrfToken,
   });
+}
+
+export function getManagedGamePortPolicy(
+  game: ManagedGameKind,
+  csrfToken: string,
+  signal?: AbortSignal,
+): Promise<GamePortPolicy> {
+  return requestJson(
+    `/api/v1/servers/port-policies/${encodeURIComponent(game)}`,
+    parseGamePortPolicy(game),
+    { csrfToken, signal },
+  );
+}
+
+export function saveManagedGamePortPolicy(
+  game: ManagedGameKind,
+  input: Pick<GamePortPolicy, 'ranges' | 'ports' | 'autoForwardOnCreate'>,
+  csrfToken: string,
+): Promise<GamePortPolicy> {
+  return requestJson(
+    `/api/v1/servers/port-policies/${encodeURIComponent(game)}`,
+    parseGamePortPolicy(game),
+    {
+      method: 'PUT',
+      body: {
+        game,
+        ranges: input.ranges,
+        ports: input.ports,
+        auto_forward_on_create: input.autoForwardOnCreate,
+      },
+      csrfToken,
+    },
+  );
 }

@@ -74,6 +74,29 @@ describe('server migrate API', () => {
     expect(parsed.terrariaSoftware).toBeNull();
   });
 
+  it('accepts the new managed games in preflight', () => {
+    for (const game of [
+      'satisfactory',
+      'project_zomboid',
+      'seven_days_to_die',
+      'rust',
+      'sons_of_the_forest',
+      'factorio',
+      'dont_starve_together',
+      'vintage_story',
+    ] as const) {
+      const parsed = parseMigratePreflight({
+        ...preflight,
+        game,
+        software: null,
+        running: false,
+        status: 'stopped',
+        blockers: [],
+      });
+      expect(parsed.game).toBe(game);
+    }
+  });
+
   it('posts inspect and copy requests', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

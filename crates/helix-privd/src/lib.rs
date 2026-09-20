@@ -329,6 +329,10 @@ pub enum BrokerRequest {
     CreatePalworld {
         spec: PalworldCreateSpec,
     },
+    CreateGame {
+        game: GameKind,
+        spec: GameCreateSpec,
+    },
     SetNativeStartOnBoot {
         instance_id: String,
         enabled: bool,
@@ -780,6 +784,50 @@ pub enum GameKind {
     Valheim,
     Terraria,
     Palworld,
+    Satisfactory,
+    ProjectZomboid,
+    SevenDaysToDie,
+    Rust,
+    SonsOfTheForest,
+    Factorio,
+    DontStarveTogether,
+    VintageStory,
+}
+
+impl GameKind {
+    /// Games created through the shared `GameCreateSpec`/`create_managed_game` flow.
+    pub fn uses_shared_spec(self) -> bool {
+        matches!(
+            self,
+            Self::Satisfactory
+                | Self::ProjectZomboid
+                | Self::SevenDaysToDie
+                | Self::Rust
+                | Self::SonsOfTheForest
+                | Self::Factorio
+                | Self::DontStarveTogether
+                | Self::VintageStory
+        )
+    }
+
+    /// Serde slug (`seven_days_to_die`, ...) used in URLs, files, and labels.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Minecraft => "minecraft",
+            Self::VRising => "vrising",
+            Self::Valheim => "valheim",
+            Self::Terraria => "terraria",
+            Self::Palworld => "palworld",
+            Self::Satisfactory => "satisfactory",
+            Self::ProjectZomboid => "project_zomboid",
+            Self::SevenDaysToDie => "seven_days_to_die",
+            Self::Rust => "rust",
+            Self::SonsOfTheForest => "sons_of_the_forest",
+            Self::Factorio => "factorio",
+            Self::DontStarveTogether => "dont_starve_together",
+            Self::VintageStory => "vintage_story",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -997,6 +1045,26 @@ impl ServerMigrateSpec {
                 server_password: None,
             }
             .validate(),
+            _ => GameCreateSpec {
+                name: self.name.clone(),
+                memory_mb: self.memory_mb,
+                cpu_millis: self.cpu_millis,
+                max_players: self.max_players,
+                game_port: self.game_port,
+                query_port: self.query_port,
+                network_exposure: self.network_exposure,
+                list_on_browser: self.list_on_browser,
+                start_on_boot: self.start_on_boot,
+                server_password: None,
+                admin_password: None,
+                cluster_token: None,
+                caves: false,
+                world_seed: None,
+                world_size: None,
+                world_name: None,
+                wine_runtime_acknowledged: self.wine_runtime_acknowledged,
+            }
+            .validate_for(game),
         }
     }
 }
@@ -1181,6 +1249,226 @@ impl PalworldCreateSpec {
             {
                 return Err("server password must be 1–128 ordinary characters".to_owned());
             }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GameCreateSpec {
+    pub name: String,
+    pub memory_mb: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_millis: u32,
+    pub max_players: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_port: Option<u16>,
+    #[serde(default)]
+    pub network_exposure: ServerNetworkExposure,
+    #[serde(default = "default_true")]
+    pub list_on_browser: bool,
+    pub start_on_boot: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster_token: Option<String>,
+    #[serde(default)]
+    pub caves: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world_seed: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world_size: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world_name: Option<String>,
+    #[serde(default)]
+    pub wine_runtime_acknowledged: bool,
+}
+
+fn validate_optional_secret(value: &Option<String>, label: &str) -> Result<(), String> {
+    if let Some(value) = value {
+        let value = value.trim();
+        if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
+            return Err(format!("{label} must be 1–128 ordinary characters"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_shared_game_fields(spec: &GameCreateSpec, game: GameKind) -> Result<(), String> {
+    validate_dedicated_name(&spec.name)?;
+    validate_cpu_millis(spec.cpu_millis)?;
+    if spec.game_port.is_some_and(|port| port < 1_024) {
+        return Err("game port must be at least 1024".to_owned());
+    }
+    if spec.query_port.is_some_and(|port| port < 1_024) {
+        return Err("query port must be at least 1024".to_owned());
+    }
+    if spec.query_port.is_some() && spec.game_port.is_none() {
+        return Err("a query port also needs a game port".to_owned());
+    }
+    if let (Some(game_port), Some(query_port)) = (spec.game_port, spec.query_port)
+        && game_port == query_port
+    {
+        return Err("game and query ports must be different".to_owned());
+    }
+    validate_optional_secret(&spec.server_password, "server password")?;
+    validate_optional_secret(&spec.admin_password, "admin password")?;
+    if let Some(token) = &spec.cluster_token {
+        let token = token.trim();
+        if token.is_empty() || token.len() > 512 || token.chars().any(char::is_control) {
+            return Err("cluster token must be 1–512 ordinary characters".to_owned());
+        }
+    }
+    if let Some(world_name) = &spec.world_name {
+        let world_name = world_name.trim();
+        if world_name.is_empty()
+            || world_name.len() > 64
+            || world_name.chars().any(char::is_control)
+            || world_name.contains(['/', '\\'])
+        {
+            return Err("world name must be 1–64 ordinary characters".to_owned());
+        }
+    }
+    if let Some(world_size) = spec.world_size
+        && !(1_000..=6_000).contains(&world_size)
+    {
+        return Err("world size must be between 1000 and 6000".to_owned());
+    }
+    let single_port = matches!(
+        game,
+        GameKind::Factorio | GameKind::DontStarveTogether | GameKind::VintageStory
+    );
+    if single_port && spec.query_port.is_some() {
+        return Err("that game uses a single port; leave the query port empty".to_owned());
+    }
+    Ok(())
+}
+
+fn reject_extras(spec: &GameCreateSpec, allowed: &[&str]) -> Result<(), String> {
+    let mut rejected: Vec<&'static str> = Vec::new();
+    for (present, name) in [
+        (spec.server_password.is_some(), "server_password"),
+        (spec.admin_password.is_some(), "admin_password"),
+        (spec.cluster_token.is_some(), "cluster_token"),
+        (spec.caves, "caves"),
+        (spec.world_seed.is_some(), "world_seed"),
+        (spec.world_size.is_some(), "world_size"),
+        (spec.world_name.is_some(), "world_name"),
+    ] {
+        if present && !allowed.contains(&name) {
+            rejected.push(name);
+        }
+    }
+    if rejected.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "unsupported field(s) for this game: {}",
+        rejected.join(", ")
+    ))
+}
+
+impl GameCreateSpec {
+    pub fn validate_for(&self, game: GameKind) -> Result<(), String> {
+        validate_shared_game_fields(self, game)?;
+        match game {
+            GameKind::Satisfactory => {
+                if !(6_144..=32_768).contains(&self.memory_mb) {
+                    return Err("Satisfactory memory must be between 6 and 32 GiB".to_owned());
+                }
+                if !(1..=16).contains(&self.max_players) {
+                    return Err("Satisfactory player limit must be between 1 and 16".to_owned());
+                }
+                reject_extras(self, &[])?;
+            }
+            GameKind::ProjectZomboid => {
+                if !(4_096..=32_768).contains(&self.memory_mb) {
+                    return Err("Project Zomboid memory must be between 4 and 32 GiB".to_owned());
+                }
+                if !(1..=128).contains(&self.max_players) {
+                    return Err("Project Zomboid player limit must be between 1 and 128".to_owned());
+                }
+                if let Some(password) = &self.admin_password {
+                    let password = password.trim();
+                    if password.len() < 6
+                        || password.len() > 128
+                        || password.chars().any(char::is_control)
+                    {
+                        return Err("admin password must be 6–128 ordinary characters".to_owned());
+                    }
+                }
+                reject_extras(self, &["server_password", "admin_password"])?;
+            }
+            GameKind::SevenDaysToDie => {
+                if !(6_144..=49_152).contains(&self.memory_mb) {
+                    return Err("7 Days to Die memory must be between 6 and 48 GiB".to_owned());
+                }
+                if !(1..=64).contains(&self.max_players) {
+                    return Err("7 Days to Die player limit must be between 1 and 64".to_owned());
+                }
+                reject_extras(self, &["server_password", "world_seed", "world_name"])?;
+            }
+            GameKind::Rust => {
+                if !(8_192..=65_536).contains(&self.memory_mb) {
+                    return Err("Rust memory must be between 8 and 64 GiB".to_owned());
+                }
+                if !(1..=500).contains(&self.max_players) {
+                    return Err("Rust player limit must be between 1 and 500".to_owned());
+                }
+                reject_extras(self, &["world_seed", "world_size"])?;
+            }
+            GameKind::SonsOfTheForest => {
+                if !(6_144..=32_768).contains(&self.memory_mb) {
+                    return Err("Sons of the Forest memory must be between 6 and 32 GiB".to_owned());
+                }
+                if !(1..=8).contains(&self.max_players) {
+                    return Err("Sons of the Forest supports 1–8 players".to_owned());
+                }
+                if !self.wine_runtime_acknowledged {
+                    return Err(
+                        "Helix could not confirm the isolated Sons of the Forest runtime install"
+                            .to_owned(),
+                    );
+                }
+                reject_extras(self, &["server_password"])?;
+            }
+            GameKind::Factorio => {
+                if !(1_024..=16_384).contains(&self.memory_mb) {
+                    return Err("Factorio memory must be between 1 and 16 GiB".to_owned());
+                }
+                if !(1..=255).contains(&self.max_players) {
+                    return Err("Factorio player limit must be between 1 and 255".to_owned());
+                }
+                reject_extras(self, &["server_password"])?;
+            }
+            GameKind::DontStarveTogether => {
+                if !(1_024..=8_192).contains(&self.memory_mb) {
+                    return Err(
+                        "Don't Starve Together memory must be between 1 and 8 GiB".to_owned()
+                    );
+                }
+                if !(1..=64).contains(&self.max_players) {
+                    return Err(
+                        "Don't Starve Together player limit must be between 1 and 64".to_owned(),
+                    );
+                }
+                reject_extras(self, &["server_password", "cluster_token", "caves"])?;
+            }
+            GameKind::VintageStory => {
+                if !(2_048..=32_768).contains(&self.memory_mb) {
+                    return Err("Vintage Story memory must be between 2 and 32 GiB".to_owned());
+                }
+                if !(1..=64).contains(&self.max_players) {
+                    return Err("Vintage Story player limit must be between 1 and 64".to_owned());
+                }
+                reject_extras(self, &["server_password"])?;
+            }
+            _ => return Err("that game does not use the shared create form".to_owned()),
         }
         Ok(())
     }
@@ -1736,6 +2024,123 @@ mod tests {
         spec.wine_runtime_acknowledged = true;
         spec.validate_for_game(GameKind::VRising)
             .expect("V Rising copy");
+    }
+
+    #[test]
+    fn managed_game_specs_enforce_per_game_bounds_and_fields() {
+        let spec = |memory_mb: u32, max_players: u16| GameCreateSpec {
+            name: "Test".to_owned(),
+            memory_mb,
+            cpu_millis: 0,
+            max_players,
+            game_port: None,
+            query_port: None,
+            network_exposure: ServerNetworkExposure::Private,
+            list_on_browser: true,
+            start_on_boot: false,
+            server_password: None,
+            admin_password: None,
+            cluster_token: None,
+            caves: false,
+            world_seed: None,
+            world_size: None,
+            world_name: None,
+            wine_runtime_acknowledged: false,
+        };
+
+        // Baseline valid specs per game.
+        spec(12_288, 4)
+            .validate_for(GameKind::Satisfactory)
+            .expect("satisfactory baseline");
+        spec(8_192, 8)
+            .validate_for(GameKind::ProjectZomboid)
+            .expect("zomboid baseline");
+        spec(12_288, 8)
+            .validate_for(GameKind::SevenDaysToDie)
+            .expect("7d2d baseline");
+        spec(12_288, 50)
+            .validate_for(GameKind::Rust)
+            .expect("rust baseline");
+        spec(4_096, 16)
+            .validate_for(GameKind::Factorio)
+            .expect("factorio baseline");
+        spec(2_048, 8)
+            .validate_for(GameKind::DontStarveTogether)
+            .expect("dst baseline");
+        spec(6_144, 16)
+            .validate_for(GameKind::VintageStory)
+            .expect("vintage story baseline");
+
+        // Memory bounds enforced per game.
+        assert!(spec(2_048, 4).validate_for(GameKind::Satisfactory).is_err());
+        assert!(
+            spec(2_048, 8)
+                .validate_for(GameKind::ProjectZomboid)
+                .is_err()
+        );
+        assert!(
+            spec(4_096, 8)
+                .validate_for(GameKind::SevenDaysToDie)
+                .is_err()
+        );
+        assert!(spec(4_096, 50).validate_for(GameKind::Rust).is_err());
+        assert!(spec(512, 16).validate_for(GameKind::Factorio).is_err());
+        assert!(
+            spec(16_384, 8)
+                .validate_for(GameKind::DontStarveTogether)
+                .is_err()
+        );
+        assert!(
+            spec(1_024, 16)
+                .validate_for(GameKind::VintageStory)
+                .is_err()
+        );
+
+        // Player bounds enforced per game.
+        assert!(
+            spec(12_288, 64)
+                .validate_for(GameKind::Satisfactory)
+                .is_err()
+        );
+        assert!(
+            spec(12_288, 32)
+                .validate_for(GameKind::SonsOfTheForest)
+                .is_err()
+        );
+
+        // Sons of the Forest requires the isolated runtime acknowledgement.
+        assert!(
+            spec(8_192, 8)
+                .validate_for(GameKind::SonsOfTheForest)
+                .is_err()
+        );
+        let mut sotf = spec(8_192, 8);
+        sotf.wine_runtime_acknowledged = true;
+        sotf.validate_for(GameKind::SonsOfTheForest)
+            .expect("sotf acknowledged");
+
+        // Fields that a game does not support are rejected.
+        let mut satisfactory = spec(12_288, 4);
+        satisfactory.server_password = Some("secret".to_owned());
+        assert!(satisfactory.validate_for(GameKind::Satisfactory).is_err());
+        let mut factorio = spec(4_096, 16);
+        factorio.caves = true;
+        assert!(factorio.validate_for(GameKind::Factorio).is_err());
+        let mut rust = spec(12_288, 50);
+        rust.world_seed = Some(12_345);
+        rust.world_size = Some(4_000);
+        rust.validate_for(GameKind::Rust).expect("rust seed+size");
+        let mut dst = spec(2_048, 8);
+        dst.cluster_token = Some("pds-g^token".to_owned());
+        dst.caves = true;
+        dst.validate_for(GameKind::DontStarveTogether)
+            .expect("dst token+caves");
+
+        // Single-port games reject a separate query port.
+        let mut factorio = spec(4_096, 16);
+        factorio.game_port = Some(34_197);
+        factorio.query_port = Some(34_198);
+        assert!(factorio.validate_for(GameKind::Factorio).is_err());
     }
 
     #[test]

@@ -231,7 +231,32 @@ export function serverReportsTps(server: Pick<ManagedServer, 'kind'>): boolean {
   return server.kind === 'minecraft' || server.kind === 'imported';
 }
 
-export type ServerKind = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld' | 'imported';
+export type ManagedGameKind =
+  | 'satisfactory'
+  | 'project_zomboid'
+  | 'seven_days_to_die'
+  | 'rust'
+  | 'sons_of_the_forest'
+  | 'factorio'
+  | 'dont_starve_together'
+  | 'vintage_story';
+
+export const MANAGED_GAME_KINDS: ReadonlyArray<ManagedGameKind> = [
+  'satisfactory',
+  'project_zomboid',
+  'seven_days_to_die',
+  'rust',
+  'sons_of_the_forest',
+  'factorio',
+  'dont_starve_together',
+  'vintage_story',
+];
+
+export function isManagedGameKind(value: string): value is ManagedGameKind {
+  return (MANAGED_GAME_KINDS as ReadonlyArray<string>).includes(value);
+}
+
+export type ServerKind = 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld' | ManagedGameKind | 'imported';
 
 export interface ManagedServer {
   id: string;
@@ -372,7 +397,7 @@ export interface NativeServerDetail {
   id: string;
   name: string;
   instanceName: string;
-  kind: 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld';
+  kind: 'minecraft' | 'vrising' | 'valheim' | 'terraria' | 'palworld' | ManagedGameKind;
   software: string;
   minecraftVersion: string;
   build: string;
@@ -756,8 +781,8 @@ export function parseServers(value: unknown): ManagedServer[] {
     const software = expectString(item, 'software', 'server');
     const rawKind = typeof item.kind === 'string' ? item.kind : '';
     const kind: ServerKind =
-      rawKind === 'vrising' || rawKind === 'minecraft' || rawKind === 'imported' || rawKind === 'valheim' || rawKind === 'terraria' || rawKind === 'palworld'
-        ? rawKind
+      rawKind === 'vrising' || rawKind === 'minecraft' || rawKind === 'imported' || rawKind === 'valheim' || rawKind === 'terraria' || rawKind === 'palworld' || isManagedGameKind(rawKind)
+        ? rawKind as ServerKind
         : /v\s*rising/iu.test(software)
           ? 'vrising'
           : /valheim/iu.test(software)
@@ -766,9 +791,7 @@ export function parseServers(value: unknown): ManagedServer[] {
               ? 'terraria'
               : /palworld/iu.test(software)
                 ? 'palworld'
-          : manager === 'helix'
-            ? 'minecraft'
-            : 'imported';
+                : managedGameKindFromSoftware(software) ?? (manager === 'helix' ? 'minecraft' : 'imported');
     return {
       id: expectString(item, 'id', 'server'),
       name: expectString(item, 'name', 'server'),
@@ -800,6 +823,18 @@ export function parseServers(value: unknown): ManagedServer[] {
       modpackIconUrl: parseModpackIconUrl(item.modpack_icon_url),
     };
   });
+}
+
+export function managedGameKindFromSoftware(software: string): ManagedGameKind | null {
+  if (/satisfactory/iu.test(software)) return 'satisfactory';
+  if (/project\s*zomboid|zomboid/iu.test(software)) return 'project_zomboid';
+  if (/7\s*days\s*to\s*die|7dtd|7d2d/iu.test(software)) return 'seven_days_to_die';
+  if (/\brust\b|rustdedicated/iu.test(software)) return 'rust';
+  if (/sons\s*of\s*the\s*forest|sonsoftheforest/iu.test(software)) return 'sons_of_the_forest';
+  if (/factorio/iu.test(software)) return 'factorio';
+  if (/don.?t\s*starve|donotstarve|dst\b/iu.test(software)) return 'dont_starve_together';
+  if (/vintage\s*story|vintagestory/iu.test(software)) return 'vintage_story';
+  return null;
 }
 
 function parseJob(value: unknown): BrokerJob {
@@ -905,8 +940,8 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
   const software = expectString(root, 'software', 'server detail');
   const rawKind = typeof root.kind === 'string' ? root.kind : '';
   const kind =
-    rawKind === 'vrising' || rawKind === 'valheim' || rawKind === 'terraria' || rawKind === 'palworld'
-      ? rawKind
+    rawKind === 'vrising' || rawKind === 'valheim' || rawKind === 'terraria' || rawKind === 'palworld' || isManagedGameKind(rawKind)
+      ? rawKind as NativeServerDetail['kind']
       : 'minecraft';
   const containerState = expectRecord(root.container_state, 'container state');
   const consoleHistory = expectRecord(root.console_history, 'console history configuration');
@@ -1324,6 +1359,37 @@ export function createPalworldServer(input: {
   return requestJson('/api/v1/servers/palworld', (value) => {
     const root = expectRecord(value, 'Palworld job');
     return { jobId: expectString(root, 'job_id', 'Palworld job') };
+  }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
+}
+
+export interface ManagedGameCreateInput {
+  name: string;
+  memory_mb: number;
+  cpu_millis?: number;
+  max_players: number;
+  game_port?: number;
+  query_port?: number;
+  start_on_boot: boolean;
+  network_exposure: 'private' | 'public';
+  list_on_browser: boolean;
+  server_password?: string;
+  admin_password?: string;
+  cluster_token?: string;
+  caves?: boolean;
+  world_seed?: number;
+  world_size?: number;
+  world_name?: string;
+  wine_runtime_acknowledged?: boolean;
+}
+
+export function createManagedGameServer(
+  game: ManagedGameKind,
+  input: ManagedGameCreateInput,
+  csrfToken: string,
+): Promise<{ jobId: string }> {
+  return requestJson(`/api/v1/servers/native/${encodeURIComponent(game)}`, (value) => {
+    const root = expectRecord(value, 'server create job');
+    return { jobId: expectString(root, 'job_id', 'server create job') };
   }, { method: 'POST', body: input, csrfToken, timeoutMs: 20_000 });
 }
 

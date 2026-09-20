@@ -5,7 +5,7 @@ use crate::files::{
 };
 use helix_privd::{
     CURSEFORGE_API_KEY_REQUIRED, CURSEFORGE_CDN_BLOCKED, CURSEFORGE_KEY_REJECTED,
-    CURSEFORGE_RATE_LIMITED, CustomMinecraftJarSpec, FileUploadPurpose, GameKind,
+    CURSEFORGE_RATE_LIMITED, CustomMinecraftJarSpec, FileUploadPurpose, GameCreateSpec, GameKind,
     GamePortPolicySpec, GamePortRangeSpec, MAX_CONCURRENT_FILE_UPLOADS,
     MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES, MAX_MINECRAFT_VERSION_CATALOG,
     MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode, MinecraftModpackCreateSpec,
@@ -35,14 +35,23 @@ use std::{
 };
 use uuid::Uuid;
 
+mod dont_starve_together;
+mod factorio;
+pub(crate) mod game_def;
 mod marketplace;
 mod modpacks;
 mod palworld;
+mod project_zomboid;
 mod pumpkin;
 mod runtime;
+mod rust;
+mod satisfactory;
+mod seven_days_to_die;
+mod sons_of_the_forest;
 mod terraria;
 mod valheim;
 mod valheim_manage;
+mod vintage_story;
 mod vrising;
 
 const MANIFEST_VERSION: u32 = 1;
@@ -240,6 +249,10 @@ impl InstanceManifest {
         matches!(self.kind, GameKind::Palworld)
     }
 
+    fn managed_game_def(&self) -> Option<&'static game_def::GameDef> {
+        game_def::game_def(self.kind)
+    }
+
     fn uses_ready_marker(&self) -> bool {
         !self.is_minecraft()
     }
@@ -251,6 +264,10 @@ impl InstanceManifest {
             GameKind::Valheim => "valheim",
             GameKind::Terraria => "terraria",
             GameKind::Palworld => "palworld",
+            _ => self
+                .managed_game_def()
+                .map(|def| def.slug)
+                .unwrap_or("minecraft"),
         }
     }
 
@@ -261,6 +278,12 @@ impl InstanceManifest {
             // Older runtime images published a third port; keep it reserved until upgraded.
             if self.runtime_image != valheim::RUNTIME_IMAGE {
                 ports.push(self.game_port.saturating_add(2));
+            }
+        } else if self.managed_game_def().is_some() {
+            for port in [self.query_port, self.rcon_port] {
+                if port != 0 && !ports.contains(&port) {
+                    ports.push(port);
+                }
             }
         } else if self.query_port != 0 && self.query_port != self.game_port {
             ports.push(self.query_port);
@@ -754,6 +777,18 @@ impl NativeManager {
             {
                 warnings.push("Palworld dedicated server files are not installed yet".to_owned());
             }
+            if let Some(def) = manifest.managed_game_def()
+                && !data_path.join(READY_MARKER).is_file()
+                && !def
+                    .install_markers
+                    .iter()
+                    .all(|marker| data_path.join(marker).exists())
+            {
+                warnings.push(format!(
+                    "{} dedicated server files are not installed yet",
+                    def.display
+                ));
+            }
             if !states.contains_key(&manifest.container_name) {
                 warnings.push("Execution container is missing".to_owned());
             }
@@ -1062,6 +1097,81 @@ impl NativeManager {
         Err("the Palworld port pool does not have two free UDP ports; add ports or expand its ranges in Servers > Port pools".to_owned())
     }
 
+    fn resolve_managed_game_ports(
+        &self,
+        def: &game_def::GameDef,
+        spec: &GameCreateSpec,
+        manifests: &[InstanceManifest],
+    ) -> Result<(Vec<u16>, bool), String> {
+        let layout = game_def::slot_layout(def, spec.caves);
+        let helix = assigned_game_ports(manifests);
+        if let Some(game_port) = spec.game_port {
+            let mut ports = Vec::with_capacity(layout.len());
+            for (index, slot) in layout.iter().enumerate() {
+                let port = match index {
+                    0 => game_port,
+                    1 if def.caves_slot.is_none() => spec
+                        .query_port
+                        .unwrap_or_else(|| game_port.saturating_add(slot.offset)),
+                    _ => game_port.saturating_add(slot.offset),
+                };
+                ports.push(port);
+            }
+            for (index, port) in ports.iter().enumerate() {
+                if *port < 1_024 {
+                    return Err(format!("{} ports must be at least 1024", def.display));
+                }
+                if ports[..index].contains(port) {
+                    return Err(format!("{} ports must all be different", def.display));
+                }
+                if let Some(error) = self.port_conflict_error(*port, &helix) {
+                    return Err(error);
+                }
+                ensure_port_available(*port, true)?;
+            }
+            return Ok((ports, false));
+        }
+        let _guard = self
+            .port_policies
+            .lock()
+            .map_err(|_| "the game port policy lock is unavailable".to_owned())?;
+        let policy = self.read_game_port_policy(def.kind)?;
+        let candidates = policy_candidates(&policy)?;
+        let mut used = helix;
+        used.extend(self.amp_occupied_ports());
+        let available = candidates
+            .iter()
+            .copied()
+            .filter(|port| !used.contains(port) && ensure_port_available(*port, true).is_ok())
+            .collect::<Vec<_>>();
+        let count = layout.len();
+        for window in available.windows(count) {
+            if window
+                .iter()
+                .enumerate()
+                .all(|(index, port)| *port == window[0].saturating_add(index as u16))
+            {
+                return Ok((window.to_vec(), true));
+            }
+        }
+        if count == 2 && def.caves_slot.is_none() && available.len() >= 2 {
+            return Ok((vec![available[0], available[1]], true));
+        }
+        if count == 1 {
+            if let Some(port) = available.first() {
+                return Ok((vec![*port], true));
+            }
+            return Err(format!(
+                "the {} port pool has no free ports; add ports or expand its ranges in Servers > Port pools",
+                def.display
+            ));
+        }
+        Err(format!(
+            "the {} port pool does not have {count} consecutive free ports; add ports or expand its ranges in Servers > Port pools",
+            def.display
+        ))
+    }
+
     fn read_game_port_policy(&self, game: GameKind) -> Result<GamePortPolicySpec, String> {
         let path = self.game_port_policy_path(game);
         if !path.exists() {
@@ -1083,12 +1193,18 @@ impl NativeManager {
     }
 
     fn game_port_policy_path(&self, game: GameKind) -> PathBuf {
+        if let Some(def) = game_def::game_def(game) {
+            return self
+                .state_root
+                .join(format!("port-policy-{}.json", def.slug));
+        }
         self.state_root.join(match game {
             GameKind::Minecraft => "port-policy-minecraft.json",
             GameKind::VRising => "port-policy-vrising.json",
             GameKind::Valheim => "port-policy-valheim.json",
             GameKind::Terraria => "port-policy-terraria.json",
             GameKind::Palworld => "port-policy-palworld.json",
+            _ => unreachable!("unknown game port policy"),
         })
     }
 
@@ -3888,6 +4004,171 @@ impl NativeManager {
         }
     }
 
+    pub fn create_managed_game<F>(
+        &self,
+        kind: GameKind,
+        spec: &GameCreateSpec,
+        overlay: Option<&Path>,
+        mut progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        let def = game_def::game_def(kind).ok_or("that game is not natively supported")?;
+        spec.validate_for(kind)?;
+        let _operation = self.begin_creation_operation()?;
+        progress("Checking ports, names, and storage", 6);
+        let manifests = self.load_manifests()?;
+        if manifests
+            .iter()
+            .any(|manifest| manifest.name.eq_ignore_ascii_case(spec.name.trim()))
+        {
+            return Err("a Helix server with that name already exists".to_owned());
+        }
+        let (ports, allocated_automatically) =
+            self.resolve_managed_game_ports(def, spec, &manifests)?;
+        let game_port = ports[0];
+        let query_port = ports.get(1).copied().unwrap_or(0);
+        let aux_port = ports.get(2).copied().unwrap_or(0);
+        let id = Uuid::new_v4().to_string();
+        let instance_name = instance_name(spec.name.trim(), &id);
+        let container_name = format!("helix-game-{id}");
+        let run_uid = allocate_run_uid(&id, &manifests)?;
+        let data_path = self.instance_path(&id)?;
+        let manifest_path = self.manifest_path(&id)?;
+        let mut container_create_attempted = false;
+
+        let result = (|| -> Result<Value, String> {
+            progress(
+                &format!("Building or reusing the isolated {} runtime", def.display),
+                14,
+            );
+            let runtime_image = self.ensure_managed_runtime_image(def, &mut progress)?;
+
+            progress(
+                &format!("Preparing the isolated {} directory", def.display),
+                28,
+            );
+            fs::create_dir(&data_path)
+                .map_err(|_| "could not create the server directory".to_owned())?;
+            fs::set_permissions(&data_path, fs::Permissions::from_mode(0o750))
+                .map_err(|_| "could not protect the server directory".to_owned())?;
+            for folder in def.data_dirs {
+                fs::create_dir_all(data_path.join(folder))
+                    .map_err(|_| format!("could not create {} data folders", def.display))?;
+            }
+            let generated_secret = Uuid::new_v4().simple().to_string();
+            write_managed_file(
+                &data_path.join(def.settings_file),
+                serde_json::to_string_pretty(&(def.create_settings)(spec, &generated_secret))
+                    .map_err(|e| e.to_string())?
+                    .as_bytes(),
+                0o660,
+                0,
+                run_uid,
+            )?;
+
+            let manifest = InstanceManifest {
+                schema_version: MANIFEST_VERSION,
+                kind,
+                id: id.clone(),
+                name: spec.name.trim().to_owned(),
+                instance_name: instance_name.clone(),
+                container_name: container_name.clone(),
+                software: MinecraftSoftware::Vanilla,
+                minecraft_version: "dedicated".to_owned(),
+                build: def
+                    .artifact
+                    .rsplit("//")
+                    .next()
+                    .unwrap_or("dedicated")
+                    .to_owned(),
+                java_version: 0,
+                runtime_image,
+                artifact_url: def.artifact.to_owned(),
+                artifact_sha256: palworld::empty_artifact_sha256().to_owned(),
+                memory_mb: spec.memory_mb,
+                cpu_millis: spec.cpu_millis,
+                max_players: spec.max_players,
+                game_port,
+                query_port,
+                rcon_port: aux_port,
+                rcon_password: generated_secret,
+                start_on_boot: spec.start_on_boot,
+                run_uid,
+                created_at_unix_ms: now_unix_ms(),
+                unix_args: None,
+                backup_keep_count: 0,
+                backup_keep_days: 0,
+                modpack: None,
+            };
+            write_manifest(&manifest_path, &manifest)?;
+            self.chown_instance(&data_path, run_uid)?;
+            if let Some(source) = overlay {
+                progress(&format!("Copying {} saves and settings", def.display), 48);
+                self.overlay_migrated_game(kind, source, &data_path, false, run_uid)?;
+            }
+
+            progress(
+                &format!("Creating the isolated {} container", def.display),
+                52,
+            );
+            container_create_attempted = true;
+            self.create_validation_container(&manifest, &data_path)?;
+
+            progress(
+                &format!("Installing {} and starting the runtime", def.display),
+                62,
+            );
+            self.clear_ready_marker(&manifest)?;
+            self.docker(["start", manifest.container_name.as_str()], 90)?;
+            let ready_timeout = match kind {
+                GameKind::Factorio | GameKind::VintageStory => Duration::from_secs(20 * 60),
+                _ => Duration::from_secs(45 * 60),
+            };
+            self.wait_until_ready(&manifest, ready_timeout, |elapsed| {
+                let percent = 62_u64.saturating_add((elapsed / 40).min(35));
+                progress(
+                    &format!("Installing {} and waiting for first boot", def.display),
+                    u8::try_from(percent).unwrap_or(97),
+                );
+            })?;
+            self.finalize_container_restart_policy(&manifest)?;
+            self.ensure_console_archiver(&manifest)?;
+            progress("Online", 100);
+            Ok(json!({
+                "instance_id": format!("helix:{id}"),
+                "instance_name": instance_name,
+                "game_port": game_port,
+                "query_port": (query_port != 0).then_some(query_port),
+                "aux_port": (aux_port != 0).then_some(aux_port),
+                "port_allocated_automatically": allocated_automatically,
+                "manager": "helix",
+                "execution_backend": "docker",
+                "kind": def.slug,
+                "runtime_image": def.runtime_image
+            }))
+        })();
+
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                progress("Preserving the failed install for recovery", 98);
+                let cleanup_error = self.rollback_creation(
+                    &id,
+                    &container_name,
+                    &data_path,
+                    &manifest_path,
+                    container_create_attempted,
+                );
+                Err(match cleanup_error {
+                    Ok(()) => error,
+                    Err(cleanup) => format!("{error}; cleanup also failed: {cleanup}"),
+                })
+            }
+        }
+    }
+
     pub fn set_start_on_boot(&self, id: &str, enabled: bool) -> Result<Value, String> {
         let mut manifest = self.load_manifest(native_id(id))?;
         let _operation = self.begin_instance_operation(&manifest.id, "start-on-boot")?;
@@ -5316,6 +5597,9 @@ impl NativeManager {
         if manifest.is_palworld() {
             return self.create_palworld_container(manifest, data_path);
         }
+        if let Some(def) = manifest.managed_game_def() {
+            return self.create_managed_game_container(def, manifest, data_path);
+        }
         let restart = if manifest.start_on_boot {
             "unless-stopped"
         } else {
@@ -5798,6 +6082,126 @@ impl NativeManager {
         Ok(())
     }
 
+    fn create_managed_game_container(
+        &self,
+        def: &game_def::GameDef,
+        manifest: &InstanceManifest,
+        data_path: &Path,
+    ) -> Result<(), String> {
+        let restart = if manifest.start_on_boot {
+            "unless-stopped"
+        } else {
+            "no"
+        };
+        let settings = read_managed_game_settings(data_path, def.settings_file);
+        let caves = settings
+            .get("caves")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let memory_limit = u64::from(manifest.memory_mb).saturating_add(1024);
+        let mount = format!("type=bind,src={},dst=/data", data_path.display());
+        let user = format!("{}:{}", manifest.run_uid, manifest.run_uid);
+        let memory = format!("{memory_limit}m");
+        let mut args = vec![
+            "create".to_owned(),
+            "--name".to_owned(),
+            manifest.container_name.clone(),
+            "--label".to_owned(),
+            "io.helix.managed=true".to_owned(),
+            "--label".to_owned(),
+            format!("io.helix.game={}", def.slug),
+            "--label".to_owned(),
+            format!("io.helix.instance={}", manifest.id),
+            "--label".to_owned(),
+            format!("io.helix.name={}", manifest.name),
+            "--label".to_owned(),
+            format!("io.helix.instance-name={}", manifest.instance_name),
+            "--restart".to_owned(),
+            restart.to_owned(),
+            "--memory".to_owned(),
+            memory.clone(),
+            "--memory-swap".to_owned(),
+            memory,
+            "--pids-limit".to_owned(),
+            "2048".to_owned(),
+            "--cap-drop".to_owned(),
+            "ALL".to_owned(),
+            "--security-opt".to_owned(),
+            "no-new-privileges:true".to_owned(),
+            "--tmpfs".to_owned(),
+            "/tmp:rw,exec,nosuid,nodev,size=512m,mode=1777".to_owned(),
+            "--mount".to_owned(),
+            mount,
+            "--workdir".to_owned(),
+            "/data".to_owned(),
+            "--user".to_owned(),
+            user,
+            "--env".to_owned(),
+            "HOME=/data".to_owned(),
+            "--env".to_owned(),
+            format!("HELIX_SERVER_NAME={}", manifest.name),
+            "--env".to_owned(),
+            format!("HELIX_GAME_PORT={}", manifest.game_port),
+            "--env".to_owned(),
+            format!("HELIX_MAX_PLAYERS={}", manifest.max_players),
+            "--env".to_owned(),
+            format!("HELIX_MEMORY_MB={}", manifest.memory_mb),
+            "--stop-timeout".to_owned(),
+            "120".to_owned(),
+            "--log-opt".to_owned(),
+            "max-size=20m".to_owned(),
+            "--log-opt".to_owned(),
+            "max-file=5".to_owned(),
+        ];
+        if manifest.query_port != 0 {
+            args.push("--env".to_owned());
+            args.push(format!("HELIX_QUERY_PORT={}", manifest.query_port));
+        }
+        if manifest.rcon_port != 0 {
+            args.push("--env".to_owned());
+            args.push(format!("HELIX_AUX_PORT={}", manifest.rcon_port));
+        }
+        let mut has_admin_password = false;
+        let mut has_rcon_password = false;
+        if let Some(entries) = settings.as_object() {
+            for key in entries.keys() {
+                has_admin_password |= key == "admin_password";
+                has_rcon_password |= key == "rcon_password";
+                let Some(value) = game_def::settings_value(&settings, key) else {
+                    continue;
+                };
+                args.push("--env".to_owned());
+                args.push(format!("{}={value}", game_def::env_name_for_setting(key)));
+            }
+        }
+        if !has_admin_password {
+            args.push("--env".to_owned());
+            args.push(format!("HELIX_ADMIN_PASSWORD={}", manifest.rcon_password));
+        }
+        if !has_rcon_password {
+            args.push("--env".to_owned());
+            args.push(format!("HELIX_RCON_PASSWORD={}", manifest.rcon_password));
+        }
+        let ports = [manifest.game_port, manifest.query_port, manifest.rcon_port];
+        for (index, slot) in game_def::slot_layout(def, caves).iter().enumerate() {
+            let Some(port) = ports.get(index).copied().filter(|port| *port != 0) else {
+                continue;
+            };
+            if slot.tcp {
+                args.push("--publish".to_owned());
+                args.push(format!("0.0.0.0:{port}:{port}/tcp"));
+            }
+            if slot.udp {
+                args.push("--publish".to_owned());
+                args.push(format!("0.0.0.0:{port}:{port}/udp"));
+            }
+        }
+        args.push(manifest.runtime_image.clone());
+        insert_cpu_limit(&mut args, manifest.cpu_millis);
+        self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
+        Ok(())
+    }
+
     fn wait_until_ready<F>(
         &self,
         manifest: &InstanceManifest,
@@ -6106,6 +6510,10 @@ impl NativeManager {
             GameKind::Minecraft => {
                 return Err("Minecraft does not use a bundled game runtime".into());
             }
+            _ => match manifest.managed_game_def() {
+                Some(def) => def.runtime_image,
+                None => return Err("that game does not use a bundled runtime".into()),
+            },
         };
         if manifest.runtime_image != desired {
             if running {
@@ -6125,6 +6533,12 @@ impl NativeManager {
                     self.ensure_palworld_runtime_image(&mut |_, _| {})?;
                 }
                 GameKind::Minecraft => unreachable!(),
+                _ => {
+                    let def = manifest
+                        .managed_game_def()
+                        .ok_or("that game does not use a bundled runtime")?;
+                    self.ensure_managed_runtime_image(def, &mut |_, _| {})?;
+                }
             }
             if self.exact_container_identity(&manifest.container_name)?
                 != Some(("true".into(), manifest.id.clone()))
@@ -6270,6 +6684,27 @@ impl NativeManager {
         )
     }
 
+    fn ensure_managed_runtime_image<F>(
+        &self,
+        def: &game_def::GameDef,
+        progress: &mut F,
+    ) -> Result<String, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        self.ensure_bundled_runtime_image(
+            def.runtime_image,
+            def.dockerfile,
+            def.entrypoint,
+            &format!("{}-runtime", def.slug),
+            &format!(
+                "Building the isolated {} runtime image (one-time)",
+                def.display
+            ),
+            progress,
+        )
+    }
+
     fn ensure_bundled_runtime_image<F>(
         &self,
         image: &str,
@@ -6324,6 +6759,10 @@ impl NativeManager {
             GameKind::Terraria => terraria::RUNTIME_IMAGE,
             GameKind::Palworld => palworld::RUNTIME_IMAGE,
             GameKind::Minecraft => return,
+            _ => match game_def::game_def(kind) {
+                Some(def) => def.runtime_image,
+                None => return,
+            },
         };
         let remaining = self
             .load_manifests()
@@ -6633,6 +7072,7 @@ impl NativeManager {
                 }
             }
             GameKind::Minecraft | GameKind::VRising | GameKind::Palworld => {}
+            _ => {}
         }
         self.chown_instance(data_path, run_uid)?;
         Ok(report)
@@ -7755,6 +8195,10 @@ fn allocated_memory_bounds(kind: GameKind) -> (u32, u32) {
         GameKind::Valheim => (1_024, 16_384),
         GameKind::Terraria => (512, 8_192),
         GameKind::Palworld => (4_096, 32_768),
+        _ => match game_def::game_def(kind) {
+            Some(def) => def.memory,
+            None => (1_024, 24_576),
+        },
     }
 }
 
@@ -7763,12 +8207,19 @@ fn validate_allocated_memory(kind: GameKind, memory_mb: u32) -> Result<(), Strin
     if (minimum..=maximum).contains(&memory_mb) {
         return Ok(());
     }
+    if let Some(def) = game_def::game_def(kind) {
+        return Err(format!(
+            "{} memory must be between {} and {} MiB",
+            def.display, minimum, maximum
+        ));
+    }
     Err(match kind {
         GameKind::Minecraft => "memory must be between 1 and 24 GiB".to_owned(),
         GameKind::VRising => "V Rising memory must be between 2 and 24 GiB".to_owned(),
         GameKind::Valheim => "Valheim memory must be between 1 and 16 GiB".to_owned(),
         GameKind::Terraria => "Terraria memory must be between 512 MiB and 8 GiB".to_owned(),
         GameKind::Palworld => "Palworld memory must be between 4 and 32 GiB".to_owned(),
+        _ => unreachable!(),
     })
 }
 
@@ -7787,6 +8238,18 @@ fn default_game_port_policy(game: GameKind) -> GamePortPolicySpec {
         GameKind::Valheim => valheim::default_port_policy(),
         GameKind::Terraria => terraria::default_port_policy(),
         GameKind::Palworld => palworld::default_port_policy(),
+        _ => match game_def::game_def(game) {
+            Some(def) => GamePortPolicySpec {
+                game,
+                ranges: vec![GamePortRangeSpec {
+                    start: def.pool.0,
+                    end: def.pool.1,
+                }],
+                ports: Vec::new(),
+                auto_forward_on_create: false,
+            },
+            None => unreachable!("unknown game port policy"),
+        },
     }
 }
 
@@ -9316,6 +9779,10 @@ fn display_software(manifest: &InstanceManifest) -> &'static str {
         }
         GameKind::Palworld => "Palworld",
         GameKind::Minecraft => software_name(manifest.software),
+        _ => manifest
+            .managed_game_def()
+            .map(|def| def.display)
+            .unwrap_or("Dedicated"),
     }
 }
 
@@ -9328,6 +9795,13 @@ fn read_palworld_settings(data_path: &Path) -> Value {
     .ok()
     .and_then(|text| serde_json::from_str::<Value>(&text).ok())
     .unwrap_or_else(|| json!({}))
+}
+
+fn read_managed_game_settings(data_path: &Path, settings_file: &str) -> Value {
+    read_small_regular_file(&data_path.join(settings_file), 64 * 1024, "game settings")
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .unwrap_or_else(|| json!({}))
 }
 
 fn insert_cpu_limit(args: &mut Vec<String>, cpu_millis: u32) {

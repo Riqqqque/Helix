@@ -26,10 +26,10 @@ use axum::{
 use helix_core::{DatabaseStatus, HealthReport, HealthStatus, VERSION, unix_timestamp_ms};
 use helix_privd::{
     BrokerClient, BrokerClientError, BrokerRequest, DockerCleanupScheduleSpec,
-    DockerContainerActionKind, FileUploadPurpose, FileUploadTarget, FirewallRuleSpec, GameKind,
-    GamePortPolicySpec, HookServiceAction, MarketplaceCatalog, MinecraftCreateSpec,
-    MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware, ModpackProvider,
-    PackageUpdateCandidate, PalworldCreateSpec, RecurringRebootSpec, ServerAction,
+    DockerContainerActionKind, FileUploadPurpose, FileUploadTarget, FirewallRuleSpec,
+    GameCreateSpec, GameKind, GamePortPolicySpec, HookServiceAction, MarketplaceCatalog,
+    MinecraftCreateSpec, MinecraftModpackCreateSpec, MinecraftSettingsPatch, MinecraftSoftware,
+    ModpackProvider, PackageUpdateCandidate, PalworldCreateSpec, RecurringRebootSpec, ServerAction,
     ServerMigrateSource, ServerMigrateSpec, ServerNetworkExposure, StorageAnalysisMode,
     TerrariaCreateSpec, VRisingCreateSpec, ValheimCreateSpec,
 };
@@ -395,6 +395,11 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route("/servers/valheim", post(create_valheim))
         .route("/servers/terraria", post(create_terraria))
         .route("/servers/palworld", post(create_palworld))
+        .route("/servers/native/{game}", post(create_managed_game))
+        .route(
+            "/servers/port-policies/{game}",
+            get(managed_game_port_policy).put(set_managed_game_port_policy),
+        )
         .route("/servers/migrate/preflight", post(migrate_server_preflight))
         .route("/servers/migrate", post(migrate_server))
         .route("/servers/{instance_id}", get(server_detail))
@@ -3339,6 +3344,60 @@ async fn create_palworld(
         auth::require_capability(&state, &headers, "network.firewall.write").await?;
     }
     broker_json(&state, BrokerRequest::CreatePalworld { spec }).await
+}
+
+fn managed_game_kind(game: &str) -> Result<GameKind, ApiError> {
+    let kind = serde_json::from_value::<GameKind>(serde_json::Value::String(game.to_owned()))
+        .map_err(|_| ApiError::NotFound)?;
+    if !kind.uses_shared_spec() {
+        return Err(ApiError::NotFound);
+    }
+    Ok(kind)
+}
+
+async fn create_managed_game(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(game): RoutePath<String>,
+    body: Result<Json<GameCreateSpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let game = managed_game_kind(&game)?;
+    let Json(spec) = body.map_err(auth::map_json_rejection)?;
+    spec.validate_for(game).map_err(ApiError::BrokerRejected)?;
+    if spec.network_exposure == ServerNetworkExposure::Public {
+        auth::require_capability(&state, &headers, "network.firewall.write").await?;
+    }
+    broker_json(&state, BrokerRequest::CreateGame { game, spec }).await
+}
+
+async fn managed_game_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(game): RoutePath<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::require_capability(&state, &headers, "games.view").await?;
+    let game = managed_game_kind(&game)?;
+    broker_json(&state, BrokerRequest::GamePortPolicy { game }).await
+}
+
+async fn set_managed_game_port_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(game): RoutePath<String>,
+    body: Result<Json<GamePortPolicySpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let game = managed_game_kind(&game)?;
+    let Json(policy) = body.map_err(auth::map_json_rejection)?;
+    if policy.game != game {
+        return Err(ApiError::BrokerRejected(
+            "the policy game must match the route".to_owned(),
+        ));
+    }
+    broker_json(&state, BrokerRequest::SetGamePortPolicy { policy }).await
 }
 
 async fn migrate_server_preflight(
