@@ -956,6 +956,9 @@ impl NativeManager {
             GameKind::Valheim => "Valheim",
             GameKind::Terraria => "Terraria",
             GameKind::Palworld => "Palworld",
+            _ => game_def::game_def(game)
+                .map(|def| def.display)
+                .unwrap_or("the game"),
         };
         Err(format!(
             "the {label} port pool has no available ports; add ports or expand its ranges in Servers > Port pools"
