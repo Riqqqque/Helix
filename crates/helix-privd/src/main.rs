@@ -2023,7 +2023,7 @@ impl BrokerContext {
                 "Helix installs the Palworld dedicated server in its isolated runtime, then copies Pal/Saved worlds and settings. SteamCMD folders and server binaries from the source are skipped.".to_owned(),
             ),
             _ => {
-                let display = native::game_def::game_def(game)
+                let display = native::game_def::game_def(resolved.game)
                     .map(|def| def.display)
                     .unwrap_or("the game");
                 notes.push(format!(
