@@ -7754,6 +7754,7 @@ fn allocated_memory_bounds(kind: GameKind) -> (u32, u32) {
         GameKind::VRising => (2_048, 24_576),
         GameKind::Valheim => (1_024, 16_384),
         GameKind::Terraria => (512, 8_192),
+        GameKind::Palworld => (4_096, 32_768),
     }
 }
 
@@ -7767,6 +7768,7 @@ fn validate_allocated_memory(kind: GameKind, memory_mb: u32) -> Result<(), Strin
         GameKind::VRising => "V Rising memory must be between 2 and 24 GiB".to_owned(),
         GameKind::Valheim => "Valheim memory must be between 1 and 16 GiB".to_owned(),
         GameKind::Terraria => "Terraria memory must be between 512 MiB and 8 GiB".to_owned(),
+        GameKind::Palworld => "Palworld memory must be between 4 and 32 GiB".to_owned(),
     })
 }
 
