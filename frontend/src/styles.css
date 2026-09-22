@@ -1792,6 +1792,10 @@ main {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+  margin-top: 16px;
+}
+.host-docker {
+  margin-top: 16px;
 }
 .host-columns > .surface {
   min-width: 0;

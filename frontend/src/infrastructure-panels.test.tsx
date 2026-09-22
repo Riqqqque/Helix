@@ -1,6 +1,6 @@
 import { render } from "preact-render-to-string";
 import { describe, expect, it } from "vitest";
-import { PackageInventoryView } from "./host-updates";
+import { heroModel, PackageTable } from "./host-updates";
 import { NetworkEvidenceView } from "./network-panel";
 import type { NetworkInventory } from "./network-api";
 import type { SystemPackageInventory } from "./package-api";
@@ -234,9 +234,9 @@ describe("infrastructure evidence panels", () => {
     expect(markup).not.toContain("Open to internet");
   });
 
-  it("renders exact update detail and keeps apply disabled until a package is selected", () => {
+  it("renders the package list with update detail and effects", () => {
     const markup = render(
-      <PackageInventoryView
+      <PackageTable
         data={packages}
         filter="updates"
         query=""
@@ -244,59 +244,79 @@ describe("infrastructure evidence panels", () => {
         onFilter={() => undefined}
         onQuery={() => undefined}
         onPage={() => undefined}
-        selected={new Set()}
-        onToggleSelected={() => undefined}
-        onSelectSafeUpdates={() => undefined}
-        onApplySelected={() => undefined}
-        onCheckHelix={() => undefined}
-        onUpdateHelix={() => undefined}
-        mutationBusy={false}
+        onRefreshView={() => undefined}
+        refreshing={false}
       />,
     );
     expect(markup).toContain("openssl");
     expect(markup).toContain("3.0.1");
     expect(markup).toContain("3.0.2");
     expect(markup).toContain("1.9 MiB");
-    expect(markup).toContain("0 selected");
-    expect(markup).toContain("Select safe updates (1)");
-    expect(markup).toContain("Helix 1.0.0");
-    expect(markup).toContain("Check GitHub");
-    expect(markup).toContain("Update Helix");
-    expect(markup).toContain("Linux packages");
-    expect(markup).toContain("can be upgraded");
-    expect(markup).not.toMatch(/Simulation/u);
-    expect(markup.match(/disabled/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(markup).toContain("Security");
+    expect(markup).toContain("Package list");
+    expect(markup).toContain("Refresh view");
+    expect(markup).not.toContain("checkbox");
+  });
+
+  it("describes pending updates in the hero model", () => {
+    const hero = heroModel(packages, null, 1, 2_000_000);
+    expect(hero.tone).toBe("accent");
+    expect(hero.title).toBe("1 update ready to install");
+    expect(hero.detail).toContain("1.9 MiB");
+    expect(hero.detail).toContain("security");
   });
 
   it("says a host reboot is needed in plain language when Linux asked for one", () => {
-    const markup = render(
-      <PackageInventoryView
-        data={{
-          ...packages,
-          hostRestart: {
-            rebootRequiredMarkerPresent: true,
-            packages: ["linux-image-generic"],
-            automaticReboot: false,
-          },
-        }}
-        filter="updates"
-        query=""
-        page={0}
-        onFilter={() => undefined}
-        onQuery={() => undefined}
-        onPage={() => undefined}
-        selected={new Set()}
-        onToggleSelected={() => undefined}
-        onSelectSafeUpdates={() => undefined}
-        onApplySelected={() => undefined}
-        onCheckHelix={() => undefined}
-        onUpdateHelix={() => undefined}
-        mutationBusy={false}
-      />,
+    const hero = heroModel(
+      {
+        ...packages,
+        hostRestart: {
+          rebootRequiredMarkerPresent: true,
+          packages: ["linux-image-generic"],
+          automaticReboot: false,
+        },
+      },
+      null,
+      1,
+      2_000_000,
     );
-    expect(markup).toContain("Linux needs a host reboot");
-    expect(markup).toContain("linux-image-generic");
-    expect(markup).toContain("Reboot when you are ready");
-    expect(markup).not.toMatch(/Simulation/u);
+    expect(hero.tone).toBe("warning");
+    expect(hero.title).toBe("This host needs a reboot");
+    expect(hero.detail).toContain("linux-image-generic");
+  });
+
+  it("describes a finished apply job and a lost reboot need", () => {
+    const hero = heroModel(packages, {
+      id: "6b8f95ce-9c58-4c4c-b232-627a29ca1c03",
+      kind: "system_package_apply",
+      status: "complete",
+      stage: "Complete",
+      progressPercent: 100,
+      createdAtUnixMs: 1_800_000_000_000,
+      updatedAtUnixMs: 1_800_000_100_000,
+      result: {
+        reboot_required: true,
+        reboot_required_packages: ["libc6"],
+        updated: [{ name: "openssl", from: "3.0.1", to: "3.0.2" }],
+      },
+      error: null,
+    }, 0, 0);
+    expect(hero.tone).toBe("warning");
+    expect(hero.title).toContain("reboot");
+    expect(hero.detail).toContain("libc6");
+  });
+
+  it("reports an up-to-date host when nothing is pending", () => {
+    const current = {
+      ...packages,
+      inventory: {
+        ...packages.inventory,
+        upgradeAvailableTotal: 0,
+        packages: [],
+      },
+    };
+    const hero = heroModel(current, null, 0, 0);
+    expect(hero.tone).toBe("good");
+    expect(hero.title).toBe("Linux is up to date");
   });
 });
