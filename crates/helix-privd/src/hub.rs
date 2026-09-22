@@ -34,8 +34,6 @@ pub(crate) struct HubConfig {
     pub(crate) ssh_binary: PathBuf,
     #[serde(default = "default_ssh_keygen_binary")]
     pub(crate) ssh_keygen_binary: PathBuf,
-    #[serde(default = "default_setpriv_binary")]
-    pub(crate) setpriv_binary: PathBuf,
     #[serde(default = "default_timeout_binary")]
     pub(crate) timeout_binary: PathBuf,
 }
@@ -47,7 +45,6 @@ impl Default for HubConfig {
             terminal_socket: default_terminal_socket(),
             ssh_binary: default_ssh_binary(),
             ssh_keygen_binary: default_ssh_keygen_binary(),
-            setpriv_binary: default_setpriv_binary(),
             timeout_binary: default_timeout_binary(),
         }
     }
@@ -67,10 +64,6 @@ fn default_ssh_binary() -> PathBuf {
 
 fn default_ssh_keygen_binary() -> PathBuf {
     PathBuf::from("/usr/bin/ssh-keygen")
-}
-
-fn default_setpriv_binary() -> PathBuf {
-    PathBuf::from("/usr/bin/setpriv")
 }
 
 fn default_timeout_binary() -> PathBuf {
@@ -103,7 +96,6 @@ impl Hub {
         for (name, binary) in [
             ("ssh", &config.ssh_binary),
             ("ssh-keygen", &config.ssh_keygen_binary),
-            ("setpriv", &config.setpriv_binary),
             ("timeout", &config.timeout_binary),
         ] {
             if !binary.is_absolute() || !binary.is_file() {
@@ -344,23 +336,65 @@ impl Hub {
         })
     }
 
-    /// Run ssh as the terminal account so the hub key and known_hosts stay
-    /// usable; the broker itself never holds an SSH session as root.
-    fn ssh_as_terminal(
+    /// Ensure the hub known_hosts exists with the terminal account as owner.
+    /// Broker-run ssh executes as root; if root created this file the
+    /// terminal account could no longer append host keys during interactive
+    /// sessions, which would break accept-new trust for them.
+    fn ensure_known_hosts(&self, account: &TerminalAccount) -> Result<(), String> {
+        let path = self.known_hosts_path();
+        if let Some(parent) = path.parent() {
+            if !parent.is_dir() {
+                fs::create_dir_all(parent)
+                    .map_err(|_| format!("could not create {}", parent.display()))?;
+            }
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+                .map_err(|_| format!("could not secure {}", parent.display()))?;
+            run_program(
+                Path::new("/usr/bin/chown"),
+                &[
+                    format!("{}:{}", account.uid, account.gid),
+                    parent.to_string_lossy().into_owned(),
+                ],
+                10,
+            )?;
+        }
+        if !path.exists() {
+            fs::write(&path, b"").map_err(|_| format!("could not create {}", path.display()))?;
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .map_err(|_| format!("could not secure {}", path.display()))?;
+        run_program(
+            Path::new("/usr/bin/chown"),
+            &[
+                format!("{}:{}", account.uid, account.gid),
+                path.to_string_lossy().into_owned(),
+            ],
+            10,
+        )?;
+        Ok(())
+    }
+
+    /// Run ssh directly from the broker. The service's no-new-privileges
+    /// sandbox forbids uid transitions, so probes and power actions execute
+    /// as root with an isolated HOME: the hub key root for hub/password
+    /// auth, or the terminal account's home for system auth so its
+    /// ~/.ssh config and keys still resolve. Interactive terminal sessions
+    /// are unaffected — terminald already runs those as the terminal
+    /// account inside the PTY.
+    fn run_ssh(
         &self,
         account: &TerminalAccount,
+        machine: &MachineTarget,
         argv: &[String],
         remote: &str,
     ) -> Result<crate::bounded_command::BoundedCommandOutput, String> {
-        let mut args = vec![
-            format!("--reuid={}", account.uid),
-            format!("--regid={}", account.gid),
-            "--clear-groups".to_owned(),
-            self.config.ssh_binary.to_string_lossy().into_owned(),
-        ];
-        args.extend(argv.iter().skip(1).cloned());
+        self.ensure_known_hosts(account)?;
+        let mut args: Vec<String> = argv.iter().skip(1).cloned().collect();
         args.push(remote.to_owned());
-        let home = account.home.clone().unwrap_or_else(|| "/".to_owned());
+        let home = match machine.auth_kind {
+            MachineAuthKind::System => account.home.clone().unwrap_or_else(|| "/".to_owned()),
+            _ => self.config.key_root.to_string_lossy().into_owned(),
+        };
         let environment: [(&str, &str); 2] = [
             ("HOME", home.as_str()),
             (
@@ -370,7 +404,7 @@ impl Hub {
         ];
         run_bounded_command(
             &self.config.timeout_binary,
-            &self.config.setpriv_binary,
+            &self.config.ssh_binary,
             &args,
             SSH_PROBE_TIMEOUT,
             &environment,
@@ -401,7 +435,7 @@ impl Hub {
         let account = self.terminal_account()?;
         let argv = self.ssh_argv(machine, true);
         let started = Instant::now();
-        let output = self.ssh_as_terminal(&account, &argv, PROBE_SCRIPT)?;
+        let output = self.run_ssh(&account, machine, &argv, PROBE_SCRIPT)?;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let stdout = String::from_utf8_lossy(&output.stdout);
         if output.status.success() {
@@ -461,7 +495,7 @@ impl Hub {
         };
         let remote = format!("systemctl {verb} 2>&1 || sudo -n systemctl {verb} 2>&1");
         let argv = self.ssh_argv(machine, true);
-        let output = self.ssh_as_terminal(&account, &argv, &remote)?;
+        let output = self.run_ssh(&account, machine, &argv, &remote)?;
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
         if output.status.success() {
@@ -674,8 +708,8 @@ fn validate_username(username: &str) -> Result<(), String> {
     }
 }
 
-/// Look up name + home for a uid from /etc/passwd so `setpriv` ssh sessions
-/// land on the right ~/.ssh for `system` auth.
+/// Look up name + home for a uid from /etc/passwd so broker-run ssh can
+/// resolve the right ~/.ssh for `system` auth.
 fn passwd_entry_for_uid(uid: u32) -> (Option<String>, Option<String>) {
     let Ok(passwd) = fs::read_to_string("/etc/passwd") else {
         return (None, None);
