@@ -9,7 +9,7 @@ import {
 const validRecord: DashboardPreferencesRecord = {
   revision: 4,
   preferences: {
-    navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands', 'globe'],
+    navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'machines', 'servers', 'hooks', 'strands', 'globe'],
     metricsRefreshMs: 1_000,
     homeWidgets: [{ id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Right now', content: '', url: '', color: '', icon: '' }],
     homeTemplates: [{ id: 'home-main', name: 'Main', accent: '#d7f64d', widgets: [{ id: 'clock', kind: 'clock', size: 'compact', height: 'medium', title: 'Right now', content: '', url: '', color: '', icon: '' }] }],
@@ -54,15 +54,31 @@ describe('dashboard preferences API', () => {
     }).preferences.serversEnabled).toBe(true);
   });
 
-  it('rejects missing navigation pages and unsupported refresh rates', () => {
+  it('rejects unknown or duplicate navigation pages and unsupported refresh rates', () => {
     expect(() => parseDashboardPreferencesRecord({
       ...validRecord,
-      preferences: { ...validRecord.preferences, navigationOrder: ['overview'] },
+      preferences: { ...validRecord.preferences, navigationOrder: ['overview', 'bogus'] },
+    })).toThrow();
+    expect(() => parseDashboardPreferencesRecord({
+      ...validRecord,
+      preferences: { ...validRecord.preferences, navigationOrder: ['overview', 'overview'] },
     })).toThrow();
     expect(() => parseDashboardPreferencesRecord({
       ...validRecord,
       preferences: { ...validRecord.preferences, metricsRefreshMs: 3_000 },
     })).toThrow();
+  });
+
+  it('repairs a stored order that predates a new page', () => {
+    const record = parseDashboardPreferencesRecord({
+      ...validRecord,
+      preferences: {
+        ...validRecord.preferences,
+        navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands', 'globe'],
+      },
+    });
+    expect(record.preferences.navigationOrder).toContain('machines');
+    expect(record.preferences.navigationOrder[0]).toBe('overview');
   });
 
   it('loads with CSRF and writes with an expected revision', async () => {

@@ -370,6 +370,110 @@ pub enum BrokerRequest {
         key: String,
     },
     ClearCurseforgeApiKey {},
+    HubIdentity {},
+    MachineProbe {
+        machine: MachineTarget,
+    },
+    MachineWake {
+        mac: String,
+    },
+    MachinePower {
+        machine: MachineTarget,
+        action: MachinePowerAction,
+    },
+    MachineTerminalSpec {
+        machine: MachineTarget,
+    },
+}
+
+/// Connection descriptor for a registered rack machine. The dashboard owns the
+/// registry; privd only receives validated targets per request and stores no
+/// machine state of its own.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MachineTarget {
+    pub label: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_kind: MachineAuthKind,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineAuthKind {
+    /// Helix's own hub keypair, provisioned onto the target's authorized_keys.
+    Key,
+    /// Interactive password prompt; usable for terminals, not for probes.
+    Password,
+    /// The host account's own ~/.ssh configuration and keys.
+    System,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MachinePowerAction {
+    Reboot,
+    PowerOff,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HubIdentityInfo {
+    pub available: bool,
+    pub public_key: Option<String>,
+    pub fingerprint_sha256: Option<String>,
+    pub user: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineProbeResult {
+    pub status: &'static str,
+    pub detail: String,
+    pub latency_ms: Option<u64>,
+    pub hostname: Option<String>,
+    pub os: Option<String>,
+    pub kernel: Option<String>,
+    pub uptime_seconds: Option<u64>,
+    pub load: Option<[f64; 3]>,
+    pub cpu_count: Option<u32>,
+    pub mem_total_bytes: Option<u64>,
+    pub mem_available_bytes: Option<u64>,
+    pub disk_total_bytes: Option<u64>,
+    pub disk_available_bytes: Option<u64>,
+    pub containers_running: Option<u32>,
+    pub failed_units: Option<u32>,
+}
+
+impl MachineProbeResult {
+    pub fn unreachable(detail: impl Into<String>) -> Self {
+        Self {
+            status: "unreachable",
+            detail: detail.into(),
+            latency_ms: None,
+            hostname: None,
+            os: None,
+            kernel: None,
+            uptime_seconds: None,
+            load: None,
+            cpu_count: None,
+            mem_total_bytes: None,
+            mem_available_bytes: None,
+            disk_total_bytes: None,
+            disk_available_bytes: None,
+            containers_running: None,
+            failed_units: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineTerminalSpecResult {
+    pub argv: Vec<String>,
+    pub detail: String,
 }
 
 pub const CURSEFORGE_API_KEY_REQUIRED: &str = "CurseForge needs an API key. Open Settings → Catalogs, paste a key from console.curseforge.com, then search again.";
@@ -2141,6 +2245,32 @@ mod tests {
         factorio.game_port = Some(34_197);
         factorio.query_port = Some(34_198);
         assert!(factorio.validate_for(GameKind::Factorio).is_err());
+
+        // Legacy create specs reject managed games.
+        let legacy = ServerMigrateSpec {
+            source: ServerMigrateSource::Folder {
+                path: "/srv/x".to_owned(),
+            },
+            name: "Copied".to_owned(),
+            game: Some(GameKind::Rust),
+            software: None,
+            version: None,
+            memory_mb: 12_288,
+            cpu_millis: 0,
+            max_players: 50,
+            game_port: None,
+            query_port: None,
+            network_exposure: ServerNetworkExposure::Private,
+            start_on_boot: false,
+            eula_accepted: false,
+            source_stopped: true,
+            copy_acknowledged: true,
+            list_on_browser: true,
+            wine_runtime_acknowledged: false,
+        };
+        legacy
+            .validate_for_game(GameKind::Rust)
+            .expect("rust copy spec");
     }
 
     #[test]

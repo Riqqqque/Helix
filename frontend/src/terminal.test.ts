@@ -19,6 +19,11 @@ describe('host terminal events', () => {
       user: 'rique',
       shell: '/bin/bash',
     });
+    expect(parseHostTerminalEvent('{"type":"ready","user":"rique","shell":"ssh -tt operator@192.0.2.10"}')).toEqual({
+      type: 'ready',
+      user: 'rique',
+      shell: 'ssh -tt operator@192.0.2.10',
+    });
     expect(parseHostTerminalEvent('{"type":"exit","exitCode":0,"signal":null}')).toEqual({
       type: 'exit',
       exitCode: 0,

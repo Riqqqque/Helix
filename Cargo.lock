@@ -694,6 +694,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "ureq",
+ "uuid",
  "zeroize",
 ]
 
@@ -778,6 +779,7 @@ dependencies = [
  "helix-core",
  "rusqlite",
  "rustix",
+ "serde_json",
  "sha2",
  "subtle",
  "tempfile",

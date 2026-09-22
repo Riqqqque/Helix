@@ -44,6 +44,7 @@ import { dashboardSectionForHash, type DashboardSectionId } from './navigation';
 import type { NavArrangeApi } from './nav-arrange';
 import { preloadServersRoute, ServersRoute } from './servers-route';
 import { preloadSettingsRoute, SettingsRoute } from './settings-route';
+import { preloadMachinesRoute, MachinesRoute } from './machines-route';
 import { preloadTerminalRoute, TerminalRoute } from './terminal-route';
 import {
   HostPageRoute,
@@ -74,6 +75,7 @@ const navigation: ReadonlyArray<{
   { id: 'host', label: 'Host', description: 'Services and processes', icon: 'host' },
   { id: 'security', label: 'Security', description: 'Host and Helix protections', icon: 'security' },
   { id: 'terminal', label: 'Terminal', description: 'Direct Linux shell', icon: 'terminal' },
+  { id: 'machines', label: 'Machines', description: 'Rack servers and SSH', icon: 'machines' },
   { id: 'servers', label: 'Servers', description: 'Game server instances', icon: 'servers' },
   { id: 'hooks', label: 'Hooks', description: 'Connected services', icon: 'hooks' },
   { id: 'strands', label: 'Strands', description: 'Installable extensions', icon: 'strands' },
@@ -88,6 +90,7 @@ function preloadForSection(section: DashboardSectionId, csrfToken: string): (() 
   if (section === 'host') return () => { preloadHostUpdatesRoute(); preloadDockerPanel(); preloadWorkspacePages(); };
   if (section === 'overview') return () => { preloadOverviewRoute(); preloadDockerPanel(); };
   if (section === 'terminal') return preloadTerminalRoute;
+  if (section === 'machines') return preloadMachinesRoute;
   if (section === 'servers') return preloadServersRoute;
   if (section === 'hooks') return () => preloadHooksRoute(csrfToken);
   if (section === 'strands') return preloadStrandsRoute;
@@ -730,6 +733,7 @@ export function Dashboard({ user, csrfToken, onSessionExpired, onAccountUpdated,
             {active === 'host' && <HostPageRoute data={data} csrfToken={csrfToken} canManageDocker={user.capabilities.includes('system.settings.write')} canPower={user.capabilities.includes('system.power')} onSessionExpired={onSessionExpired} />}
             {active === 'security' && <SecurityRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} themeLabel={themeLabel} helixVersion={data.overview.data?.helixVersion ?? null} onSessionExpired={onSessionExpired} />}
             {active === 'terminal' && <TerminalRoute csrfToken={csrfToken} canOpen={user.capabilities.includes('terminal.open')} onSessionExpired={onSessionExpired} />}
+            {active === 'machines' && <MachinesRoute csrfToken={csrfToken} canView={user.capabilities.includes('machines.view')} canManage={user.capabilities.includes('machines.manage')} onSessionExpired={onSessionExpired} />}
             {active === 'servers' && (serversEnabled ? <ServersRoute data={data} csrfToken={csrfToken} canManageServers={user.capabilities.includes('games.manage')} canManageBackups={user.capabilities.includes('games.backups.manage')} canManageNetwork={user.capabilities.includes('network.firewall.write')} onSessionExpired={onSessionExpired} /> : <ServersModuleDisabled onEnable={() => dashboardPreferences.setServersEnabled(true)} />)}
             {active === 'hooks' && <HooksRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}
             {active === 'strands' && <StrandsRoute csrfToken={csrfToken} canManage={user.capabilities.includes('system.settings.write')} onSessionExpired={onSessionExpired} />}

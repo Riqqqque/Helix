@@ -10,7 +10,7 @@ import {
 } from './use-dashboard-preferences';
 
 const defaults: DashboardPreferences = {
-    navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'servers', 'hooks', 'strands', 'globe'],
+    navigationOrder: ['overview', 'home', 'storage', 'network', 'host', 'security', 'terminal', 'machines', 'servers', 'hooks', 'strands', 'globe'],
   metricsRefreshMs: 5_000,
   homeWidgets: defaultHomeWidgets.map((widget) => ({ ...widget })),
   homeTemplates: defaultHomeTemplates.map((template) => ({ ...template, widgets: template.widgets.map((widget) => ({ ...widget })) })),

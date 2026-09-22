@@ -6,6 +6,7 @@ export const dashboardSectionIds = [
   'host',
   'security',
   'terminal',
+  'machines',
   'servers',
   'hooks',
   'strands',

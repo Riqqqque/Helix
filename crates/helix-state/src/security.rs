@@ -3897,6 +3897,8 @@ mod tests {
                 "games.backups.manage",
                 "games.manage",
                 "games.view",
+                "machines.manage",
+                "machines.view",
                 "network.firewall.read",
                 "network.firewall.write",
                 "storage.analyze",

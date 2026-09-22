@@ -4,13 +4,15 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const PROTOCOL_VERSION: u8 = 2;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_TERMINAL_INPUT_BYTES: usize = 32 * 1024;
 pub const MIN_TERMINAL_COLUMNS: u16 = 20;
 pub const MAX_TERMINAL_COLUMNS: u16 = 400;
 pub const MIN_TERMINAL_ROWS: u16 = 5;
 pub const MAX_TERMINAL_ROWS: u16 = 200;
+pub const MAX_TERMINAL_COMMAND_ARGS: usize = 32;
+pub const MAX_TERMINAL_COMMAND_ARG_CHARS: usize = 512;
 
 pub mod kind {
     pub const CLIENT_OPEN: u8 = 1;
@@ -41,11 +43,36 @@ impl TerminalDimensions {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// Optional argv that replaces the login shell. The daemon only accepts an
+/// explicit allowlist of commands; absent means "spawn the configured shell".
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OpenRequest {
     pub protocol_version: u8,
     pub dimensions: TerminalDimensions,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+}
+
+/// Session launchers Helix is willing to run inside the PTY. `ssh` covers the
+/// multi-machine hub; anything else still gets the plain login shell path.
+pub const ALLOWED_COMMANDS: &[&str] = &["ssh"];
+
+pub fn validate_command(command: &[String]) -> Result<(), ProtocolError> {
+    if command.is_empty()
+        || command.len() > MAX_TERMINAL_COMMAND_ARGS
+        || !ALLOWED_COMMANDS.contains(&command[0].as_str())
+    {
+        return Err(ProtocolError::InvalidPayload);
+    }
+    if command.iter().any(|argument| {
+        argument.is_empty()
+            || argument.chars().count() > MAX_TERMINAL_COMMAND_ARG_CHARS
+            || argument.chars().any(|character| character.is_control())
+    }) {
+        return Err(ProtocolError::InvalidPayload);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -258,9 +285,48 @@ mod tests {
     #[test]
     fn open_payload_rejects_unknown_fields() {
         let invalid =
-            br#"{"protocol_version":1,"dimensions":{"columns":80,"rows":24},"command":"id"}"#;
+            br#"{"protocol_version":2,"dimensions":{"columns":80,"rows":24},"shell":"id"}"#;
         assert_eq!(
             decode_json::<OpenRequest>(invalid),
+            Err(ProtocolError::InvalidPayload)
+        );
+    }
+
+    #[test]
+    fn open_command_defaults_to_the_login_shell() {
+        let decoded = decode_json::<OpenRequest>(
+            br#"{"protocol_version":2,"dimensions":{"columns":80,"rows":24}}"#,
+        )
+        .expect("open request without a command still decodes");
+        assert_eq!(decoded.command, None);
+        let decoded = decode_json::<OpenRequest>(
+            br#"{"protocol_version":2,"dimensions":{"columns":80,"rows":24},"command":["ssh","-p","22","ops@nas-1"]}"#,
+        )
+        .expect("ssh argv decodes");
+        assert!(validate_command(decoded.command.as_deref().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn command_allowlist_and_bounds_hold() {
+        assert!(validate_command(&["ssh".to_owned(), "ops@nas-1".to_owned()]).is_ok());
+        for bad in [
+            Vec::new(),
+            vec!["id".to_owned()],
+            vec!["SSH".to_owned()],
+            vec!["ssh".to_owned(), String::new()],
+            vec![
+                "ssh".to_owned(),
+                "x".repeat(MAX_TERMINAL_COMMAND_ARG_CHARS + 1),
+            ],
+            vec!["ssh".to_owned(), "bad\narg".to_owned()],
+        ] {
+            assert_eq!(validate_command(&bad), Err(ProtocolError::InvalidPayload));
+        }
+        let too_many: Vec<String> = (0..=MAX_TERMINAL_COMMAND_ARGS)
+            .map(|_| "x".to_owned())
+            .collect();
+        assert_eq!(
+            validate_command(&too_many),
             Err(ProtocolError::InvalidPayload)
         );
     }

@@ -25,6 +25,7 @@ describe('dashboard preferences', () => {
       'host',
       'security',
       'terminal',
+      'machines',
       'hooks',
       'strands',
       'globe',
