@@ -8,6 +8,7 @@ export const primaryDashboardSections = [
   'host',
   'security',
   'terminal',
+  'machines',
   'servers',
   'hooks',
   'strands',

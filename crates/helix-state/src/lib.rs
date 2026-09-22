@@ -2,6 +2,7 @@
 
 mod api_tokens;
 mod appearance;
+mod machines;
 mod secrets;
 mod security;
 mod strands;
@@ -39,6 +40,7 @@ pub use appearance::{
     MAX_SERVER_ICON_BYTES, ServerAppearanceRecord, ServerAppearanceSummary, ServerAppearanceUpdate,
     ServerAppearanceUpdateOutcome, ServerIconPreset,
 };
+pub use machines::{MachineAuth, MachineInput, MachineRecord};
 pub use secrets::{
     EncryptedSecretWrite, InstallMasterKeyInput, InstallMasterKeyOutcome, MasterKeyRecord,
     SecretRecordMetadata, StoredSecretRecord,
@@ -57,7 +59,7 @@ pub use strands::{
     StrandInstallInput, StrandKvEntry, StrandOrigin, StrandPackageRecord, StrandPackageSummary,
 };
 
-pub const STATE_SCHEMA_VERSION: i64 = 10;
+pub const STATE_SCHEMA_VERSION: i64 = 11;
 pub const METRICS_SCHEMA_VERSION: i64 = 1;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DAEMON_LEASE_FILE: &str = ".helixd.lock";
@@ -203,6 +205,10 @@ pub enum StateError {
     InvalidServerAppearanceInput(&'static str),
     #[error("invalid Strand input: {0}")]
     InvalidStrandInput(&'static str),
+    #[error("invalid machine input: {0}")]
+    InvalidMachineInput(&'static str),
+    #[error("machine registration limit was exceeded")]
+    MachineQuotaExceeded,
     #[error("Strand package was not found")]
     StrandNotFound,
     #[error("a Strand with that slug is already installed")]
@@ -732,6 +738,9 @@ fn migrate_state(
     }
     if current < 10 {
         api_tokens::migrate(connection)?;
+    }
+    if current < 11 {
+        machines::migrate_machines(connection)?;
     }
     Ok(())
 }
@@ -1440,6 +1449,9 @@ fn validate_state_semantics(
     if expected_schema_version >= 10 {
         required_tables.extend(["server_api_tokens", "server_api_jobs"]);
     }
+    if expected_schema_version >= 11 {
+        required_tables.push("machines");
+    }
     for table in required_tables {
         let strict = connection
             .query_row(
@@ -1518,7 +1530,7 @@ fn validate_state_semantics(
             (7, "terminal-capability".to_owned()),
             (8, "installable-ui-strands".to_owned()),
         ],
-        9 | 10 => vec![
+        9..=11 => vec![
             (1, "foundational-state".to_owned()),
             (2, "owner-authentication".to_owned()),
             (3, "recoverable-secret-storage".to_owned()),
@@ -1540,6 +1552,9 @@ fn validate_state_semantics(
     let mut expected_migrations = expected_migrations;
     if expected_schema_version >= 10 {
         expected_migrations.push((10, "server-api-tokens".to_owned()));
+    }
+    if expected_schema_version >= 11 {
+        expected_migrations.push((11, "rack-machines".to_owned()));
     }
     if migration_rows != expected_migrations {
         failures.push("schema_migrations rows do not match the declared state schema".to_owned());
@@ -1712,6 +1727,24 @@ fn validate_state_semantics(
         )?;
         if !owner_has_terminal {
             failures.push("owner capability terminal.open is missing".to_owned());
+        }
+    }
+    if expected_schema_version >= 11 {
+        for capability in ["machines.view", "machines.manage"] {
+            let owner_has_capability = connection.query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM roles r
+                    JOIN role_capabilities rc ON rc.role_id = r.id
+                    WHERE r.name = 'owner' AND r.is_system = 1
+                          AND rc.capability = ?1
+                )",
+                [capability],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !owner_has_capability {
+                failures.push(format!("owner capability {capability} is missing"));
+            }
         }
     }
     if expected_schema_version >= 9 {

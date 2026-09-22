@@ -1,10 +1,9 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { Terminal, type ITheme } from '@xterm/xterm';
+import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { ApiError } from './api';
 import { DASHBOARD_PREFERENCES_EVENT } from './dashboard-preferences';
 import { InlineError, PageHead } from './dashboard-ui';
 import { Icon } from './icons';
@@ -27,172 +26,26 @@ import {
   terminalKeyAction,
   writeClipboardText,
 } from './terminal-keys';
+import {
+  detachIo,
+  describeTerminalError,
+  isExpiredSessionError,
+  nextTerminalOutputBacklog,
+  parseHostTerminalEvent,
+  stopSocket,
+  terminalTheme,
+  type TerminalChrome,
+  type TerminalPhase,
+  type TerminalRuntime,
+} from './terminal-surface';
 import './terminal.css';
+
+export { nextTerminalOutputBacklog, parseHostTerminalEvent };
 
 export interface TerminalPageProps {
   csrfToken: string;
   canOpen: boolean;
   onSessionExpired: () => void;
-}
-
-type TerminalPhase =
-  | 'loading'
-  | 'locked'
-  | 'authorizing'
-  | 'connecting'
-  | 'connected'
-  | 'ended'
-  | 'unavailable';
-
-interface TerminalRuntime {
-  terminal: Terminal;
-  fit: FitAddon;
-  search: SearchAddon;
-  socket: WebSocket | null;
-  resizeObserver: ResizeObserver | null;
-  dataDisposable: { dispose: () => void } | null;
-  binaryDisposable: { dispose: () => void } | null;
-  resizeDisposable: { dispose: () => void } | null;
-  keepalive: number | null;
-  pendingOutputBytes: number;
-}
-
-interface TerminalChrome {
-  copy: () => void;
-  paste: () => void;
-  openFind: () => void;
-  runFind: (direction: 'next' | 'previous', incremental?: boolean) => void;
-  closeFind: () => void;
-  findOpen: boolean;
-  adjustFont: (delta: 1 | -1 | 0) => void;
-}
-
-const MAX_PENDING_TERMINAL_OUTPUT_BYTES = 4 * 1024 * 1024;
-
-export function nextTerminalOutputBacklog(pendingBytes: number, incomingBytes: number): number | null {
-  if (!Number.isSafeInteger(pendingBytes) || !Number.isSafeInteger(incomingBytes) || pendingBytes < 0 || incomingBytes < 0) return null;
-  const next = pendingBytes + incomingBytes;
-  return next <= MAX_PENDING_TERMINAL_OUTPUT_BYTES ? next : null;
-}
-
-type HostTerminalEvent =
-  | { type: 'ready'; user: string; shell: string }
-  | { type: 'heartbeat' }
-  | { type: 'exit'; exitCode: number; signal: string | null }
-  | { type: 'error'; message: string };
-
-function safeEventText(value: unknown, maximum: number): string | null {
-  if (
-    typeof value !== 'string' ||
-    value.length === 0 ||
-    value.length > maximum ||
-    Array.from(value).some((character) => /\p{Cc}/u.test(character))
-  ) return null;
-  return value;
-}
-
-export function parseHostTerminalEvent(value: string): HostTerminalEvent | null {
-  if (value.length > 2_048) return null;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-    const event = parsed as Record<string, unknown>;
-    if (event.type === 'heartbeat' && Object.keys(event).length === 1) return { type: 'heartbeat' };
-    if (event.type === 'ready' && Object.keys(event).length === 3) {
-      const user = safeEventText(event.user, 64);
-      const shell = safeEventText(event.shell, 512);
-      if (user !== null && shell !== null && shell.startsWith('/')) {
-        return { type: 'ready', user, shell };
-      }
-    }
-    if (event.type === 'exit' && Object.keys(event).length === 3) {
-      const exitCode = event.exitCode;
-      const signal = event.signal;
-      if (
-        Number.isSafeInteger(exitCode) &&
-        typeof exitCode === 'number' &&
-        exitCode >= 0 &&
-        exitCode <= 4_294_967_295 &&
-        (signal === null || safeEventText(signal, 128) !== null)
-      ) {
-        return { type: 'exit', exitCode, signal: signal as string | null };
-      }
-    }
-    if (event.type === 'error' && Object.keys(event).length === 2) {
-      const message = safeEventText(event.message, 512);
-      if (message !== null) return { type: 'error', message };
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : 'Helix could not open the terminal.';
-}
-
-function isExpiredSession(error: unknown): boolean {
-  return error instanceof ApiError &&
-    (error.code === 'authentication_required' || error.code === 'csrf_rejected');
-}
-
-function terminalTheme(host: HTMLElement): ITheme {
-  const style = globalThis.getComputedStyle(host);
-  const background = style.getPropertyValue('--terminal-background').trim() || '#0b0d10';
-  const foreground = style.getPropertyValue('--terminal-foreground').trim() || '#e8ebdf';
-  const accent = style.getPropertyValue('--accent').trim() || '#d7f64d';
-  return {
-    background,
-    foreground,
-    cursor: accent,
-    cursorAccent: background,
-    selectionBackground: `${accent}40`,
-    selectionInactiveBackground: `${accent}28`,
-    scrollbarSliderBackground: `${foreground}33`,
-    scrollbarSliderHoverBackground: `${foreground}55`,
-    scrollbarSliderActiveBackground: `${accent}66`,
-    black: '#111318',
-    red: '#ff7168',
-    green: '#b7df65',
-    yellow: '#f0c96b',
-    blue: '#7bb6ff',
-    magenta: '#d9a3ff',
-    cyan: '#69d7db',
-    white: '#d9ddd4',
-    brightBlack: '#6e746e',
-    brightRed: '#ff948d',
-    brightGreen: '#d7f68d',
-    brightYellow: '#ffe39a',
-    brightBlue: '#a7ccff',
-    brightMagenta: '#e8c5ff',
-    brightCyan: '#9ce8ea',
-    brightWhite: '#ffffff',
-  };
-}
-
-function detachIo(runtime: TerminalRuntime): void {
-  runtime.dataDisposable?.dispose();
-  runtime.binaryDisposable?.dispose();
-  runtime.resizeDisposable?.dispose();
-  runtime.dataDisposable = null;
-  runtime.binaryDisposable = null;
-  runtime.resizeDisposable = null;
-  if (runtime.keepalive !== null) globalThis.clearInterval(runtime.keepalive);
-  runtime.keepalive = null;
-  runtime.pendingOutputBytes = 0;
-}
-
-function stopSocket(runtime: TerminalRuntime): void {
-  detachIo(runtime);
-  const socket = runtime.socket;
-  runtime.socket = null;
-  if (socket !== null && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: 'close' }));
-    socket.close(1000, 'terminal closed');
-  } else if (socket !== null && socket.readyState === WebSocket.CONNECTING) {
-    socket.close();
-  }
 }
 
 export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalPageProps) {
@@ -316,9 +169,9 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
       })
       .catch((nextError: unknown) => {
         if (controller.signal.aborted) return;
-        if (isExpiredSession(nextError)) onSessionExpired();
+        if (isExpiredSessionError(nextError)) onSessionExpired();
         else {
-          setError(describeError(nextError));
+          setError(describeTerminalError(nextError));
           setPhase('unavailable');
         }
       });
@@ -573,8 +426,8 @@ export function TerminalPage({ csrfToken, canOpen, onSessionExpired }: TerminalP
       });
     } catch (nextError) {
       if (generationRef.current !== generation) return;
-      if (isExpiredSession(nextError)) onSessionExpired();
-      else setError(describeError(nextError));
+      if (isExpiredSessionError(nextError)) onSessionExpired();
+      else setError(describeTerminalError(nextError));
       setPhase(status?.availability === 'available' ? 'locked' : 'unavailable');
     }
   };

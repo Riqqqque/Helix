@@ -15,6 +15,8 @@ mod hook_install;
 #[cfg(target_os = "linux")]
 mod host;
 #[cfg(target_os = "linux")]
+mod hub;
+#[cfg(target_os = "linux")]
 mod inventory;
 #[cfg(target_os = "linux")]
 mod native;
@@ -50,6 +52,8 @@ use helix_update::{HelixUpdateConfig, HelixUpdateManager};
 use hook_install::{HookInstaller, HookInstallerConfig};
 #[cfg(target_os = "linux")]
 use host::{HostControl, HostControlConfig};
+#[cfg(target_os = "linux")]
+use hub::{Hub, HubConfig};
 #[cfg(target_os = "linux")]
 use native::{NativeConfig, NativeManager};
 #[cfg(target_os = "linux")]
@@ -120,6 +124,8 @@ struct BrokerConfig {
     hook_installer: HookInstallerConfig,
     #[serde(default)]
     helix_update: HelixUpdateConfig,
+    #[serde(default)]
+    hub: HubConfig,
 }
 
 #[cfg(target_os = "linux")]
@@ -149,6 +155,7 @@ struct BrokerContext {
     packages: PackageManager,
     helix_update: HelixUpdateManager,
     hook_installer: Arc<HookInstaller>,
+    hub: Option<Arc<Hub>>,
     power_gate: Mutex<()>,
     jobs: Mutex<HashMap<String, JobRecord>>,
 }
@@ -749,6 +756,26 @@ impl BrokerContext {
                 .as_deref()
                 .ok_or_else(|| "the Helix server manager is not configured".to_owned())
                 .and_then(NativeManager::clear_curseforge_api_key),
+            BrokerRequest::HubIdentity {} => self
+                .hub_manager()
+                .and_then(|hub| hub.identity())
+                .and_then(to_value),
+            BrokerRequest::MachineProbe { machine } => self
+                .hub_manager()
+                .and_then(|hub| hub.probe(&machine))
+                .and_then(to_value),
+            BrokerRequest::MachineWake { mac } => self
+                .hub_manager()
+                .and_then(|hub| hub.wake(&mac))
+                .and_then(to_value),
+            BrokerRequest::MachinePower { machine, action } => self
+                .hub_manager()
+                .and_then(|hub| hub.power(&machine, action))
+                .and_then(to_value),
+            BrokerRequest::MachineTerminalSpec { machine } => self
+                .hub_manager()
+                .and_then(|hub| hub.terminal_spec(&machine))
+                .and_then(to_value),
         };
 
         match result {
@@ -1406,6 +1433,12 @@ impl BrokerContext {
         self.native
             .as_deref()
             .ok_or_else(|| "the Helix server manager is not configured".to_owned())
+    }
+
+    fn hub_manager(&self) -> Result<&Hub, String> {
+        self.hub
+            .as_deref()
+            .ok_or_else(|| "the machine hub is not configured on this host".to_owned())
     }
 
     fn server_action(
@@ -3446,6 +3479,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let packages = PackageManager::new(config.packages).map_err(io::Error::other)?;
     let hook_installer =
         Arc::new(HookInstaller::new(config.hook_installer).map_err(io::Error::other)?);
+    let hub = match Hub::new(config.hub) {
+        Ok(hub) => Some(Arc::new(hub)),
+        Err(error) => {
+            eprintln!("helix-privd: machine hub disabled: {error}");
+            None
+        }
+    };
     let context = Arc::new(BrokerContext {
         files,
         storage,
@@ -3456,6 +3496,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         packages,
         helix_update,
         hook_installer,
+        hub,
         power_gate: Mutex::new(()),
         jobs: Mutex::new(HashMap::new()),
     });
@@ -3642,6 +3683,7 @@ mod tests {
             )
             .unwrap(),
             hook_installer: Arc::new(HookInstaller::new(HookInstallerConfig::default()).unwrap()),
+            hub: None,
             power_gate: Mutex::new(()),
             jobs: Mutex::new(HashMap::new()),
         }

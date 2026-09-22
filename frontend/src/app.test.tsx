@@ -38,7 +38,7 @@ describe('dashboard shell', () => {
     const sidebar = markup.match(/<nav[^>]*class="sidebar-nav"[^>]*>.*?<\/nav>/u)?.[0] ?? '';
     const links = Array.from(sidebar.matchAll(/href="([^"]+)"/gu), (match) => match[1]);
 
-    expect(links).toEqual(['#overview', '#home', '#storage', '#network', '#host', '#security', '#terminal', '#servers', '#hooks', '#strands', '#settings']);
+    expect(links).toEqual(['#overview', '#home', '#storage', '#network', '#host', '#security', '#terminal', '#machines', '#servers', '#hooks', '#strands', '#settings']);
     expect(sidebar).toContain('>Arrange<');
     expect(sidebar).not.toContain('#globe');
     expect(sidebar).toMatch(/nav-item nav-item--settings/u);
@@ -72,6 +72,7 @@ describe('dashboard shell', () => {
       ['#host', 'Host'],
       ['#security', 'Security'],
       ['#terminal', 'Terminal'],
+      ['#machines', 'Machines'],
       ['#servers', 'Servers'],
       ['#hooks', 'Hooks'],
       ['#strands', 'Strands'],
@@ -80,8 +81,8 @@ describe('dashboard shell', () => {
     ] as const) {
       vi.stubGlobal('window', { location: { hash } });
       const markup = render(<Dashboard {...dashboardProps} />);
-      if (hash === '#home' || hash === '#hooks' || hash === '#terminal' || hash === '#overview' || hash === '#strands' || hash === '#globe' || hash === '#storage' || hash === '#network' || hash === '#host') {
-        expect(markup).toContain(hash === '#home' ? 'Loading Home…' : hash === '#hooks' ? 'Loading Hooks…' : hash === '#overview' ? 'Loading Overview…' : hash === '#strands' ? 'Loading Strands…' : hash === '#globe' ? 'Loading Globe…' : hash === '#storage' ? 'Loading Storage…' : hash === '#network' ? 'Loading Network…' : hash === '#host' ? 'Loading Host…' : 'Loading terminal…');
+      if (hash === '#home' || hash === '#hooks' || hash === '#terminal' || hash === '#machines' || hash === '#overview' || hash === '#strands' || hash === '#globe' || hash === '#storage' || hash === '#network' || hash === '#host') {
+        expect(markup).toContain(hash === '#home' ? 'Loading Home…' : hash === '#hooks' ? 'Loading Hooks…' : hash === '#overview' ? 'Loading Overview…' : hash === '#strands' ? 'Loading Strands…' : hash === '#globe' ? 'Loading Globe…' : hash === '#storage' ? 'Loading Storage…' : hash === '#network' ? 'Loading Network…' : hash === '#host' ? 'Loading Host…' : hash === '#machines' ? 'Loading machines…' : 'Loading terminal…');
       } else {
         expect(markup).toContain(`<h1>${title}</h1>`);
       }

@@ -38,11 +38,13 @@ use tokio::{
     time::timeout,
 };
 
-const TERMINAL_TICKET_COOKIE: &str = "helix_terminal_ticket";
-const TERMINAL_SUBPROTOCOL: &str = "helix-terminal-v1";
+pub(crate) const TERMINAL_TICKET_COOKIE: &str = "helix_terminal_ticket";
+pub(crate) const MACHINE_TICKET_COOKIE: &str = "helix_machine_ticket";
+pub(crate) const TERMINAL_SUBPROTOCOL: &str = "helix-terminal-v1";
 const TERMINAL_TICKET_TTL: Duration = Duration::from_secs(30);
 const MAX_ACTIVE_TICKETS: usize = 16;
-const MAX_BROWSER_TERMINAL_MESSAGE_BYTES: usize = helix_terminal::MAX_TERMINAL_INPUT_BYTES;
+pub(crate) const MAX_BROWSER_TERMINAL_MESSAGE_BYTES: usize =
+    helix_terminal::MAX_TERMINAL_INPUT_BYTES;
 #[cfg(unix)]
 const TERMINAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 #[cfg(unix)]
@@ -76,7 +78,7 @@ impl TerminalConnector {
         Ok(Self { socket_path })
     }
 
-    fn available(&self) -> bool {
+    pub(crate) fn available(&self) -> bool {
         socket_is_unix_socket(&self.socket_path)
     }
 }
@@ -92,16 +94,24 @@ fn socket_is_unix_socket(_path: &Path) -> bool {
     false
 }
 
-struct TerminalTicket {
+pub(crate) struct TerminalTicket {
     session_hash: SessionTokenHash,
     user_id: String,
     dimensions: TerminalDimensions,
+    machine_id: Option<String>,
     expires_at: Instant,
 }
 
-struct TicketIssue {
-    token: EncodedToken,
-    expires_at_unix_ms: u64,
+/// What a consumed ticket unlocks: the host shell, or an SSH session to one
+/// registered machine.
+pub(crate) struct TerminalGrant {
+    pub(crate) dimensions: TerminalDimensions,
+    pub(crate) machine_id: Option<String>,
+}
+
+pub(crate) struct TicketIssue {
+    pub(crate) token: EncodedToken,
+    pub(crate) expires_at_unix_ms: u64,
 }
 
 #[derive(Clone)]
@@ -122,13 +132,20 @@ impl Default for TerminalTicketStore {
 }
 
 impl TerminalTicketStore {
-    fn issue(
+    pub(crate) fn issue(
         &self,
         session_hash: SessionTokenHash,
         user_id: String,
         dimensions: TerminalDimensions,
+        machine_id: Option<String>,
     ) -> Result<TicketIssue, ApiError> {
-        self.issue_at(session_hash, user_id, dimensions, Instant::now())
+        self.issue_at(
+            session_hash,
+            user_id,
+            dimensions,
+            machine_id,
+            Instant::now(),
+        )
     }
 
     fn issue_at(
@@ -136,6 +153,7 @@ impl TerminalTicketStore {
         session_hash: SessionTokenHash,
         user_id: String,
         dimensions: TerminalDimensions,
+        machine_id: Option<String>,
         now: Instant,
     ) -> Result<TicketIssue, ApiError> {
         let token = OpaqueToken::generate().map_err(|_| ApiError::ServiceUnavailable)?;
@@ -158,6 +176,7 @@ impl TerminalTicketStore {
                 session_hash,
                 user_id,
                 dimensions,
+                machine_id,
                 expires_at,
             },
         );
@@ -168,12 +187,12 @@ impl TerminalTicketStore {
         })
     }
 
-    fn consume(
+    pub(crate) fn consume(
         &self,
         encoded: &str,
         session_hash: &SessionTokenHash,
         user_id: &str,
-    ) -> Result<TerminalDimensions, ApiError> {
+    ) -> Result<TerminalGrant, ApiError> {
         self.consume_at(encoded, session_hash, user_id, Instant::now())
     }
 
@@ -183,7 +202,7 @@ impl TerminalTicketStore {
         session_hash: &SessionTokenHash,
         user_id: &str,
         now: Instant,
-    ) -> Result<TerminalDimensions, ApiError> {
+    ) -> Result<TerminalGrant, ApiError> {
         let token =
             OpaqueToken::from_encoded(encoded).map_err(|_| ApiError::TerminalTicketRejected)?;
         let verifier = token.verification_hash(TokenDomain::TerminalTicket);
@@ -202,7 +221,10 @@ impl TerminalTicketStore {
         {
             return Err(ApiError::TerminalTicketRejected);
         }
-        Ok(ticket.dimensions)
+        Ok(TerminalGrant {
+            dimensions: ticket.dimensions,
+            machine_id: ticket.machine_id,
+        })
     }
 }
 
@@ -290,9 +312,10 @@ async fn issue_terminal_ticket(
     )
     .await?;
     let session_hash = auth::session_hash_from_headers(&headers)?;
-    let ticket = state
-        .terminal_tickets
-        .issue(session_hash, authenticated.user_id, dimensions)?;
+    let ticket =
+        state
+            .terminal_tickets
+            .issue(session_hash, authenticated.user_id, dimensions, None)?;
     let mut response = (
         StatusCode::CREATED,
         Json(TerminalTicketResponse {
@@ -326,10 +349,12 @@ async fn connect_terminal(
     let session_hash = auth::session_hash_from_headers(&headers)?;
     let encoded = auth::parse_named_cookie(&headers, TERMINAL_TICKET_COOKIE)
         .map_err(|()| ApiError::TerminalTicketRejected)?;
-    let dimensions =
-        state
-            .terminal_tickets
-            .consume(encoded, &session_hash, &authenticated.user_id)?;
+    let grant = state
+        .terminal_tickets
+        .consume(encoded, &session_hash, &authenticated.user_id)?;
+    if grant.machine_id.is_some() {
+        return Err(ApiError::TerminalTicketRejected);
+    }
     let connector = state
         .terminal
         .clone()
@@ -338,19 +363,17 @@ async fn connect_terminal(
     let user_id = authenticated.user_id;
     let databases = Arc::clone(&state.databases);
     let blocking_tasks = state.blocking_tasks.clone();
+    let open = helix_terminal::OpenRequest {
+        protocol_version: helix_terminal::PROTOCOL_VERSION,
+        dimensions: grant.dimensions,
+        command: None,
+    };
     let mut response = websocket
         .max_message_size(MAX_BROWSER_TERMINAL_MESSAGE_BYTES)
         .max_frame_size(MAX_BROWSER_TERMINAL_MESSAGE_BYTES)
         .protocols([TERMINAL_SUBPROTOCOL])
         .on_upgrade(move |socket| {
-            bridge_terminal(
-                socket,
-                connector,
-                dimensions,
-                user_id,
-                databases,
-                blocking_tasks,
-            )
+            bridge_terminal(socket, connector, open, user_id, databases, blocking_tasks)
         })
         .into_response();
     response
@@ -362,7 +385,7 @@ async fn connect_terminal(
     Ok(response)
 }
 
-fn offers_terminal_subprotocol(headers: &HeaderMap) -> bool {
+pub(crate) fn offers_terminal_subprotocol(headers: &HeaderMap) -> bool {
     let mut values = headers.get_all("sec-websocket-protocol").iter();
     let Some(value) = values.next().and_then(|value| value.to_str().ok()) else {
         return false;
@@ -376,8 +399,23 @@ fn offers_terminal_subprotocol(headers: &HeaderMap) -> bool {
 }
 
 fn terminal_ticket_cookie(encoded: &str) -> Result<HeaderValue, ApiError> {
+    ticket_cookie(TERMINAL_TICKET_COOKIE, encoded, "/api/v1/terminal/connect")
+}
+
+pub(crate) fn ticket_cookie(
+    name: &str,
+    encoded: &str,
+    path: &str,
+) -> Result<HeaderValue, ApiError> {
     HeaderValue::from_str(&format!(
-        "{TERMINAL_TICKET_COOKIE}={encoded}; HttpOnly; SameSite=Strict; Path=/api/v1/terminal/connect; Max-Age=30"
+        "{name}={encoded}; HttpOnly; SameSite=Strict; Path={path}; Max-Age=30"
+    ))
+    .map_err(|_| ApiError::ServiceUnavailable)
+}
+
+pub(crate) fn clear_ticket_cookie(name: &'static str, path: &str) -> Result<HeaderValue, ApiError> {
+    HeaderValue::from_str(&format!(
+        "{name}=; HttpOnly; SameSite=Strict; Path={path}; Max-Age=0"
     ))
     .map_err(|_| ApiError::ServiceUnavailable)
 }
@@ -389,10 +427,10 @@ fn clear_terminal_ticket_cookie() -> HeaderValue {
 }
 
 #[cfg(unix)]
-async fn bridge_terminal(
+pub(crate) async fn bridge_terminal(
     mut websocket: WebSocket,
     connector: TerminalConnector,
-    dimensions: TerminalDimensions,
+    open: OpenRequest,
     user_id: String,
     databases: Arc<DatabaseSet>,
     blocking_tasks: crate::BlockingTaskTracker,
@@ -421,10 +459,7 @@ async fn bridge_terminal(
         }
     };
     let (mut terminal_reader, mut terminal_writer) = tokio::io::split(stream);
-    let open_payload = match encode_json(&OpenRequest {
-        protocol_version: PROTOCOL_VERSION,
-        dimensions,
-    }) {
+    let open_payload = match encode_json(&open) {
         Ok(payload) => payload,
         Err(_) => {
             send_websocket_error(
@@ -630,10 +665,10 @@ async fn bridge_terminal(
 }
 
 #[cfg(not(unix))]
-async fn bridge_terminal(
+pub(crate) async fn bridge_terminal(
     mut websocket: WebSocket,
     _connector: TerminalConnector,
-    _dimensions: TerminalDimensions,
+    _open: helix_terminal::OpenRequest,
     user_id: String,
     databases: Arc<DatabaseSet>,
     blocking_tasks: crate::BlockingTaskTracker,
@@ -670,7 +705,7 @@ fn valid_ready_response(ready: &ReadyResponse) -> bool {
             .user
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-        && ready.shell.starts_with('/')
+        && (ready.shell.starts_with('/') || ready.shell.starts_with("ssh "))
         && ready.shell.len() <= 512
         && !ready.shell.chars().any(char::is_control)
 }
@@ -688,13 +723,13 @@ fn safe_daemon_error(payload: &[u8]) -> &'static str {
     }
 }
 
-async fn send_websocket_error(websocket: &mut WebSocket, message: &'static str) {
+pub(crate) async fn send_websocket_error(websocket: &mut WebSocket, message: &'static str) {
     let event = serde_json::json!({ "type": "error", "message": message }).to_string();
     let _ = websocket.send(Message::Text(event.into())).await;
     let _ = websocket.send(Message::Close(None)).await;
 }
 
-async fn record_terminal_audit_result(
+pub(crate) async fn record_terminal_audit_result(
     databases: Arc<DatabaseSet>,
     blocking_tasks: crate::BlockingTaskTracker,
     user_id: String,
@@ -710,7 +745,7 @@ async fn record_terminal_audit_result(
     .await
 }
 
-async fn record_terminal_audit(
+pub(crate) async fn record_terminal_audit(
     databases: Arc<DatabaseSet>,
     blocking_tasks: crate::BlockingTaskTracker,
     user_id: String,
@@ -770,11 +805,14 @@ mod tests {
             rows: 32,
         };
         let issued = store
-            .issue(session(1), "owner".to_owned(), dimensions)
+            .issue(session(1), "owner".to_owned(), dimensions, None)
             .unwrap();
         let encoded = issued.token.expose_secret().to_owned();
         assert_eq!(
-            store.consume(&encoded, &session(1), "owner").unwrap(),
+            store
+                .consume(&encoded, &session(1), "owner")
+                .unwrap()
+                .dimensions,
             dimensions
         );
         assert!(matches!(
@@ -793,6 +831,38 @@ mod tests {
     }
 
     #[test]
+    fn machine_scoped_tickets_keep_their_scope_through_consume() {
+        let store = TerminalTicketStore {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            capacity: 2,
+            ttl: Duration::from_secs(30),
+        };
+        let dimensions = TerminalDimensions {
+            columns: 120,
+            rows: 32,
+        };
+        let machine = store
+            .issue(
+                session(1),
+                "owner".to_owned(),
+                dimensions,
+                Some("machine-7".to_owned()),
+            )
+            .unwrap();
+        let grant = store
+            .consume(machine.token.expose_secret(), &session(1), "owner")
+            .unwrap();
+        assert_eq!(grant.machine_id.as_deref(), Some("machine-7"));
+        let host = store
+            .issue(session(1), "owner".to_owned(), dimensions, None)
+            .unwrap();
+        let grant = store
+            .consume(host.token.expose_secret(), &session(1), "owner")
+            .unwrap();
+        assert!(grant.machine_id.is_none());
+    }
+
+    #[test]
     fn wrong_session_burns_the_ticket_and_expired_entries_free_capacity() {
         let now = Instant::now();
         let store = TerminalTicketStore {
@@ -805,14 +875,14 @@ mod tests {
             rows: 24,
         };
         let first = store
-            .issue_at(session(1), "owner".to_owned(), dimensions, now)
+            .issue_at(session(1), "owner".to_owned(), dimensions, None, now)
             .unwrap();
         assert!(matches!(
             store.consume_at(first.token.expose_secret(), &session(2), "owner", now),
             Err(ApiError::TerminalTicketRejected)
         ));
         let second = store
-            .issue_at(session(1), "owner".to_owned(), dimensions, now)
+            .issue_at(session(1), "owner".to_owned(), dimensions, None, now)
             .unwrap();
         let later = now + Duration::from_millis(20);
         assert!(matches!(
@@ -820,7 +890,7 @@ mod tests {
             Err(ApiError::TerminalTicketRejected)
         ));
         store
-            .issue_at(session(1), "owner".to_owned(), dimensions, later)
+            .issue_at(session(1), "owner".to_owned(), dimensions, None, later)
             .unwrap();
     }
 

@@ -1405,9 +1405,22 @@ pub(crate) async fn authorize_terminal_with_current_password(
     state: &ApiState,
     peer: IpAddr,
     headers: &HeaderMap,
-    mut current_password: SecretString,
+    current_password: SecretString,
 ) -> Result<AuthenticatedSession, ApiError> {
-    let authenticated = require_capability(state, headers, "terminal.open").await?;
+    authorize_terminal_for_capability(state, peer, headers, current_password, "terminal.open").await
+}
+
+/// Password proof for a protected terminal session gated by any capability —
+/// machine SSH sessions recheck the dashboard password exactly like the host
+/// terminal does.
+pub(crate) async fn authorize_terminal_for_capability(
+    state: &ApiState,
+    peer: IpAddr,
+    headers: &HeaderMap,
+    mut current_password: SecretString,
+    capability: &'static str,
+) -> Result<AuthenticatedSession, ApiError> {
+    let authenticated = require_capability(state, headers, capability).await?;
     let session_hash = session_hash_from_headers(headers)?;
     let reservation = state
         .attempt_limiter

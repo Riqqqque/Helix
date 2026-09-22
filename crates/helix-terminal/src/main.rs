@@ -5,6 +5,7 @@ mod linux_daemon {
         ExitResponse, Frame, LOGIN_SHELL_ARGS, OpenRequest, PROTOCOL_VERSION, ReadyResponse,
         TerminalDimensions, child_home, child_lang, child_tz, child_xdg_runtime_dir,
         decode_frame_length, decode_json, decode_resize, encode_frame, encode_json, kind,
+        validate_command,
     };
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::{
@@ -26,7 +27,7 @@ mod linux_daemon {
     use tracing_subscriber::EnvFilter;
 
     type DynError = Box<dyn Error + Send + Sync>;
-    const MAX_CONCURRENT_TERMINALS: usize = 2;
+    const MAX_CONCURRENT_TERMINALS: usize = 8;
     const OUTPUT_CHUNK_BYTES: usize = 16 * 1024;
     const PATH_VALUE: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
@@ -261,13 +262,32 @@ mod linux_daemon {
             return Ok(());
         }
         let dimensions = open.dimensions.validate().map_err(protocol_io_error)?;
-        run_pty(read_stream, config, dimensions)
+        let command = match open.command {
+            Some(command) => {
+                validate_command(&command).map_err(protocol_io_error)?;
+                Some(command)
+            }
+            None => None,
+        };
+        run_pty(read_stream, config, dimensions, command)
+    }
+
+    fn resolve_command(name: &str) -> Option<PathBuf> {
+        PATH_VALUE
+            .split(':')
+            .map(|directory| Path::new(directory).join(name))
+            .find(|candidate| {
+                fs::metadata(candidate).is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                })
+            })
     }
 
     fn run_pty(
         mut read_stream: UnixStream,
         config: &SessionConfig,
         dimensions: TerminalDimensions,
+        launch: Option<Vec<String>>,
     ) -> Result<(), io::Error> {
         let pty = native_pty_system();
         let pair = pty
@@ -278,9 +298,33 @@ mod linux_daemon {
                 pixel_height: 0,
             })
             .map_err(other_io_error)?;
-        let mut command = CommandBuilder::new(&config.shell);
-        for arg in LOGIN_SHELL_ARGS {
-            command.arg(*arg);
+        let (program, description) = match launch.as_ref() {
+            Some(argv) => {
+                let program = resolve_command(&argv[0]).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "the requested terminal command is not installed",
+                    )
+                })?;
+                (program, argv.join(" "))
+            }
+            None => (
+                config.shell.clone(),
+                config.shell.to_string_lossy().into_owned(),
+            ),
+        };
+        let mut command = CommandBuilder::new(&program);
+        match launch {
+            Some(argv) => {
+                for arg in argv.iter().skip(1) {
+                    command.arg(arg);
+                }
+            }
+            None => {
+                for arg in LOGIN_SHELL_ARGS {
+                    command.arg(*arg);
+                }
+            }
         }
         command.cwd(&config.working_directory);
         command.env_clear();
@@ -310,7 +354,7 @@ mod linux_daemon {
             &ReadyResponse {
                 protocol_version: PROTOCOL_VERSION,
                 user: config.user.clone(),
-                shell: config.shell.to_string_lossy().into_owned(),
+                shell: description,
             },
         )?;
         let exited = Arc::new(AtomicBool::new(false));

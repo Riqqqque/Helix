@@ -59,12 +59,18 @@ function parsePreferences(value: unknown): DashboardPreferences {
     'Dashboard preferences',
     primaryDashboardSections.length,
   );
-  const navigationOrder = normalizeNavigationOrder(rawOrder);
+  const allowedSections = new Set<string>(primaryDashboardSections);
+  const seenSections = new Set<string>();
   if (
-    rawOrder.length !== primaryDashboardSections.length ||
-    navigationOrder.length !== rawOrder.length ||
-    rawOrder.some((entry, index) => entry !== navigationOrder[index])
+    rawOrder.some((entry) => {
+      if (typeof entry !== 'string' || !allowedSections.has(entry) || seenSections.has(entry)) {
+        return true;
+      }
+      seenSections.add(entry);
+      return false;
+    })
   ) throw new ApiError('Dashboard preferences returned an invalid navigationOrder value.');
+  const navigationOrder = normalizeNavigationOrder(rawOrder);
 
   const metricsRefreshMs = expectNumber(
     record,

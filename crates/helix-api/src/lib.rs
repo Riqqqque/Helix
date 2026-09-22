@@ -2,6 +2,7 @@
 
 mod auth;
 mod discovery;
+mod machines;
 mod marketplace_media;
 mod server_media;
 mod server_tokens;
@@ -511,6 +512,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .merge(broker_api)
         .merge(auth_api)
         .merge(terminal_api)
+        .merge(machines::routes())
         .merge(settings_api)
         .merge(strand_api)
         .merge(server_tokens::routes())
@@ -3654,6 +3656,7 @@ pub(crate) enum ApiError {
     InvalidStorageAnalysisRequest,
     InvalidTerminalRequest,
     InvalidWeatherLocation,
+    MachineRejected(String),
     LoginRejected,
     NotFound,
     PayloadTooLarge,
@@ -3709,6 +3712,18 @@ impl IntoResponse for ApiError {
                 )
                     .into_response();
             }
+            Self::MachineRejected(message) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    [(header::CACHE_CONTROL, "no-store")],
+                    Json(serde_json::json!({
+                        "code": "machine_rejected",
+                        "message": message,
+                    })),
+                )
+                    .into_response();
+            }
+
             other => other,
         };
         let clear_cookie = matches!(this, Self::AuthenticationRequired);
@@ -3771,6 +3786,7 @@ impl IntoResponse for ApiError {
             ),
             Self::BrokerRejected(_) => unreachable!("handled before the static problem match"),
             Self::StrandRejected(_) => unreachable!("handled before the static problem match"),
+            Self::MachineRejected(_) => unreachable!("handled before the static problem match"),
             Self::CrossSiteRequest => (
                 StatusCode::FORBIDDEN,
                 ApiProblem {
