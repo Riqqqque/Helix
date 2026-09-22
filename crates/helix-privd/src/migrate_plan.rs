@@ -1314,6 +1314,72 @@ pub fn read_source_properties(root: &Path) -> Option<String> {
     fs::read_to_string(&path).ok()
 }
 
+/// Detects whether a Don't Starve Together source tree contains a real Caves
+/// shard, so a migrated cluster keeps its second shard instead of silently
+/// collapsing to Master-only. Mirrors the overlay's shard-segment rule: any
+/// directory named `caves` maps under `Cluster_1/Caves`, but we only enable the
+/// shard when that directory holds shard-typical content rather than, say, an
+/// unrelated `mods/caves` folder.
+pub fn dst_overlay_has_caves(root: &Path) -> bool {
+    const MAX_DEPTH: usize = 8;
+    const MAX_ENTRIES: usize = 4096;
+    const SHARD_FILES: [&str; 5] = [
+        "server.ini",
+        "cluster.ini",
+        "leveldataoverride.lua",
+        "worldgenoverride.lua",
+        "modoverrides.lua",
+    ];
+    const SHARD_DIRS: [&str; 2] = ["save", "backup"];
+
+    fn looks_like_shard(dir: &Path) -> bool {
+        let Ok(entries) = read_real_dir(dir) else {
+            return false;
+        };
+        entries.iter().any(|entry| {
+            let Some(name) = entry
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| value.to_ascii_lowercase())
+            else {
+                return false;
+            };
+            (SHARD_FILES.contains(&name.as_str()) && is_real_file(entry))
+                || (SHARD_DIRS.contains(&name.as_str()) && is_real_dir(entry))
+        })
+    }
+
+    let mut visited = 0usize;
+    let mut queue = std::collections::VecDeque::from([(root.to_path_buf(), 0usize)]);
+    while let Some((dir, depth)) = queue.pop_front() {
+        if depth > MAX_DEPTH {
+            continue;
+        }
+        let Ok(entries) = read_real_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            visited += 1;
+            if visited > MAX_ENTRIES {
+                return false;
+            }
+            if !is_real_dir(&entry) {
+                continue;
+            }
+            let is_caves = entry
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| value.eq_ignore_ascii_case("caves"))
+                .unwrap_or(false);
+            if is_caves && looks_like_shard(&entry) {
+                return true;
+            }
+            queue.push_back((entry, depth + 1));
+        }
+    }
+    false
+}
+
 pub fn find_minecraft_server_jar(root: &Path) -> Result<PathBuf, String> {
     for name in [
         "server.jar",
@@ -1590,6 +1656,26 @@ fn is_real_dir(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn dst_caves_detection_requires_real_shard_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let cluster = dir.path().join("Klei/DoNotStarveTogether/Cluster_1");
+        fs::create_dir_all(cluster.join("Master")).unwrap();
+        fs::write(cluster.join("cluster_token.txt"), "token").unwrap();
+        assert!(!dst_overlay_has_caves(dir.path()));
+
+        // A stray folder named "caves" without shard content must not count.
+        let stray = dir.path().join("mods/caves");
+        fs::create_dir_all(&stray).unwrap();
+        fs::write(stray.join("notes.txt"), "not a shard").unwrap();
+        assert!(!dst_overlay_has_caves(dir.path()));
+
+        let caves = cluster.join("Caves");
+        fs::create_dir_all(&caves).unwrap();
+        fs::write(caves.join("server.ini"), "[network]\n").unwrap();
+        assert!(dst_overlay_has_caves(dir.path()));
+    }
 
     #[test]
     fn identifies_complete_chunked_valheim_world_without_renaming_files() {
