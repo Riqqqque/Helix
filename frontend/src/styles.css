@@ -1840,6 +1840,8 @@ main {
 }
 .state-label {
   display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 3px 6px;
   border: 1px solid var(--line);
   border-radius: 3px;

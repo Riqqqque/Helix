@@ -2,6 +2,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal, type ITheme } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ApiError } from './api';
 import { copyFlashLabel, useCopyFlash } from './copy-button';
@@ -18,6 +19,7 @@ import {
   terminalKeyAction,
   writeClipboardText,
 } from './terminal-keys';
+import './terminal.css';
 
 export type TerminalPhase =
   | 'loading'

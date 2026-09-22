@@ -1,13 +1,15 @@
 //! Rack-machine hub: hub SSH identity, probes, Wake-on-LAN, and power control.
 //!
-//! privd owns the hub keypair on disk but every SSH invocation (probes and the
-//! terminal bridge alike) runs as the unprivileged terminal account, so remote
-//! commands never execute with broker credentials.
+//! privd owns the hub keypair on disk. Interactive SSH sessions run as the
+//! unprivileged terminal account inside the terminald PTY; batch probes and
+//! power actions run directly as root (the service sandbox forbids uid
+//! transitions) with an isolated HOME so broker SSH never touches personal
+//! SSH state.
 
 use crate::bounded_command::run_bounded_command;
 use helix_privd::{
     HubIdentityInfo, MachineAuthKind, MachinePowerAction, MachineProbeResult, MachineTarget,
-    MachineTerminalSpecResult,
+    MachineTerminalSpecResult, MachineTopProcess,
 };
 use serde::Deserialize;
 use std::{
@@ -530,8 +532,10 @@ const PROBE_SCRIPT: &str = concat!(
     "sed -n 's/^PRETTY_NAME=//p' /etc/os-release 2>/dev/null | tr -d '\"' | sed 's/^/O=/';",
     "awk '{print \"U=\"int($1)}' /proc/uptime 2>/dev/null;",
     "awk '{print \"L=\"$1\" \"$2\" \"$3}' /proc/loadavg 2>/dev/null;",
-    "awk '/^MemTotal:/{print \"MT=\"$2*1024}/^MemAvailable:/{print \"MA=\"$2*1024}' /proc/meminfo 2>/dev/null;",
+    "awk '/^MemTotal:/{print \"MT=\"$2*1024}/^MemAvailable:/{print \"MA=\"$2*1024}/^SwapTotal:/{print \"ST=\"$2*1024}/^SwapFree:/{print \"SF=\"$2*1024}' /proc/meminfo 2>/dev/null;",
     "df -B1 --output=size,avail / 2>/dev/null | awk 'NR==2{print \"D=\"$1\" \"$2}';",
+    "ls -d /proc/[0-9]* 2>/dev/null | wc -l | sed 's/^/P=/';",
+    "ps -eo pcpu=,comm= --sort=-pcpu 2>/dev/null | head -n 3 | awk 'NF>=2{print \"TP=\"$2\"|\"$1}';",
     "command -v docker >/dev/null 2>&1 && docker ps -q 2>/dev/null | wc -l | sed 's/^/C=/';",
     "command -v systemctl >/dev/null 2>&1 && systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l | sed 's/^/F=/';",
     "true"
@@ -569,6 +573,24 @@ fn parse_probe(stdout: &str, latency_ms: u64) -> MachineProbeResult {
             "U" => result.uptime_seconds = value.parse::<u64>().ok(),
             "MT" => result.mem_total_bytes = value.parse::<u64>().ok(),
             "MA" => result.mem_available_bytes = value.parse::<u64>().ok(),
+            "ST" => result.swap_total_bytes = value.parse::<u64>().ok(),
+            "SF" => result.swap_free_bytes = value.parse::<u64>().ok(),
+            "P" => result.process_count = value.parse::<u32>().ok(),
+            "TP" => {
+                if let Some((name, percent)) = value.split_once('|') {
+                    if let (Some(name), Ok(percent)) = (
+                        bounded_string(name.trim(), 64),
+                        percent.trim().parse::<f64>(),
+                    ) {
+                        if percent.is_finite() && percent >= 0.0 && result.top_processes.len() < 8 {
+                            result.top_processes.push(MachineTopProcess {
+                                name,
+                                cpu_percent: percent,
+                            });
+                        }
+                    }
+                }
+            }
             "C" => result.containers_running = value.parse::<u32>().ok(),
             "F" => result.failed_units = value.parse::<u32>().ok(),
             "L" => {
@@ -743,5 +765,126 @@ fn run_program(program: &Path, args: &[String], timeout_seconds: u64) -> Result<
             program.display(),
             String::from_utf8_lossy(&output.stderr).trim()
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hub() -> Hub {
+        Hub {
+            config: HubConfig::default(),
+        }
+    }
+
+    fn machine(auth: MachineAuthKind) -> MachineTarget {
+        MachineTarget {
+            label: "builder".to_owned(),
+            host: "192.0.2.10".to_owned(),
+            port: 22,
+            username: "operator".to_owned(),
+            auth_kind: auth,
+        }
+    }
+
+    #[test]
+    fn ssh_argv_isolated_known_hosts_and_key() {
+        let argv = hub().ssh_argv(&machine(MachineAuthKind::Key), true);
+        assert_eq!(argv[0], "ssh");
+        assert!(!argv.contains(&"-tt".to_owned()));
+        let joined = argv.join(" ");
+        assert!(joined.contains("UserKnownHostsFile=/var/lib/helix-hub/known_hosts"));
+        assert!(joined.contains("StrictHostKeyChecking=accept-new"));
+        assert!(joined.contains("BatchMode=yes"));
+        assert!(joined.contains("-i /var/lib/helix-hub/id_ed25519"));
+        assert!(joined.contains("IdentitiesOnly=yes"));
+        assert_eq!(argv.last(), Some(&"operator@192.0.2.10".to_owned()));
+    }
+
+    #[test]
+    fn ssh_argv_terminal_requests_tty() {
+        let argv = hub().ssh_argv(&machine(MachineAuthKind::Password), false);
+        assert_eq!(argv[1], "-tt");
+        assert!(!argv.join(" ").contains("BatchMode"));
+        assert!(argv.join(" ").contains("PreferredAuthentications=password"));
+    }
+
+    #[test]
+    fn probe_parser_collects_extended_fields() {
+        let stdout = "__HX__\nH=nas-1\nK=6.8.0-138-generic\nO=Ubuntu 24.04.5 LTS\nN=16\nU=2672065\nL=3.02 3.47 2.71\nMT=33562816512\nMA=19876663296\nST=8589934592\nSF=8000000000\nD=234039422976 123352260608\nP=412\nTP=nginx|45.2\nTP=kworker/u32:1|12.5\nC=25\nF=0\n";
+        let probe = parse_probe(stdout, 144);
+        assert_eq!(probe.status, "online");
+        assert_eq!(probe.hostname.as_deref(), Some("nas-1"));
+        assert_eq!(probe.cpu_count, Some(16));
+        assert_eq!(probe.uptime_seconds, Some(2_672_065));
+        assert_eq!(probe.load, Some([3.02, 3.47, 2.71]));
+        assert_eq!(probe.swap_total_bytes, Some(8_589_934_592));
+        assert_eq!(probe.swap_free_bytes, Some(8_000_000_000));
+        assert_eq!(probe.process_count, Some(412));
+        assert_eq!(probe.containers_running, Some(25));
+        assert_eq!(probe.failed_units, Some(0));
+        assert_eq!(probe.top_processes.len(), 2);
+        assert_eq!(probe.top_processes[0].name, "nginx");
+        assert!((probe.top_processes[0].cpu_percent - 45.2).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn probe_parser_rejects_output_without_marker() {
+        let probe = parse_probe("H=nas-1\n", 10);
+        assert_eq!(probe.status, "error");
+    }
+
+    #[test]
+    fn probe_parser_ignores_malformed_top_processes() {
+        let stdout = "__HX__\nTP=ok|5.5\nTP=bad|notanumber\nTP=|3\nTP=nopipe\n";
+        let probe = parse_probe(stdout, 5);
+        assert_eq!(probe.top_processes.len(), 1);
+        assert_eq!(probe.top_processes[0].name, "ok");
+    }
+
+    #[test]
+    fn host_validation_accepts_names_ips_and_ipv6() {
+        assert!(validate_host("192.0.2.10").is_ok());
+        assert!(validate_host("nas-1.lan").is_ok());
+        assert!(validate_host("[fd00::10]").is_ok());
+        assert!(validate_host("").is_err());
+        assert!(validate_host("-evil").is_err());
+        assert!(validate_host("a..b").is_err());
+        assert!(validate_host("host name").is_err());
+        assert!(validate_host("host;rm -rf").is_err());
+    }
+
+    #[test]
+    fn username_validation_rejects_flags_and_shell_chars() {
+        assert!(validate_username("operator").is_ok());
+        assert!(validate_username("deploy.bot-1").is_ok());
+        assert!(validate_username("-oProxyCommand=x").is_err());
+        assert!(validate_username("user name").is_err());
+        assert!(validate_username("").is_err());
+    }
+
+    #[test]
+    fn mac_parse_requires_six_octets() {
+        assert_eq!(parse_mac("3c:52:82:ab:12:34").unwrap()[0], 0x3c);
+        assert_eq!(parse_mac("AA-BB-CC-DD-EE-FF").unwrap()[5], 0xff);
+        assert!(parse_mac("3c:52:82:ab:12").is_err());
+        assert!(parse_mac("zz:52:82:ab:12:34").is_err());
+    }
+
+    #[test]
+    fn ssh_failures_classify() {
+        assert_eq!(
+            classify_ssh_failure("Permission denied (publickey).").0,
+            "auth_failed"
+        );
+        assert_eq!(
+            classify_ssh_failure("Host key verification failed.").0,
+            "host_key"
+        );
+        assert_eq!(
+            classify_ssh_failure("connect to host x port 22: Connection timed out").0,
+            "unreachable"
+        );
     }
 }

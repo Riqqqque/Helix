@@ -44,7 +44,7 @@ mod tests {
         assert_eq!(DEF.slug, "satisfactory");
         assert_eq!(DEF.slots.len(), 2);
         assert!(DEF.slots[0].tcp && DEF.slots[0].udp);
-        assert!(DEF.slots[1].tcp && !DEF.slots[1].udp);
+        assert!(!DEF.slots[1].tcp && DEF.slots[1].udp);
         assert_eq!(DEF.pool, (7_777, 7_811));
     }
 }

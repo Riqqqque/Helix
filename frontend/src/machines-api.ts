@@ -19,6 +19,11 @@ export type MachineProbeStatus =
   | 'error';
 export type MachinePowerAction = 'reboot' | 'poweroff';
 
+export interface MachineTopProcess {
+  name: string;
+  cpuPercent: number;
+}
+
 export interface MachineProbe {
   status: MachineProbeStatus;
   detail: string;
@@ -31,10 +36,14 @@ export interface MachineProbe {
   cpuCount: number | null;
   memTotalBytes: number | null;
   memAvailableBytes: number | null;
+  swapTotalBytes: number | null;
+  swapFreeBytes: number | null;
   diskTotalBytes: number | null;
   diskAvailableBytes: number | null;
+  processCount: number | null;
   containersRunning: number | null;
   failedUnits: number | null;
+  topProcesses: MachineTopProcess[];
 }
 
 export interface Machine {
@@ -148,11 +157,37 @@ export function parseMachineProbe(value: unknown): MachineProbe {
     cpuCount: optionalNumber(record, 'cpuCount', 1, 65_535),
     memTotalBytes: optionalNumber(record, 'memTotalBytes'),
     memAvailableBytes: optionalNumber(record, 'memAvailableBytes'),
+    swapTotalBytes: optionalNumber(record, 'swapTotalBytes'),
+    swapFreeBytes: optionalNumber(record, 'swapFreeBytes'),
     diskTotalBytes: optionalNumber(record, 'diskTotalBytes'),
     diskAvailableBytes: optionalNumber(record, 'diskAvailableBytes'),
+    processCount: optionalNumber(record, 'processCount', 0, 1_000_000),
     containersRunning: optionalNumber(record, 'containersRunning', 0, 100_000),
     failedUnits: optionalNumber(record, 'failedUnits', 0, 100_000),
+    topProcesses: parseTopProcesses(record.topProcesses),
   };
+}
+
+function parseTopProcesses(value: unknown): MachineTopProcess[] {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 8) {
+    throw new ApiError('Machine probe returned an invalid topProcesses value.');
+  }
+  return value.map((entry) => {
+    const record = expectRecord(entry, 'Machine probe');
+    const name = optionalText(record, 'name', 64);
+    if (name === null) throw new ApiError('Machine probe returned an invalid topProcesses value.');
+    const cpuPercent = record.cpuPercent;
+    if (
+      typeof cpuPercent !== 'number' ||
+      !Number.isFinite(cpuPercent) ||
+      cpuPercent < 0 ||
+      cpuPercent > 100_000
+    ) {
+      throw new ApiError('Machine probe returned an invalid topProcesses value.');
+    }
+    return { name, cpuPercent };
+  });
 }
 
 export function parseMachine(value: unknown): Machine {

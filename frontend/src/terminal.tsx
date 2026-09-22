@@ -2,7 +2,6 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { DASHBOARD_PREFERENCES_EVENT } from './dashboard-preferences';
 import { InlineError, PageHead } from './dashboard-ui';
@@ -38,7 +37,6 @@ import {
   type TerminalPhase,
   type TerminalRuntime,
 } from './terminal-surface';
-import './terminal.css';
 
 export { nextTerminalOutputBacklog, parseHostTerminalEvent };
 

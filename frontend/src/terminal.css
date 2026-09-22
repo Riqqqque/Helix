@@ -1,6 +1,4 @@
 .page--terminal {
-  --terminal-background: #090b0e;
-  --terminal-foreground: #e6e9df;
   gap: 14px;
 }
 
@@ -36,6 +34,8 @@
 }
 
 .terminal-frame {
+  --terminal-background: #090b0e;
+  --terminal-foreground: #e6e9df;
   overflow: hidden;
   padding: 0;
   border-color: color-mix(in srgb, var(--line) 78%, var(--accent) 22%);

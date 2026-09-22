@@ -441,10 +441,23 @@ pub struct MachineProbeResult {
     pub cpu_count: Option<u32>,
     pub mem_total_bytes: Option<u64>,
     pub mem_available_bytes: Option<u64>,
+    pub swap_total_bytes: Option<u64>,
+    pub swap_free_bytes: Option<u64>,
     pub disk_total_bytes: Option<u64>,
     pub disk_available_bytes: Option<u64>,
+    pub process_count: Option<u32>,
     pub containers_running: Option<u32>,
     pub failed_units: Option<u32>,
+    pub top_processes: Vec<MachineTopProcess>,
+}
+
+/// A single high-CPU process observed during a machine probe. Names are
+/// bounded and percentages sanity-checked before they reach the dashboard.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MachineTopProcess {
+    pub name: String,
+    pub cpu_percent: f64,
 }
 
 impl MachineProbeResult {
@@ -461,10 +474,14 @@ impl MachineProbeResult {
             cpu_count: None,
             mem_total_bytes: None,
             mem_available_bytes: None,
+            swap_total_bytes: None,
+            swap_free_bytes: None,
             disk_total_bytes: None,
             disk_available_bytes: None,
+            process_count: None,
             containers_running: None,
             failed_units: None,
+            top_processes: Vec::new(),
         }
     }
 }
