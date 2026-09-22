@@ -28,7 +28,7 @@ export function HostRebootButton({ csrfToken, disabled = false, onSessionExpired
   };
   return <div>
     <button type="button" class="button button--danger" disabled={disabled || busy} onClick={() => void open()}>
-      <Icon name="refresh" size={15} />{busy ? 'Checking host…' : 'Reboot host'}
+      <Icon name="power" size={15} />{busy ? 'Checking host…' : 'Reboot host'}
     </button>
     <InlineError message={error} />
     {integration !== null && <HostRebootDialog integration={integration} csrfToken={csrfToken} onClose={() => setIntegration(null)} onChanged={async () => setIntegration(await getHostIntegration(csrfToken))} />}

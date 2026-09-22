@@ -386,7 +386,7 @@ impl PackageManager {
         }))
     }
 
-    pub fn refresh_lists(&self) -> Result<Value, String> {
+    pub fn refresh_lists(&self, progress: &dyn Fn(&str, u8)) -> Result<Value, String> {
         if !self.binary_available(&self.config.apt_get_binary) {
             return Err("the configured apt-get binary is unavailable".to_owned());
         }
@@ -402,6 +402,7 @@ impl PackageManager {
             "Acquire::Retries=3".to_owned(),
             "update".to_owned(),
         ]);
+        progress("Refreshing signed package lists", 25);
         let output = self.runner.run(
             &self.config.apt_get_binary,
             &args,
@@ -424,7 +425,9 @@ impl PackageManager {
         requested: &[PackageUpdateCandidate],
         confirmation: &str,
         disruption_acknowledged: bool,
+        progress: &dyn Fn(&str, u8),
     ) -> Result<Value, String> {
+        progress("Validating the update request", 6);
         validate_update_request(requested, confirmation, disruption_acknowledged)?;
         if ![
             &self.config.dpkg_query_binary,
@@ -443,6 +446,7 @@ impl PackageManager {
             .map_err(|_| "another package operation is already running".to_owned())?;
         let started_at_unix_ms = now_unix_ms();
 
+        progress("Reading installed packages and holds", 14);
         let installed = self.query_installed_packages()?;
         let installed_by_name = installed
             .iter()
@@ -481,6 +485,7 @@ impl PackageManager {
             selected_records.push(package.clone());
         }
 
+        progress("Verifying candidate versions", 28);
         let candidates = self.query_candidate_metadata(&selected_records)?;
         let mut download_bytes = 0_u64;
         for request in requested {
@@ -511,6 +516,7 @@ impl PackageManager {
                 })?)
                 .ok_or_else(|| "the selected package sizes exceed supported bounds".to_owned())?;
         }
+        progress("Checking download size and disk space", 40);
         let available_bytes = fs2::available_space(&self.config.apt_archives_root)
             .map_err(|_| "could not measure free space for APT downloads".to_owned())?;
         let required_bytes = download_bytes
@@ -522,6 +528,7 @@ impl PackageManager {
             ));
         }
 
+        progress("Simulating the package change", 50);
         let simulation_args = selected_update_args(requested, true);
         let simulation_output = self.runner.run(
             &self.config.apt_get_binary,
@@ -532,6 +539,7 @@ impl PackageManager {
         let simulation = parse_apt_simulation(&simulation_output.stdout);
         verify_selected_simulation(requested, &simulation)?;
 
+        progress("Installing updates with APT", 62);
         let apply_output = self.runner.run(
             &self.config.apt_get_binary,
             &selected_update_args(requested, false),
@@ -543,6 +551,7 @@ impl PackageManager {
             ));
         }
 
+        progress("Verifying installed versions", 88);
         let after = self.query_installed_packages()?;
         let after_by_name = after
             .iter()
@@ -565,6 +574,7 @@ impl PackageManager {
                 ));
             }
         }
+        progress("Checking whether Linux needs a reboot", 96);
         let reboot_packages = read_package_set(&self.config.reboot_packages_path);
         let reboot_required = self.config.reboot_required_path.is_file();
         let mut reboot_required_packages = reboot_packages.into_iter().collect::<Vec<_>>();
@@ -1473,7 +1483,7 @@ mod tests {
             candidate_version: "5.2".to_owned(),
         }];
         let result = manager
-            .apply_updates(&selected, "APPLY 1 UPDATE", true)
+            .apply_updates(&selected, "APPLY 1 UPDATE", true, &|_, _| {})
             .unwrap();
         assert_eq!(result["updated"][0]["to"], "5.2");
         assert_eq!(result["automatic_reboot"], false);
@@ -1522,6 +1532,7 @@ mod tests {
                 }],
                 "APPLY 1 UPDATE",
                 true,
+                &|_, _| {},
             )
             .unwrap_err();
         assert!(error.contains("candidate"));
@@ -1548,7 +1559,7 @@ mod tests {
             runner.clone(),
         )
         .unwrap();
-        let result = manager.refresh_lists().unwrap();
+        let result = manager.refresh_lists(&|_, _| {}).unwrap();
         assert_eq!(result["refreshed"], true);
         assert_eq!(result["package_state_mutated"], false);
         let calls = runner.calls.lock().unwrap();

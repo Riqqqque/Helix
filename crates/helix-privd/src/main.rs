@@ -1649,7 +1649,14 @@ impl BrokerContext {
                     job.stage = "Checking signed Linux package sources".to_owned();
                     job.progress_percent = 10;
                 });
-                let result = context.packages.refresh_lists();
+                let progress_context = Arc::clone(&context);
+                let worker_job_id_for_progress = worker_job_id.clone();
+                let result = context.packages.refresh_lists(&|stage, percent| {
+                    progress_context.update_job(&worker_job_id_for_progress, |job| {
+                        job.stage = stage.to_owned();
+                        job.progress_percent = percent;
+                    });
+                });
                 context.finish_job(
                     &worker_job_id,
                     result,
@@ -1685,10 +1692,18 @@ impl BrokerContext {
                     job.stage = "Checking the selected versions and disk space".to_owned();
                     job.progress_percent = 5;
                 });
+                let progress_context = Arc::clone(&context);
+                let worker_job_id_for_progress = worker_job_id.clone();
                 let result = context.packages.apply_updates(
                     &packages,
                     &confirmation,
                     disruption_acknowledged,
+                    &|stage, percent| {
+                        progress_context.update_job(&worker_job_id_for_progress, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = percent;
+                        });
+                    },
                 );
                 context.finish_job(
                     &worker_job_id,
