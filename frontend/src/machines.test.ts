@@ -1,6 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import type { Machine } from './machines-api';
-import { machineAddress, machineStatusLabel, machineStatusTone, draftToUpsert } from './machines';
+import type { Machine, MachineProbe } from './machines-api';
+import { machineAddress, machineHealth, machineStatusLabel, machineStatusTone, draftToUpsert } from './machines';
+
+function probeFixture(overrides: Partial<MachineProbe> = {}): MachineProbe {
+  return {
+    status: 'online',
+    detail: 'SSH probe succeeded',
+    latencyMs: 42,
+    hostname: 'builder',
+    os: 'Ubuntu 24.04.3 LTS',
+    kernel: '6.8.0-79-generic',
+    uptimeSeconds: 1_234_567,
+    load: [0.42, 0.5, 0.61],
+    cpuCount: 16,
+    memTotalBytes: 33_554_432_000,
+    memAvailableBytes: 16_777_216_000,
+    swapTotalBytes: null,
+    swapFreeBytes: null,
+    diskTotalBytes: 1_000_000_000_000,
+    diskAvailableBytes: 600_000_000_000,
+    processCount: 300,
+    containersRunning: 4,
+    failedUnits: 0,
+    topProcesses: [],
+    ...overrides,
+  };
+}
 
 function machine(probe: Machine['probe']): Machine {
   return {
@@ -31,14 +56,37 @@ describe('machine status mapping', () => {
       ['unreachable', 'bad', 'Unreachable'],
       ['error', 'bad', 'Probe failed'],
     ] as const) {
-      const probe = { status, detail: '', latencyMs: null, hostname: null, os: null, kernel: null, uptimeSeconds: null, load: null, cpuCount: null, memTotalBytes: null, memAvailableBytes: null, diskTotalBytes: null, diskAvailableBytes: null, containersRunning: null, failedUnits: null };
-      expect(machineStatusTone(machine(probe))).toBe(tone);
-      expect(machineStatusLabel(machine(probe))).toBe(label);
+      expect(machineStatusTone(machine(probeFixture({ status })))).toBe(tone);
+      expect(machineStatusLabel(machine(probeFixture({ status })))).toBe(label);
     }
   });
 
   it('renders the SSH address', () => {
     expect(machineAddress(machine(null))).toBe('operator@192.0.2.10:22');
+  });
+});
+
+describe('machine health verdict', () => {
+  it('reports healthy under normal load', () => {
+    const health = machineHealth(probeFixture());
+    expect(health?.label).toBe('Healthy');
+    expect(health?.tone).toBe('good');
+  });
+
+  it('flags busy and overloaded machines', () => {
+    const busy = machineHealth(probeFixture({ load: [12, 8, 4], cpuCount: 16 }));
+    expect(busy?.label).toBe('Busy');
+    const hot = machineHealth(probeFixture({
+      memTotalBytes: 100,
+      memAvailableBytes: 5,
+    }));
+    expect(hot?.label).toBe('Overloaded');
+    expect(hot?.tone).toBe('bad');
+  });
+
+  it('stays silent for offline or unprobed machines', () => {
+    expect(machineHealth(null)).toBeNull();
+    expect(machineHealth(probeFixture({ status: 'unreachable' }))).toBeNull();
   });
 });
 

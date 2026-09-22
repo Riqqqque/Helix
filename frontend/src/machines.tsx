@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { InlineError, PageHead, ProgressBar, toneForPercent } from './dashboard-ui';
-import { formatDuration, formatTimestamp } from './format';
+import { InlineError, Metric, PageHead, ProgressBar, toneForPercent } from './dashboard-ui';
+import { formatBytes, formatDuration, formatPercent, formatTimestamp } from './format';
 import { Icon } from './icons';
 import {
   createMachine,
@@ -81,6 +81,34 @@ function diskPercent(probe: MachineProbe): number | null {
   return Math.round(((probe.diskTotalBytes - probe.diskAvailableBytes) / probe.diskTotalBytes) * 100);
 }
 
+function swapPercent(probe: MachineProbe): number | null {
+  if (probe.swapTotalBytes === null || probe.swapFreeBytes === null || probe.swapTotalBytes === 0) return null;
+  return Math.round(((probe.swapTotalBytes - probe.swapFreeBytes) / probe.swapTotalBytes) * 100);
+}
+
+export interface MachineHealth {
+  tone: 'good' | 'warn' | 'bad';
+  label: string;
+  reason: string;
+}
+
+/// Overall load verdict for an online machine: CPU load vs cores and memory
+/// pressure decide between Healthy, Busy, and Overloaded so the cards answer
+/// "how is it running" at a glance.
+export function machineHealth(probe: MachineProbe | null): MachineHealth | null {
+  if (probe === null || probe.status !== 'online') return null;
+  const load = loadPercent(probe);
+  const memory = memPercent(probe);
+  const score = Math.max(load ?? 0, memory ?? 0);
+  const reasons: string[] = [];
+  if (load !== null) reasons.push(`load ${load}%`);
+  if (memory !== null) reasons.push(`memory ${memory}%`);
+  const reason = reasons.join(' · ');
+  if (score >= 90) return { tone: 'bad', label: 'Overloaded', reason };
+  if (score >= 70) return { tone: 'warn', label: 'Busy', reason };
+  return { tone: 'good', label: 'Healthy', reason };
+}
+
 function isSessionFailure(error: unknown): boolean {
   return isExpiredSessionError(error);
 }
@@ -155,10 +183,10 @@ export function MachinesPage({ csrfToken, canView, canManage, onSessionExpired }
   const [unlocked, setUnlocked] = useState<string | null>(null);
   const [tabs, setTabs] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
-  const [view, setView] = useState<'grid' | 'terminal'>('grid');
+  const [view, setView] = useState<'grid' | 'detail' | 'terminal'>('grid');
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [tabPhases, setTabPhases] = useState<Record<string, TerminalSessionPhase>>({});
-  const machinesRef = useRef<Machine[]>([]);
-  machinesRef.current = machines;
+  const detailProbedRef = useRef<string | null>(null);
 
   const applyProbe = useCallback((machineId: string, probe: MachineProbe, probedAtUnixMs: number): void => {
     setMachines((current) => current.map((machine) =>
@@ -197,6 +225,11 @@ export function MachinesPage({ csrfToken, canView, canManage, onSessionExpired }
     setTabs((current) => current.includes(machine.id) ? current : [...current, machine.id]);
     setActiveTab(machine.id);
     setView('terminal');
+  }, []);
+
+  const openDetail = useCallback((machine: Machine): void => {
+    setDetailId(machine.id);
+    setView('detail');
   }, []);
 
   const closeTab = useCallback((machineId: string): void => {
@@ -239,6 +272,22 @@ export function MachinesPage({ csrfToken, canView, canManage, onSessionExpired }
       });
     }
   }, [csrfToken, applyProbe, onSessionExpired]);
+
+  // Opening a machine detail refreshes stale probe data once per open so the
+  // health report reflects the machine's current state, not cached history.
+  useEffect(() => {
+    if (view !== 'detail' || detailId === null) {
+      detailProbedRef.current = null;
+      return;
+    }
+    if (detailProbedRef.current === detailId) return;
+    const machine = machines.find((entry) => entry.id === detailId);
+    if (machine === undefined) return;
+    const stale = machine.probedAtUnixMs === null || Date.now() - machine.probedAtUnixMs > 60_000;
+    if (!stale) return;
+    detailProbedRef.current = detailId;
+    void probeOne(machine);
+  }, [view, detailId, machines, probeOne]);
 
   const probeAll = useCallback(async (): Promise<void> => {
     setRefreshing(true);
@@ -329,7 +378,12 @@ export function MachinesPage({ csrfToken, canView, canManage, onSessionExpired }
     .map((id) => machines.find((machine) => machine.id === id))
     .filter((machine): machine is Machine => machine !== undefined);
   const connectedCount = Object.values(tabPhases).filter((phase) => phase === 'connected').length;
+  const detailMachine = detailId === null
+    ? undefined
+    : machines.find((machine) => machine.id === detailId);
+  const showingDetail = view === 'detail' && detailMachine !== undefined;
   const showingTerminal = view === 'terminal' && tabMachines.length > 0;
+  const showingGrid = !showingTerminal && !showingDetail;
 
   return (
     <div class="page page--machines">
@@ -345,7 +399,7 @@ export function MachinesPage({ csrfToken, canView, canManage, onSessionExpired }
       />
       <InlineError message={error ?? notice} />
 
-      {!showingTerminal && (
+      {showingGrid && (
         <>
           <div class="machines-toolbar">
             <div class="machines-toolbar-actions">
@@ -394,6 +448,7 @@ export function MachinesPage({ csrfToken, canView, canManage, onSessionExpired }
                   probing={probing.has(machine.id)}
                   waking={busyAction === `wake:${machine.id}`}
                   tabOpen={tabs.includes(machine.id)}
+                  onOpen={() => openDetail(machine)}
                   onSsh={() => openTerminal(machine)}
                   onProbe={() => void probeOne(machine)}
                   onWake={() => void wake(machine)}
@@ -407,6 +462,22 @@ export function MachinesPage({ csrfToken, canView, canManage, onSessionExpired }
         </>
       )}
 
+      {showingDetail && detailMachine !== undefined && (
+        <MachineDetail
+          machine={detailMachine}
+          canManage={canManage}
+          probing={probing.has(detailMachine.id)}
+          waking={busyAction === `wake:${detailMachine.id}`}
+          onBack={() => setView('grid')}
+          onSsh={() => openTerminal(detailMachine)}
+          onProbe={() => void probeOne(detailMachine)}
+          onWake={() => void wake(detailMachine)}
+          onEdit={() => setDialog({ mode: 'edit', machine: detailMachine })}
+          onDelete={() => setDeleting(detailMachine)}
+          onPower={(action) => setPowerTarget({ machine: detailMachine, action })}
+        />
+      )}
+
       {showingTerminal && (
         <div class="machines-terminal">
           <div class="machines-tabstrip" role="tablist" aria-label="Open SSH sessions">
@@ -416,28 +487,30 @@ export function MachinesPage({ csrfToken, canView, canManage, onSessionExpired }
             {tabMachines.map((machine) => {
               const phase = tabPhases[machine.id];
               return (
-                <button
+                <div
                   key={machine.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === machine.id}
+                  role="presentation"
                   class={`machine-tab${activeTab === machine.id ? ' is-active' : ''}`}
-                  onClick={() => setActiveTab(machine.id)}
                 >
-                  <span class={`status-dot status-dot--${phase === 'connected' ? 'good' : phase === 'connecting' || phase === 'authorizing' ? 'busy' : 'neutral'}`} />
-                  <span class="machine-tab-label">{machine.label}</span>
-                  <span
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === machine.id}
+                    class="machine-tab-select"
+                    onClick={() => setActiveTab(machine.id)}
+                  >
+                    <span class={`status-dot status-dot--${phase === 'connected' ? 'good' : phase === 'connecting' || phase === 'authorizing' ? 'busy' : 'neutral'}`} />
+                    <span class="machine-tab-label">{machine.label}</span>
+                  </button>
+                  <button
+                    type="button"
                     class="machine-tab-close"
-                    role="button"
                     aria-label={`Close ${machine.label} session`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      closeTab(machine.id);
-                    }}
+                    onClick={() => closeTab(machine.id)}
                   >
                     <Icon name="close" size={12} />
-                  </span>
-                </button>
+                  </button>
+                </div>
               );
             })}
             {unlocked !== null && (
@@ -508,6 +581,7 @@ function MachineCard({
   probing,
   waking,
   tabOpen,
+  onOpen,
   onSsh,
   onProbe,
   onWake,
@@ -520,6 +594,7 @@ function MachineCard({
   probing: boolean;
   waking: boolean;
   tabOpen: boolean;
+  onOpen: () => void;
   onSsh: () => void;
   onProbe: () => void;
   onWake: () => void;
@@ -529,6 +604,7 @@ function MachineCard({
 }) {
   const tone = machineStatusTone(machine);
   const probe = machine.probe;
+  const health = machineHealth(probe);
   const load = probe === null ? null : loadPercent(probe);
   const memory = probe === null ? null : memPercent(probe);
   const disk = probe === null ? null : diskPercent(probe);
@@ -537,24 +613,20 @@ function MachineCard({
       <header class="machine-card-head">
         <span class={`status-dot status-dot--${tone === 'good' ? 'good' : tone === 'bad' ? 'bad' : tone === 'warn' ? 'busy' : 'neutral'}`} />
         <div class="machine-card-title">
-          <strong>{machine.label}</strong>
+          <button class="machine-card-open" type="button" onClick={onOpen} title={`Open ${machine.label} health report`}>
+            <strong>{machine.label}</strong>
+            <Icon name="chevron" size={13} />
+          </button>
           <span class="machine-card-address">{machineAddress(machine)}</span>
         </div>
         <span class={`machine-card-status machine-card-status--${tone}`}>{machineStatusLabel(machine)}</span>
       </header>
-      {probe !== null && probe.status === 'online' && (
-        <dl class="machine-card-facts">
-          {probe.hostname !== null && <div><dt>Host</dt><dd>{probe.hostname}</dd></div>}
-          {probe.os !== null && <div><dt>OS</dt><dd>{probe.os}</dd></div>}
-          {probe.uptimeSeconds !== null && <div><dt>Uptime</dt><dd>{formatDuration(probe.uptimeSeconds)}</dd></div>}
-          {probe.latencyMs !== null && <div><dt>SSH</dt><dd>{probe.latencyMs} ms</dd></div>}
-        </dl>
-      )}
-      {probe !== null && probe.status !== 'online' && (
-        <p class="machine-card-detail">{probe.detail}</p>
-      )}
-      {probe === null && (
-        <p class="machine-card-detail">Not probed yet — check reachability or open a terminal.</p>
+      {health !== null && (
+        <div class={`machine-card-health machine-card-health--${health.tone}`}>
+          <Icon name="activity" size={13} />
+          <strong>{health.label}</strong>
+          <span>{health.reason}</span>
+        </div>
       )}
       {(load !== null || memory !== null || disk !== null) && (
         <div class="machine-card-metrics">
@@ -562,6 +634,20 @@ function MachineCard({
           {memory !== null && <MetricBar label="Mem" percent={memory} />}
           {disk !== null && <MetricBar label="Disk" percent={disk} />}
         </div>
+      )}
+      {probe !== null && probe.status === 'online' && (
+        <dl class="machine-card-facts">
+          {probe.os !== null && <div><dt>OS</dt><dd>{probe.os}</dd></div>}
+          {probe.uptimeSeconds !== null && <div><dt>Uptime</dt><dd>{formatDuration(probe.uptimeSeconds)}</dd></div>}
+          {probe.latencyMs !== null && <div><dt>SSH</dt><dd>{probe.latencyMs} ms</dd></div>}
+          {probe.processCount !== null && <div><dt>Procs</dt><dd>{probe.processCount.toLocaleString()}</dd></div>}
+        </dl>
+      )}
+      {probe !== null && probe.status !== 'online' && (
+        <p class="machine-card-detail">{probe.detail}</p>
+      )}
+      {probe === null && (
+        <p class="machine-card-detail">Not probed yet — check reachability or open a terminal.</p>
       )}
       <p class="machine-card-meta">
         <span>{authKindLabel(machine.authKind)}</span>
@@ -573,7 +659,10 @@ function MachineCard({
         <button class="button button--primary" type="button" onClick={onSsh}>
           <Icon name="terminal" size={14} />{tabOpen ? 'Terminal' : 'SSH'}
         </button>
-        <button class="button button--quiet" type="button" disabled={probing} onClick={onProbe} aria-label={`Probe ${machine.label}`}>
+        <button class="button button--quiet" type="button" onClick={onOpen} aria-label={`Health report for ${machine.label}`} title="Health report">
+          <Icon name="activity" size={14} />
+        </button>
+        <button class="button button--quiet" type="button" disabled={probing} onClick={onProbe} aria-label={`Probe ${machine.label}`} title="Probe now">
           <Icon name="refresh" size={14} />
         </button>
         {machine.wolMac !== null && (
@@ -583,13 +672,13 @@ function MachineCard({
         )}
         {canManage && (
           <>
-            <button class="button button--quiet" type="button" onClick={() => onPower('reboot')} aria-label={`Power actions for ${machine.label}`}>
+            <button class="button button--quiet" type="button" onClick={() => onPower('reboot')} aria-label={`Power actions for ${machine.label}`} title="Reboot or power off">
               <Icon name="power" size={14} />
             </button>
-            <button class="button button--quiet" type="button" onClick={onEdit} aria-label={`Edit ${machine.label}`}>
+            <button class="button button--quiet" type="button" onClick={onEdit} aria-label={`Edit ${machine.label}`} title="Edit">
               <Icon name="edit" size={14} />
             </button>
-            <button class="button button--quiet" type="button" onClick={onDelete} aria-label={`Remove ${machine.label}`}>
+            <button class="button button--quiet" type="button" onClick={onDelete} aria-label={`Remove ${machine.label}`} title="Remove">
               <Icon name="trash" size={14} />
             </button>
           </>
@@ -609,6 +698,213 @@ function MetricBar({ label, percent }: { label: string; percent: number }) {
       <ProgressBar value={percent} tone={toneForPercent(percent)} />
       <span class="machine-metric-value">{percent}%</span>
     </div>
+  );
+}
+
+function MachineDetail({
+  machine,
+  canManage,
+  probing,
+  waking,
+  onBack,
+  onSsh,
+  onProbe,
+  onWake,
+  onEdit,
+  onDelete,
+  onPower,
+}: {
+  machine: Machine;
+  canManage: boolean;
+  probing: boolean;
+  waking: boolean;
+  onBack: () => void;
+  onSsh: () => void;
+  onProbe: () => void;
+  onWake: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onPower: (action: MachinePowerAction) => void;
+}) {
+  const tone = machineStatusTone(machine);
+  const probe = machine.probe;
+  const health = machineHealth(probe);
+  const online = probe !== null && probe.status === 'online';
+  const load = probe === null ? null : loadPercent(probe);
+  const memory = probe === null ? null : memPercent(probe);
+  const disk = probe === null ? null : diskPercent(probe);
+  const swap = probe === null ? null : swapPercent(probe);
+  const memoryUsed = probe !== null && probe.memTotalBytes !== null && probe.memAvailableBytes !== null
+    ? probe.memTotalBytes - probe.memAvailableBytes
+    : null;
+  const diskUsed = probe !== null && probe.diskTotalBytes !== null && probe.diskAvailableBytes !== null
+    ? probe.diskTotalBytes - probe.diskAvailableBytes
+    : null;
+  const swapUsed = probe !== null && probe.swapTotalBytes !== null && probe.swapFreeBytes !== null
+    ? probe.swapTotalBytes - probe.swapFreeBytes
+    : null;
+  return (
+    <section class="machine-detail surface">
+      <header class="machine-detail-head">
+        <button class="machines-back" type="button" onClick={onBack}>
+          <Icon name="back" size={14} />Machines
+        </button>
+        <div class="machine-detail-title">
+          <span class={`status-dot status-dot--${tone === 'good' ? 'good' : tone === 'bad' ? 'bad' : tone === 'warn' ? 'busy' : 'neutral'}`} />
+          <div class="machine-detail-name">
+            <strong>{machine.label}</strong>
+            <span class="machine-card-address">{machineAddress(machine)}</span>
+          </div>
+          <span class={`machine-card-status machine-card-status--${tone}`}>{machineStatusLabel(machine)}</span>
+          {health !== null && (
+            <span class={`machine-card-status machine-card-status--${health.tone}`}>{health.label}</span>
+          )}
+        </div>
+        <div class="machine-detail-actions">
+          <button class="button button--primary" type="button" onClick={onSsh}>
+            <Icon name="terminal" size={14} />SSH terminal
+          </button>
+          <button class="button button--quiet" type="button" disabled={probing} onClick={onProbe}>
+            <Icon name="refresh" size={14} />{probing ? 'Probing…' : 'Probe now'}
+          </button>
+          {machine.wolMac !== null && (
+            <button class="button button--quiet" type="button" disabled={waking} onClick={onWake}>
+              <Icon name="bell" size={14} />{waking ? 'Waking…' : 'Wake'}
+            </button>
+          )}
+          {canManage && (
+            <>
+              <button class="button button--quiet" type="button" onClick={() => onPower('reboot')}>
+                <Icon name="power" size={14} />Power
+              </button>
+              <button class="button button--quiet" type="button" onClick={onEdit}>
+                <Icon name="edit" size={14} />Edit
+              </button>
+              <button class="button button--quiet" type="button" onClick={onDelete}>
+                <Icon name="trash" size={14} />Remove
+              </button>
+            </>
+          )}
+        </div>
+      </header>
+
+      {!online && (
+        <div class="machine-detail-offline">
+          <Icon name="warning" size={22} />
+          <strong>{probe === null ? 'No probe data yet' : machineStatusLabel(machine)}</strong>
+          <p>{probe === null
+            ? 'Probe the machine to collect its health report — Helix keeps the snapshot cached here.'
+            : probe.detail}</p>
+          <button class="button button--primary" type="button" disabled={probing} onClick={onProbe}>
+            <Icon name="refresh" size={14} />{probing ? 'Probing…' : 'Probe now'}
+          </button>
+        </div>
+      )}
+
+      {online && probe !== null && (
+        <>
+          {health !== null && health.tone !== 'good' && (
+            <p class={`machine-detail-alert machine-detail-alert--${health.tone}`} role="status">
+              <Icon name="warning" size={14} />
+              {health.tone === 'bad'
+                ? `${machine.label} is overloaded — ${health.reason}. Check the busy processes below or open a terminal.`
+                : `${machine.label} is working hard — ${health.reason}.`}
+            </p>
+          )}
+          <div class="machine-detail-metrics">
+            <Metric
+              icon="cpu"
+              label="Load"
+              value={load === null ? '—' : formatPercent(load)}
+              detail={probe.load === null
+                ? 'Load average unavailable'
+                : `1m ${probe.load[0].toFixed(2)} · 5m ${probe.load[1].toFixed(2)} · 15m ${probe.load[2].toFixed(2)}`}
+              percent={load ?? undefined}
+            />
+            <Metric
+              icon="memory"
+              label="Memory"
+              value={memory === null ? '—' : formatPercent(memory)}
+              detail={memoryUsed === null || probe.memTotalBytes === null
+                ? 'Memory unavailable'
+                : `${formatBytes(memoryUsed)} of ${formatBytes(probe.memTotalBytes)} used`}
+              percent={memory ?? undefined}
+            />
+            <Metric
+              icon="storage"
+              label="Disk"
+              value={disk === null ? '—' : formatPercent(disk)}
+              detail={diskUsed === null || probe.diskTotalBytes === null
+                ? 'Root filesystem unavailable'
+                : `${formatBytes(diskUsed)} of ${formatBytes(probe.diskTotalBytes)} used`}
+              percent={disk ?? undefined}
+            />
+            <Metric
+              icon="performance"
+              label="Swap"
+              value={swap === null ? '—' : formatPercent(swap)}
+              detail={swapUsed === null || probe.swapTotalBytes === null
+                ? 'No swap configured'
+                : `${formatBytes(swapUsed)} of ${formatBytes(probe.swapTotalBytes)} used`}
+              percent={swap ?? undefined}
+            />
+            <Metric
+              icon="clock"
+              label="Uptime"
+              value={probe.uptimeSeconds === null ? '—' : formatDuration(probe.uptimeSeconds)}
+              detail={probe.hostname ?? 'Hostname not reported'}
+            />
+          </div>
+
+          <div class="machine-detail-columns">
+            <section class="machine-detail-panel">
+              <h3>System</h3>
+              <dl class="machine-detail-facts">
+                {probe.hostname !== null && <div><dt>Hostname</dt><dd>{probe.hostname}</dd></div>}
+                {probe.os !== null && <div><dt>OS</dt><dd>{probe.os}</dd></div>}
+                {probe.kernel !== null && <div><dt>Kernel</dt><dd>{probe.kernel}</dd></div>}
+                {probe.cpuCount !== null && <div><dt>CPU cores</dt><dd>{probe.cpuCount}</dd></div>}
+                {probe.processCount !== null && <div><dt>Processes</dt><dd>{probe.processCount.toLocaleString()}</dd></div>}
+                {probe.containersRunning !== null && <div><dt>Containers</dt><dd>{probe.containersRunning} running</dd></div>}
+                {probe.failedUnits !== null && (
+                  <div>
+                    <dt>Failed units</dt>
+                    <dd class={probe.failedUnits > 0 ? 'machine-card-warn' : undefined}>
+                      {probe.failedUnits === 0 ? 'None' : `${probe.failedUnits} failed`}
+                    </dd>
+                  </div>
+                )}
+                {probe.latencyMs !== null && <div><dt>SSH latency</dt><dd>{probe.latencyMs} ms</dd></div>}
+                <div><dt>Sign-in</dt><dd>{authKindLabel(machine.authKind)}</dd></div>
+                {machine.wolMac !== null && <div><dt>Wake MAC</dt><dd>{machine.wolMac}</dd></div>}
+                {machine.probedAtUnixMs !== null && (
+                  <div><dt>Last probed</dt><dd>{formatTimestamp(machine.probedAtUnixMs)}</dd></div>
+                )}
+              </dl>
+            </section>
+            <section class="machine-detail-panel">
+              <h3>Busiest processes</h3>
+              {probe.topProcesses.length === 0 ? (
+                <p class="machine-detail-empty">Process sampling unavailable on this machine.</p>
+              ) : (
+                <ul class="machine-detail-top">
+                  {probe.topProcesses.map((process) => (
+                    <li key={process.name}>
+                      <span class="machine-detail-top-name">{process.name}</span>
+                      <ProgressBar value={Math.min(100, process.cpuPercent)} tone={toneForPercent(process.cpuPercent)} />
+                      <span class="machine-detail-top-value">{process.cpuPercent.toFixed(1)}%</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p class="machine-detail-empty">CPU share of a single core — over 100% means multi-core use.</p>
+            </section>
+          </div>
+        </>
+      )}
+
+      {machine.notes !== '' && <p class="machine-detail-notes">{machine.notes}</p>}
+    </section>
   );
 }
 

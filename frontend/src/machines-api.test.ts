@@ -17,10 +17,17 @@ const probeFixture = {
   cpuCount: 16,
   memTotalBytes: 33_554_432_000,
   memAvailableBytes: 16_777_216_000,
+  swapTotalBytes: 8_589_934_592,
+  swapFreeBytes: 7_500_000_000,
   diskTotalBytes: 1_000_000_000_000,
   diskAvailableBytes: 600_000_000_000,
+  processCount: 412,
   containersRunning: 4,
   failedUnits: 0,
+  topProcesses: [
+    { name: 'nginx', cpuPercent: 45.2 },
+    { name: 'postgres', cpuPercent: 12.1 },
+  ],
 };
 
 const machineFixture = {
@@ -46,6 +53,12 @@ describe('machine api parsing', () => {
     expect(machine.probe?.status).toBe('online');
     expect(machine.probe?.load).toEqual([0.42, 0.5, 0.61]);
     expect(machine.probe?.containersRunning).toBe(4);
+    expect(machine.probe?.swapTotalBytes).toBe(8_589_934_592);
+    expect(machine.probe?.processCount).toBe(412);
+    expect(machine.probe?.topProcesses).toEqual([
+      { name: 'nginx', cpuPercent: 45.2 },
+      { name: 'postgres', cpuPercent: 12.1 },
+    ]);
   });
 
   it('accepts machines without probe data or a WoL address', () => {
@@ -76,6 +89,13 @@ describe('machine api parsing', () => {
     expect(() => parseMachineProbe({ ...probeFixture, load: [0.1] })).toThrow();
     expect(() => parseMachineProbe({ ...probeFixture, load: ['a', 1, 2] })).toThrow();
     expect(() => parseMachineProbe({ ...probeFixture, uptimeSeconds: -1 })).toThrow();
+  });
+
+  it('rejects malformed top-process entries', () => {
+    expect(() => parseMachineProbe({ ...probeFixture, topProcesses: [{ name: 'x' }] })).toThrow();
+    expect(() => parseMachineProbe({ ...probeFixture, topProcesses: [{ name: 'x', cpuPercent: -1 }] })).toThrow();
+    expect(() => parseMachineProbe({ ...probeFixture, topProcesses: 'nginx' })).toThrow();
+    expect(parseMachineProbe({ ...probeFixture, topProcesses: null }).topProcesses).toEqual([]);
   });
 
   it('parses the hub identity', () => {
