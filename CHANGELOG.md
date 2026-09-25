@@ -10,7 +10,8 @@ release, not a public-internet support promise.
 
 - The in-app Helix updater failed on GNU tar hosts with an unrecognized
   `--no-absolute-filenames` option, so no release could install. Archive paths
-  are still validated before extraction.
+  are still validated before extraction. Extracting the new broker binaries no
+  longer fails on their command-less image stages.
 - The updater now finds a dashboard deployed with `docker compose --env-file`
   by using the env file Compose recorded, and says why detection failed
   instead of a generic message.

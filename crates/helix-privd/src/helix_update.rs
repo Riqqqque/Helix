@@ -793,8 +793,10 @@ impl HelixUpdateManager {
         source: &str,
         destination: &Path,
     ) -> Result<(), String> {
+        // Artifact stages are FROM scratch with no CMD; name one so Docker can
+        // create the (never started) container we copy from.
         let created = self.docker(
-            &["create".to_owned(), image.to_owned()],
+            &["create".to_owned(), image.to_owned(), source.to_owned()],
             Duration::from_secs(60),
         )?;
         let container = created.trim();
