@@ -577,18 +577,19 @@ fn parse_probe(stdout: &str, latency_ms: u64) -> MachineProbeResult {
             "SF" => result.swap_free_bytes = value.parse::<u64>().ok(),
             "P" => result.process_count = value.parse::<u32>().ok(),
             "TP" => {
-                if let Some((name, percent)) = value.split_once('|') {
-                    if let (Some(name), Ok(percent)) = (
+                if let Some((name, percent)) = value.split_once('|')
+                    && let (Some(name), Ok(percent)) = (
                         bounded_string(name.trim(), 64),
                         percent.trim().parse::<f64>(),
-                    ) {
-                        if percent.is_finite() && percent >= 0.0 && result.top_processes.len() < 8 {
-                            result.top_processes.push(MachineTopProcess {
-                                name,
-                                cpu_percent: percent,
-                            });
-                        }
-                    }
+                    )
+                    && percent.is_finite()
+                    && percent >= 0.0
+                    && result.top_processes.len() < 8
+                {
+                    result.top_processes.push(MachineTopProcess {
+                        name,
+                        cpu_percent: percent,
+                    });
                 }
             }
             "C" => result.containers_running = value.parse::<u32>().ok(),
