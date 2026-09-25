@@ -4,7 +4,7 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
-## Unreleased
+## 1.1.0 - 2026-09-24
 
 ### Fixed
 
