@@ -112,6 +112,8 @@ pub fn exposure_ports(
         "factorio" => (FirewallProtocol::Udp, extras(game_port)),
         "dont_starve_together" => (FirewallProtocol::Udp, extras(game_port)),
         "vintage_story" => (FirewallProtocol::Tcp, extras(game_port)),
+        // Hytale uses QUIC, which is UDP only.
+        "hytale" => (FirewallProtocol::Udp, extras(game_port)),
         _ => (FirewallProtocol::Tcp, Vec::new()),
     }
 }
@@ -154,7 +156,8 @@ fn exposure_port_protocols(mapping: &GamePortMapping, port: u16) -> Vec<Firewall
         | "project_zomboid"
         | "sons_of_the_forest"
         | "factorio"
-        | "dont_starve_together" => vec![FirewallProtocol::Udp],
+        | "dont_starve_together"
+        | "hytale" => vec![FirewallProtocol::Udp],
         _ => vec![FirewallProtocol::Tcp],
     }
 }
