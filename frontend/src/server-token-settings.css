@@ -1,12 +1,22 @@
-.server-token-settings form { display: grid; gap: 1rem; }
+.server-token-settings form { display: grid; gap: 1.15rem; padding: 0 18px 18px; }
 .server-token-settings__fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(8rem, .4fr); gap: .8rem; }
 .server-token-settings__fields label { display: grid; gap: .4rem; }
-.server-token-settings fieldset { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .7rem; border: 1px solid var(--line); border-radius: .5rem; padding: .8rem; min-width: 0; }
+.server-token-settings fieldset { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .85rem; border: 1px solid var(--line); border-radius: .5rem; padding: 1rem; min-width: 0; }
 .server-token-settings fieldset label { display: flex; align-items: start; gap: .5rem; min-width: 0; }
 .server-token-settings small { display: block; overflow-wrap: anywhere; opacity: .75; }
-.server-token-settings__warning { font-size: .85rem; }
-.server-token-settings__secret { display: grid; gap: .6rem; margin-block: 1rem; }
+.server-token-settings__warning { margin: 16px 18px; font-size: .85rem; line-height: 1.5; }
+.server-token-settings > .inline-error { margin: 16px 18px; }
+.server-token-settings__secret { display: grid; gap: .6rem; margin: 0 18px 18px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
 .server-token-settings__secret input { width: 100%; min-width: 0; font-family: monospace; }
+.server-token-settings__secret-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.server-token-settings__list { margin: 0 18px 16px; border-top: 1px solid var(--line); }
+.server-token-settings__list > p { margin: 1rem 0; opacity: .75; }
+.server-token-settings__list .server-token-settings__ok { color: var(--good); opacity: 1; }
+.server-token-settings__list .server-token-settings__bad { color: var(--danger); opacity: 1; }
 .server-token-settings__list article { display: flex; justify-content: space-between; align-items: center; gap: .8rem; padding-block: 1rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .server-token-settings__list article > div:last-child { display: flex; flex-wrap: wrap; gap: .5rem; }
+.server-token-settings__actions { align-items: center; }
+.server-token-settings__actions small { flex-basis: 100%; }
+.server-token-settings > .button { margin: 16px 18px 18px; }
+.server-token-settings__list + .button { margin-top: 0; }
 @media (max-width: 540px) { .server-token-settings__fields { grid-template-columns: 1fr; } }

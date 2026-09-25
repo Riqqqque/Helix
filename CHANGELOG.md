@@ -22,6 +22,13 @@ release, not a public-internet support promise.
 
 ### Added
 
+- Server API tokens can now last 180 days, 1 year, or never expire. A
+  never-expiring token stays valid until it is revoked or the owner password
+  or account changes. Each token in Settings shows whether it can still
+  authenticate, which servers and permissions it has, and when it was created
+  and last used. **Rotate & show new token** issues a replacement secret while
+  keeping the scope and expiry, so a lost token no longer has to be recreated.
+
 - Settings now measures Docker disk use and can run a safe background cleanup
   immediately or on selected host-local days. It prunes old build cache,
   dangling images, and unused networks while preserving every container,

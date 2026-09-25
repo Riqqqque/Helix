@@ -1,10 +1,18 @@
 # Server API tokens
 
 Open **Settings → Server API tokens → Manage tokens**. Choose a name, exact
-servers, permissions and an expiration of 1–90 days. Save the secret when it
-appears: Helix stores only its domain-separated SHA-256 verifier. The list
-never returns the secret. Revoke a token from the same card; future requests
-fail immediately. Already accepted jobs are not cancelled by revocation.
+servers, permissions and an expiration of 1–365 days or **Never**. A never-expiring
+token stays valid until revoked or the owner account authorization changes.
+Save the secret when it appears: Helix stores only its domain-separated SHA-256
+verifier. The list never returns token secrets. To get a token value later, use
+**Rotate & show new token**. This replaces the old secret immediately while
+keeping its server scope, permissions, and expiry; update any clients using the
+old value. Revoke a token from the same card; future requests fail immediately.
+Already accepted jobs are not cancelled by revocation or rotation.
+
+Each token in the list shows whether it can still authenticate (active, expired,
+revoked, or invalidated by an owner account/password change), its servers and
+permissions, when it was created, and when it was last used.
 
 Use HTTPS or an SSH tunnel. Do not send tokens over an untrusted HTTP network,
 put them in URLs, commit them, or paste them into chat. The Python token client
@@ -88,12 +96,12 @@ Tokens and job mappings live in the critical-state database, covered by Helix
 backups. Password/account authorization changes invalidate existing tokens.
 Logout alone does not revoke them. At most 256 live tokens can exist; revoked
 and expired records are cleaned when another token is created. Each token has
-up to 64 exact server IDs, up to 90 days validity, and 600 requests per minute.
+up to 64 exact server IDs, either 1–365 days or no automatic expiry, and 600 requests per minute.
 The automation request endpoint admits two concurrent broker requests.
 
 Audit records identify the token, server, permission decision and result;
 they do not retain token secrets, file contents or console command text.
 A restored old database may restore credentials that were valid at backup time:
 after a security incident, revoke tokens or change the owner password again.
-Lost create responses cannot recover a token secret: revoke that entry and
-create another. Do not give automation an owner session as a fallback.
+Lost create responses cannot recover the original token secret: rotate the
+entry to issue a replacement. Do not give automation an owner session as a fallback.

@@ -54,6 +54,8 @@ pub struct ApiTokenRecord {
     pub expires_at: i64,
     pub revoked_at: Option<i64>,
     pub last_used_at: Option<i64>,
+    /// False when a password or account change has invalidated the token.
+    pub authorized: bool,
 }
 
 fn record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiTokenRecord> {
@@ -75,10 +77,14 @@ fn record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiTokenRecord> {
         expires_at: row.get(6)?,
         revoked_at: row.get(7)?,
         last_used_at: row.get(8)?,
+        authorized: row.get(9)?,
     })
 }
 
-const COLUMNS: &str = "t.id,t.user_id,t.name,t.servers,t.permissions,t.created_at,t.expires_at,t.revoked_at,t.last_used_at";
+const COLUMNS: &str = "t.id,t.user_id,t.name,t.servers,t.permissions,t.created_at,t.expires_at,t.revoked_at,t.last_used_at,(u.status='active' AND u.auth_version=t.auth_version)";
+
+/// Longest finite lifetime; `i64::MAX` marks a token that never expires.
+pub const MAX_EXPIRY_DAYS: i64 = 365;
 
 impl StateDatabase {
     pub fn api_token_jobs(&self, id: &str) -> Result<Vec<(String, String)>, StateError> {
@@ -125,7 +131,8 @@ impl StateDatabase {
             || !valid_values(&input.permissions)
             || input.now < 0
             || input.expires_at <= input.now
-            || input.expires_at.saturating_sub(input.now) > 90 * 86_400_000
+            || (input.expires_at != i64::MAX
+                && input.expires_at.saturating_sub(input.now) > MAX_EXPIRY_DAYS * 86_400_000)
         {
             return Err(StateError::InvalidSecurityInput(
                 "invalid API token scope or expiration",
@@ -163,7 +170,7 @@ impl StateDatabase {
 
     pub fn list_api_tokens(&self, user_id: &str) -> Result<Vec<ApiTokenRecord>, StateError> {
         let connection = self.lock()?;
-        let mut query = connection.prepare(&format!("SELECT {COLUMNS} FROM server_api_tokens t WHERE user_id=?1 ORDER BY created_at DESC LIMIT 256"))?;
+        let mut query = connection.prepare(&format!("SELECT {COLUMNS} FROM server_api_tokens t JOIN users u ON u.id=t.user_id WHERE t.user_id=?1 ORDER BY t.created_at DESC LIMIT 256"))?;
         Ok(query
             .query_map([user_id], record)?
             .collect::<Result<Vec<_>, _>>()?)
@@ -179,6 +186,37 @@ impl StateDatabase {
                 now,
                 Some(user_id),
                 "api_token.revoked",
+                Some("api_token"),
+                Some(id),
+                "success",
+            )?;
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    pub fn rotate_api_token(
+        &self,
+        user_id: &str,
+        id: &str,
+        verifier: &[u8; 32],
+        now: i64,
+    ) -> Result<bool, StateError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
+            "UPDATE server_api_tokens SET verifier=?4, last_used_at=NULL
+             WHERE id=?1 AND user_id=?2 AND revoked_at IS NULL AND expires_at>?3
+             AND EXISTS(SELECT 1 FROM users u WHERE u.id=?2 AND u.status='active'
+                        AND u.auth_version=server_api_tokens.auth_version)",
+            params![id, user_id, now, verifier.as_slice()],
+        )? > 0;
+        if changed {
+            append_audit(
+                &tx,
+                now,
+                Some(user_id),
+                "api_token.rotated",
                 Some("api_token"),
                 Some(id),
                 "success",
