@@ -37,7 +37,7 @@ Helix combines a responsive web dashboard, an unprivileged Rust service, and a
 narrow typed Linux broker. It gives the browser useful host controls without
 turning the dashboard into a general root shell.
 
-The current main branch includes the features below. The 1.1.1 release
+The current main branch includes the features below. The 1.2.0 release
 is an older snapshot; check its release notes before choosing it over main.
 
 - local owner setup, Argon2id password login, revocable sessions, CSRF
@@ -326,7 +326,7 @@ Useful starting points:
 
 ## License
 
-Helix is versioned as `1.1.1` and licensed under the
+Helix is versioned as `1.2.0` and licensed under the
 [GNU Affero General Public License v3.0 or later](LICENSE).
 
 Public source availability does not mean production support, stable
