@@ -242,6 +242,32 @@ export const MANAGED_GAMES: ReadonlyArray<ManagedGameInfo> = [
     worldName: false,
     wineNotice: false,
   },
+  {
+    id: 'hytale',
+    label: 'Hytale',
+    blurb: 'Official Java 25 server with CurseForge mods. One UDP (QUIC) port.',
+    intro:
+      'Helix downloads the official Hytale server with the Hytale Downloader and runs it on Java 25 in an isolated container. You sign in with your Hytale account twice on first setup — once to download the server files and once so players can join — and Helix shows each link as soon as Hytale asks. Players connect over QUIC on a single UDP port. Install mods from the Mods tab or upload .jar/.zip files to mods/.',
+    memory: { min: 4_096, max: 32_768, default: 6_144 },
+    players: { min: 1, max: 100, default: 16 },
+    defaultGamePort: 5_520,
+    extraPorts: 0,
+    manualQueryPort: false,
+    queryPortLabel: '',
+    joinProtocol: 'udp',
+    portNoun: 'the UDP game port',
+    poolRangeHint: '5520-5570',
+    poolPortsHint: '5520, 5523',
+    listOnBrowser: false,
+    serverPassword: true,
+    adminPassword: false,
+    clusterToken: false,
+    caves: false,
+    worldSeed: false,
+    worldSize: false,
+    worldName: false,
+    wineNotice: false,
+  },
 ];
 
 export function managedGameInfo(game: ManagedGameKind): ManagedGameInfo {

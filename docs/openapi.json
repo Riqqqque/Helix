@@ -1078,7 +1078,7 @@
           "name": "game",
           "in": "path",
           "required": true,
-          "description": "A game created through the shared spec: satisfactory, project_zomboid, seven_days_to_die, rust, sons_of_the_forest, factorio, dont_starve_together or vintage_story",
+          "description": "A game created through the shared spec: satisfactory, project_zomboid, seven_days_to_die, rust, sons_of_the_forest, factorio, dont_starve_together, vintage_story or hytale",
           "schema": {
             "type": "string"
           }
@@ -1172,7 +1172,7 @@
           "name": "game",
           "in": "path",
           "required": true,
-          "description": "A game created through the shared spec: satisfactory, project_zomboid, seven_days_to_die, rust, sons_of_the_forest, factorio, dont_starve_together or vintage_story",
+          "description": "A game created through the shared spec: satisfactory, project_zomboid, seven_days_to_die, rust, sons_of_the_forest, factorio, dont_starve_together, vintage_story or hytale",
           "schema": {
             "type": "string"
           }
@@ -3395,7 +3395,8 @@
           "sons_of_the_forest",
           "factorio",
           "dont_starve_together",
-          "vintage_story"
+          "vintage_story",
+          "hytale"
         ]
       },
       "ServerNetworkExposure": {

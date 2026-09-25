@@ -3,6 +3,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type { BrokerJob } from './control-api';
 import { ProgressBar } from './dashboard-ui';
 import { formatDuration } from './format';
+import { StageText } from './hytale-sign-in';
 import { Icon } from './icons';
 import { OperationError } from './operation-error';
 
@@ -46,7 +47,7 @@ export function CreateJobProgress({
           <Icon name={job.status === 'failed' ? 'warning' : 'check'} size={26} />
         )}
       </div>
-      <strong>{job.stage}</strong>
+      <strong><StageText text={job.stage} /></strong>
       {job.status === 'failed' && job.error ? <OperationError message={job.error} /> : <span>{copy}</span>}
       <ProgressBar
         value={active ? Math.max(percent, 6) : percent}
