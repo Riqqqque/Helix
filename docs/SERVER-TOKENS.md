@@ -5,7 +5,7 @@ servers, permissions and an expiration of 1–365 days or **Never**. A never-exp
 token stays valid until revoked or the owner account authorization changes.
 Save the secret when it appears: Helix stores only its domain-separated SHA-256
 verifier. The list never returns token secrets. To get a token value later, use
-**Rotate & show new token**. This replaces the old secret immediately while
+**Rotate & show**. This replaces the old secret immediately while
 keeping its server scope, permissions, and expiry; update any clients using the
 old value. Revoke a token from the same card; future requests fail immediately.
 Already accepted jobs are not cancelled by revocation or rotation.

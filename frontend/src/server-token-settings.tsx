@@ -51,32 +51,66 @@ export function ServerTokenSettings({ csrfToken, servers }: { csrfToken: string;
   function serverName(id: string): string { return servers.find((s) => s.id === id)?.name ?? id; }
   return <section class="settings-card server-token-settings">
     <div class="settings-card__head"><div><Icon name="servers" /><span><h2>Server API tokens</h2><p>Give a tool access to selected servers without sharing your login.</p></span></div></div>
-    <InlineError message={error} />
-    {data === null ? <button class="button button--quiet" disabled={busy} onClick={() => void run(refresh)}>{busy ? 'Loading…' : 'Manage tokens'}</button> : <>
-      <p class="server-token-settings__warning">Use HTTPS or an SSH tunnel. Grant only the servers and actions your tool needs. Tokens cannot administer the host or create other tokens. A never-expiring token stays valid until you revoke it.</p>
-      {secret !== null && <div class="server-token-settings__secret" role="status"><strong>New token — save it before leaving this page.</strong><small>Helix stores only a verifier, so this exact value is not shown again. If you lose it, use Rotate on the token to get a new one.</small><input aria-label="New API token" readOnly value={secret} autoComplete="off" spellcheck={false} onFocus={(e) => e.currentTarget.select()} /><div class="server-token-settings__secret-actions"><button class="button button--quiet" type="button" onClick={() => { void navigator.clipboard?.writeText(secret).then(() => setCopied(true), () => setCopied(false)); }}>{copied ? 'Copied' : 'Copy token'}</button><button class="button button--quiet" type="button" onClick={() => setSecret(null)}>Hide token</button></div></div>}
-      <form onSubmit={(e) => { e.preventDefault(); void run(async () => {
+    {error !== null && <div class="server-token-settings__error"><InlineError message={error} /></div>}
+    {data === null ? <div class="server-token-settings__intro">
+      <p>Create, check, rotate, and revoke tokens for scripts and plugins.</p>
+      <button class="button button--quiet" type="button" disabled={busy} onClick={() => void run(refresh)}>{busy ? 'Loading…' : 'Manage tokens'}</button>
+    </div> : <>
+      {secret !== null && <div class="server-token-settings__secret" role="status">
+        <strong>New token — copy it now</strong>
+        <small>Helix stores only a verifier, so this exact value is not shown again. If you lose it, use Rotate on the token to get a new one.</small>
+        <div class="server-token-settings__secret-row">
+          <input aria-label="New API token" readOnly value={secret} autoComplete="off" spellcheck={false} onFocus={(e) => e.currentTarget.select()} />
+          <button class="button button--primary" type="button" onClick={() => { void navigator.clipboard?.writeText(secret).then(() => setCopied(true), () => setCopied(false)); }}>{copied ? 'Copied' : 'Copy'}</button>
+          <button class="button button--quiet" type="button" onClick={() => setSecret(null)}>Hide</button>
+        </div>
+      </div>}
+      <form class="server-token-settings__form" onSubmit={(e) => { e.preventDefault(); void run(async () => {
         setSecret(null);
         const created = await requestJson('/api/v1/auth/server-tokens', (value) => expectString(expectRecord(value, 'new token'), 'token', 'new token'), { csrfToken, method: 'POST', body: { name: name.trim(), servers: selected, permissions, expires_in_days: days } });
         setSecret(created); setName(''); await refresh();
       }); }}>
-        <div class="server-token-settings__fields"><label>Token name<input required maxLength={80} value={name} onInput={(e) => setName(e.currentTarget.value)} placeholder="Plugin deployment" /></label><label>Expires after<select value={days === null ? 'never' : days} onChange={(e) => setDays(e.currentTarget.value === 'never' ? null : Number(e.currentTarget.value))}>{EXPIRY_DAYS.map((d) => <option key={d} value={d}>{expiryLabel(d)}</option>)}<option value="never">Never — revoke manually</option></select></label></div>
-        <fieldset disabled={busy}><legend>Servers</legend>{servers.length === 0 && <p>No servers available.</p>}{servers.map((s) => <label key={s.id}><input type="checkbox" checked={selected.includes(s.id)} onChange={() => setSelected(toggle(selected, s.id))} /><span>{s.name}<small>{s.id}</small></span></label>)}</fieldset>
-        <fieldset disabled={busy}><legend>Permissions</legend>{data.permissions.map((p) => <label key={p}><input type="checkbox" checked={permissions.includes(p)} onChange={() => setPermissions(toggle(permissions, p))} /><span>{p}</span></label>)}</fieldset>
-        <button class="button button--primary" disabled={busy || name.trim() === '' || selected.length === 0 || permissions.length === 0}>{busy ? 'Working…' : 'Create token'}</button>
+        <h3>New token</h3>
+        <div class="server-token-settings__fields">
+          <label><span>Token name</span><input required maxLength={80} value={name} onInput={(e) => setName(e.currentTarget.value)} placeholder="Plugin deployment" /></label>
+          <label><span>Expires after</span><select value={days === null ? 'never' : days} onChange={(e) => setDays(e.currentTarget.value === 'never' ? null : Number(e.currentTarget.value))}>{EXPIRY_DAYS.map((d) => <option key={d} value={d}>{expiryLabel(d)}</option>)}<option value="never">Never (until revoked)</option></select></label>
+        </div>
+        <fieldset disabled={busy}><legend>Servers</legend>
+          {servers.length === 0 && <p class="server-token-settings__empty">No servers available.</p>}
+          <div class="server-token-settings__choices server-token-settings__choices--servers">{servers.map((s) => <label key={s.id}><input type="checkbox" checked={selected.includes(s.id)} onChange={() => setSelected(toggle(selected, s.id))} /><span><strong>{s.name}</strong><small>{s.id}</small></span></label>)}</div>
+        </fieldset>
+        <fieldset disabled={busy}><legend>Permissions</legend>
+          <div class="server-token-settings__choices">{data.permissions.map((p) => <label key={p}><input type="checkbox" checked={permissions.includes(p)} onChange={() => setPermissions(toggle(permissions, p))} /><span><strong>{p}</strong></span></label>)}</div>
+        </fieldset>
+        <div class="server-token-settings__form-actions">
+          <span>Use HTTPS or an SSH tunnel. Grant only what the tool needs; tokens can't administer the host.</span>
+          <button class="button button--primary" type="submit" disabled={busy || name.trim() === '' || selected.length === 0 || permissions.length === 0}>{busy ? 'Working…' : 'Create token'}</button>
+        </div>
       </form>
-      <div class="server-token-settings__list">{data.tokens.length === 0 && <p>No tokens yet.</p>}{data.tokens.map((t) => { const status = tokenStatus(t, Date.now()); return <article key={t.id}>
-        <div><strong>{t.name}</strong><small class={status.usable ? 'server-token-settings__ok' : 'server-token-settings__bad'}>{status.label}</small><small>Servers: {t.servers.map(serverName).join(', ')}</small><small>Permissions: {t.permissions.join(', ')}</small><small>{t.createdAt !== null && `Created ${when(t.createdAt)} · `}{t.lastUsedAt === null ? 'Never used' : `Last used ${when(t.lastUsedAt)}`}</small></div>
-        {!t.revoked && <div class="server-token-settings__actions">
-          {confirmRotate === t.id ? <><small>The old token will stop working immediately.</small><button class="button button--primary" type="button" disabled={busy} onClick={() => void run(async () => {
-            const next = await requestJson(`/api/v1/auth/server-tokens/${encodeURIComponent(t.id)}/rotate`, (v) => expectString(expectRecord(v, 'rotated token'), 'token', 'rotated token'), { csrfToken, method: 'POST', body: {} });
-            setSecret(next); setConfirmRotate(null); await refresh();
-          })}>Confirm rotation</button><button class="button button--quiet" type="button" disabled={busy} onClick={() => setConfirmRotate(null)}>Cancel</button></>
-          : confirmRevoke === t.id ? <><button class="button button--danger" type="button" disabled={busy} onClick={() => void run(async () => { await requestJson(`/api/v1/auth/server-tokens/${encodeURIComponent(t.id)}`, (v) => expectRecord(v, 'revocation'), { csrfToken, method: 'DELETE', body: {} }); setConfirmRevoke(null); await refresh(); })}>Confirm revoke</button><button class="button button--quiet" type="button" disabled={busy} onClick={() => setConfirmRevoke(null)}>Cancel</button></>
-          : <><button class="button button--quiet" type="button" disabled={busy || !status.usable} onClick={() => { setConfirmRevoke(null); setConfirmRotate(t.id); }}>Rotate &amp; show new token</button><button class="button button--quiet" type="button" disabled={busy} onClick={() => { setConfirmRotate(null); setConfirmRevoke(t.id); }}>Revoke</button></>}
-        </div>}
-      </article>; })}</div>
-      <button class="button button--quiet" disabled={busy} onClick={() => void run(refresh)}>Refresh tokens</button>
+      <div class="server-token-settings__list">
+        <h3>Your tokens <small>{data.tokens.length}</small></h3>
+        {data.tokens.length === 0 && <p class="server-token-settings__empty">No tokens yet.</p>}
+        {data.tokens.map((t) => { const status = tokenStatus(t, Date.now()); return <article key={t.id} class={status.usable ? '' : 'is-inactive'}>
+          <div class="server-token-settings__token">
+            <div class="server-token-settings__token-title"><strong>{t.name}</strong><span class={`server-token-settings__status ${status.usable ? 'is-ok' : 'is-bad'}`}>{status.label}</span></div>
+            <dl>
+              <dt>Servers</dt><dd>{t.servers.map(serverName).join(', ')}</dd>
+              <dt>Permissions</dt><dd>{t.permissions.join(', ')}</dd>
+              <dt>Created</dt><dd>{t.createdAt === null ? '—' : when(t.createdAt)}</dd>
+              <dt>Last used</dt><dd>{t.lastUsedAt === null ? 'Never' : when(t.lastUsedAt)}</dd>
+            </dl>
+          </div>
+          {!t.revoked && <div class="server-token-settings__actions">
+            {confirmRotate === t.id ? <><small>The current value stops working immediately.</small><button class="button button--primary" type="button" disabled={busy} onClick={() => void run(async () => {
+              const next = await requestJson(`/api/v1/auth/server-tokens/${encodeURIComponent(t.id)}/rotate`, (v) => expectString(expectRecord(v, 'rotated token'), 'token', 'rotated token'), { csrfToken, method: 'POST', body: {} });
+              setSecret(next); setConfirmRotate(null); await refresh();
+            })}>Confirm rotate</button><button class="button button--quiet" type="button" disabled={busy} onClick={() => setConfirmRotate(null)}>Cancel</button></>
+            : confirmRevoke === t.id ? <><small>Tools using this token lose access.</small><button class="button button--danger" type="button" disabled={busy} onClick={() => void run(async () => { await requestJson(`/api/v1/auth/server-tokens/${encodeURIComponent(t.id)}`, (v) => expectRecord(v, 'revocation'), { csrfToken, method: 'DELETE', body: {} }); setConfirmRevoke(null); await refresh(); })}>Confirm revoke</button><button class="button button--quiet" type="button" disabled={busy} onClick={() => setConfirmRevoke(null)}>Cancel</button></>
+            : <><button class="button button--quiet" type="button" disabled={busy || !status.usable} title="Issue a new value for this token and show it once" onClick={() => { setConfirmRevoke(null); setConfirmRotate(t.id); }}>Rotate &amp; show</button><button class="button button--quiet" type="button" disabled={busy} onClick={() => { setConfirmRotate(null); setConfirmRevoke(t.id); }}>Revoke</button></>}
+          </div>}
+        </article>; })}
+      </div>
+      <div class="settings-card__foot"><span>Tokens are stored as verifiers only</span><button class="button button--quiet" type="button" disabled={busy} onClick={() => void run(refresh)}>Refresh</button></div>
     </>}
   </section>;
 }
