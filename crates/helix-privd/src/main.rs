@@ -76,10 +76,74 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 #[cfg(target_os = "linux")]
 use uuid::Uuid;
+
+/// The dashboard lists servers every few seconds. When AMP keeps failing, back
+/// off briefly between attempts (a hung AMP would otherwise stall every list
+/// for the API timeout) and log a repeated error only every ten minutes.
+#[cfg(target_os = "linux")]
+struct AmpListGate {
+    state: Mutex<AmpListState>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct AmpListState {
+    retry_after: Option<Instant>,
+    last_error: Option<String>,
+    last_logged: Option<Instant>,
+}
+
+#[cfg(target_os = "linux")]
+const AMP_FAILURE_BACKOFF: Duration = Duration::from_secs(15);
+#[cfg(target_os = "linux")]
+const AMP_REPEAT_LOG_INTERVAL: Duration = Duration::from_secs(600);
+
+#[cfg(target_os = "linux")]
+static AMP_LIST_GATE: AmpListGate = AmpListGate {
+    state: Mutex::new(AmpListState {
+        retry_after: None,
+        last_error: None,
+        last_logged: None,
+    }),
+};
+
+#[cfg(target_os = "linux")]
+impl AmpListGate {
+    fn should_try(&self, now: Instant) -> bool {
+        self.state.lock().map_or(true, |state| {
+            state.retry_after.is_none_or(|after| now >= after)
+        })
+    }
+
+    fn succeeded(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = AmpListState::default();
+        }
+    }
+
+    /// Record a failure; returns whether it should be logged.
+    fn failed(&self, error: &str, now: Instant) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return true;
+        };
+        state.retry_after = Some(now + AMP_FAILURE_BACKOFF);
+        let changed = state.last_error.as_deref() != Some(error);
+        let due = state
+            .last_logged
+            .is_none_or(|logged| now.saturating_duration_since(logged) >= AMP_REPEAT_LOG_INTERVAL);
+        if changed || due {
+            state.last_error = Some(error.to_owned());
+            state.last_logged = Some(now);
+            true
+        } else {
+            false
+        }
+    }
+}
 
 #[cfg(target_os = "linux")]
 const MAX_CONNECTIONS: usize = 32;
@@ -790,10 +854,19 @@ impl BrokerContext {
         } else {
             Vec::new()
         };
-        if let Some(amp) = &self.amp {
+        if let Some(amp) = &self.amp
+            && AMP_LIST_GATE.should_try(Instant::now())
+        {
             match amp.list_servers() {
-                Ok(imported) => servers.extend(imported.servers),
-                Err(error) => eprintln!("AMP compatibility inventory unavailable: {error}"),
+                Ok(imported) => {
+                    AMP_LIST_GATE.succeeded();
+                    servers.extend(imported.servers);
+                }
+                Err(error) => {
+                    if AMP_LIST_GATE.failed(&error, Instant::now()) {
+                        eprintln!("AMP compatibility inventory unavailable: {error}");
+                    }
+                }
             }
         }
         to_value(servers)
@@ -3672,6 +3745,27 @@ fn main() {
 #[cfg(all(target_os = "linux", test))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_amp_failures_back_off_and_log_once() {
+        let gate = AmpListGate {
+            state: Mutex::new(AmpListState::default()),
+        };
+        let start = Instant::now();
+        assert!(gate.should_try(start));
+        assert!(gate.failed("invalid instance list", start));
+        assert!(!gate.should_try(start + Duration::from_secs(2)));
+        assert!(gate.should_try(start + AMP_FAILURE_BACKOFF));
+        assert!(!gate.failed("invalid instance list", start + Duration::from_secs(20)));
+        assert!(gate.failed("connection refused", start + Duration::from_secs(40)));
+        assert!(gate.failed(
+            "connection refused",
+            start + Duration::from_secs(40) + AMP_REPEAT_LOG_INTERVAL
+        ));
+        gate.succeeded();
+        assert!(gate.should_try(start + Duration::from_secs(41)));
+        assert!(gate.failed("connection refused", start + Duration::from_secs(42)));
+    }
 
     fn context() -> BrokerContext {
         let root = tempfile::tempdir().unwrap().keep();

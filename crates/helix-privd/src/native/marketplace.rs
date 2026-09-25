@@ -2,7 +2,7 @@ use super::{
     FORGECDN_DOWNLOAD_HOSTS, InstanceManifest, MinecraftSoftware, NativeManager, native_id,
     now_unix_ms, require_https_host, run_program, software_name, valid_hex,
 };
-use helix_privd::{MarketplaceCatalog, ModpackProvider};
+use helix_privd::{GameKind, MarketplaceCatalog, ModpackProvider};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha1::{Digest as Sha1Digest, Sha1};
@@ -14,6 +14,7 @@ use std::{
     io::{Read as _, Write as _},
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 use uuid::Uuid;
 
@@ -97,9 +98,17 @@ impl NativeManager {
         catalog: MarketplaceCatalog,
     ) -> Result<Value, String> {
         let manifest = self.load_manifest(native_id(instance_id))?;
+        validate_search(query, offset, limit)?;
+        if matches!(manifest.kind, GameKind::Hytale) {
+            if !matches!(provider, ModpackProvider::Curseforge)
+                || !matches!(catalog, MarketplaceCatalog::Content)
+            {
+                return Err("Hytale mods come from CurseForge".to_owned());
+            }
+            return self.hytale_marketplace_search(instance_id, &manifest, query, offset, limit);
+        }
         self.require_minecraft_content(&manifest)?;
         let profile = content_profile(manifest.software)?;
-        validate_search(query, offset, limit)?;
         match provider {
             ModpackProvider::Curseforge => self.curseforge_marketplace_search(
                 instance_id,
@@ -154,6 +163,12 @@ impl NativeManager {
     ) -> Result<Value, String> {
         validate_modrinth_id(project_id, "project")?;
         let manifest = self.load_manifest(native_id(instance_id))?;
+        if matches!(manifest.kind, GameKind::Hytale) {
+            if !matches!(provider, ModpackProvider::Curseforge) {
+                return Err("Hytale mods come from CurseForge".to_owned());
+            }
+            return self.hytale_marketplace_project(instance_id, &manifest, project_id);
+        }
         self.require_minecraft_content(&manifest)?;
         let profile = content_profile(manifest.software)?;
         if matches!(provider, ModpackProvider::Curseforge) {
@@ -236,10 +251,23 @@ impl NativeManager {
             validate_modrinth_id(version_id, "version")?;
         }
         let manifest = self.load_manifest(native_id(instance_id))?;
-        self.require_minecraft_content(&manifest)?;
-        let profile = content_profile(manifest.software)?;
+        let hytale = matches!(manifest.kind, GameKind::Hytale);
+        if hytale && !matches!(provider, ModpackProvider::Curseforge) {
+            return Err("Hytale mods come from CurseForge".to_owned());
+        }
+        if !hytale {
+            self.require_minecraft_content(&manifest)?;
+        }
+        let profile = if hytale {
+            hytale_profile()
+        } else {
+            content_profile(manifest.software)?
+        };
         let _operation = self.begin_instance_operation(&manifest.id, "marketplace install")?;
         let resolved = match provider {
+            ModpackProvider::Curseforge if hytale => {
+                self.resolve_hytale_content_tree(project_id, version_id)?
+            }
             ModpackProvider::Curseforge => self.resolve_curseforge_content_tree(
                 project_id,
                 version_id,
@@ -625,9 +653,16 @@ impl NativeManager {
             )?;
             fs::set_permissions(staged, fs::Permissions::from_mode(0o640))
                 .map_err(|_| "could not protect the verified content file".to_owned())?;
-            ensure_safe_content_directory(&content_path)?;
-            fs::rename(staged, &destination)
-                .map_err(|_| "could not commit the verified content file".to_owned())?;
+            // Move into the container-writable folder through a descriptor so a
+            // folder swapped for a link cannot redirect root's rename.
+            let content_directory = open_content_directory(&content_path)?;
+            rustix::fs::renameat(
+                rustix::fs::CWD,
+                staged,
+                &content_directory,
+                content.file.filename.as_str(),
+            )
+            .map_err(|_| "could not commit the verified content file".to_owned())?;
             mutation.installed.push(destination);
 
             let record = InstallRecord {
@@ -987,7 +1022,8 @@ fn validate_modrinth_id(value: &str, label: &str) -> Result<(), String> {
 fn validate_content_filename(value: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > 180
-        || !value.to_ascii_lowercase().ends_with(".jar")
+        || !(value.to_ascii_lowercase().ends_with(".jar")
+            || value.to_ascii_lowercase().ends_with(".zip"))
         || value.starts_with('.')
         || value.contains(['/', '\\'])
         || value.chars().any(char::is_control)
@@ -1547,8 +1583,23 @@ fn select_curseforge_release<'a>(
 }
 
 fn select_curseforge_jar(file: &Value, url: String) -> Result<ResolvedFile, String> {
+    select_curseforge_file(file, url, &["jar"])
+}
+
+fn select_curseforge_file(
+    file: &Value,
+    url: String,
+    extensions: &[&str],
+) -> Result<ResolvedFile, String> {
     let filename = required_text(file, "fileName", 180)?;
     validate_content_filename(&filename)?;
+    let lower = filename.to_ascii_lowercase();
+    if !extensions
+        .iter()
+        .any(|extension| lower.ends_with(&format!(".{extension}")))
+    {
+        return Err("the CurseForge file type is not installable on this server".to_owned());
+    }
     require_https_host(&url, FORGECDN_DOWNLOAD_HOSTS)?;
     let size = file
         .get("fileLength")
@@ -1641,16 +1692,29 @@ fn ensure_content_directory(path: &Path, run_uid: u32) -> Result<(), String> {
         return Ok(());
     }
     fs::create_dir(path).map_err(|_| "could not create the server content directory".to_owned())?;
-    run_program(
-        Path::new("/usr/bin/chown"),
-        &[
-            format!("{run_uid}:{run_uid}"),
-            path.to_string_lossy().into_owned(),
-        ],
-        20,
-    )?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o750))
+    // The parent is writable by the game container: change the new folder only
+    // through a descriptor that refused to follow a swapped-in link.
+    let directory = open_content_directory(path)?;
+    rustix::fs::fchown(
+        &directory,
+        Some(rustix::fs::Uid::from_raw(run_uid)),
+        Some(rustix::fs::Gid::from_raw(run_uid)),
+    )
+    .map_err(|_| "could not set the server content directory owner".to_owned())?;
+    rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(0o750))
         .map_err(|_| "could not protect the server content directory".to_owned())
+}
+
+fn open_content_directory(path: &Path) -> Result<std::os::fd::OwnedFd, String> {
+    rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| "the server content directory is unsafe".to_owned())
 }
 
 fn ensure_safe_content_directory(path: &Path) -> Result<(), String> {
@@ -1846,6 +1910,355 @@ fn remove_directory_if_present(path: &Path) -> Result<(), String> {
         .map_err(|_| "could not clean the marketplace staging directory".to_owned())
 }
 
+// ---------------------------------------------------------------------------
+// Hytale mods (CurseForge). Hytale has one first-party mod API, so there is no
+// loader or game-version filter; files are `.jar` plugins or `.zip` packs that
+// the server loads from `mods/`.
+// ---------------------------------------------------------------------------
+
+const HYTALE_ACCEPTED_LOADER: &str = "hytale";
+
+fn hytale_profile() -> ContentProfile {
+    ContentProfile {
+        kind: "mod",
+        search_project_type: "mod",
+        directory: "mods",
+        accepted_loaders: &[HYTALE_ACCEPTED_LOADER],
+    }
+}
+
+/// CurseForge's numeric IDs for Hytale and its Mods class, looked up once
+/// from the catalog instead of being hard-coded.
+static HYTALE_CURSEFORGE_IDS: OnceLock<(u64, u64)> = OnceLock::new();
+
+impl NativeManager {
+    fn hytale_curseforge_ids(&self) -> Result<(u64, u64), String> {
+        if let Some(ids) = HYTALE_CURSEFORGE_IDS.get() {
+            return Ok(*ids);
+        }
+        let mut game_id = None;
+        for page in 0..10_u32 {
+            let games = self.curseforge_v1(&format!("games?index={}&pageSize=50", page * 50))?;
+            let data = games
+                .get("data")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "CurseForge returned an unexpected game list".to_owned())?;
+            game_id = data.iter().find_map(|game| {
+                (game.get("slug").and_then(Value::as_str) == Some("hytale"))
+                    .then(|| game.get("id").and_then(Value::as_u64))
+                    .flatten()
+            });
+            if game_id.is_some() || data.len() < 50 {
+                break;
+            }
+        }
+        let game_id = game_id.ok_or_else(|| {
+            "CurseForge did not list Hytale for this API key. Check the key in Settings.".to_owned()
+        })?;
+        let classes =
+            self.curseforge_v1(&format!("categories?gameId={game_id}&classesOnly=true"))?;
+        let class_id = classes
+            .get("data")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find_map(|class| {
+                let slug = class
+                    .get("slug")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let name = class
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                (slug.eq_ignore_ascii_case("mods") || name.eq_ignore_ascii_case("mods"))
+                    .then(|| class.get("id").and_then(Value::as_u64))
+                    .flatten()
+            })
+            .ok_or_else(|| "CurseForge has no Hytale Mods category".to_owned())?;
+        let _ = HYTALE_CURSEFORGE_IDS.set((game_id, class_id));
+        Ok((game_id, class_id))
+    }
+
+    fn hytale_compatibility(manifest: &InstanceManifest) -> Value {
+        json!({
+            "minecraft_version": manifest.minecraft_version,
+            "server_software": "Hytale",
+            "content_kind": "mod",
+            "accepted_loaders": [HYTALE_ACCEPTED_LOADER],
+            "install_directory": "mods",
+        })
+    }
+
+    fn hytale_marketplace_search(
+        &self,
+        instance_id: &str,
+        manifest: &InstanceManifest,
+        query: &str,
+        offset: u32,
+        limit: u8,
+    ) -> Result<Value, String> {
+        let (game_id, class_id) = self.hytale_curseforge_ids()?;
+        let response = self.curseforge_v1(&format!(
+            "mods/search?gameId={game_id}&classId={class_id}&index={offset}&pageSize={limit}&sortField=2&sortOrder=desc&searchFilter={}",
+            percent_encode(query.trim())
+        ))?;
+        let hits = response
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "CurseForge returned an unexpected catalog shape".to_owned())?;
+        let profile = hytale_profile();
+        let records = self.load_install_records(&manifest.id);
+        let hits = hits
+            .iter()
+            .take(usize::from(MAX_SEARCH_LIMIT))
+            .map(|hit| {
+                let mut hit = sanitize_curseforge_hit(hit, &profile, &records)?;
+                if let Some(slug) = hit.get("slug").and_then(Value::as_str) {
+                    hit["web_url"] = json!(hytale_web_url(slug));
+                }
+                hit["project_type"] = json!("mod");
+                Ok(hit)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let total = response
+            .pointer("/pagination/totalCount")
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| u64::try_from(hits.len()).unwrap_or(u64::MAX));
+        Ok(json!({
+            "schema_version": 1,
+            "instance_id": instance_id,
+            "provider": "curseforge",
+            "catalog": catalog_name(MarketplaceCatalog::Content),
+            "compatibility": Self::hytale_compatibility(manifest),
+            "total_hits": total,
+            "offset": offset,
+            "limit": limit,
+            "hits": hits,
+            "collected_at_unix_ms": now_unix_ms(),
+        }))
+    }
+
+    fn hytale_marketplace_project(
+        &self,
+        instance_id: &str,
+        manifest: &InstanceManifest,
+        project_id: &str,
+    ) -> Result<Value, String> {
+        let (game_id, _) = self.hytale_curseforge_ids()?;
+        let project = self.hytale_project(project_id, game_id)?;
+        let slug = required_text(&project, "slug", 128)
+            .or_else(|_| required_text(&project, "name", 128))?;
+        let title = optional_text(&project, "name", 256).unwrap_or_else(|| slug.clone());
+        let files_response = self.curseforge_v1(&format!("mods/{project_id}/files?pageSize=50"))?;
+        let files = files_response
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let total_files = files_response
+            .pointer("/pagination/totalCount")
+            .and_then(Value::as_u64);
+        let versions = files
+            .iter()
+            .take(100)
+            .filter_map(|file| sanitize_hytale_version(file, &manifest.minecraft_version).ok())
+            .collect::<Vec<_>>();
+        let version_count = versions.len();
+        let records = self.load_install_records(&manifest.id);
+        let installed = records.get(project_id);
+        let (body, body_format) = match self.curseforge_description(project_id) {
+            Some(html) => (html, "html"),
+            None => (
+                optional_text_chars(&project, "summary", MAX_PROJECT_BODY_CHARS)
+                    .unwrap_or_default(),
+                "markdown",
+            ),
+        };
+        Ok(json!({
+            "schema_version": 1,
+            "instance_id": instance_id,
+            "provider": "curseforge",
+            "compatibility": Self::hytale_compatibility(manifest),
+            "project": {
+                "id": project_id,
+                "slug": slug,
+                "title": title,
+                "description": optional_text(&project, "summary", 2_048),
+                "body": body,
+                "project_type": "mod",
+                "content_kind": "mod",
+                "server_side": "unknown",
+                "downloads": project.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
+                "followers": 0,
+                "license": Value::Null,
+                "source_url": safe_https_url(project.pointer("/links/sourceUrl").and_then(Value::as_str)),
+                "issues_url": safe_https_url(project.pointer("/links/issuesUrl").and_then(Value::as_str)),
+                "wiki_url": safe_https_url(project.pointer("/links/wikiUrl").and_then(Value::as_str)),
+                "web_url": hytale_web_url(&slug),
+                "icon_url": curseforge_icon_proxy_url(project.pointer("/logo/url").and_then(Value::as_str)),
+            },
+            "versions": versions,
+            "version_count_returned": version_count,
+            "version_results_truncated": total_files.is_some_and(|total| total > u64::try_from(files.len()).unwrap_or(u64::MAX)),
+            "installed": installed.is_some(),
+            "installed_version": installed.map(|record| record.version_number.clone()),
+            "body_format": body_format,
+            "collected_at_unix_ms": now_unix_ms(),
+        }))
+    }
+
+    /// Load a CurseForge project and refuse anything that is not a Hytale mod,
+    /// so a dependency ID cannot pull in another game's content.
+    fn hytale_project(&self, project_id: &str, game_id: u64) -> Result<Value, String> {
+        validate_modrinth_id(project_id, "project")?;
+        let project = self.curseforge_v1(&format!("mods/{project_id}"))?;
+        let project = project.get("data").cloned().unwrap_or(project);
+        if project.get("gameId").and_then(Value::as_u64) != Some(game_id) {
+            return Err("that CurseForge project is not a Hytale mod".to_owned());
+        }
+        Ok(project)
+    }
+
+    fn resolve_hytale_content_tree(
+        &self,
+        root_project_id: &str,
+        root_version_id: Option<&str>,
+    ) -> Result<Vec<ResolvedContent>, String> {
+        let (game_id, _) = self.hytale_curseforge_ids()?;
+        let mut pending = VecDeque::from([(
+            root_project_id.to_owned(),
+            root_version_id.map(str::to_owned),
+        )]);
+        let mut resolved = Vec::new();
+        let mut seen = HashSet::new();
+        while let Some((project_id, version_hint)) = pending.pop_front() {
+            if resolved.len() >= MAX_DEPENDENCY_PROJECTS {
+                return Err(format!(
+                    "the mod dependency tree exceeds the {MAX_DEPENDENCY_PROJECTS}-project safety limit"
+                ));
+            }
+            validate_modrinth_id(&project_id, "project")?;
+            if !seen.insert(project_id.clone()) {
+                continue;
+            }
+            let project = self.hytale_project(&project_id, game_id)?;
+            let file = if let Some(file_id) = version_hint.as_deref() {
+                validate_modrinth_id(file_id, "version")?;
+                self.curseforge_v1(&format!("mods/{project_id}/files/{file_id}"))?
+                    .get("data")
+                    .cloned()
+                    .ok_or_else(|| "CurseForge returned a file without data".to_owned())?
+            } else {
+                let files = self.curseforge_v1(&format!("mods/{project_id}/files?pageSize=50"))?;
+                let files = files
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .ok_or_else(|| "CurseForge returned no files for this mod".to_owned())?;
+                select_hytale_release(&files)?.clone()
+            };
+            let file_id = file
+                .get("id")
+                .and_then(Value::as_u64)
+                .map(|id| id.to_string())
+                .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
+            let slug = required_text(&project, "slug", 128)
+                .or_else(|_| required_text(&project, "name", 128))?;
+            let title = optional_text(&project, "name", 256).unwrap_or_else(|| slug.clone());
+            let url = self.resolve_curseforge_download_url(&project_id, &file)?;
+            let resolved_file = select_curseforge_file(&file, url, &["jar", "zip"])?;
+            let mut optional_dependencies = Vec::new();
+            if let Some(dependencies) = file.get("dependencies").and_then(Value::as_array) {
+                for dependency in dependencies.iter().take(128) {
+                    let relation = dependency
+                        .get("relationType")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let dep_id = dependency
+                        .get("modId")
+                        .and_then(Value::as_u64)
+                        .map(|id| id.to_string());
+                    match (relation, dep_id) {
+                        (3, Some(id)) => pending.push_back((id, None)),
+                        (2, Some(id)) => optional_dependencies.push(id),
+                        _ => {}
+                    }
+                }
+            }
+            resolved.push(ResolvedContent {
+                project_id,
+                project_slug: slug,
+                project_title: title,
+                version_id: file_id,
+                version_number: optional_text(&file, "displayName", 128)
+                    .or_else(|| optional_text(&file, "fileName", 128))
+                    .unwrap_or_else(|| "unknown".to_owned()),
+                file: resolved_file,
+                optional_dependencies,
+            });
+        }
+        Ok(resolved)
+    }
+}
+
+fn hytale_web_url(slug: &str) -> String {
+    format!(
+        "https://www.curseforge.com/hytale/mods/{}",
+        percent_encode(slug)
+    )
+}
+
+fn hytale_file_name_allowed(file: &Value) -> bool {
+    optional_text(file, "fileName", 180).is_some_and(|name| {
+        let name = name.to_ascii_lowercase();
+        name.ends_with(".jar") || name.ends_with(".zip")
+    })
+}
+
+fn sanitize_hytale_version(file: &Value, server_version: &str) -> Result<Value, String> {
+    if !hytale_file_name_allowed(file) {
+        return Err("unsupported file".to_owned());
+    }
+    let id = file
+        .get("id")
+        .and_then(Value::as_u64)
+        .map(|id| id.to_string())
+        .ok_or_else(|| "CurseForge returned a file without an id".to_owned())?;
+    validate_modrinth_id(&id, "version")?;
+    let filename = optional_text(file, "fileName", 180).unwrap_or_default();
+    let version_type = match file.get("releaseType").and_then(Value::as_u64).unwrap_or(1) {
+        1 => "release",
+        2 => "beta",
+        _ => "alpha",
+    };
+    // Hytale has one mod API, so every file targets the server; its own game
+    // version labels are shown after the server's for reference.
+    let mut game_versions = vec![server_version.to_owned()];
+    game_versions.extend(curseforge_game_versions(file));
+    Ok(json!({
+        "id": id,
+        "name": optional_text(file, "displayName", 256).unwrap_or_else(|| filename.clone()),
+        "version_number": if filename.is_empty() { id.clone() } else { filename },
+        "version_type": version_type,
+        "date_published": optional_text(file, "fileDate", 64),
+        "downloads": file.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
+        "game_versions": game_versions,
+        "loaders": [HYTALE_ACCEPTED_LOADER],
+        "has_primary_file": true,
+    }))
+}
+
+fn select_hytale_release(files: &[Value]) -> Result<&Value, String> {
+    files
+        .iter()
+        .find(|file| {
+            hytale_file_name_allowed(file)
+                && file.get("releaseType").and_then(Value::as_u64).unwrap_or(0) == 1
+        })
+        .or_else(|| files.iter().find(|file| hytale_file_name_allowed(file)))
+        .ok_or_else(|| "this mod has no downloadable .jar or .zip file on CurseForge".to_owned())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2037,7 +2450,10 @@ mod tests {
         unknown["path"] = json!("/etc/passwd");
         assert!(serde_json::from_value::<InstallRecord>(unknown).is_err());
         assert!(validate_content_filename("../example.jar").is_err());
-        assert!(validate_content_filename("example.zip").is_err());
+        // Hytale packs are .zip; Minecraft's .jar-only rule is enforced where
+        // files are selected (see curseforge_files_must_match_the_server_extensions).
+        assert!(validate_content_filename("example.zip").is_ok());
+        assert!(validate_content_filename("example.exe").is_err());
 
         let mut wrong_project = serde_json::to_value(&record).unwrap();
         wrong_project["project_id"] = json!("other-project");
@@ -2053,5 +2469,42 @@ mod tests {
         repeated_file["files"] = json!(["example.jar", "example.jar"]);
         let repeated_file: InstallRecord = serde_json::from_value(repeated_file).unwrap();
         assert!(validate_install_record(&repeated_file, "abc", "plugins").is_err());
+    }
+    #[test]
+    fn hytale_files_are_jar_or_zip_and_prefer_releases() {
+        let files = vec![
+            json!({"id": 1, "fileName": "notes.txt", "releaseType": 1}),
+            json!({"id": 2, "fileName": "Cool-Mod-beta.zip", "releaseType": 2}),
+            json!({"id": 3, "fileName": "Cool-Mod-1.0.jar", "releaseType": 1}),
+        ];
+        assert_eq!(select_hytale_release(&files).unwrap()["id"], 3);
+        assert_eq!(select_hytale_release(&files[..2]).unwrap()["id"], 2);
+        assert!(select_hytale_release(&files[..1]).is_err());
+        let version = sanitize_hytale_version(&files[1], "dedicated").unwrap();
+        assert_eq!(version["loaders"], json!(["hytale"]));
+        assert_eq!(version["game_versions"][0], "dedicated");
+        assert!(sanitize_hytale_version(&files[0], "dedicated").is_err());
+        assert_eq!(
+            hytale_web_url("cool mod"),
+            "https://www.curseforge.com/hytale/mods/cool%20mod"
+        );
+    }
+
+    #[test]
+    fn curseforge_files_must_match_the_server_extensions() {
+        let file = json!({
+            "fileName": "pack.zip",
+            "fileLength": 4096,
+            "hashes": [{"algo": 1, "value": "0123456789abcdef0123456789abcdef01234567"}]
+        });
+        let url = "https://mediafilez.forgecdn.net/files/1/2/pack.zip".to_owned();
+        assert!(select_curseforge_jar(&file, url.clone()).is_err());
+        assert!(select_curseforge_file(&file, url, &["jar", "zip"]).is_ok());
+        for unsafe_name in ["../x.jar", ".hidden.jar", "run.sh", "a\\b.zip"] {
+            assert!(
+                validate_content_filename(unsafe_name).is_err(),
+                "{unsafe_name}"
+            );
+        }
     }
 }
