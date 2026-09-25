@@ -1022,6 +1022,194 @@
         }
       }
     },
+    "/servers/port-policies/palworld": {
+      "parameters": [],
+      "get": {
+        "operationId": "getServersPortPoliciesPalworld",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Read the Palworld port pool",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putServersPortPoliciesPalworld",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Persist the Palworld port pool and optional public-setup default",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GamePortPolicySpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/port-policies/{game}": {
+      "parameters": [
+        {
+          "name": "game",
+          "in": "path",
+          "required": true,
+          "description": "A game created through the shared spec: satisfactory, project_zomboid, seven_days_to_die, rust, sons_of_the_forest, factorio, dont_starve_together or vintage_story",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getServersPortPoliciesGame",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Read the shared-spec game port pool",
+        "x-helix-capability": "games.view",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putServersPortPoliciesGame",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Persist the shared-spec game port pool and optional public-setup default",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GamePortPolicySpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/palworld": {
+      "parameters": [],
+      "post": {
+        "operationId": "postServersPalworld",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Start a native Palworld creation job",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PalworldCreateSpec"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/native/{game}": {
+      "parameters": [
+        {
+          "name": "game",
+          "in": "path",
+          "required": true,
+          "description": "A game created through the shared spec: satisfactory, project_zomboid, seven_days_to_die, rust, sons_of_the_forest, factorio, dont_starve_together or vintage_story",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersNativeGame",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Start a native shared-spec game creation job",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GameCreateSpec"
+              }
+            }
+          }
+        }
+      }
+    },
     "/servers/migrate/preflight": {
       "parameters": [],
       "post": {
@@ -3198,7 +3386,16 @@
           "minecraft",
           "vrising",
           "valheim",
-          "terraria"
+          "terraria",
+          "palworld",
+          "satisfactory",
+          "project_zomboid",
+          "seven_days_to_die",
+          "rust",
+          "sons_of_the_forest",
+          "factorio",
+          "dont_starve_together",
+          "vintage_story"
         ]
       },
       "ServerNetworkExposure": {
@@ -3730,6 +3927,216 @@
           },
           "settings": {
             "$ref": "#/components/schemas/ValheimSettings"
+          }
+        }
+      },
+      "PalworldCreateSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "memory_mb",
+          "max_players",
+          "start_on_boot"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "cpu_millis": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "game_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network_exposure": {
+            "$ref": "#/components/schemas/ServerNetworkExposure"
+          },
+          "list_on_browser": {
+            "type": "boolean",
+            "default": true
+          },
+          "start_on_boot": {
+            "type": "boolean"
+          },
+          "server_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "GameCreateSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "memory_mb",
+          "max_players",
+          "start_on_boot"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "cpu_millis": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "max_players": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "game_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query_port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network_exposure": {
+            "$ref": "#/components/schemas/ServerNetworkExposure"
+          },
+          "list_on_browser": {
+            "type": "boolean",
+            "default": true
+          },
+          "start_on_boot": {
+            "type": "boolean"
+          },
+          "server_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "admin_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cluster_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "caves": {
+            "type": "boolean",
+            "default": false
+          },
+          "world_seed": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "world_size": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "world_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wine_runtime_acknowledged": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
