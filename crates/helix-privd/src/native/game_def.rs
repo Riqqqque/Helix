@@ -32,6 +32,8 @@ pub(crate) struct GameDef {
     pub entrypoint: &'static str,
     pub artifact: &'static str,
     pub memory: (u32, u32),
+    /// Supported player-count range; recorded per game but not enforced yet.
+    #[allow(dead_code)]
     pub players: (u16, u16),
     /// Migration defaults: (memory_mb, max_players).
     pub defaults: (u32, u16),
