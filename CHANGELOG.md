@@ -4,6 +4,38 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.2.0 - 2026-09-25
+
+### Added
+
+- Hytale dedicated servers. Helix installs the official server with the Hytale
+  Downloader, runs it on Java 25, and updates it on each start. The Hytale
+  account sign-ins (download and server) appear as links during creation and
+  on the server page, and the server keeps its sign-in across restarts. A
+  Console tab sends commands to the server, and the Mods tab installs Hytale
+  mods from CurseForge with required dependencies and checksum checks. See
+  [docs/HYTALE.md](docs/HYTALE.md).
+
+### Security
+
+- The privileged broker no longer follows symlinks a game server places in its
+  own data folder. Previously a compromised game server could make the broker
+  change the owner and mode of a host file (when protecting server artifacts on
+  startup or saving settings), read a host file back through settings, or run
+  it out of memory by linking a settings file to `/dev/zero`. Ownership and mode
+  changes now go through file descriptors opened without following links, and
+  settings files are read with a size limit, refusing links.
+- Mod installs move verified files into `mods/` and `plugins/` through a
+  descriptor, so a folder swapped for a link cannot redirect them.
+
+### Fixed
+
+- Toggling the V Rising server-list setting no longer leaves its settings file
+  unreadable by the game.
+- A misbehaving AMP no longer writes the same error to the journal every two
+  seconds or delays every server list; Helix backs off for 15 seconds after a
+  failure and repeats an unchanged error at most every ten minutes.
+
 ## 1.1.1 - 2026-09-24
 
 ### Fixed
