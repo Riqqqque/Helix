@@ -264,7 +264,6 @@ impl HelixUpdateManager {
             &[
                 "--no-same-owner".to_owned(),
                 "--no-same-permissions".to_owned(),
-                "--no-absolute-filenames".to_owned(),
                 "-C".to_owned(),
                 staging.to_string_lossy().into_owned(),
                 "-xzf".to_owned(),
@@ -438,7 +437,7 @@ impl HelixUpdateManager {
 
     fn status_inner(&self, refresh: bool) -> Result<Value, String> {
         let current = env!("CARGO_PKG_VERSION");
-        let compose = self.compose_context().ok();
+        let compose = self.compose_context();
         let plan = match self.load_plan(refresh) {
             Ok(plan) => plan,
             Err(error) => {
@@ -453,7 +452,7 @@ impl HelixUpdateManager {
                     "release_url": Value::Null,
                     "release_notes": Value::Null,
                     "update_available": false,
-                    "compose_detected": compose.is_some(),
+                    "compose_detected": compose.is_ok(),
                     "required_confirmation": REQUIRED_CONFIRMATION,
                     "rollback_claimed": true,
                     "automatic_reboot": false
@@ -461,12 +460,14 @@ impl HelixUpdateManager {
             }
         };
         let update_available = version_is_newer(&plan.version, current)?;
-        let compose_detected = compose.is_some();
-        let (available, reason_code, reason) = if !compose_detected {
+        let compose_detected = compose.is_ok();
+        let (available, reason_code, reason) = if let Err(error) = &compose {
             (
                 false,
                 "compose_project_not_detected",
-                "Helix can see a GitHub release, but this host has no detected dashboard Compose project, so it will not replace binaries or containers from here.".to_owned(),
+                format!(
+                    "Helix can see a GitHub release, but this host has no detected dashboard Compose project ({error}), so it will not replace binaries or containers from here."
+                ),
             )
         } else if !update_available {
             (
@@ -565,10 +566,7 @@ impl HelixUpdateManager {
             .filter(|name| is_compose_project_name(name))
             .ok_or_else(|| "the dashboard container has no Compose project name".to_owned())?
             .to_owned();
-        let env_file = working_dir.join(".env");
-        if !env_file.is_file() {
-            return Err("the Compose working directory has no .env file".to_owned());
-        }
+        let env_file = compose_env_file(&labels, &working_dir)?;
         Ok(ComposeContext {
             project_name,
             env_file,
@@ -1286,6 +1284,25 @@ fn is_compose_project_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_'))
 }
 
+/// Prefer `.env` in the Compose working directory, then the single env file
+/// Compose recorded when the project was brought up with `--env-file`.
+fn compose_env_file(labels: &Value, working_dir: &Path) -> Result<PathBuf, String> {
+    let default = working_dir.join(".env");
+    if default.is_file() {
+        return Ok(default);
+    }
+    let recorded = labels
+        .get("com.docker.compose.project.environment_file")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && !value.contains(','))
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.is_file());
+    recorded.ok_or_else(|| {
+        "the Compose working directory has no .env file and the dashboard has no recorded env file"
+            .to_owned()
+    })
+}
+
 fn truncate_notes(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.chars().count() <= MAX_RELEASE_NOTES_CHARS {
@@ -1493,6 +1510,30 @@ fn default_finalize_unit() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compose_env_file_prefers_dot_env_then_the_recorded_env_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let recorded = dir.path().join("deploy.env");
+        fs::write(&recorded, "A=1\n").unwrap();
+        let labels = json!({
+            "com.docker.compose.project.environment_file": recorded.to_string_lossy()
+        });
+        assert_eq!(compose_env_file(&labels, dir.path()).unwrap(), recorded);
+        fs::write(dir.path().join(".env"), "A=1\n").unwrap();
+        assert_eq!(
+            compose_env_file(&labels, dir.path()).unwrap(),
+            dir.path().join(".env")
+        );
+        let empty = tempfile::tempdir().unwrap();
+        let several = json!({
+            "com.docker.compose.project.environment_file": format!("{},{}", recorded.display(), recorded.display())
+        });
+        assert!(compose_env_file(&several, empty.path()).is_err());
+        assert!(compose_env_file(&json!({}), empty.path()).is_err());
+        let relative = json!({"com.docker.compose.project.environment_file": "deploy.env"});
+        assert!(compose_env_file(&relative, empty.path()).is_err());
+    }
 
     #[test]
     fn release_tags_reject_prerelease_and_non_semver() {
