@@ -38,6 +38,7 @@ use uuid::Uuid;
 mod dont_starve_together;
 mod factorio;
 pub(crate) mod game_def;
+mod hytale;
 mod marketplace;
 mod modpacks;
 mod palworld;
@@ -1810,6 +1811,8 @@ impl NativeManager {
         if manifest.is_minecraft() {
             capabilities.insert(0, "console");
             capabilities.insert(1, "settings");
+        } else if matches!(manifest.kind, GameKind::Hytale) {
+            capabilities.insert(0, "console");
         }
         let tps = if state.running && manifest.is_minecraft() {
             self.load_tps_map(&[(
@@ -1865,6 +1868,11 @@ impl NativeManager {
                 "scope": "per_server"
             },
             "capabilities": capabilities,
+            "hytale_auth": if matches!(manifest.kind, GameKind::Hytale) {
+                hytale::read_auth_prompt(&data_path)
+            } else {
+                Value::Null
+            },
             "browser_listing": if manifest.is_vrising() {
                 read_vrising_browser_listing(&data_path)
             } else {
@@ -2016,6 +2024,9 @@ impl NativeManager {
 
     pub fn server_console(&self, id: &str, command: &str) -> Result<Value, String> {
         let manifest = self.load_manifest(native_id(id))?;
+        if matches!(manifest.kind, GameKind::Hytale) {
+            return self.hytale_console(&manifest, command);
+        }
         if !manifest.is_minecraft() {
             return Err(format!(
                 "{} does not expose a command console; use the log view and Files instead",
@@ -2057,6 +2068,30 @@ impl NativeManager {
             "instance_id": format!("helix:{}", manifest.id),
             "command": command,
             "response": response,
+            "history_recorded": history_recorded,
+            "completed_at_unix_ms": now_unix_ms()
+        }))
+    }
+
+    /// Hytale has no RCON; commands go to the server's stdin pipe and the reply
+    /// shows up in its log, so the response only confirms delivery.
+    fn hytale_console(&self, manifest: &InstanceManifest, command: &str) -> Result<Value, String> {
+        if !self.container_running(&manifest.container_name) {
+            return Err("start the server before using its console".to_owned());
+        }
+        let data_path = self.instance_path(&manifest.id)?;
+        hytale::send_console_command(&data_path, command)?;
+        let command = command.trim().trim_start_matches('/');
+        let archive = self.ensure_console_archiver(manifest)?;
+        let history_recorded = archive.lock().is_ok_and(|mut archive| {
+            archive
+                .append(&format!("[helix {}] > /{command}", now_unix_ms()))
+                .is_ok()
+        });
+        Ok(json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "command": command,
+            "response": "Sent to the Hytale console. Its reply appears in the log.",
             "history_recorded": history_recorded,
             "completed_at_unix_ms": now_unix_ms()
         }))
@@ -3347,7 +3382,12 @@ impl NativeManager {
                 )?;
                 if let Some(source_properties) = migrate_plan::read_source_properties(source) {
                     let properties_path = data_path.join("server.properties");
-                    let current = fs::read_to_string(&properties_path).unwrap_or_default();
+                    let current = read_small_regular_file(
+                        &properties_path,
+                        MAX_PROPERTIES_BYTES,
+                        "server settings",
+                    )
+                    .unwrap_or_default();
                     let merged = migrate_plan::merge_server_properties(
                         &current,
                         &source_properties,
@@ -3500,11 +3540,13 @@ impl NativeManager {
             if let Some(source) = overlay {
                 progress("Copying V Rising saves", 48);
                 self.overlay_migrated_game(GameKind::VRising, source, &data_path, false, run_uid)?;
-                let settings_path = data_path
-                    .join("save")
-                    .join("Settings")
-                    .join("ServerHostSettings.json");
-                let source_settings = fs::read_to_string(&settings_path).unwrap_or_default();
+                let source_settings = read_beneath(
+                    &data_path,
+                    VRISING_HOST_SETTINGS,
+                    MAX_VRISING_SETTINGS_BYTES,
+                    "V Rising host settings",
+                )
+                .unwrap_or_default();
                 let settings = migrate_plan::merge_vrising_host_settings(
                     vrising::host_settings_json(
                         spec.name.trim(),
@@ -3515,12 +3557,16 @@ impl NativeManager {
                     ),
                     &source_settings,
                 );
-                fs::write(
-                    &settings_path,
-                    serde_json::to_vec_pretty(&settings)
+                write_managed_file_beneath(
+                    &data_path,
+                    "save/Settings",
+                    "ServerHostSettings.json",
+                    &serde_json::to_vec_pretty(&settings)
                         .map_err(|_| "could not write V Rising host settings".to_owned())?,
-                )
-                .map_err(|_| "could not write V Rising host settings".to_owned())?;
+                    0o660,
+                    0,
+                    run_uid,
+                )?;
                 self.chown_instance(&data_path, run_uid)?;
             }
 
@@ -4131,10 +4177,15 @@ impl NativeManager {
             };
             self.wait_until_ready(&manifest, ready_timeout, |elapsed| {
                 let percent = 62_u64.saturating_add((elapsed / 40).min(35));
-                progress(
-                    &format!("Installing {} and waiting for first boot", def.display),
-                    u8::try_from(percent).unwrap_or(97),
-                );
+                // Hytale's downloader waits for an account sign-in; surface the
+                // validated link in the job instead of a silent progress bar.
+                let message = matches!(kind, GameKind::Hytale)
+                    .then(|| hytale::sign_in_progress(&data_path))
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        format!("Installing {} and waiting for first boot", def.display)
+                    });
+                progress(&message, u8::try_from(percent).unwrap_or(97));
             })?;
             self.finalize_container_restart_policy(&manifest)?;
             self.ensure_console_archiver(&manifest)?;
@@ -4310,9 +4361,12 @@ impl NativeManager {
         let data_path = self.instance_path(&manifest.id)?;
         let path = vrising_host_settings_path(&data_path);
         let mut settings = if path.is_file() {
-            serde_json::from_slice::<Value>(
-                &fs::read(&path).map_err(|_| "could not read V Rising host settings".to_owned())?,
-            )
+            serde_json::from_str::<Value>(&read_beneath(
+                &data_path,
+                VRISING_HOST_SETTINGS,
+                MAX_VRISING_SETTINGS_BYTES,
+                "V Rising host settings",
+            )?)
             .map_err(|_| "V Rising host settings are invalid".to_owned())?
         } else {
             vrising::host_settings_json(
@@ -4331,7 +4385,15 @@ impl NativeManager {
         object.insert("HideIPAddress".to_owned(), json!(list_on_browser));
         let encoded = serde_json::to_string_pretty(&settings)
             .map_err(|_| "could not encode V Rising host settings".to_owned())?;
-        write_private_text(&path, &format!("{encoded}\n"))?;
+        write_managed_file_beneath(
+            &data_path,
+            "save/Settings",
+            "ServerHostSettings.json",
+            format!("{encoded}\n").as_bytes(),
+            0o660,
+            0,
+            manifest.run_uid,
+        )?;
         let running = self.container_running(&manifest.container_name);
         Ok(json!({
             "instance_id": format!("helix:{}", manifest.id),
@@ -7117,27 +7179,7 @@ impl NativeManager {
     }
 
     fn protect_instance_artifacts(&self, path: &Path, uid: u32) -> Result<(), String> {
-        for (name, mode) in [
-            ("pumpkin", 0o550),
-            ("pumpkin.toml", 0o660),
-            ("server.jar", 0o440),
-            ("server.properties", 0o660),
-            ("eula.txt", 0o440),
-            (MODPACK_LOCK_FILE, 0o440),
-        ] {
-            let artifact = path.join(name);
-            if !artifact.is_file() {
-                continue;
-            }
-            run_program(
-                Path::new("/usr/bin/chown"),
-                &[format!("0:{uid}"), artifact.to_string_lossy().into_owned()],
-                20,
-            )?;
-            fs::set_permissions(&artifact, fs::Permissions::from_mode(mode))
-                .map_err(|_| format!("could not protect {}", artifact.display()))?;
-        }
-        Ok(())
+        protect_artifacts_in(path, uid)
     }
 
     fn curl_no_redirect(
@@ -9119,6 +9161,10 @@ fn preserve_settings_after_stop(path: &Path, saved: &str, run_uid: u32) -> Resul
     Ok(())
 }
 
+/// Atomically replace a file that lives in a game container's writable tree.
+/// Every step works on descriptors (no path-based chown/chmod after creation)
+/// so a container that swaps the staged file or its parent for a symlink
+/// cannot redirect root's ownership or mode changes onto a host file.
 fn write_managed_file(
     path: &Path,
     content: &[u8],
@@ -9128,33 +9174,100 @@ fn write_managed_file(
 ) -> Result<(), String> {
     let parent = path
         .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
         .ok_or_else(|| "managed file path has no parent".to_owned())?;
-    let temporary = parent.join(format!(".helix-write-{}.partial", Uuid::new_v4()));
+    let name = path
+        .file_name()
+        .ok_or_else(|| "managed file path has no name".to_owned())?;
+    let directory = rustix::fs::open(
+        parent,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| "the managed file's folder is missing or is a link".to_owned())?;
+    write_managed_file_at(&directory, name, content, mode, owner_uid, owner_gid)
+}
+
+/// Like [`write_managed_file`], but the parent is resolved beneath `root`
+/// without following any symlink, for files nested in container folders.
+fn write_managed_file_beneath(
+    root: &Path,
+    parent_relative: &str,
+    name: &str,
+    content: &[u8],
+    mode: u32,
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<(), String> {
+    let root = rustix::fs::open(
+        root,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| "the server folder is unavailable".to_owned())?;
+    let directory = rustix::fs::openat2(
+        &root,
+        parent_relative,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::BENEATH
+            | rustix::fs::ResolveFlags::NO_SYMLINKS
+            | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|_| "the managed file's folder is missing or is a link".to_owned())?;
+    write_managed_file_at(
+        &directory,
+        std::ffi::OsStr::new(name),
+        content,
+        mode,
+        owner_uid,
+        owner_gid,
+    )
+}
+
+fn write_managed_file_at(
+    directory: &std::os::fd::OwnedFd,
+    name: &std::ffi::OsStr,
+    content: &[u8],
+    mode: u32,
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<(), String> {
+    let temporary = format!(".helix-write-{}.partial", Uuid::new_v4());
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(mode)
-            .open(&temporary)
-            .map_err(|_| "could not stage the managed file".to_owned())?;
+        let staged = rustix::fs::openat(
+            directory,
+            temporary.as_str(),
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )
+        .map_err(|_| "could not stage the managed file".to_owned())?;
+        rustix::fs::fchown(
+            &staged,
+            Some(rustix::fs::Uid::from_raw(owner_uid)),
+            Some(rustix::fs::Gid::from_raw(owner_gid)),
+        )
+        .map_err(|_| "could not set the managed file owner".to_owned())?;
+        rustix::fs::fchmod(&staged, rustix::fs::Mode::from_raw_mode(mode))
+            .map_err(|_| "could not protect the managed file".to_owned())?;
+        let mut file = File::from(staged);
         file.write_all(content)
             .and_then(|()| file.sync_all())
             .map_err(|_| "could not persist the managed file".to_owned())?;
-        run_program(
-            Path::new("/usr/bin/chown"),
-            &[
-                format!("{owner_uid}:{owner_gid}"),
-                temporary.to_string_lossy().into_owned(),
-            ],
-            20,
-        )?;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(mode))
-            .map_err(|_| "could not protect the managed file".to_owned())?;
-        fs::rename(&temporary, path).map_err(|_| "could not commit the managed file".to_owned())?;
-        sync_directory(parent)
+        rustix::fs::renameat(directory, temporary.as_str(), directory, name)
+            .map_err(|_| "could not commit the managed file".to_owned())?;
+        rustix::fs::fsync(directory)
+            .map_err(|_| "could not persist the native server directory".to_owned())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(temporary);
+        let _ = rustix::fs::unlinkat(directory, temporary.as_str(), rustix::fs::AtFlags::empty());
     }
     result
 }
@@ -9380,13 +9493,133 @@ fn backup_id_from_path(path: &Path) -> String {
         .to_owned()
 }
 
+/// Restore root ownership and fixed modes on Helix-managed artifacts. The data
+/// folder is writable by the game container, so each artifact is opened
+/// without following links and changed only through its descriptor.
+fn protect_artifacts_in(path: &Path, uid: u32) -> Result<(), String> {
+    let directory = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| format!("could not open {}", path.display()))?;
+    for (name, mode) in [
+        ("pumpkin", 0o550),
+        ("pumpkin.toml", 0o660),
+        ("server.jar", 0o440),
+        ("server.properties", 0o660),
+        ("eula.txt", 0o440),
+        (MODPACK_LOCK_FILE, 0o440),
+    ] {
+        let artifact = match rustix::fs::openat(
+            &directory,
+            name,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) => continue,
+            Err(_) => {
+                return Err(format!(
+                    "{name} in {} is not a regular file; Helix refused to change it",
+                    path.display()
+                ));
+            }
+        };
+        let stat = rustix::fs::fstat(&artifact)
+            .map_err(|_| format!("could not inspect {name} in {}", path.display()))?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile {
+            continue;
+        }
+        rustix::fs::fchown(
+            &artifact,
+            Some(rustix::fs::Uid::ROOT),
+            Some(rustix::fs::Gid::from_raw(uid)),
+        )
+        .map_err(|_| format!("could not protect {name} in {}", path.display()))?;
+        rustix::fs::fchmod(&artifact, rustix::fs::Mode::from_raw_mode(mode))
+            .map_err(|_| format!("could not protect {name} in {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Read a small text file whose final component a game container can replace.
+/// The last component is opened without following symlinks, must be a regular
+/// file, and at most `maximum` bytes are read, so a swapped-in link to a host
+/// file or `/dev/zero` is refused instead of read.
 fn read_small_regular_file(path: &Path, maximum: u64, label: &str) -> Result<String, String> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| format!("{label} are unavailable"))?;
-    if !metadata.file_type().is_file() || metadata.len() > maximum {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| format!("{label} are unavailable"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("{label} are unavailable"))?;
+    let directory = rustix::fs::open(
+        parent,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| format!("{label} are unavailable"))?;
+    let file = rustix::fs::openat(
+        &directory,
+        name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| format!("{label} are unavailable"))?;
+    read_bounded_text(File::from(file), maximum, label)
+}
+
+/// Read `relative` under `root` without following any symlink or leaving
+/// `root`, for files nested in container-writable directories.
+fn read_beneath(root: &Path, relative: &str, maximum: u64, label: &str) -> Result<String, String> {
+    let directory = rustix::fs::open(
+        root,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|_| format!("{label} are unavailable"))?;
+    let file = rustix::fs::openat2(
+        &directory,
+        relative,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::BENEATH
+            | rustix::fs::ResolveFlags::NO_SYMLINKS
+            | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+    )
+    .map_err(|_| format!("{label} are unavailable"))?;
+    read_bounded_text(File::from(file), maximum, label)
+}
+
+fn read_bounded_text(file: File, maximum: u64, label: &str) -> Result<String, String> {
+    let metadata = file
+        .metadata()
+        .map_err(|_| format!("{label} are unavailable"))?;
+    if !metadata.is_file() || metadata.len() > maximum {
         return Err(format!("{label} are invalid"));
     }
-    String::from_utf8(fs::read(path).map_err(|_| format!("could not read {label}"))?)
-        .map_err(|_| format!("{label} are not UTF-8 text"))
+    let mut body = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.take(maximum.saturating_add(1))
+        .read_to_end(&mut body)
+        .map_err(|_| format!("could not read {label}"))?;
+    if u64::try_from(body.len()).unwrap_or(u64::MAX) > maximum {
+        return Err(format!("{label} are invalid"));
+    }
+    String::from_utf8(body).map_err(|_| format!("{label} are not UTF-8 text"))
 }
 
 fn parse_properties(content: &str) -> HashMap<String, String> {
@@ -9836,11 +10069,18 @@ fn vrising_host_settings_path(data_path: &Path) -> PathBuf {
         .join("ServerHostSettings.json")
 }
 
+const VRISING_HOST_SETTINGS: &str = "save/Settings/ServerHostSettings.json";
+const MAX_VRISING_SETTINGS_BYTES: u64 = 256 * 1024;
+
 fn read_vrising_browser_listing(data_path: &Path) -> Value {
-    let path = vrising_host_settings_path(data_path);
-    let parsed = fs::read(&path)
-        .ok()
-        .and_then(|body| serde_json::from_slice::<Value>(&body).ok());
+    let parsed = read_beneath(
+        data_path,
+        VRISING_HOST_SETTINGS,
+        MAX_VRISING_SETTINGS_BYTES,
+        "V Rising host settings",
+    )
+    .ok()
+    .and_then(|body| serde_json::from_str::<Value>(&body).ok());
     let list_on_eos = parsed
         .as_ref()
         .and_then(|value| value.get("ListOnEOS"))
@@ -11988,6 +12228,138 @@ mod tests {
                 .unwrap()
                 .len(),
             0
+        );
+    }
+    #[test]
+    fn container_owned_files_are_never_read_through_links() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path();
+        let host_secret = temporary.path().join("host-secret");
+        fs::write(&host_secret, "root only").unwrap();
+        fs::write(data.join("server.properties"), "motd=hello\n").unwrap();
+        assert_eq!(
+            read_small_regular_file(&data.join("server.properties"), 1024, "settings").unwrap(),
+            "motd=hello\n"
+        );
+        fs::remove_file(data.join("server.properties")).unwrap();
+        std::os::unix::fs::symlink(&host_secret, data.join("server.properties")).unwrap();
+        assert!(
+            read_small_regular_file(&data.join("server.properties"), 1024, "settings").is_err()
+        );
+        std::os::unix::fs::symlink("/dev/zero", data.join("valheim.json")).unwrap();
+        assert!(read_small_regular_file(&data.join("valheim.json"), 1024, "settings").is_err());
+        fs::write(data.join("big.json"), vec![b'x'; 2048]).unwrap();
+        assert!(read_small_regular_file(&data.join("big.json"), 1024, "settings").is_err());
+
+        fs::create_dir_all(data.join("save/Settings")).unwrap();
+        fs::write(data.join(VRISING_HOST_SETTINGS), "{}").unwrap();
+        assert_eq!(
+            read_beneath(data, VRISING_HOST_SETTINGS, 1024, "settings").unwrap(),
+            "{}"
+        );
+        fs::remove_dir_all(data.join("save")).unwrap();
+        fs::create_dir(temporary.path().join("elsewhere")).unwrap();
+        fs::create_dir_all(temporary.path().join("elsewhere/Settings")).unwrap();
+        fs::write(
+            temporary
+                .path()
+                .join("elsewhere/Settings/ServerHostSettings.json"),
+            "{}",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(temporary.path().join("elsewhere"), data.join("save")).unwrap();
+        assert!(read_beneath(data, VRISING_HOST_SETTINGS, 1024, "settings").is_err());
+        assert!(read_beneath(data, "../host-secret", 1024, "settings").is_err());
+    }
+
+    #[test]
+    fn managed_writes_refuse_linked_folders_and_keep_host_files_untouched() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().join("data");
+        let host = temporary.path().join("host");
+        fs::create_dir_all(data.join("save/Settings")).unwrap();
+        fs::create_dir(&host).unwrap();
+        let uid = rustix::process::getuid().as_raw();
+        let gid = rustix::process::getgid().as_raw();
+        write_managed_file(&data.join("config.json"), b"{}", 0o640, uid, gid).unwrap();
+        assert_eq!(fs::read(data.join("config.json")).unwrap(), b"{}");
+        assert_eq!(
+            fs::metadata(data.join("config.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+        write_managed_file_beneath(
+            &data,
+            "save/Settings",
+            "ServerHostSettings.json",
+            b"{}",
+            0o660,
+            uid,
+            gid,
+        )
+        .unwrap();
+        assert!(data.join(VRISING_HOST_SETTINGS).is_file());
+
+        fs::remove_dir_all(data.join("save")).unwrap();
+        fs::create_dir(data.join("save")).unwrap();
+        std::os::unix::fs::symlink(&host, data.join("save/Settings")).unwrap();
+        assert!(
+            write_managed_file_beneath(
+                &data,
+                "save/Settings",
+                "ServerHostSettings.json",
+                b"x",
+                0o660,
+                uid,
+                gid
+            )
+            .is_err()
+        );
+        assert!(
+            write_managed_file(
+                &data.join("save/Settings/ServerHostSettings.json"),
+                b"x",
+                0o660,
+                uid,
+                gid
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read_dir(&host).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn artifact_protection_never_follows_container_links() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().join("data");
+        fs::create_dir(&data).unwrap();
+        let host_file = temporary.path().join("host-file");
+        fs::write(&host_file, "host").unwrap();
+        fs::set_permissions(&host_file, fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&host_file, data.join("server.properties")).unwrap();
+        fs::write(data.join("eula.txt"), "eula=true\n").unwrap();
+        let gid = rustix::process::getgid().as_raw();
+        assert!(protect_artifacts_in(&data, gid).is_err());
+        assert_eq!(
+            fs::metadata(&host_file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_file(data.join("server.properties")).unwrap();
+        if !rustix::process::geteuid().is_root() {
+            // Handing artifacts to root needs root; the link refusal above is the point.
+            return;
+        }
+        protect_artifacts_in(&data, gid).unwrap();
+        assert_eq!(
+            fs::metadata(data.join("eula.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o440
         );
     }
 }
