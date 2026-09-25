@@ -143,6 +143,7 @@ import {
 } from "./port-policy-api";
 import { Dialog } from "./modal";
 import { ServerConfigNotice } from "./server-config-notice";
+import { HytaleSignIn } from "./hytale-sign-in";
 export { ServerConfigNotice } from "./server-config-notice";
 import { purgeTrashedNativeServer } from "./native-server-trash-api";
 import {
@@ -2695,7 +2696,7 @@ const nativeServerTabs: ReadonlyArray<{
 ];
 
 export function supportsMarketplaceSoftware(software: string): boolean {
-  return /^(?:paper|purpur|folia|leaves|fabric|forge|neoforge|quilt|pufferfish)$/iu.test(software.trim());
+  return /^(?:paper|purpur|folia|leaves|fabric|forge|neoforge|quilt|pufferfish|hytale)$/iu.test(software.trim());
 }
 
 function ConsolePanel({
@@ -5267,6 +5268,9 @@ function NativeServerPage({
         </section>
       )}
       <ServerConfigNotice detail={detail} />
+      {detail.kind === "hytale" && (
+        <HytaleSignIn auth={detail.hytaleAuth} running={detail.status !== "stopped"} />
+      )}
       <nav class="server-tabs" aria-label="Server tools">
         {nativeServerTabs
           .filter((item) => {
@@ -5289,7 +5293,7 @@ function NativeServerPage({
               onClick={() => setTab(item.id)}
             >
               <Icon name={item.icon} size={16} />
-              {detail.kind === "valheim" && item.id === "marketplace" ? "Mods" : item.label}
+              {(detail.kind === "valheim" || detail.kind === "hytale") && item.id === "marketplace" ? "Mods" : item.label}
             </button>
           ))}
       </nav>

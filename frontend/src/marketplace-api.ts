@@ -153,6 +153,7 @@ const profiles: Record<string, MarketplaceProfile> = {
   neoforge: { contentKind: 'mod', acceptedLoaders: ['neoforge'], installDirectory: 'mods' },
   quilt: { contentKind: 'mod', acceptedLoaders: ['quilt'], installDirectory: 'mods' },
   pufferfish: { contentKind: 'plugin', acceptedLoaders: ['paper', 'spigot', 'bukkit', 'pufferfish'], installDirectory: 'plugins' },
+  hytale: { contentKind: 'mod', acceptedLoaders: ['hytale'], installDirectory: 'mods' },
 };
 
 export function marketplaceProfileForSoftware(software: string): MarketplaceProfile | null {

@@ -13,7 +13,8 @@ export type GameMarkId =
   | 'sons_of_the_forest'
   | 'factorio'
   | 'dont_starve_together'
-  | 'vintage_story';
+  | 'vintage_story'
+  | 'hytale';
 
 export function GameMark({
   game,
@@ -54,6 +55,8 @@ export function GameMark({
         <DontStarveMark />
       ) : game === 'vintage_story' ? (
         <VintageStoryMark />
+      ) : game === 'hytale' ? (
+        <HytaleMark />
       ) : (
         <PalworldMark />
       )}
@@ -229,6 +232,19 @@ function VintageStoryMark(): JSX.Element {
   );
 }
 
+function HytaleMark(): JSX.Element {
+  return (
+    <>
+      <rect width="32" height="32" rx="6" fill="#0f1c2b" />
+      <path fill="#1f4f6b" d="M4 24l7-9 4 5 5-8 8 12z" />
+      <path fill="#2e7aa3" d="M11 15l4 5 5-8 3 4.6-5.2 7.4H8.4z" opacity="0.55" />
+      <path fill="#f2c14e" d="M16 4.6l5.6 3.2v6.4L16 17.4l-5.6-3.2V7.8z" />
+      <path fill="#fbe39a" d="M16 6.8l3.6 2v4l-3.6 2-3.6-2v-4z" />
+      <path fill="#0f1c2b" d="M14.4 9h1v3.4h-1zM16.6 9h1v3.4h-1zM15.4 10.3h1.2v.9h-1.2z" />
+    </>
+  );
+}
+
 export function gameMarkForSoftware(software: string, kind?: string): GameMarkId | null {
   if (kind === 'palworld' || /palworld/iu.test(software)) return 'palworld';
   if (kind === 'vrising' || /v\s*rising/iu.test(software)) return 'vrising';
@@ -242,6 +258,7 @@ export function gameMarkForSoftware(software: string, kind?: string): GameMarkId
   if (kind === 'factorio' || /factorio/iu.test(software)) return 'factorio';
   if (kind === 'dont_starve_together' || /don.?t\s*starve|donotstarve/iu.test(software)) return 'dont_starve_together';
   if (kind === 'vintage_story' || /vintage\s*story|vintagestory/iu.test(software)) return 'vintage_story';
+  if (kind === 'hytale' || /hytale/iu.test(software)) return 'hytale';
   if (kind === 'minecraft' || /minecraft|paper|purpur|folia|leaves|fabric|vanilla|spigot|bukkit|forge|quilt|pufferfish/iu.test(software)) {
     return 'minecraft';
   }

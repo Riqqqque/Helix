@@ -239,7 +239,8 @@ export type ManagedGameKind =
   | 'sons_of_the_forest'
   | 'factorio'
   | 'dont_starve_together'
-  | 'vintage_story';
+  | 'vintage_story'
+  | 'hytale';
 
 export const MANAGED_GAME_KINDS: ReadonlyArray<ManagedGameKind> = [
   'satisfactory',
@@ -250,6 +251,7 @@ export const MANAGED_GAME_KINDS: ReadonlyArray<ManagedGameKind> = [
   'factorio',
   'dont_starve_together',
   'vintage_story',
+  'hytale',
 ];
 
 export function isManagedGameKind(value: string): value is ManagedGameKind {
@@ -429,6 +431,7 @@ export interface NativeServerDetail {
   capabilities: string[];
   browserListing: NativeBrowserListing | null;
   modpack: NativeInstalledModpack | null;
+  hytaleAuth: HytaleAuthPrompt | null;
 }
 
 export interface ServerConfigChanges {
@@ -463,6 +466,40 @@ export interface NativeInstalledModpack {
   minecraftVersion: string;
   loader: string;
   loaderVersion: string;
+}
+
+export interface HytaleAuthPrompt {
+  state: 'needs_sign_in' | 'signed_in' | 'unknown';
+  stage: 'download' | 'server';
+  url: string | null;
+  code: string | null;
+}
+
+/** Only https links on hytale.com or its subdomains are ever shown or linked. */
+export function safeHytaleUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 512) return null;
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '') return null;
+    return host === 'hytale.com' || host.endsWith('.hytale.com') ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseHytaleAuth(value: unknown): HytaleAuthPrompt | null {
+  if (value === null || value === undefined || typeof value !== 'object') return null;
+  const root = value as Record<string, unknown>;
+  const state = root.state === 'needs_sign_in' || root.state === 'signed_in' ? root.state : 'unknown';
+  const url = safeHytaleUrl(root.url);
+  const code = typeof root.code === 'string' && /^[A-Za-z0-9-]{4,32}$/u.test(root.code) ? root.code : null;
+  return {
+    state: state === 'needs_sign_in' && url === null ? 'unknown' : state,
+    stage: root.stage === 'download' ? 'download' : 'server',
+    url,
+    code,
+  };
 }
 
 export interface NativeBrowserListing {
@@ -834,6 +871,7 @@ export function managedGameKindFromSoftware(software: string): ManagedGameKind |
   if (/factorio/iu.test(software)) return 'factorio';
   if (/don.?t\s*starve|donotstarve|dst\b/iu.test(software)) return 'dont_starve_together';
   if (/vintage\s*story|vintagestory/iu.test(software)) return 'vintage_story';
+  if (/hytale/iu.test(software)) return 'hytale';
   return null;
 }
 
@@ -991,6 +1029,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     }),
     browserListing: parseBrowserListing(root.browser_listing),
     modpack: parseNativeInstalledModpack(root.modpack),
+    hytaleAuth: parseHytaleAuth(root.hytale_auth),
   };
 }
 

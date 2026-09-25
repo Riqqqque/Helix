@@ -1,0 +1,28 @@
+.hytale-sign-in {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.hytale-sign-in > svg { flex: none; margin-top: 2px; color: var(--accent); }
+.hytale-sign-in > div { display: grid; gap: 10px; min-width: 0; }
+.hytale-sign-in p { margin: 0; }
+.hytale-sign-in strong { color: var(--text); font-weight: 600; }
+.hytale-sign-in small { color: var(--quiet); font-size: 10px; }
+.hytale-sign-in__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.hytale-sign-in__code { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.hytale-sign-in__code code {
+  padding: 3px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}

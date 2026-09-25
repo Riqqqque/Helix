@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { StageText } from './hytale-sign-in';
 import { ApiError, getSystemOverview } from './api';
 import { OperationError } from './operation-error';
 import {
@@ -646,7 +647,7 @@ function OperationContinuity({
         <div class={`operation-continuity__item operation-continuity__item--${operation.status}`} key={operation.id}>
           <div>
             <strong>{operation.label}</strong>
-            <span>{operation.stage}</span>
+            <span><StageText text={operation.stage} /></span>
             {(operation.status === 'queued' || operation.status === 'running') && (
               <progress max={100} value={operation.progressPercent}>{operation.progressPercent}%</progress>
             )}

@@ -66,12 +66,12 @@ export function marketplaceInstallRuntimeCopy(status: MarketplaceRouteProps['ser
 } {
   if (status === 'stopped') {
     return {
-      backup: 'Helix writes the verified JAR into plugins/ or mods/ and leaves the server stopped.',
+      backup: 'Helix writes the verified file into plugins/ or mods/ and leaves the server stopped.',
       validation: 'Restart the server yourself when you want the new files loaded. Helix does not create a world backup for this install.',
     };
   }
   return {
-    backup: 'Helix writes the verified JAR into plugins/ or mods/ and leaves the server running.',
+    backup: 'Helix writes the verified file into plugins/ or mods/ and leaves the server running.',
     validation: 'Restart the server yourself when you want the new files loaded. Helix does not stop Minecraft or run a health check.',
   };
 }
@@ -254,7 +254,7 @@ function InstallationResult({ job, onClose }: { job: MarketplaceInstallJob; onCl
         <div><dt>World backup</dt><dd>{result.backupId.length > 0 ? <code>{result.backupId}</code> : 'Not created'}</dd></div>
         <div><dt>Required dependencies</dt><dd>{result.dependencyCount}</dd></div>
         <div><dt>Activation</dt><dd>{result.restartRequired ? 'Restart when you want' : 'Ready for first start'}</dd></div>
-        <div><dt>File rollback</dt><dd>Helix-managed JARs only</dd></div>
+        <div><dt>File rollback</dt><dd>Helix-managed files only</dd></div>
       </dl>
       {result.optionalDependenciesNotInstalled.length > 0 && <div class="marketplace-optional"><Icon name="info" size={15} /><span><strong>Optional dependencies were not installed</strong><small>{result.optionalDependenciesNotInstalled.join(', ')}</small></span></div>}
       <button class="button button--primary" type="button" onClick={onClose}>Done</button>
@@ -353,7 +353,7 @@ function InstallDialog({
         <ul class="marketplace-safety-list">
           <li><Icon name="check" size={15} /><span><strong>Required dependencies are resolved automatically.</strong> Optional dependencies stay uninstalled and will be listed afterward.</span></li>
           <li><Icon name="backup" size={15} /><span><strong>The world stays online if it is already running.</strong> {runtimeCopy.backup}</span></li>
-          <li><Icon name="check" size={15} /><span><strong>Every downloaded file is checksum-verified.</strong> Helix writes the selected JAR only to <code>{detail.compatibility.installDirectory}/</code>.</span></li>
+          <li><Icon name="check" size={15} /><span><strong>Every downloaded file is checksum-verified.</strong> Helix writes the selected file only to <code>{detail.compatibility.installDirectory}/</code>.</span></li>
           <li><Icon name="restart" size={15} /><span><strong>You choose when to restart.</strong> {runtimeCopy.validation}</span></li>
         </ul>
         {metadataWarning !== null && <div class="marketplace-note marketplace-note--warning"><Icon name="warning" size={14} />{metadataWarning}</div>}
@@ -444,7 +444,8 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
   const serverMinecraftVersion = server.minecraftVersion;
   const [draftQuery, setDraftQuery] = useState('');
   const [query, setQuery] = useState('');
-  const [provider, setProvider] = useState<MarketplaceProvider>('modrinth');
+  const hytale = server.software.trim().toLowerCase() === 'hytale';
+  const [provider, setProvider] = useState<MarketplaceProvider>(hytale ? 'curseforge' : 'modrinth');
   const [catalog, setCatalog] = useState<MarketplaceCatalog>('content');
   const [offset, setOffset] = useState(0);
   const [searchRevision, setSearchRevision] = useState(0);
@@ -586,22 +587,27 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
       <header class="marketplace-head">
         <div>
           <span class="eyebrow">SERVER MARKETPLACE</span>
-          <h2>{profile.contentKind === 'plugin' ? 'Plugin marketplace' : 'Mod marketplace'} <InfoTip text="Helix filters this catalog to this server’s loader and Minecraft version. Install copies the JAR into plugins/ or mods/ and leaves the server running. Restart when you want the files loaded." /></h2>
-          <p>Browse Modrinth and CurseForge for plugins, Bukkit addons, mods, and modpacks that match this loader. List Install picks a compatible release; open the project if you want a different build. If you use CurseForge, this host needs a normal ISP IP. VPS and VPN exits are often blocked.</p>
+          {hytale ? <>
+            <h2>Hytale mods <InfoTip text="Hytale mods come from CurseForge, Hytale's official mod platform. Install copies the verified .jar or .zip into mods/ along with required dependencies. Restart the server to load new mods." /></h2>
+            <p>Search CurseForge for Hytale mods. Install picks the newest release and its required dependencies; open a mod to choose a different file. You can also upload your own .jar or .zip into mods/ from the Files tab. CurseForge needs the API key in Settings → Catalogs.</p>
+          </> : <>
+            <h2>{profile.contentKind === 'plugin' ? 'Plugin marketplace' : 'Mod marketplace'} <InfoTip text="Helix filters this catalog to this server’s loader and Minecraft version. Install copies the JAR into plugins/ or mods/ and leaves the server running. Restart when you want the files loaded." /></h2>
+            <p>Browse Modrinth and CurseForge for plugins, Bukkit addons, mods, and modpacks that match this loader. List Install picks a compatible release; open the project if you want a different build. If you use CurseForge, this host needs a normal ISP IP. VPS and VPN exits are often blocked.</p>
+          </>}
         </div>
-        <div class="marketplace-source-toggle" role="group" aria-label="Marketplace catalog">
+        {!hytale && <div class="marketplace-source-toggle" role="group" aria-label="Marketplace catalog">
           <button type="button" class={provider === 'modrinth' ? 'is-active' : undefined} onClick={() => { setProvider('modrinth'); setCatalog('content'); setOffset(0); setPage(null); }}>Modrinth</button>
           <button type="button" class={provider === 'curseforge' ? 'is-active' : undefined} onClick={() => { setProvider('curseforge'); setOffset(0); setPage(null); }}>CurseForge</button>
-        </div>
+        </div>}
       </header>
-      {provider === 'curseforge' && profile.contentKind === 'mod' && (
+      {!hytale && provider === 'curseforge' && profile.contentKind === 'mod' && (
         <div class="marketplace-source-toggle marketplace-source-toggle--catalog" role="group" aria-label="CurseForge content type">
           <button type="button" class={catalog === 'content' ? 'is-active' : undefined} onClick={() => { setCatalog('content'); setOffset(0); }}>Mods</button>
           <button type="button" class={catalog === 'modpacks' ? 'is-active' : undefined} onClick={() => { setCatalog('modpacks'); setOffset(0); }}>Modpacks</button>
         </div>
       )}
       {page !== null && <CompatibilityBar page={page} />}
-      <label class="marketplace-search"><Icon name="search" size={18} /><span class="sr-only">Search compatible projects</span><input type="search" value={draftQuery} maxlength={120} autocomplete="off" placeholder={`Search ${catalog === 'modpacks' ? 'modpacks' : profile.contentKind === 'plugin' ? 'plugins' : 'mods'} by name`} onInput={(event) => setDraftQuery(event.currentTarget.value)} />{draftQuery.length > 0 && <button type="button" onClick={() => setDraftQuery('')} aria-label="Clear marketplace search"><Icon name="close" size={15} /></button>}</label>
+      <label class="marketplace-search"><Icon name="search" size={18} /><span class="sr-only">Search compatible projects</span><input type="search" value={draftQuery} maxlength={120} autocomplete="off" placeholder={hytale ? 'Search Hytale mods by name' : `Search ${catalog === 'modpacks' ? 'modpacks' : profile.contentKind === 'plugin' ? 'plugins' : 'mods'} by name`} onInput={(event) => setDraftQuery(event.currentTarget.value)} />{draftQuery.length > 0 && <button type="button" onClick={() => setDraftQuery('')} aria-label="Clear marketplace search"><Icon name="close" size={15} /></button>}</label>
       <div class="marketplace-results-head"><div><strong>{page === null ? 'Matching projects' : `${wholeNumber.format(page.totalHits)} matching project${page.totalHits === 1 ? '' : 's'}`}</strong><span>{query.length === 0 ? 'Popular results for this server' : `Results for “${query}”`}</span></div>{page !== null && page.totalHits > 0 && <span>{firstResult}–{lastResult} of {wholeNumber.format(page.totalHits)}</span>}</div>
       <InlineError message={listInstallError} />
       <SearchResults page={page} loading={searching} error={searchError} canManageServers={canManageServers} installingId={listInstallingId} onOpen={loadProject} onInstall={(hit) => void installFromList(hit)} onRetry={() => setSearchRevision((value) => value + 1)} />
