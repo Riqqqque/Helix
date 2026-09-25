@@ -4,6 +4,20 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.1.1 - 2026-09-24
+
+### Fixed
+
+- The in-app Helix updater failed on GNU tar hosts with an unrecognized
+  `--no-absolute-filenames` option, so no release could install. Archive paths
+  are still validated before extraction.
+- The updater now finds a dashboard deployed with `docker compose --env-file`
+  by using the env file Compose recorded, and says why detection failed
+  instead of a generic message.
+- The Server API tokens card matches the rest of Settings: consistent padding
+  and field styles, aligned server and permission choices, and a token list
+  that shows status, servers, permissions, created, and last-used times.
+
 ## 1.1.0 - 2026-09-24
 
 ### Fixed
@@ -26,7 +40,7 @@ release, not a public-internet support promise.
   never-expiring token stays valid until it is revoked or the owner password
   or account changes. Each token in Settings shows whether it can still
   authenticate, which servers and permissions it has, and when it was created
-  and last used. **Rotate & show new token** issues a replacement secret while
+  and last used. **Rotate & show** issues a replacement secret while
   keeping the scope and expiry, so a lost token no longer has to be recreated.
 
 - Settings now measures Docker disk use and can run a safe background cleanup
