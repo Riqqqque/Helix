@@ -5791,7 +5791,7 @@ textarea:focus {
 }
 .settings-page-grid {
   column-count: 2;
-  column-gap: 12px;
+  column-gap: 16px;
 }
 
 .advanced-update-note {
@@ -5808,11 +5808,11 @@ textarea:focus {
 .settings-card {
   break-inside: avoid;
   display: inline-block;
-  margin: 0 0 12px;
+  margin: 0 0 16px;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 9px;
   background: var(--surface);
   vertical-align: top;
   width: 100%;
@@ -5828,7 +5828,7 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 13px 16px;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--line);
 }
 .settings-card__head > div {
@@ -5849,9 +5849,10 @@ textarea:focus {
   font-size: 13px;
 }
 .settings-card__head p {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
+  line-height: 1.45;
 }
 .settings-card--helix-data {
   column-span: all;
@@ -6169,7 +6170,7 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 16px;
+  padding: 16px 18px;
 }
 .settings-select-row > span {
   display: flex;
@@ -6192,8 +6193,8 @@ textarea:focus {
 .theme-choice-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: 12px;
-  gap: 7px;
+  padding: 18px;
+  gap: 10px;
 }
 .theme-choice-grid > button {
   position: relative;
@@ -6201,7 +6202,7 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  padding: 7px;
+  padding: 11px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--surface-raised);
@@ -6233,7 +6234,7 @@ textarea:focus {
 .appearance-color-center {
   display: grid;
   gap: 11px;
-  padding: 14px 16px 16px;
+  padding: 16px 18px 18px;
   border-top: 1px solid var(--line);
 }
 .appearance-color-center > div:first-child {
@@ -6362,7 +6363,7 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 6px 11px 6px 16px;
+  padding: 9px 18px;
   border-bottom: 1px solid var(--line);
 }
 .navigation-order-list li:last-child {
@@ -6408,7 +6409,7 @@ textarea:focus {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  padding: 12px 16px 8px;
+  padding: 14px 18px 16px;
 }
 .navigation-add-catalog > span {
   width: 100%;
@@ -6442,7 +6443,7 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 9px 12px 9px 16px;
+  padding: 12px 18px;
   border-top: 1px solid var(--line);
   background: var(--sidebar);
 }
@@ -6453,7 +6454,7 @@ textarea:focus {
   letter-spacing: 0.07em;
 }
 .account-settings-form {
-  padding: 16px;
+  padding: 18px;
 }
 .settings-field-row {
   display: grid;
@@ -6617,7 +6618,7 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 14px 16px;
+  padding: 16px 18px;
 }
 .host-boot-control > div {
   min-width: 0;
