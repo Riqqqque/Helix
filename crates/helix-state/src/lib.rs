@@ -6,7 +6,7 @@ mod machines;
 mod secrets;
 mod security;
 mod strands;
-pub use api_tokens::{ApiTokenRecord, NewApiToken};
+pub use api_tokens::{ApiTokenRecord, MAX_EXPIRY_DAYS as MAX_API_TOKEN_EXPIRY_DAYS, NewApiToken};
 
 #[cfg(test)]
 pub(crate) fn private_test_directory(description: &str) -> tempfile::TempDir {

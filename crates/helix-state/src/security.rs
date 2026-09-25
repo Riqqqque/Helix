@@ -2630,19 +2630,120 @@ mod tests {
             databases.state().api_token_jobs(&id).unwrap(),
             vec![("job-one".into(), "helix:one".into())]
         );
+        assert!(databases.state().list_api_tokens(&owner.user_id).unwrap()[0].authorized);
         databases
             .state()
             .lock()
             .unwrap()
             .execute(
                 "UPDATE users SET auth_version=auth_version+1 WHERE id=?1",
-                [owner.user_id],
+                [&owner.user_id],
             )
             .unwrap();
         assert!(
             databases
                 .state()
                 .authenticate_api_token(&[7; 32], NOW + 2)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!databases.state().list_api_tokens(&owner.user_id).unwrap()[0].authorized);
+    }
+
+    #[test]
+    fn server_token_lifetime_allows_one_year_or_never() {
+        let (_temp, databases) = open_databases();
+        let owner = claim_owner(databases.state(), NOW);
+        let credential = databases
+            .state()
+            .credential_by_login("owner", NOW)
+            .unwrap()
+            .unwrap();
+        let day = 86_400_000;
+        for (byte, expires_at, accepted) in [
+            (1, NOW + 365 * day, true),
+            (2, NOW + 366 * day, false),
+            (3, i64::MAX, true),
+            (4, NOW, false),
+        ] {
+            let result = databases.state().create_api_token(crate::NewApiToken {
+                user_id: owner.user_id.clone(),
+                auth_version: credential.auth_version,
+                verifier: [byte; 32],
+                name: "lifetime".into(),
+                servers: vec!["helix:one".into()],
+                permissions: vec!["view".into()],
+                now: NOW,
+                expires_at,
+            });
+            assert_eq!(result.is_ok(), accepted, "expires_at={expires_at}");
+        }
+    }
+
+    #[test]
+    fn never_expiring_server_token_still_requires_active_owner_and_can_be_revoked() {
+        let (_temp, databases) = open_databases();
+        let owner = claim_owner(databases.state(), NOW);
+        let credential = databases
+            .state()
+            .credential_by_login("owner", NOW)
+            .unwrap()
+            .unwrap();
+        let id = databases
+            .state()
+            .create_api_token(crate::NewApiToken {
+                user_id: owner.user_id.clone(),
+                auth_version: credential.auth_version,
+                verifier: [8; 32],
+                name: "persistent automation".into(),
+                servers: vec!["helix:one".into()],
+                permissions: vec!["view".into()],
+                now: NOW,
+                expires_at: i64::MAX,
+            })
+            .unwrap();
+        let token = databases
+            .state()
+            .authenticate_api_token(&[8; 32], NOW + 100 * 86_400_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(token.id, id);
+        assert_eq!(token.expires_at, i64::MAX);
+        databases
+            .state()
+            .track_api_token_job(&id, "old-job", "helix:one", NOW)
+            .unwrap();
+        assert!(
+            databases
+                .state()
+                .rotate_api_token(&owner.user_id, &id, &[9; 32], NOW + 1)
+                .unwrap()
+        );
+        assert!(
+            databases
+                .state()
+                .authenticate_api_token(&[8; 32], NOW + 2)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(databases.state().api_token_jobs(&id).unwrap().len(), 1);
+        assert!(
+            databases
+                .state()
+                .authenticate_api_token(&[9; 32], NOW + 2)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            databases
+                .state()
+                .revoke_api_token(&owner.user_id, &id, NOW + 1)
+                .unwrap()
+        );
+        assert!(
+            databases
+                .state()
+                .authenticate_api_token(&[9; 32], NOW + 2)
                 .unwrap()
                 .is_none()
         );

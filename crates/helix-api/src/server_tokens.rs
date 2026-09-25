@@ -8,7 +8,7 @@ use axum::{
 };
 use helix_auth::{OpaqueToken, TokenDomain};
 use helix_privd::{BrokerRequest, ServerFileRequest};
-use helix_state::{ApiTokenRecord, NewApiToken};
+use helix_state::{ApiTokenRecord, MAX_API_TOKEN_EXPIRY_DAYS, NewApiToken};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -33,6 +33,7 @@ pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
         .route("/auth/server-tokens", get(list).post(create))
         .route("/auth/server-tokens/{id}", delete(revoke))
+        .route("/auth/server-tokens/{id}/rotate", post(rotate))
         .route("/automation/jobs", get(jobs))
         .route(
             "/automation/server",
@@ -48,7 +49,11 @@ fn now() -> i64 {
 }
 
 fn metadata(t: ApiTokenRecord) -> Value {
-    json!({"id":t.id,"name":t.name,"servers":t.servers,"permissions":t.permissions,"created_at":t.created_at,"expires_at":t.expires_at,"revoked_at":t.revoked_at,"last_used_at":t.last_used_at})
+    json!({"id":t.id,"name":t.name,"servers":t.servers,"permissions":t.permissions,"created_at":t.created_at,"expires_at":public_expiry(t.expires_at),"revoked_at":t.revoked_at,"last_used_at":t.last_used_at,"authorized":t.authorized})
+}
+
+fn public_expiry(expires_at: i64) -> Option<i64> {
+    (expires_at != i64::MAX).then_some(expires_at)
 }
 
 fn response(value: Value) -> Response {
@@ -73,7 +78,14 @@ struct CreateToken {
     name: String,
     servers: Vec<String>,
     permissions: Vec<String>,
-    expires_in_days: u16,
+    expires_in_days: TokenExpiry,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(untagged)]
+enum TokenExpiry {
+    Days(u16),
+    Never(()),
 }
 
 async fn create(
@@ -96,7 +108,7 @@ async fn create(
         || body.servers.len() > 64
         || body.permissions.is_empty()
         || body.permissions.len() > PERMISSIONS.len()
-        || !(1..=90).contains(&body.expires_in_days)
+        || matches!(body.expires_in_days, TokenExpiry::Days(days) if !(1..=MAX_API_TOKEN_EXPIRY_DAYS).contains(&i64::from(days)))
         || body
             .permissions
             .iter()
@@ -127,7 +139,10 @@ async fn create(
     }
     let token = OpaqueToken::generate().map_err(|_| ApiError::ServiceUnavailable)?;
     let verifier = *token.verification_hash(TokenDomain::ServerApi).as_bytes();
-    let expires_at = now().saturating_add(i64::from(body.expires_in_days) * 86_400_000);
+    let expires_at = match body.expires_in_days {
+        TokenExpiry::Never(()) => i64::MAX,
+        TokenExpiry::Days(days) => now().saturating_add(i64::from(days) * 86_400_000),
+    };
     let db = Arc::clone(&state.databases);
     let id = auth::run_blocking_state(&state.blocking_tasks, move || {
         db.state().create_api_token(NewApiToken {
@@ -143,7 +158,7 @@ async fn create(
     })
     .await?;
     Ok(response(
-        json!({"id":id,"token":token.encode().expose_secret(),"expires_at":expires_at}),
+        json!({"id":id,"token":token.encode().expose_secret(),"expires_at":public_expiry(expires_at)}),
     ))
 }
 
@@ -163,6 +178,48 @@ async fn revoke(
         return Err(ApiError::NotFound);
     }
     Ok(response(json!({"revoked":true})))
+}
+
+async fn rotate(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    let owner = auth::require_capability(&state, &headers, "system.settings.write").await?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    auth::require_capability(&state, &headers, "games.view").await?;
+    let db = Arc::clone(&state.databases);
+    let owner_id = owner.user_id.clone();
+    let lookup_id = id.clone();
+    let permissions = auth::run_blocking_state(&state.blocking_tasks, move || {
+        db.state().list_api_tokens(&owner_id).map(|tokens| {
+            tokens
+                .into_iter()
+                .find(|entry| entry.id == lookup_id)
+                .map(|entry| entry.permissions)
+        })
+    })
+    .await?
+    .ok_or(ApiError::NotFound)?;
+    if permissions
+        .iter()
+        .any(|permission| permission.starts_with("backups."))
+    {
+        auth::require_capability(&state, &headers, "games.backups.manage").await?;
+    }
+    let token = OpaqueToken::generate().map_err(|_| ApiError::ServiceUnavailable)?;
+    let verifier = *token.verification_hash(TokenDomain::ServerApi).as_bytes();
+    let db = Arc::clone(&state.databases);
+    let changed = auth::run_blocking_state(&state.blocking_tasks, move || {
+        db.state()
+            .rotate_api_token(&owner.user_id, &id, &verifier, now())
+    })
+    .await?;
+    if !changed {
+        return Err(ApiError::NotFound);
+    }
+    Ok(response(json!({"token":token.encode().expose_secret()})))
 }
 
 fn bearer(headers: &HeaderMap) -> Result<OpaqueToken, ApiError> {
@@ -439,5 +496,29 @@ mod tests {
         headers.remove(header::COOKIE);
         headers.append(header::AUTHORIZATION, "Bearer invalid".parse().unwrap());
         assert!(bearer(&headers).is_err());
+    }
+
+    #[test]
+    fn never_expiring_token_metadata_has_no_expiry_date() {
+        assert_eq!(public_expiry(i64::MAX), None);
+        assert_eq!(public_expiry(123), Some(123));
+        let body: CreateToken = serde_json::from_value(json!({
+            "name":"test", "servers":["helix:one"], "permissions":["view"],
+            "expires_in_days":null
+        }))
+        .unwrap();
+        assert!(matches!(body.expires_in_days, TokenExpiry::Never(())));
+        let body: CreateToken = serde_json::from_value(json!({
+            "name":"test", "servers":["helix:one"], "permissions":["view"],
+            "expires_in_days":365
+        }))
+        .unwrap();
+        assert!(matches!(body.expires_in_days, TokenExpiry::Days(365)));
+        assert!(
+            serde_json::from_value::<CreateToken>(json!({
+                "name":"test", "servers":["helix:one"], "permissions":["view"]
+            }))
+            .is_err()
+        );
     }
 }

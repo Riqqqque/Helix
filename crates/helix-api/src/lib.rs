@@ -4301,7 +4301,55 @@ mod tests {
         assert_eq!(listing.status(), StatusCode::OK);
         let listing = response_json(listing).await;
         assert_eq!(listing["tokens"][0]["id"], id);
+        assert_eq!(listing["tokens"][0]["authorized"], true);
         assert!(!listing.to_string().contains(token.encode().expose_secret()));
+        let rotate_uri = format!("/api/v1/auth/server-tokens/{id}/rotate");
+        let denied = context
+            .app
+            .clone()
+            .oneshot(with_cookie(
+                post_json(&rotate_uri, &json!({}), 52),
+                &client.cookie,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        let rotated = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(post_json(&rotate_uri, &json!({}), 52), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rotated.status(), StatusCode::OK);
+        assert_eq!(
+            rotated.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        let rotated_value = response_json(rotated).await;
+        let replacement =
+            OpaqueToken::from_encoded(rotated_value["token"].as_str().unwrap()).unwrap();
+        let replacement_verifier = *replacement
+            .verification_hash(TokenDomain::ServerApi)
+            .as_bytes();
+        assert!(
+            context
+                .databases
+                .state()
+                .authenticate_api_token(&verifier, now)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            context
+                .databases
+                .state()
+                .authenticate_api_token(&replacement_verifier, now)
+                .unwrap()
+                .is_some()
+        );
         assert!(
             context
                 .databases
@@ -4313,10 +4361,20 @@ mod tests {
             context
                 .databases
                 .state()
-                .authenticate_api_token(&verifier, now)
+                .authenticate_api_token(&replacement_verifier, now)
                 .unwrap()
                 .is_none()
         );
+        let revoked_rotation = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(post_json(&rotate_uri, &json!({}), 52), &client.cookie),
+                &client.csrf,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(revoked_rotation.status(), StatusCode::NOT_FOUND);
     }
 
     async fn test_app(metrics: DatabaseStatus) -> TestApp {
