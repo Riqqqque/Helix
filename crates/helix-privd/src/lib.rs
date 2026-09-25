@@ -913,6 +913,7 @@ pub enum GameKind {
     Factorio,
     DontStarveTogether,
     VintageStory,
+    Hytale,
 }
 
 impl GameKind {
@@ -928,6 +929,7 @@ impl GameKind {
                 | Self::Factorio
                 | Self::DontStarveTogether
                 | Self::VintageStory
+                | Self::Hytale
         )
     }
 
@@ -947,6 +949,7 @@ impl GameKind {
             Self::Factorio => "factorio",
             Self::DontStarveTogether => "dont_starve_together",
             Self::VintageStory => "vintage_story",
+            Self::Hytale => "hytale",
         }
     }
 }
@@ -1462,7 +1465,10 @@ fn validate_shared_game_fields(spec: &GameCreateSpec, game: GameKind) -> Result<
     }
     let single_port = matches!(
         game,
-        GameKind::Factorio | GameKind::DontStarveTogether | GameKind::VintageStory
+        GameKind::Factorio
+            | GameKind::DontStarveTogether
+            | GameKind::VintageStory
+            | GameKind::Hytale
     );
     if single_port && spec.query_port.is_some() {
         return Err("that game uses a single port; leave the query port empty".to_owned());
@@ -1586,6 +1592,15 @@ impl GameCreateSpec {
                 }
                 if !(1..=64).contains(&self.max_players) {
                     return Err("Vintage Story player limit must be between 1 and 64".to_owned());
+                }
+                reject_extras(self, &["server_password"])?;
+            }
+            GameKind::Hytale => {
+                if !(4_096..=32_768).contains(&self.memory_mb) {
+                    return Err("Hytale memory must be between 4 and 32 GiB".to_owned());
+                }
+                if !(1..=100).contains(&self.max_players) {
+                    return Err("Hytale player limit must be between 1 and 100".to_owned());
                 }
                 reject_extras(self, &["server_password"])?;
             }

@@ -3,7 +3,7 @@ use serde_json::Value;
 use crate::{GameCreateSpec, GameKind};
 
 use super::{
-    dont_starve_together, factorio, project_zomboid, rust, satisfactory, seven_days_to_die,
+    dont_starve_together, factorio, hytale, project_zomboid, rust, satisfactory, seven_days_to_die,
     sons_of_the_forest, vintage_story,
 };
 
@@ -63,6 +63,7 @@ pub(crate) fn game_def(kind: GameKind) -> Option<&'static GameDef> {
         GameKind::Factorio => Some(&factorio::DEF),
         GameKind::DontStarveTogether => Some(&dont_starve_together::DEF),
         GameKind::VintageStory => Some(&vintage_story::DEF),
+        GameKind::Hytale => Some(&hytale::DEF),
         _ => None,
     }
 }
