@@ -4,6 +4,17 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.5.1 - 2026-09-26
+
+### Fixed
+
+- The copy dialog's name follows the chosen source instead of keeping the first
+  server's name after switching.
+- Memory sizes from AMP read as rounded values such as 3.9 GiB instead of long
+  fractions.
+- Copies no longer carry loose launcher JARs such as `paperclip.jar` or
+  `fabric.jar`; Helix installs its own server JAR.
+
 ## 1.5.0 - 2026-09-26
 
 ### Changed
