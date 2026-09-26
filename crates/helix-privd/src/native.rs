@@ -3232,6 +3232,52 @@ impl NativeManager {
         &self,
         spec: &MinecraftCreateSpec,
         overlay: Option<&Path>,
+        progress: F,
+    ) -> Result<Value, String>
+    where
+        F: FnMut(&str, u8),
+    {
+        self.create_minecraft_with_ports(spec, overlay, &[], progress)
+    }
+
+    /// Why `port` cannot be used by a server copied from AMP instance `amp_owner`, if anything.
+    /// The source instance's own claim is ignored because the copy replaces it.
+    pub fn import_port_problem(
+        &self,
+        port: u16,
+        amp_owner: Option<&str>,
+        udp: bool,
+    ) -> Option<String> {
+        if port < 1_024 {
+            return Some(format!("port {port} is below 1024"));
+        }
+        if self
+            .load_manifests()
+            .map(|manifests| assigned_game_ports(&manifests).contains(&port))
+            .unwrap_or(true)
+        {
+            return Some(format!("another Helix server already uses port {port}"));
+        }
+        if let Some(amp) = self.amp.as_ref() {
+            let claimed = match amp_owner {
+                Some(owner) => amp.port_claimed_outside(port, owner),
+                None => amp.occupied_ports().contains(&port),
+            };
+            if claimed {
+                return Some(amp.explain_claimed_port(port));
+            }
+        }
+        let tcp = TcpListener::bind((IpAddr::from([0, 0, 0, 0]), port)).is_ok();
+        let udp_free = !udp || UdpSocket::bind((IpAddr::from([0, 0, 0, 0]), port)).is_ok();
+        (!(tcp && udp_free))
+            .then(|| format!("port {port} is in use by another program on this host"))
+    }
+
+    pub fn create_minecraft_with_ports<F>(
+        &self,
+        spec: &MinecraftCreateSpec,
+        overlay: Option<&Path>,
+        extra_ports: &[ExtraPortSpec],
         mut progress: F,
     ) -> Result<Value, String>
     where
@@ -3262,6 +3308,45 @@ impl NativeManager {
         let mut reserved_ports = self.amp_occupied_ports();
         reserved_ports.extend([game_port, bedrock_port]);
         let rcon_port = allocate_rcon_port(&manifests, &reserved_ports)?;
+        // Add-on ports carried over from a copy; ones that are taken are reported, not fatal.
+        let taken = assigned_game_ports(&manifests);
+        let amp_taken = self.amp_occupied_ports();
+        let mut kept_extra_ports = Vec::new();
+        let mut skipped_extra_ports = Vec::new();
+        for entry in extra_ports.iter().take(helix_privd::MAX_EXTRA_PORTS) {
+            let problem = if [game_port, bedrock_port, rcon_port].contains(&entry.port) {
+                Some(format!(
+                    "port {} is already one of this server's own ports",
+                    entry.port
+                ))
+            } else if entry.port < 1_024 {
+                Some(format!("port {} is below 1024", entry.port))
+            } else if taken.contains(&entry.port) {
+                Some(format!(
+                    "another Helix server already uses port {}",
+                    entry.port
+                ))
+            } else if amp_taken.contains(&entry.port) {
+                Some(format!("an AMP instance lists port {}", entry.port))
+            } else if kept_extra_ports
+                .iter()
+                .any(|kept: &ExtraPortSpec| kept.port == entry.port)
+            {
+                Some(format!("port {} is listed twice", entry.port))
+            } else {
+                check_extra_port_free(entry).err()
+            };
+            match problem {
+                None => kept_extra_ports.push(entry.clone()),
+                Some(reason) => skipped_extra_ports.push(json!({
+                    "port": entry.port,
+                    "protocol": entry.protocol,
+                    "label": entry.label,
+                    "reason": reason
+                })),
+            }
+        }
+        kept_extra_ports.sort_by_key(|entry| entry.port);
         let id = Uuid::new_v4().to_string();
         let instance_name = instance_name(spec.name.trim(), &id);
         let container_name = format!("helix-game-{id}");
@@ -3380,7 +3465,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 modpack: None,
-                extra_ports: Vec::new(),
+                extra_ports: kept_extra_ports.clone(),
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -3440,6 +3525,9 @@ impl NativeManager {
                 "port_allocated_automatically": allocated_automatically,
                 "software": spec.software,
                 "query_port": if pumpkin { json!(bedrock_port) } else { Value::Null },
+                "extra_ports": kept_extra_ports,
+                "extra_ports_skipped": skipped_extra_ports,
+                "minecraft_version": manifest.minecraft_version,
                 "manager": "helix",
                 "execution_backend": "docker"
             }))
@@ -10051,7 +10139,7 @@ fn check_extra_port_free(entry: &ExtraPortSpec) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "port {} is already in use on this host",
+            "port {} is already in use on this host by a program Helix does not manage, such as an AMP server or another game panel. Stop that program or pick a different number",
             entry.port
         ))
     }

@@ -206,6 +206,9 @@ struct ResolvedMigrate {
     version_raw: String,
     memory_mb: u32,
     max_players: u16,
+    amp_instance_name: Option<String>,
+    source_game_port: Option<u16>,
+    source_start_on_boot: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -2102,7 +2105,19 @@ impl BrokerContext {
         let copy_server_jar = mapped.as_ref().is_some_and(|mapped| mapped.copy_server_jar);
         let report =
             migrate_plan::scan_overlay(resolved.game, &resolved.game_root, copy_server_jar)?;
-        let version = migrate_plan::minecraft_version_for_create(&resolved.version_raw);
+        let configured = migrate_plan::minecraft_version_for_create(&resolved.version_raw);
+        let detected_version = if resolved.game == GameKind::Minecraft {
+            migrate_plan::detect_minecraft_version(&resolved.game_root)
+        } else {
+            None
+        };
+        let version = match &detected_version {
+            Some(detected) => migrate_plan::MinecraftVersionChoice {
+                version: detected.clone(),
+                used_latest: false,
+            },
+            None => configured.clone(),
+        };
         let terraria_software = if resolved.game == GameKind::Terraria {
             Some(migrate_plan::detect_terraria_software(&resolved.game_root)?)
         } else {
@@ -2115,16 +2130,67 @@ impl BrokerContext {
                     .to_owned(),
             );
         }
-        if copy_server_jar && version.used_latest {
-            blockers.push(
-                "This copy needs the exact Minecraft version (for example 1.21.8). Helix will not guess latest for a custom JAR."
+        let mut notes = vec![
+            "Helix copies into a new native server. AMP and Pterodactyl files are not edited or deleted.".to_owned(),
+        ];
+        if resolved.game == GameKind::Minecraft {
+            match &detected_version {
+                Some(detected) if !configured.used_latest && configured.version != *detected => {
+                    notes.push(format!(
+                        "The panel lists {}, but the server last ran Minecraft {detected}. Helix uses {detected} so the world is not upgraded or downgraded.",
+                        configured.version
+                    ));
+                }
+                Some(_) => {}
+                None if version.used_latest => notes.push(
+                    "Helix could not tell which Minecraft version this world last ran. Enter it below (the server log's first lines show it). Installing a newer version upgrades the world permanently."
+                        .to_owned(),
+                ),
+                None => notes.push(format!(
+                    "Helix could not confirm the version from the server's own files, so it uses the panel's {}. Check it matches before copying.",
+                    version.version
+                )),
+            }
+        }
+        let owner = resolved.amp_instance_name.as_deref();
+        let native = self.native.as_deref();
+        let port_problem = |port: u16, udp: bool| -> Option<String> {
+            if resolved.running {
+                None
+            } else {
+                native.and_then(|native| native.import_port_problem(port, owner, udp))
+            }
+        };
+        let source_port_problem = resolved
+            .source_game_port
+            .and_then(|port| port_problem(port, true));
+        let plugin_ports = if resolved.game == GameKind::Minecraft {
+            migrate_plan::detect_plugin_ports(&resolved.game_root, resolved.source_game_port)
+        } else {
+            Vec::new()
+        };
+        let plugin_ports_json = plugin_ports
+            .iter()
+            .map(|entry| {
+                let problem = port_problem(entry.port, entry.protocol.udp());
+                json!({
+                    "port": entry.port,
+                    "protocol": entry.protocol,
+                    "label": entry.label,
+                    "available": problem.is_none(),
+                    "reason": problem
+                })
+            })
+            .collect::<Vec<_>>();
+        if resolved.source_start_on_boot {
+            notes.push(
+                "AMP still starts this instance with the host. Turn off its autostart in AMP after the copy, or both servers will try to use the same ports after a reboot."
                     .to_owned(),
             );
         }
-        let mut notes = vec![
-            "Helix copies into a new native server. AMP and Pterodactyl files are not edited or deleted.".to_owned(),
-            "The new Helix server gets a free port. The old manager keeps its port until you retire that instance.".to_owned(),
-        ];
+        if resolved.running {
+            notes.push("Port checks run again once the source is stopped.".to_owned());
+        }
         if resolved.source_kind == "folder" {
             notes.push(
                 "Stop the Pterodactyl or AMP server yourself. Helix cannot see Wings power state from a folder path.".to_owned(),
@@ -2175,6 +2241,12 @@ impl BrokerContext {
             "version_used_latest": version.used_latest,
             "memory_mb": resolved.memory_mb,
             "max_players": resolved.max_players,
+            "detected_version": detected_version,
+            "source_game_port": resolved.source_game_port,
+            "source_port_available": resolved.source_game_port.is_some() && source_port_problem.is_none(),
+            "source_port_problem": source_port_problem,
+            "source_start_on_boot": resolved.source_start_on_boot,
+            "plugin_ports": plugin_ports_json,
             "running": resolved.running,
             "status": resolved.status,
             "files": report.files,
@@ -2200,6 +2272,14 @@ impl BrokerContext {
                     .ok_or_else(|| "AMP is not configured on this host".to_owned())?;
                 let handle = amp.migrate_handle(instance_id)?;
                 let (game, game_root) = migrate_plan::find_game_root(&handle.path)?;
+                let source_game_port = if game == GameKind::Minecraft {
+                    handle.game_port.or_else(|| {
+                        migrate_plan::read_source_properties(&game_root)
+                            .and_then(|text| properties_port(&text))
+                    })
+                } else {
+                    None
+                };
                 Ok(ResolvedMigrate {
                     source_kind: "amp",
                     source_id: handle.id,
@@ -2213,6 +2293,9 @@ impl BrokerContext {
                     version_raw: handle.version,
                     memory_mb: handle.memory_mb,
                     max_players: handle.max_players,
+                    amp_instance_name: handle.instance_name,
+                    source_game_port,
+                    source_start_on_boot: handle.start_on_boot,
                 })
             }
             ServerMigrateSource::Folder { path } => {
@@ -2259,6 +2342,12 @@ impl BrokerContext {
                         .unwrap_or("Dedicated")
                         .to_owned(),
                 };
+                let source_game_port = if game == GameKind::Minecraft {
+                    migrate_plan::read_source_properties(&game_root)
+                        .and_then(|text| properties_port(&text))
+                } else {
+                    None
+                };
                 Ok(ResolvedMigrate {
                     source_kind: "folder",
                     source_id: canonical.to_string_lossy().into_owned(),
@@ -2276,6 +2365,9 @@ impl BrokerContext {
                     version_raw: "latest".to_owned(),
                     memory_mb,
                     max_players,
+                    amp_instance_name: None,
+                    source_game_port,
+                    source_start_on_boot: false,
                 })
             }
         }
@@ -2302,6 +2394,26 @@ impl BrokerContext {
             return Err("that folder is a different game than the one you selected".to_owned());
         }
         spec.validate_for_game(game)?;
+        if game == GameKind::Minecraft {
+            let requested = spec.version.as_deref().unwrap_or(&resolved.version_raw);
+            let detected = migrate_plan::detect_minecraft_version(&resolved.game_root);
+            if migrate_plan::minecraft_version_for_create(requested).used_latest {
+                return Err(match detected {
+                    Some(detected) => format!(
+                        "choose the exact Minecraft version for this copy; the server last ran {detected}"
+                    ),
+                    None => "choose the exact Minecraft version this world last ran; Helix will not install the newest version over an existing world".to_owned(),
+                });
+            }
+            if let Some(detected) = detected
+                && migrate_plan::minecraft_version_is_older(requested, &detected)
+            {
+                return Err(format!(
+                    "this world last ran Minecraft {detected}; copying it onto {} would downgrade it and can corrupt chunks",
+                    requested.trim()
+                ));
+            }
+        }
         let resource = match game {
             GameKind::Minecraft => "minecraft:create".to_owned(),
             GameKind::VRising => "vrising:create".to_owned(),
@@ -2325,6 +2437,11 @@ impl BrokerContext {
         let context = Arc::clone(self);
         let worker_job_id = job_id.clone();
         let overlay = resolved.game_root.clone();
+        let plugin_ports = if game == GameKind::Minecraft {
+            migrate_plan::detect_plugin_ports(&overlay, None)
+        } else {
+            Vec::new()
+        };
         if thread::Builder::new()
             .name(format!("migrate-job-{}", &job_id[..8]))
             .spawn(move || {
@@ -2333,12 +2450,29 @@ impl BrokerContext {
                     job.stage = "Copying into a new Helix server".to_owned();
                     job.progress_percent = 4;
                 });
+                // The stopped source's own ports move with it; nothing else in AMP may list them.
+                let mut released = Vec::new();
+                if let (Some(amp), Some(owner)) = (
+                    context.amp.as_deref(),
+                    resolved.amp_instance_name.as_deref(),
+                ) {
+                    let wanted = spec
+                        .game_port
+                        .into_iter()
+                        .chain(plugin_ports.iter().map(|entry| entry.port));
+                    for port in wanted {
+                        if !amp.port_claimed_outside(port, owner) {
+                            released.push(amp.release_port_for_migration(port));
+                        }
+                    }
+                }
                 let result = match game {
                     GameKind::Minecraft => context.migrate_minecraft(
                         &native,
                         &spec,
                         &resolved,
                         &overlay,
+                        &plugin_ports,
                         |stage, progress| {
                             context.update_job(&worker_job_id, |job| {
                                 job.stage = stage.to_owned();
@@ -2391,6 +2525,7 @@ impl BrokerContext {
                         },
                     ),
                 };
+                drop(released);
                 context.update_job(&worker_job_id, |job| match result {
                     Ok(value) => {
                         job.status = JobState::Complete;
@@ -2419,6 +2554,7 @@ impl BrokerContext {
         spec: &ServerMigrateSpec,
         resolved: &ResolvedMigrate,
         overlay: &Path,
+        plugin_ports: &[migrate_plan::DetectedPluginPort],
         progress: F,
     ) -> Result<Value, String>
     where
@@ -2455,7 +2591,7 @@ impl BrokerContext {
         if mapped.copy_server_jar {
             let jar = migrate_plan::find_minecraft_server_jar(overlay)?;
             let mut staged = native.stage_migrate_jar(&jar)?;
-            staged.java_version = 21;
+            staged.java_version = migrate_plan::java_for_minecraft_version(&create.version);
             create.software = MinecraftSoftware::Custom;
             create.custom_jar = Some(staged);
             if create.version.eq_ignore_ascii_case("latest") {
@@ -2465,8 +2601,12 @@ impl BrokerContext {
                 );
             }
         }
+        let extra_ports = plugin_ports
+            .iter()
+            .map(migrate_plan::DetectedPluginPort::to_spec)
+            .collect::<Vec<_>>();
         native
-            .create_minecraft(&create, Some(overlay), progress)
+            .create_minecraft_with_ports(&create, Some(overlay), &extra_ports, progress)
             .map(|value| self.apply_creation_exposure(value, &spec.name, spec.network_exposure))
     }
 
@@ -4130,4 +4270,15 @@ mod tests {
         assert_eq!(health["error"]["code"], "amp_inventory_unavailable");
         assert!(!health.to_string().contains("upstream detail"));
     }
+}
+
+#[cfg(target_os = "linux")]
+fn properties_port(text: &str) -> Option<u16> {
+    text.lines().find_map(|line| {
+        let (key, value) = line.trim().split_once('=')?;
+        (key.trim() == "server-port")
+            .then(|| value.trim().parse::<u16>().ok())
+            .flatten()
+            .filter(|port| *port >= 1_024)
+    })
 }

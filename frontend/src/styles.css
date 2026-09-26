@@ -8503,3 +8503,40 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* Server copy: version hint, kept ports, and the finished summary. */
+.field > .field-hint,
+.field > .field-error {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+.field > .field-error {
+  color: var(--danger);
+}
+.migrate-ports {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--sidebar);
+}
+.migrate-ports .check-row {
+  padding: 0;
+  border: 0;
+}
+.migrate-ports__addons {
+  display: grid;
+  gap: 6px;
+}
+.migrate-ports__addons > strong {
+  font-size: 10px;
+}
+.migrate-ports__addons small {
+  color: var(--muted);
+}
+.migrate-result {
+  margin: 12px 0 0;
+}

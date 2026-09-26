@@ -454,3 +454,31 @@ describe('Servers route', () => {
     expect(markup).not.toContain('Delete forever');
   });
 });
+
+describe('server copies', () => {
+  it('never calls snapshots or equal versions older', async () => {
+    const { minecraftVersionIsOlder } = await import('./servers');
+    expect(minecraftVersionIsOlder('1.21.4', '1.21.8')).toBe(true);
+    expect(minecraftVersionIsOlder('1.21.8', '26.2')).toBe(true);
+    expect(minecraftVersionIsOlder('1.21.8', '1.21.8')).toBe(false);
+    expect(minecraftVersionIsOlder('26.2', '1.21.10')).toBe(false);
+    expect(minecraftVersionIsOlder('25w14a', '1.21.8')).toBe(false);
+  });
+
+  it('summarises the address, add-on ports, and the AMP follow-up', async () => {
+    const { migrateResultLines } = await import('./servers');
+    const same = migrateResultLines({
+      game_port: 25565,
+      port_allocated_automatically: false,
+      extra_ports: [{ port: 24454, protocol: 'udp', label: 'Simple Voice Chat' }],
+      extra_ports_skipped: [{ port: 8100, protocol: 'tcp', label: 'BlueMap', reason: 'port 8100 is in use' }],
+    }, true);
+    expect(same[0]).toContain('same address');
+    expect(same).toContain('Also opened: Simple Voice Chat 24454.');
+    expect(same.join(' ')).toContain('Not opened: BlueMap 8100 (port 8100 is in use)');
+    expect(same.at(-1)).toContain('turn off autostart');
+    const moved = migrateResultLines({ game_port: 25570, port_allocated_automatically: true }, false);
+    expect(moved[0]).toContain('new port');
+    expect(moved.at(-1)).toContain('Leave the old AMP instance stopped');
+  });
+});

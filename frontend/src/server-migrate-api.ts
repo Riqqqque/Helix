@@ -55,6 +55,21 @@ export interface ServerMigratePreflight {
   warning: string | null;
   blockers: string[];
   notes: string[];
+  /** Version read from the server's own files; null when Helix could not tell. */
+  detectedVersion: string | null;
+  sourceGamePort: number | null;
+  sourcePortAvailable: boolean;
+  sourcePortProblem: string | null;
+  sourceStartOnBoot: boolean;
+  pluginPorts: MigratePluginPort[];
+}
+
+export interface MigratePluginPort {
+  port: number;
+  protocol: 'tcp' | 'udp' | 'both';
+  label: string;
+  available: boolean;
+  reason: string | null;
 }
 
 export interface ServerMigrateInput {
@@ -112,6 +127,30 @@ function optionalString(record: JsonRecord, key: string, context: string): strin
     throw new ApiError(`${context} returned an invalid ${key} value.`);
   }
   return value;
+}
+
+function optionalPort(record: JsonRecord, key: string): number | null {
+  const value = record[key];
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65_535 ? value : null;
+}
+
+function pluginPorts(record: JsonRecord): MigratePluginPort[] {
+  const value = record.plugin_ports;
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 16).flatMap((entry): MigratePluginPort[] => {
+    if (entry === null || typeof entry !== 'object') return [];
+    const item = entry as JsonRecord;
+    const port = optionalPort(item, 'port');
+    const protocol = item.protocol;
+    if (port === null || (protocol !== 'tcp' && protocol !== 'udp' && protocol !== 'both')) return [];
+    return [{
+      port,
+      protocol,
+      label: typeof item.label === 'string' ? item.label.slice(0, 40) : `Port ${port}`,
+      available: item.available === true,
+      reason: typeof item.reason === 'string' ? item.reason.slice(0, 1_024) : null,
+    }];
+  });
 }
 
 function stringList(record: JsonRecord, key: string, context: string, maximum: number): string[] {
@@ -187,6 +226,12 @@ export function parseMigratePreflight(value: unknown): ServerMigratePreflight {
     warning: optionalString(root, 'warning', 'copy preflight'),
     blockers: stringList(root, 'blockers', 'copy preflight', 16),
     notes: stringList(root, 'notes', 'copy preflight', 16),
+    detectedVersion: optionalString(root, 'detected_version', 'copy preflight'),
+    sourceGamePort: optionalPort(root, 'source_game_port'),
+    sourcePortAvailable: root.source_port_available === true,
+    sourcePortProblem: optionalString(root, 'source_port_problem', 'copy preflight'),
+    sourceStartOnBoot: root.source_start_on_boot === true,
+    pluginPorts: pluginPorts(root),
   };
 }
 

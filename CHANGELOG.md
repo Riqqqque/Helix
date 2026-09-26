@@ -4,6 +4,33 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.5.0 - 2026-09-26
+
+### Changed
+
+- Copying a server from AMP or Pterodactyl keeps it the same server. Helix reads
+  the Minecraft version the world last ran from the server's own files (log,
+  Paper version history, or version folders) instead of trusting panel
+  settings, and refuses to install an older version or silently install the
+  newest one over an existing world.
+- A copy can keep its original game port, so players and router forwarding work
+  unchanged. Helix allows it only when the stopped source instance is the sole
+  owner of that port.
+- Ports that plugins and mods open on their own — Simple Voice Chat, BlueMap,
+  Dynmap, and Geyser — are read from their configs and opened on the new server.
+  Any that are taken are listed with the reason instead of failing the copy.
+- The copy dialog shows the version guard, the kept port, the add-on ports, and
+  a finished summary with the address and what to do with the old instance.
+- A port that another program already holds now says so, rather than only
+  "already in use".
+
+### Fixed
+
+- Copied `server.properties` no longer keeps a panel's `server-ip`, which bound
+  to the host address and stopped the server starting inside its container.
+- Custom JAR copies use the Java version their Minecraft version needs instead
+  of always Java 21.
+
 ## 1.4.0 - 2026-09-26
 
 ### Changed

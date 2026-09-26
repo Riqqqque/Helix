@@ -37,6 +37,22 @@ pub struct AmpClient {
     instance_root: PathBuf,
     sessions: Mutex<HashMap<u16, String>>,
     operations: Mutex<HashSet<String>>,
+    /// Ports of a stopped AMP instance that an import is moving into Helix.
+    released_ports: Mutex<HashSet<u16>>,
+}
+
+/// Keeps a stopped AMP instance's game port usable by its Helix copy until dropped.
+pub(crate) struct ReleasedPortGuard<'a> {
+    ports: &'a Mutex<HashSet<u16>>,
+    port: u16,
+}
+
+impl Drop for ReleasedPortGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut ports) = self.ports.lock() {
+            ports.remove(&self.port);
+        }
+    }
 }
 
 struct AmpOperationGuard<'a> {
@@ -85,6 +101,9 @@ pub struct AmpServer {
 pub(crate) struct AmpMigrateHandle {
     pub id: String,
     pub name: String,
+    pub instance_name: Option<String>,
+    pub game_port: Option<u16>,
+    pub start_on_boot: bool,
     pub path: PathBuf,
     pub running: bool,
     pub status: String,
@@ -188,6 +207,7 @@ impl AmpClient {
             instance_root,
             sessions: Mutex::new(HashMap::new()),
             operations: Mutex::new(HashSet::new()),
+            released_ports: Mutex::new(HashSet::new()),
         })
     }
 
@@ -211,7 +231,50 @@ impl AmpClient {
                 }
             }
         }
+        if let Ok(released) = self.released_ports.lock() {
+            ports.retain(|port| !released.contains(port));
+        }
         ports
+    }
+
+    /// True when anything in AMP other than `instance_name` lists `port`.
+    pub(crate) fn port_claimed_outside(&self, port: u16, instance_name: &str) -> bool {
+        if port == self.public_panel_port || port == self.endpoint.port() {
+            return true;
+        }
+        if let Ok(entries) = fs::read_dir(&self.instance_root) {
+            for entry in entries.flatten().take(MAX_LOCAL_INSTANCES) {
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if name == instance_name
+                    || validate_instance_name(&name).is_err()
+                    || !entry.file_type().is_ok_and(|kind| kind.is_dir())
+                {
+                    continue;
+                }
+                if self.instance_config_ports(&name).contains(&port) {
+                    return true;
+                }
+            }
+        }
+        self.local_instances().is_ok_and(|instances| {
+            instances.iter().take(MAX_LOCAL_INSTANCES).any(|instance| {
+                required_u16(instance, "Port").ok() == Some(port)
+                    && text(instance, "InstanceName").as_deref() != Some(instance_name)
+            })
+        })
+    }
+
+    /// Lets a Helix import reuse the stopped source instance's port.
+    pub(crate) fn release_port_for_migration(&self, port: u16) -> ReleasedPortGuard<'_> {
+        if let Ok(mut ports) = self.released_ports.lock() {
+            ports.insert(port);
+        }
+        ReleasedPortGuard {
+            ports: &self.released_ports,
+            port,
+        }
     }
 
     pub fn explain_claimed_port(&self, port: u16) -> String {
@@ -600,6 +663,9 @@ impl AmpClient {
             return Ok(AmpMigrateHandle {
                 id: server.id,
                 name: server.name,
+                instance_name: Some(server.instance_name),
+                game_port: server.game_port,
+                start_on_boot: server.start_on_boot,
                 path: PathBuf::from(server.path),
                 running,
                 status: server.status,
@@ -626,6 +692,9 @@ impl AmpClient {
         Ok(AmpMigrateHandle {
             id: format!("amp:{instance_id}"),
             name,
+            instance_name: Some(instance_name.clone()),
+            game_port: None,
+            start_on_boot: boolean(instance, "DaemonAutostart"),
             path,
             running: panel_running,
             status: if panel_running {
@@ -1585,6 +1654,7 @@ mod tests {
             instance_root: instance_root.to_owned(),
             sessions: Mutex::new(HashMap::new()),
             operations: Mutex::new(HashSet::new()),
+            released_ports: Mutex::new(HashSet::new()),
         }
     }
 

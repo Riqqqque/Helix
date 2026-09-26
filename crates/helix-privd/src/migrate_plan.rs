@@ -4,7 +4,7 @@
 //! a copy would include, which Minecraft software to run, and how to merge
 //! `server.properties` onto Helix-owned ports and RCON.
 
-use crate::{GameKind, MinecraftSoftware, TerrariaSoftware};
+use crate::{ExtraPortProtocol, ExtraPortSpec, GameKind, MinecraftSoftware, TerrariaSoftware};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -18,6 +18,7 @@ pub const MAX_MIGRATE_BYTES: u64 = 128 * 1024 * 1024 * 1024;
 pub const MAX_MIGRATE_DEPTH: usize = 24;
 
 const HELIX_PROPERTY_KEYS: &[&str] = &[
+    "server-ip",
     "server-port",
     "query.port",
     "rcon.port",
@@ -1140,6 +1141,8 @@ pub fn merge_server_properties(
         }
         values.insert(key.to_owned(), value.trim().to_owned());
     }
+    // Panels often bind to the host address, which does not exist inside the container.
+    values.insert("server-ip".to_owned(), String::new());
     values.insert("server-port".to_owned(), game_port.to_string());
     values.insert("query.port".to_owned(), game_port.to_string());
     values.insert("rcon.port".to_owned(), rcon_port.to_string());
@@ -1652,6 +1655,253 @@ fn is_real_dir(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+const MAX_VERSION_PROBE_BYTES: u64 = 256 * 1024;
+
+fn read_small_text(path: &Path, limit: u64) -> Option<String> {
+    use std::io::Read;
+    if !is_real_file(path) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn clean_version_token(raw: &str) -> Option<String> {
+    let token = raw.trim().trim_end_matches(['.', ',', ')']);
+    (!token.is_empty()
+        && token.len() <= 64
+        && token.bytes().any(|byte| byte.is_ascii_digit())
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+')))
+    .then(|| token.to_owned())
+}
+
+fn numeric_version(value: &str) -> Option<Vec<u32>> {
+    let parts = value
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    (1..=4).contains(&parts.len()).then_some(parts)
+}
+
+/// True only when both are plain release numbers and `target` is older than `ran`.
+#[must_use]
+pub fn minecraft_version_is_older(target: &str, ran: &str) -> bool {
+    match (numeric_version(target.trim()), numeric_version(ran.trim())) {
+        (Some(mut target), Some(mut ran)) => {
+            let width = target.len().max(ran.len());
+            target.resize(width, 0);
+            ran.resize(width, 0);
+            target < ran
+        }
+        _ => false,
+    }
+}
+
+fn newest_version_dir(parent: &Path) -> Option<String> {
+    if !is_real_dir(parent) {
+        return None;
+    }
+    let mut best: Option<(Vec<u32>, String)> = None;
+    for entry in read_real_dir(parent).ok()?.into_iter().take(256) {
+        if !is_real_dir(&entry) {
+            continue;
+        }
+        let Some(name) = entry.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(parts) = numeric_version(name) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(current, _)| parts > *current) {
+            best = Some((parts, name.to_owned()));
+        }
+    }
+    best.map(|(_, name)| name)
+}
+
+/// Finds the Minecraft version the source server last ran, from files the server itself wrote.
+/// Panel settings can say "latest" or name a loader version, so these win when present.
+#[must_use]
+pub fn detect_minecraft_version(root: &Path) -> Option<String> {
+    if let Some(log) = read_small_text(
+        &root.join("logs").join("latest.log"),
+        MAX_VERSION_PROBE_BYTES,
+    ) {
+        const MARKER: &str = "Starting minecraft server version ";
+        if let Some(found) = log.lines().find_map(|line| {
+            line.find(MARKER)
+                .and_then(|at| line[at + MARKER.len()..].split_whitespace().next())
+                .and_then(clean_version_token)
+        }) {
+            return Some(found);
+        }
+    }
+    if let Some(history) = read_small_text(&root.join("version_history.json"), 16 * 1024)
+        && let Ok(Value::Object(history)) = serde_json::from_str::<Value>(&history)
+        && let Some(current) = history.get("currentVersion").and_then(Value::as_str)
+        && let Some(at) = current.find("(MC: ")
+        && let Some(found) = clean_version_token(&current[at + 5..])
+    {
+        return Some(found);
+    }
+    newest_version_dir(&root.join("versions"))
+        .or_else(|| newest_version_dir(&root.join("libraries/net/minecraft/server")))
+}
+
+/// Java runtime for a copied custom JAR, following Mojang's requirements.
+#[must_use]
+pub fn java_for_minecraft_version(version: &str) -> u16 {
+    let parts = numeric_version(version.trim()).unwrap_or_default();
+    match parts.as_slice() {
+        [1, minor, ..] if *minor >= 21 => 21,
+        [1, 20, patch, ..] if *patch >= 5 => 21,
+        [1, ..] => 17,
+        [major, ..] if *major >= 26 => 25,
+        _ => 21,
+    }
+}
+
+/// A port a copied plugin or mod listens on besides the game port.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DetectedPluginPort {
+    pub port: u16,
+    pub protocol: ExtraPortProtocol,
+    pub label: &'static str,
+}
+
+impl DetectedPluginPort {
+    #[must_use]
+    pub fn to_spec(&self) -> ExtraPortSpec {
+        ExtraPortSpec {
+            port: self.port,
+            protocol: self.protocol,
+            label: self.label.to_owned(),
+        }
+    }
+}
+
+fn key_value_port(text: &str, key: &str, separators: &[char]) -> Option<u16> {
+    text.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix(key)?;
+        let value = rest.trim_start().strip_prefix(separators)?;
+        value
+            .trim()
+            .trim_matches('"')
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port >= 1_024)
+    })
+}
+
+fn geyser_bedrock_port(text: &str) -> Option<u16> {
+    let mut in_bedrock = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        if !line.starts_with([' ', '\t']) {
+            in_bedrock = line.trim_end() == "bedrock:";
+            continue;
+        }
+        if in_bedrock && let Some(port) = key_value_port(line, "port", &[':']) {
+            return Some(port);
+        }
+    }
+    None
+}
+
+/// Reads the ports of common add-ons that open their own listener, so a copy keeps working.
+#[must_use]
+pub fn detect_plugin_ports(root: &Path, game_port: Option<u16>) -> Vec<DetectedPluginPort> {
+    let mut found: Vec<DetectedPluginPort> = Vec::new();
+    let mut add = |port: Option<u16>, protocol: ExtraPortProtocol, label: &'static str| {
+        if let Some(port) = port
+            && Some(port) != game_port
+            && !found.iter().any(|entry| entry.port == port)
+        {
+            found.push(DetectedPluginPort {
+                port,
+                protocol,
+                label,
+            });
+        }
+    };
+    for base in ["plugins", "config"] {
+        if let Some(text) = read_small_text(
+            &root
+                .join(base)
+                .join("voicechat")
+                .join("voicechat-server.properties"),
+            64 * 1024,
+        ) {
+            // port=-1 shares the game port and needs no extra listener.
+            let explicit = text
+                .lines()
+                .any(|line| line.trim_start().starts_with("port="));
+            add(
+                key_value_port(&text, "port", &['=']).or((!explicit).then_some(24_454)),
+                ExtraPortProtocol::Udp,
+                "Simple Voice Chat",
+            );
+        }
+        for folder in ["BlueMap", "bluemap"] {
+            if let Some(text) = read_small_text(
+                &root.join(base).join(folder).join("webserver.conf"),
+                64 * 1024,
+            ) && !text
+                .lines()
+                .any(|line| line.replace(' ', "").trim() == "enabled:false")
+            {
+                add(
+                    key_value_port(&text, "port", &[':', '=']).or(Some(8_100)),
+                    ExtraPortProtocol::Tcp,
+                    "BlueMap",
+                );
+            }
+        }
+    }
+    if let Some(text) = read_small_text(
+        &root
+            .join("plugins")
+            .join("dynmap")
+            .join("configuration.txt"),
+        256 * 1024,
+    ) {
+        add(
+            key_value_port(&text, "webserver-port", &[':']).or(Some(8_123)),
+            ExtraPortProtocol::Tcp,
+            "Dynmap",
+        );
+    }
+    for path in [
+        ["plugins", "Geyser-Spigot"],
+        ["config", "Geyser-Fabric"],
+        ["config", "Geyser-NeoForge"],
+        ["config", "geyser"],
+    ] {
+        if let Some(text) = read_small_text(
+            &root.join(path[0]).join(path[1]).join("config.yml"),
+            128 * 1024,
+        ) {
+            add(
+                geyser_bedrock_port(&text).or(Some(19_132)),
+                ExtraPortProtocol::Udp,
+                "Geyser (Bedrock)",
+            );
+            break;
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1906,6 +2156,136 @@ mod tests {
         assert!(merged.contains("white-list=true"));
         assert!(merged.contains("max-players=30"));
         assert!(!merged.contains("25565"));
+        let bound = merge_server_properties(
+            "",
+            "server-ip=192.168.1.20
+",
+            25_571,
+            4_000,
+            "x",
+            20,
+        );
+        assert!(
+            bound.contains(
+                "server-ip=
+"
+            ),
+            "{bound}"
+        );
+    }
+
+    #[test]
+    fn copies_keep_the_version_the_world_last_ran() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(detect_minecraft_version(root.path()), None);
+        fs::create_dir_all(root.path().join("versions/1.21.4")).unwrap();
+        fs::create_dir_all(root.path().join("versions/1.21.10")).unwrap();
+        assert_eq!(
+            detect_minecraft_version(root.path()).as_deref(),
+            Some("1.21.10")
+        );
+        fs::write(
+            root.path().join("version_history.json"),
+            r#"{"currentVersion":"1.21.8-60-abc (MC: 1.21.8)"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            detect_minecraft_version(root.path()).as_deref(),
+            Some("1.21.8")
+        );
+        fs::create_dir_all(root.path().join("logs")).unwrap();
+        fs::write(
+            root.path().join("logs/latest.log"),
+            "[12:00:00] [ServerMain/INFO]: Loading
+[12:00:01] [Server thread/INFO]: Starting minecraft server version 26.2
+",
+        )
+        .unwrap();
+        assert_eq!(
+            detect_minecraft_version(root.path()).as_deref(),
+            Some("26.2")
+        );
+        assert!(minecraft_version_is_older("1.21.4", "1.21.8"));
+        assert!(minecraft_version_is_older("1.21.8", "26.2"));
+        assert!(!minecraft_version_is_older("1.21.8", "1.21.8"));
+        assert!(!minecraft_version_is_older("26.2", "1.21.8"));
+        assert!(!minecraft_version_is_older("24w14a", "1.21.8"));
+        assert_eq!(java_for_minecraft_version("26.2"), 25);
+        assert_eq!(java_for_minecraft_version("1.21.8"), 21);
+        assert_eq!(java_for_minecraft_version("1.20.6"), 21);
+        assert_eq!(java_for_minecraft_version("1.20.4"), 17);
+    }
+
+    #[test]
+    fn copies_bring_their_add_on_ports() {
+        let root = tempfile::tempdir().unwrap();
+        let plugins = root.path().join("plugins");
+        fs::create_dir_all(plugins.join("voicechat")).unwrap();
+        fs::write(
+            plugins.join("voicechat/voicechat-server.properties"),
+            "port=24455
+max_voice_chat_distance=48
+",
+        )
+        .unwrap();
+        fs::create_dir_all(plugins.join("BlueMap")).unwrap();
+        fs::write(
+            plugins.join("BlueMap/webserver.conf"),
+            "enabled: true
+port: 8200
+",
+        )
+        .unwrap();
+        fs::create_dir_all(plugins.join("Geyser-Spigot")).unwrap();
+        fs::write(
+            plugins.join("Geyser-Spigot/config.yml"),
+            "bedrock:
+  # Bedrock port
+  port: 19133
+remote:
+  port: 25565
+",
+        )
+        .unwrap();
+        fs::create_dir_all(plugins.join("dynmap")).unwrap();
+        fs::write(
+            plugins.join("dynmap/configuration.txt"),
+            "deftemplatesuffix: hires
+",
+        )
+        .unwrap();
+        let ports = detect_plugin_ports(root.path(), Some(25_565));
+        let found = ports
+            .iter()
+            .map(|entry| (entry.port, entry.protocol, entry.label))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            found,
+            vec![
+                (24_455, ExtraPortProtocol::Udp, "Simple Voice Chat"),
+                (8_200, ExtraPortProtocol::Tcp, "BlueMap"),
+                (8_123, ExtraPortProtocol::Tcp, "Dynmap"),
+                (19_133, ExtraPortProtocol::Udp, "Geyser (Bedrock)"),
+            ]
+        );
+        fs::write(
+            plugins.join("voicechat/voicechat-server.properties"),
+            "port=-1
+",
+        )
+        .unwrap();
+        fs::write(
+            plugins.join("BlueMap/webserver.conf"),
+            "enabled: false
+",
+        )
+        .unwrap();
+        let ports = detect_plugin_ports(root.path(), Some(25_565));
+        assert!(
+            ports
+                .iter()
+                .all(|entry| entry.label != "Simple Voice Chat" && entry.label != "BlueMap")
+        );
     }
 
     #[test]
