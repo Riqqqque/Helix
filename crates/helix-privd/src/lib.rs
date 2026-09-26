@@ -349,6 +349,10 @@ pub enum BrokerRequest {
         instance_id: String,
         cpu_millis: u32,
     },
+    SetNativeExtraPorts {
+        instance_id: String,
+        ports: Vec<ExtraPortSpec>,
+    },
     SetNativeBrowserListing {
         instance_id: String,
         list_on_browser: bool,
@@ -952,6 +956,62 @@ impl GameKind {
             Self::Hytale => "hytale",
         }
     }
+}
+
+/// Extra host ports published straight through to a game container, for
+/// plugins and mods that listen on their own port (voice chat, maps, web
+/// panels). The container port always equals the host port.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtraPortProtocol {
+    Tcp,
+    Udp,
+    Both,
+}
+
+impl ExtraPortProtocol {
+    pub fn tcp(self) -> bool {
+        matches!(self, Self::Tcp | Self::Both)
+    }
+
+    pub fn udp(self) -> bool {
+        matches!(self, Self::Udp | Self::Both)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtraPortSpec {
+    pub port: u16,
+    pub protocol: ExtraPortProtocol,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+}
+
+pub const MAX_EXTRA_PORTS: usize = 16;
+
+pub fn validate_extra_ports(ports: &[ExtraPortSpec]) -> Result<(), String> {
+    if ports.len() > MAX_EXTRA_PORTS {
+        return Err(format!(
+            "a server can have at most {MAX_EXTRA_PORTS} extra ports"
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for entry in ports {
+        if entry.port < 1_024 {
+            return Err(format!("extra port {} must be 1024 or higher", entry.port));
+        }
+        if !seen.insert(entry.port) {
+            return Err(format!(
+                "extra port {} is listed twice; choose TCP + UDP instead",
+                entry.port
+            ));
+        }
+        if entry.label.len() > 40 || entry.label.chars().any(char::is_control) {
+            return Err("extra port labels must be up to 40 ordinary characters".to_owned());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -2941,5 +3001,49 @@ mod tests {
         spec.game_port = Some(9_876);
         spec.query_port = Some(9_876);
         assert!(spec.validate().unwrap_err().contains("different"));
+    }
+    #[test]
+    fn extra_ports_are_bounded_unique_and_unprivileged() {
+        let port = |port, protocol| ExtraPortSpec {
+            port,
+            protocol,
+            label: String::new(),
+        };
+        assert!(
+            validate_extra_ports(&[
+                port(24_454, ExtraPortProtocol::Udp),
+                port(8_100, ExtraPortProtocol::Both)
+            ])
+            .is_ok()
+        );
+        assert!(validate_extra_ports(&[port(80, ExtraPortProtocol::Tcp)]).is_err());
+        assert!(
+            validate_extra_ports(&[
+                port(24_454, ExtraPortProtocol::Udp),
+                port(24_454, ExtraPortProtocol::Tcp)
+            ])
+            .is_err()
+        );
+        let many = (0..17)
+            .map(|offset| port(30_000 + offset, ExtraPortProtocol::Tcp))
+            .collect::<Vec<_>>();
+        assert!(validate_extra_ports(&many).is_err());
+        let labelled = ExtraPortSpec {
+            port: 24_454,
+            protocol: ExtraPortProtocol::Udp,
+            label: "voice\nchat".to_owned(),
+        };
+        assert!(validate_extra_ports(&[labelled]).is_err());
+        let parsed: ExtraPortSpec = serde_json::from_value(
+            serde_json::json!({"port": 24454, "protocol": "udp", "label": "Voice chat"}),
+        )
+        .unwrap();
+        assert!(parsed.protocol.udp() && !parsed.protocol.tcp());
+        assert!(
+            serde_json::from_value::<ExtraPortSpec>(
+                serde_json::json!({"port": 1, "protocol": "sctp"})
+            )
+            .is_err()
+        );
     }
 }

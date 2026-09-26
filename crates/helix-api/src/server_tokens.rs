@@ -294,6 +294,7 @@ fn scope(request: &BrokerRequest) -> Option<(&str, &'static str)> {
         UpdateServerSettings { instance_id, .. }
         | SetNativeMemory { instance_id, .. }
         | SetNativeCpu { instance_id, .. }
+        | SetNativeExtraPorts { instance_id, .. }
         | SetNativeStartOnBoot { instance_id, .. }
         | SetNativeBrowserListing { instance_id, .. } => (instance_id, "settings"),
         ChangeNativeRuntime { instance_id, .. } => (instance_id, "update"),

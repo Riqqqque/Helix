@@ -5,8 +5,8 @@ use crate::files::{
 };
 use helix_privd::{
     CURSEFORGE_API_KEY_REQUIRED, CURSEFORGE_CDN_BLOCKED, CURSEFORGE_KEY_REJECTED,
-    CURSEFORGE_RATE_LIMITED, CustomMinecraftJarSpec, FileUploadPurpose, GameCreateSpec, GameKind,
-    GamePortPolicySpec, GamePortRangeSpec, MAX_CONCURRENT_FILE_UPLOADS,
+    CURSEFORGE_RATE_LIMITED, CustomMinecraftJarSpec, ExtraPortSpec, FileUploadPurpose,
+    GameCreateSpec, GameKind, GamePortPolicySpec, GamePortRangeSpec, MAX_CONCURRENT_FILE_UPLOADS,
     MAX_CUSTOM_JAR_UPLOAD_BYTES, MAX_FILE_UPLOAD_CHUNK_BYTES, MAX_MINECRAFT_VERSION_CATALOG,
     MinecraftCreateSpec, MinecraftDifficulty, MinecraftGameMode, MinecraftModpackCreateSpec,
     MinecraftSettingsPatch, MinecraftSoftware, ModpackProvider, PalworldCreateSpec, ServerAction,
@@ -173,6 +173,8 @@ struct InstanceManifest {
     backup_keep_days: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     modpack: Option<InstalledModpack>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    extra_ports: Vec<ExtraPortSpec>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -288,6 +290,11 @@ impl InstanceManifest {
             }
         } else if self.query_port != 0 && self.query_port != self.game_port {
             ports.push(self.query_port);
+        }
+        for extra in &self.extra_ports {
+            if !ports.contains(&extra.port) {
+                ports.push(extra.port);
+            }
         }
         ports
     }
@@ -1844,6 +1851,7 @@ impl NativeManager {
             "cpu_limit_millis": manifest.cpu_millis,
             "game_port": manifest.game_port,
             "query_port": if manifest.query_port == 0 { Value::Null } else { json!(manifest.query_port) },
+            "extra_ports": manifest.extra_ports,
             "console_endpoint": "local_only",
             "start_on_boot": manifest.start_on_boot,
             "created_at_unix_ms": manifest.created_at_unix_ms,
@@ -3367,6 +3375,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 modpack: None,
+                extra_ports: Vec::new(),
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -3534,6 +3543,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 modpack: None,
+                extra_ports: Vec::new(),
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -3706,6 +3716,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 modpack: None,
+                extra_ports: Vec::new(),
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -3851,6 +3862,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 modpack: None,
+                extra_ports: Vec::new(),
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -3993,6 +4005,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 modpack: None,
+                extra_ports: Vec::new(),
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -4150,6 +4163,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 modpack: None,
+                extra_ports: Vec::new(),
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -4312,6 +4326,75 @@ impl NativeManager {
             "instance_id": format!("helix:{}", manifest.id),
             "changed": true,
             "memory_mb": memory_mb,
+            "container_republished": true,
+            "was_running": running
+        }))
+    }
+
+    /// Replace the extra ports published for a server. The container is
+    /// recreated (and restarted if it was running) because Docker fixes port
+    /// publications at creation.
+    pub fn set_extra_ports(&self, id: &str, ports: Vec<ExtraPortSpec>) -> Result<Value, String> {
+        helix_privd::validate_extra_ports(&ports)?;
+        let mut manifest = self.load_manifest(native_id(id))?;
+        let mut ports = ports
+            .into_iter()
+            .map(|mut entry| {
+                entry.label = entry.label.trim().to_owned();
+                entry
+            })
+            .collect::<Vec<_>>();
+        ports.sort_by_key(|entry| entry.port);
+        if manifest.extra_ports == ports {
+            return Ok(json!({
+                "instance_id": format!("helix:{}", manifest.id),
+                "changed": false,
+                "extra_ports": ports,
+                "container_republished": false
+            }));
+        }
+        let _operation = self.begin_instance_operation(&manifest.id, "port update")?;
+        let own = {
+            let mut base = manifest.clone();
+            base.extra_ports.clear();
+            base.occupied_ports()
+        };
+        let mut others = assigned_game_ports(&self.load_manifests()?);
+        for port in manifest.occupied_ports() {
+            others.remove(&port);
+        }
+        for entry in &ports {
+            if own.contains(&entry.port) || entry.port == manifest.rcon_port {
+                return Err(format!(
+                    "port {} is already one of this server's own ports",
+                    entry.port
+                ));
+            }
+            if let Some(error) = self.port_conflict_error(entry.port, &others) {
+                return Err(error.replace("game port", "port"));
+            }
+            if !manifest
+                .extra_ports
+                .iter()
+                .any(|current| current.port == entry.port)
+            {
+                check_extra_port_free(entry)?;
+            }
+        }
+        let previous = manifest.clone();
+        let data_path = self.instance_path(&manifest.id)?;
+        let running = self.container_running(&manifest.container_name);
+        manifest.extra_ports = ports.clone();
+        write_manifest(&self.manifest_path(&manifest.id)?, &manifest)?;
+        if let Err(error) = self.republish_minecraft_container(&manifest, &data_path, running) {
+            let _ = write_manifest(&self.manifest_path(&previous.id)?, &previous);
+            let _ = self.republish_minecraft_container(&previous, &data_path, running);
+            return Err(error);
+        }
+        Ok(json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "changed": true,
+            "extra_ports": ports,
             "container_republished": true,
             "was_running": running
         }))
@@ -5775,6 +5858,7 @@ impl NativeManager {
             args.push("--nogui".to_owned());
         }
         insert_cpu_limit(&mut args, manifest.cpu_millis);
+        insert_extra_ports(&mut args, &manifest.extra_ports);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -5883,6 +5967,7 @@ impl NativeManager {
             manifest.runtime_image.clone(),
         ];
         insert_cpu_limit(&mut args, manifest.cpu_millis);
+        insert_extra_ports(&mut args, &manifest.extra_ports);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -5959,6 +6044,7 @@ impl NativeManager {
             manifest.runtime_image.clone(),
         ];
         insert_cpu_limit(&mut args, manifest.cpu_millis);
+        insert_extra_ports(&mut args, &manifest.extra_ports);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -6041,6 +6127,7 @@ impl NativeManager {
             manifest.runtime_image.clone(),
         ];
         insert_cpu_limit(&mut args, manifest.cpu_millis);
+        insert_extra_ports(&mut args, &manifest.extra_ports);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -6143,6 +6230,7 @@ impl NativeManager {
             args.push(format!("HELIX_SERVER_PASSWORD={server_password}"));
         }
         insert_cpu_limit(&mut args, manifest.cpu_millis);
+        insert_extra_ports(&mut args, &manifest.extra_ports);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -6263,6 +6351,7 @@ impl NativeManager {
         }
         args.push(manifest.runtime_image.clone());
         insert_cpu_limit(&mut args, manifest.cpu_millis);
+        insert_extra_ports(&mut args, &manifest.extra_ports);
         self.docker_owned(&args, DOCKER_TIMEOUT_SECONDS)?;
         Ok(())
     }
@@ -9947,6 +10036,22 @@ fn allocate_run_uid(id: &str, manifests: &[InstanceManifest]) -> Result<u32, Str
     Err("no isolated runtime identity is available".to_owned())
 }
 
+/// A newly added extra port must not already be bound on the host.
+fn check_extra_port_free(entry: &ExtraPortSpec) -> Result<(), String> {
+    let tcp_free = !entry.protocol.tcp()
+        || TcpListener::bind((IpAddr::from([0, 0, 0, 0]), entry.port)).is_ok();
+    let udp_free =
+        !entry.protocol.udp() || UdpSocket::bind((IpAddr::from([0, 0, 0, 0]), entry.port)).is_ok();
+    if tcp_free && udp_free {
+        Ok(())
+    } else {
+        Err(format!(
+            "port {} is already in use on this host",
+            entry.port
+        ))
+    }
+}
+
 fn ensure_port_available(port: u16, udp: bool) -> Result<(), String> {
     let tcp = TcpListener::bind((IpAddr::from([0, 0, 0, 0]), port));
     let udp_result = if udp {
@@ -10038,6 +10143,25 @@ fn read_managed_game_settings(data_path: &Path, settings_file: &str) -> Value {
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .unwrap_or_else(|| json!({}))
+}
+
+/// Publish a server's extra ports (same host and container port) next to the
+/// other resource flags, before the image name.
+fn insert_extra_ports(args: &mut Vec<String>, ports: &[ExtraPortSpec]) {
+    let Some(index) = args.iter().position(|argument| argument == "--memory-swap") else {
+        return;
+    };
+    let mut flags = Vec::new();
+    for entry in ports {
+        for (enabled, protocol) in [(entry.protocol.tcp(), "tcp"), (entry.protocol.udp(), "udp")] {
+            if enabled {
+                flags.push("--publish".to_owned());
+                flags.push(format!("0.0.0.0:{0}:{0}/{protocol}", entry.port));
+            }
+        }
+    }
+    let insert_at = index.saturating_add(2);
+    args.splice(insert_at..insert_at, flags);
 }
 
 fn insert_cpu_limit(args: &mut Vec<String>, cpu_millis: u32) {
@@ -10856,6 +10980,7 @@ mod tests {
             backup_keep_count: 0,
             backup_keep_days: 0,
             modpack: None,
+            extra_ports: Vec::new(),
         };
         let encoded = serde_json::to_value(&vrising).unwrap();
         assert_eq!(encoded["kind"], "vrising");
@@ -11936,6 +12061,7 @@ mod tests {
             backup_keep_count: 0,
             backup_keep_days: 0,
             modpack: None,
+            extra_ports: Vec::new(),
         };
         write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
         let active = backup_root.join(id);
@@ -12074,6 +12200,7 @@ mod tests {
             backup_keep_count: 2,
             backup_keep_days: 0,
             modpack: None,
+            extra_ports: Vec::new(),
         };
         write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
         let active = backup_root.join(id);
@@ -12179,6 +12306,7 @@ mod tests {
             backup_keep_count: 0,
             backup_keep_days: 0,
             modpack: None,
+            extra_ports: Vec::new(),
         };
         let record_root = state_root.join("server-trash").join(trash_id);
         let data_root = instance_root.join(".trash").join(trash_id);
@@ -12361,5 +12489,36 @@ mod tests {
                 & 0o777,
             0o440
         );
+    }
+    #[test]
+    fn extra_ports_are_published_before_the_image() {
+        let mut args = vec![
+            "create".to_owned(),
+            "--memory".to_owned(),
+            "4096m".to_owned(),
+            "--memory-swap".to_owned(),
+            "4096m".to_owned(),
+            "image:tag".to_owned(),
+        ];
+        insert_extra_ports(
+            &mut args,
+            &[
+                ExtraPortSpec {
+                    port: 24_454,
+                    protocol: helix_privd::ExtraPortProtocol::Udp,
+                    label: "Voice chat".to_owned(),
+                },
+                ExtraPortSpec {
+                    port: 8_100,
+                    protocol: helix_privd::ExtraPortProtocol::Both,
+                    label: String::new(),
+                },
+            ],
+        );
+        assert_eq!(args.last().unwrap(), "image:tag");
+        let joined = args.join(" ");
+        assert!(joined.contains("--publish 0.0.0.0:24454:24454/udp"));
+        assert!(!joined.contains("24454:24454/tcp"));
+        assert!(joined.contains("--publish 0.0.0.0:8100:8100/tcp --publish 0.0.0.0:8100:8100/udp"));
     }
 }
