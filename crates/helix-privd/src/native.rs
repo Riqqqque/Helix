@@ -839,6 +839,9 @@ impl NativeManager {
                 };
             let kind = manifest.kind_slug();
             let software = display_software(&manifest).to_owned();
+            // Some servers report "Paper 26.2" as their version; the list already
+            // shows the software, so keep only the version part.
+            let version = strip_software_prefix(&version, &software);
             servers.push(AmpServer {
                 id: format!("helix:{}", manifest.id),
                 name: manifest.name,
@@ -2786,6 +2789,8 @@ impl NativeManager {
                 "trash_id": record.trash_id,
                 "backup_id": record.backup_id,
                 "trashed_at_unix_ms": record.trashed_at_unix_ms,
+                // Backup IDs are their creation time in Unix milliseconds.
+                "created_at_unix_ms": record.backup_id.parse::<u64>().ok(),
                 "undo_available": true,
                 "undo_expires_at_unix_ms": Value::Null,
                 "purge_eligible_at_unix_ms": record.purge_eligible_at_unix_ms,
@@ -10107,6 +10112,20 @@ fn assigned_game_ports(manifests: &[InstanceManifest]) -> HashSet<u16> {
         .collect()
 }
 
+fn strip_software_prefix(version: &str, software: &str) -> String {
+    let trimmed = version.trim();
+    match trimmed.get(..software.len()) {
+        Some(prefix)
+            if !software.is_empty()
+                && prefix.eq_ignore_ascii_case(software)
+                && trimmed[software.len()..].starts_with(' ') =>
+        {
+            trimmed[software.len()..].trim_start().to_owned()
+        }
+        _ => trimmed.to_owned(),
+    }
+}
+
 fn display_software(manifest: &InstanceManifest) -> &'static str {
     match manifest.kind {
         GameKind::VRising => "V Rising",
@@ -12520,5 +12539,18 @@ mod tests {
         assert!(joined.contains("--publish 0.0.0.0:24454:24454/udp"));
         assert!(!joined.contains("24454:24454/tcp"));
         assert!(joined.contains("--publish 0.0.0.0:8100:8100/tcp --publish 0.0.0.0:8100:8100/udp"));
+    }
+
+    #[test]
+    fn reported_versions_do_not_repeat_the_software_name() {
+        assert_eq!(strip_software_prefix("Paper 26.2", "Paper"), "26.2");
+        assert_eq!(strip_software_prefix("paper 26.2", "Paper"), "26.2");
+        assert_eq!(strip_software_prefix("26.2", "Paper"), "26.2");
+        assert_eq!(
+            strip_software_prefix("PaperSpigot 1.8", "Paper"),
+            "PaperSpigot 1.8"
+        );
+        assert_eq!(strip_software_prefix("1.21.1", "NeoForge"), "1.21.1");
+        assert_eq!(strip_software_prefix("dedicated", "Hytale"), "dedicated");
     }
 }
