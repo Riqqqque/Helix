@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import {
+import { useMemo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -91,7 +91,7 @@ import {
   formatTimestamp,
 } from "./format";
 import { ServerReadySummary } from "./server-ready";
-import { ServerRuntimeControls } from "./server-runtime";
+import { ServerRuntimeControls, runtimeSoftware } from "./server-runtime";
 import { ValheimPanelRoute as ValheimPanel, ValheimFieldsRoute as ValheimSettingsFields } from "./valheim-route";
 import { defaultValheimSettings } from "./valheim-api";
 import { CreateJobProgress, migrateCreateJobCopy, steamCreateJobCopy } from "./create-job-progress";
@@ -144,7 +144,7 @@ import {
 import { Dialog } from "./modal";
 import { ServerConfigNotice } from "./server-config-notice";
 import { HytaleSignIn } from "./hytale-sign-in";
-import { ServerPortsCard } from "./server-ports";
+import { ServerPortsCard, portProfile } from "./server-ports";
 export { ServerConfigNotice } from "./server-config-notice";
 import { purgeTrashedNativeServer } from "./native-server-trash-api";
 import {
@@ -2506,7 +2506,7 @@ function ServerRow({
           <span>
             {server.software} {server.version}
           </span>
-          <small>{serverStatusLabel(server.status)} · {server.instanceName}</small>
+          <small>{serverStatusLabel(server.status, server.manager)} · {server.instanceName}</small>
         </span>
       </button>
       <div class="server-stat">
@@ -4053,7 +4053,7 @@ function PurgeBackupDialog({
     <Dialog title="Delete this backup forever?" onClose={() => !busy && onClose()}>
       <div class="dialog-copy">
         <p>
-          <strong>{formatTimestamp(item.trashedAtUnixMs)}</strong> ·{" "}
+          <strong>{formatTimestamp(item.createdAtUnixMs ?? item.trashedAtUnixMs)}</strong> ·{" "}
           {formatBytes(item.sizeBytes)}
         </p>
         <p>This removes the trashed archive from disk. Undo will no longer work for this copy.</p>
@@ -4077,6 +4077,83 @@ function PurgeBackupDialog({
         </button>
         <button class="button button--danger" type="button" disabled={!confirmed || busy} onClick={() => void purge()}>
           {busy ? "Deleting…" : "Delete forever"}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
+const TRASH_WARNING_BYTES = 20 * 1024 ** 3;
+
+function EmptyBackupTrashDialog({
+  server,
+  items,
+  csrfToken,
+  onClose,
+  onDone,
+  onSessionExpired,
+}: {
+  server: ManagedServer;
+  items: ServerBackupTrash[];
+  csrfToken: string;
+  onClose: () => void;
+  onDone: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const total = items.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const run = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    let removed = 0;
+    try {
+      // One request per copy keeps each deletion checked by the broker.
+      for (const item of items) {
+        await purgeTrashedServerBackup(server.id, item.trashId, csrfToken);
+        removed += 1;
+        setDone(removed);
+      }
+      await onDone();
+      onClose();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(`${describeError(requestError)} ${removed} of ${items.length} were deleted before this stopped.`);
+      await onDone().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog title="Empty the backup trash?" onClose={() => !busy && onClose()}>
+      <div class="dialog-copy">
+        <p>
+          This permanently deletes <strong>{items.length} deleted backup{items.length === 1 ? "" : "s"}</strong>{" "}
+          ({formatBytes(total)}) for {server.name}. Your {items.length === 1 ? "copy" : "copies"} in the main backup list are not touched.
+        </p>
+      </div>
+      <label class="check-row">
+        <input
+          type="checkbox"
+          checked={confirmed}
+          disabled={busy}
+          onChange={(event) => setConfirmed(event.currentTarget.checked)}
+        />
+        <span>
+          <strong>Delete them forever</strong>
+          <small>I understand these backups cannot be restored afterwards.</small>
+        </span>
+      </label>
+      {busy && <p class="dialog-progress" role="status">Deleted {done} of {items.length}…</p>}
+      <InlineError message={error} />
+      <div class="dialog-actions">
+        <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>
+          Cancel
+        </button>
+        <button class="button button--danger" type="button" disabled={!confirmed || busy} onClick={() => void run()}>
+          {busy ? "Deleting…" : `Delete ${items.length} forever`}
         </button>
       </div>
     </Dialog>
@@ -4121,6 +4198,8 @@ function BackupsPanel({
   } | null>(null);
   const [undoing, setUndoing] = useState<string | null>(null);
   const [visibleTrash, setVisibleTrash] = useState(25);
+  const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
+  const trashBytes = useMemo(() => trash.reduce((sum, item) => sum + item.sizeBytes, 0), [trash]);
   const [error, setError] = useState<string | null>(null);
   const canCreate = canRunBackupMutation(
     "create",
@@ -4239,30 +4318,41 @@ function BackupsPanel({
               .finally(() => setPolicyBusy(false));
           }}
         >
+          <h3 class="backup-policy__title">Automatic cleanup</h3>
           <div>
             <label>
-              Keep this many
-              <InfoTip text="0 means keep every backup. Any extra oldest copies move to trash after the next backup or when you save this rule." />
-              <input
-                type="number"
-                min="0"
-                max="50"
-                value={keepCountDraft}
-                disabled={policyBusy}
-                onInput={(event) => setKeepCountDraft(event.currentTarget.value)}
-              />
+              <span>
+                Keep the newest{" "}
+                <InfoTip text="Extra oldest copies move to trash after the next backup or when you save this rule." />
+              </span>
+              <span class="backup-policy__field">
+                <input
+                  type="number"
+                  min="0"
+                  max="50"
+                  value={keepCountDraft}
+                  disabled={policyBusy}
+                  onInput={(event) => setKeepCountDraft(event.currentTarget.value)}
+                />
+                <small>backups · 0 keeps all</small>
+              </span>
             </label>
             <label>
-              Keep this many days
-              <InfoTip text="0 means no age limit. Backups older than this move to trash after the next backup or when you save this rule." />
-              <input
-                type="number"
-                min="0"
-                max="365"
-                value={keepDaysDraft}
-                disabled={policyBusy}
-                onInput={(event) => setKeepDaysDraft(event.currentTarget.value)}
-              />
+              <span>
+                Remove backups older than{" "}
+                <InfoTip text="Backups older than this move to trash after the next backup or when you save this rule." />
+              </span>
+              <span class="backup-policy__field">
+                <input
+                  type="number"
+                  min="0"
+                  max="365"
+                  value={keepDaysDraft}
+                  disabled={policyBusy}
+                  onInput={(event) => setKeepDaysDraft(event.currentTarget.value)}
+                />
+                <small>days · 0 never</small>
+              </span>
             </label>
           </div>
           <p>{keepPolicy.note}</p>
@@ -4382,11 +4472,37 @@ function BackupsPanel({
         <section class="deleted-backups">
           <div class="deleted-backups__head">
             <div>
-              <h3>Deleted backups</h3>
-              <p>{trashPolicy?.note}</p>
+              <h3>
+                Trash <span>{trash.length}</span>
+              </h3>
+              <p>
+                {trash.length === 0
+                  ? "Deleted backups wait here until you restore them or delete them forever. Helix never empties the trash on its own."
+                  : `${formatBytes(trashBytes)} held by deleted backups. Helix never empties the trash on its own.`}
+              </p>
             </div>
-            <span>{trash.length}</span>
+            {trash.length > 0 && (
+              <button
+                class="button button--danger-quiet"
+                type="button"
+                disabled={!canUseTrash || undoing !== null}
+                title={canUseTrash ? undefined : "Requires games.backups.manage permission"}
+                onClick={() => setEmptyTrashOpen(true)}
+              >
+                <Icon name="trash" size={14} />
+                Empty trash
+              </button>
+            )}
           </div>
+          {trashBytes >= TRASH_WARNING_BYTES && (
+            <div class="backup-capability-note" role="status">
+              <Icon name="warning" size={15} />
+              <span>
+                The trash is using {formatBytes(trashBytes)} of disk. Empty it
+                once you are sure you will not need these backups.
+              </span>
+            </div>
+          )}
           <div class="deleted-backup-list">
             {trash.slice(0, visibleTrash).map((item) => (
               <div key={item.trashId}>
@@ -4394,14 +4510,17 @@ function BackupsPanel({
                   <Icon name="trash" />
                 </span>
                 <div>
-                  <strong>{formatTimestamp(item.trashedAtUnixMs)}</strong>
+                  <strong>
+                    {formatTimestamp(item.createdAtUnixMs ?? item.trashedAtUnixMs)}
+                  </strong>
                   <small>
-                    {formatBytes(item.sizeBytes)} ·{" "}
-                    {item.definitionPresent
-                      ? "Restorable definition included"
-                      : "Archive only"}
+                    {formatBytes(item.sizeBytes)}
+                    {item.createdAtUnixMs !== null &&
+                      ` · deleted ${formatTimestamp(item.trashedAtUnixMs)}`}
+                    {item.definitionPresent ? "" : " · archive only"}
                   </small>
                 </div>
+                <div class="backup-row-actions">
                 <button
                   class="button button--quiet"
                   type="button"
@@ -4427,6 +4546,7 @@ function BackupsPanel({
                 >
                   <Icon name="trash" size={15} />
                 </button>
+                </div>
               </div>
             ))}
           </div>
@@ -4465,6 +4585,19 @@ function BackupsPanel({
           onDeleted={async (trashIdValue, backup, purged) => {
             if (!purged) setImmediateUndo({ trashId: trashIdValue, backup });
             else if (immediateUndo?.trashId === trashIdValue) setImmediateUndo(null);
+            await load();
+          }}
+          onSessionExpired={onSessionExpired}
+        />
+      )}
+      {emptyTrashOpen && (
+        <EmptyBackupTrashDialog
+          server={server}
+          items={trash}
+          csrfToken={csrfToken}
+          onClose={() => setEmptyTrashOpen(false)}
+          onDone={async () => {
+            setImmediateUndo(null);
             await load();
           }}
           onSessionExpired={onSessionExpired}
@@ -4626,14 +4759,24 @@ function RemoveNativeServerDialog({
     <Dialog title={`Remove ${server.name}?`} onClose={() => !busy && onClose()}>
       <div class="dialog-copy">
         <p>
-          Helix will stop and remove its exact Docker workload, then move the
-          server files into protected recovery storage. Backups, console
-          history, and the custom icon remain intact.
+          <strong>Your world is not deleted.</strong> You can bring this
+          server back, stopped, from <em>Removed servers</em> on the Servers
+          page.
         </p>
-        <p>
-          <strong>This does not permanently erase the world.</strong> The
-          Removed servers section can restore it in a stopped state.
-        </p>
+        <ul class="dialog-points">
+          <li>
+            <Icon name="stop" size={14} />
+            <span>The server stops and its container is removed.</span>
+          </li>
+          <li>
+            <Icon name="folder" size={14} />
+            <span>Its files move to protected recovery storage.</span>
+          </li>
+          <li>
+            <Icon name="backup" size={14} />
+            <span>Backups, console history, and the icon are kept.</span>
+          </li>
+        </ul>
       </div>
       <label class="field">
         <span>
@@ -5355,7 +5498,9 @@ function NativeServerPage({
                 <small>
                   {usesUdpJoin
                     ? udpDiagnostic.detail
-                    : `${tcpDiagnostic.detail} ${udpDiagnostic.detail}`}
+                    : tcpDiagnostic.detail === udpDiagnostic.detail
+                      ? tcpDiagnostic.detail
+                      : `${tcpDiagnostic.detail} ${udpDiagnostic.detail}`}
                 </small>
               </div>
               {(detail.kind === "vrising" || canManageNetwork) && (
@@ -5420,9 +5565,9 @@ function NativeServerPage({
             <ServerPortsCard
               serverId={detail.id}
               kind={detail.kind}
+              software={detail.software}
               gamePort={detail.gamePort}
               queryPort={detail.queryPort}
-              joinProtocol={usesUdpJoin ? "UDP" : "TCP"}
               extraPorts={detail.extraPorts}
               lanAddress={network?.addresses.privateIpv4 ?? null}
               running={detail.status !== "stopped"}
@@ -5588,6 +5733,7 @@ function NativeServerPage({
             csrfToken={csrfToken}
             onSessionExpired={onSessionExpired}
             initialPath={detail.dataPath}
+            root={{ path: detail.dataPath, label: detail.name }}
           />
         )}
         {detail.kind === "valheim" && (tab === "settings" || tab === "marketplace") && <ValheimPanel key={`${detail.id}-${tab}`} detail={detail} csrfToken={csrfToken} canManage={canManageServers} onSessionExpired={onSessionExpired} onBackups={() => setTab("backups")} mode={tab === "settings" ? "settings" : "mods"} />}
@@ -5644,7 +5790,7 @@ function NativeServerPage({
                   <button class="button button--quiet" type="button" onClick={() => setTab("settings")}>
                     <Icon name="update" size={15} /> Software updates &amp; repair
                   </button>
-                ) : (
+                ) : detail.kind === "minecraft" && detail.modpack === null && runtimeSoftware(detail.software) !== null ? null : (
                   <button
                     class="button button--quiet"
                     type="button"
@@ -5705,7 +5851,7 @@ function NativeServerPage({
                   <InfoTip text="Helix’s internal name for this container. It is not the world name players see." />
                 </dt>
                 <dd>
-                  <code>{detail.instanceName}</code>
+                  <code title={detail.instanceName}>{detail.instanceName}</code>
                 </dd>
               </div>
               <div>
@@ -5721,34 +5867,35 @@ function NativeServerPage({
                   <InfoTip text="The exact container image Helix starts. A digest pin means Helix will not silently float to a different build." />
                 </dt>
                 <dd>
-                  <code>{detail.runtimeImage}</code>
+                  <code title={detail.runtimeImage}>{detail.runtimeImage}</code>
                 </dd>
               </div>
-              <div>
+              {detail.kind === "minecraft" && <div>
                 <dt>
                   Server SHA-256{" "}
                   <InfoTip text="A fingerprint of the server JAR Helix installed. If this changes, the file on disk is not the same bytes Helix verified." />
                 </dt>
                 <dd>
-                  <code>{detail.artifactSha256}</code>
+                  <code title={detail.artifactSha256}>{detail.artifactSha256}</code>
                 </dd>
-              </div>
+              </div>}
               <div>
                 <dt>
                   Data path{" "}
                   <InfoTip text="The host folder mounted into the container. Worlds, mods, plugins, and configs live here." />
                 </dt>
                 <dd>
-                  <code>{detail.dataPath}</code>
+                  <code title={detail.dataPath}>{detail.dataPath}</code>
                 </dd>
               </div>
               <div>
                 <dt>
                   Game port{" "}
-                  <InfoTip text="The port players connect to. Helix publishes TCP and UDP for Minecraft. This is not the RCON console port." />
+                  <InfoTip text="The port players connect to. Extra ports for plugins and mods are on the Overview tab." />
                 </dt>
                 <dd>
-                  <code>{detail.gamePort}/tcp + udp</code>
+                  <code>{detail.gamePort} · {portProfile(detail.kind, detail.software).gameProtocol}</code>
+                  {detail.extraPorts.length > 0 && <small class="advanced-facts__extra">+ {detail.extraPorts.map((entry) => entry.port).join(", ")}</small>}
                 </dd>
               </div>
               <div>
@@ -5763,7 +5910,7 @@ function NativeServerPage({
                   Console{" "}
                   <InfoTip text="Loopback only means RCON listens on 127.0.0.1 on this host. The dashboard talks to Minecraft locally. That port is not opened to the LAN or internet, and it is not the game port players join." />
                 </dt>
-                <dd>Loopback only</dd>
+                <dd>{detail.kind === "minecraft" ? "RCON on loopback only" : detail.kind === "hytale" ? "Server input pipe" : detail.capabilities.includes("console") ? "Loopback only" : "No command console"}</dd>
               </div>
               <div>
                 <dt>
@@ -6056,7 +6203,7 @@ function ImportedServerPage({
             <span
               class={`state-label state-label--${serverStatusTone(server.status)}`}
             >
-              {serverStatusLabel(server.status)}
+              {serverStatusLabel(server.status, server.manager)}
             </span>
           </div>
           <div class="server-health-stats">
@@ -6805,7 +6952,6 @@ export function NewServerChooser({
               Paper, Fabric, Forge, NeoForge, Quilt, Pufferfish, and Modrinth or CurseForge packs.
             </small>
           </span>
-          <em>Ready</em>
         </button>
         <button type="button" onClick={onVRising}>
           <span class="game-create-icon game-create-icon--vrising">
@@ -6817,7 +6963,6 @@ export function NewServerChooser({
               Dedicated server in an isolated Helix container. Show it on the in-game list, then start it.
             </small>
           </span>
-          <em>Click to install</em>
         </button>
         <button type="button" onClick={onValheim}>
           <span class="game-create-icon game-create-icon--valheim">
@@ -6829,7 +6974,6 @@ export function NewServerChooser({
               World settings, crossplay and Thunderstore mods with backups.
             </small>
           </span>
-          <em>Click to install</em>
         </button>
         <button type="button" onClick={onTerraria}>
           <span class="game-create-icon game-create-icon--terraria">
@@ -6838,10 +6982,9 @@ export function NewServerChooser({
           <span>
             <strong>Terraria</strong>
             <small>
-              Vanilla or tModLoader. Drop `.tmod` files in mods and restart.
+              Vanilla or tModLoader. Add .tmod files to mods/ and restart.
             </small>
           </span>
-          <em>Click to install</em>
         </button>
         <button type="button" onClick={onPalworld}>
           <span class="game-create-icon game-create-icon--palworld">
@@ -6853,7 +6996,6 @@ export function NewServerChooser({
               SteamCMD dedicated server in an isolated Helix container. Needs 8+ GiB of memory.
             </small>
           </span>
-          <em>Click to install</em>
         </button>
         {MANAGED_GAMES.map((info) => (
           <button key={info.id} type="button" onClick={() => onManaged(info.id)}>
@@ -6864,7 +7006,6 @@ export function NewServerChooser({
               <strong>{info.label}</strong>
               <small>{info.blurb}</small>
             </span>
-            <em>Click to install</em>
           </button>
         ))}
         <button type="button" onClick={onMigrate}>
@@ -6877,7 +7018,6 @@ export function NewServerChooser({
               Bring a stopped AMP or Pterodactyl world into a new Helix server. The old files stay put.
             </small>
           </span>
-          <em>Copy into Helix</em>
         </button>
       </div>
       <div class="server-platform-note">
@@ -8187,6 +8327,15 @@ export function ServersPage({
     (server) => server.manager === "helix",
   ).length;
   const imported = servers.length - helixManaged;
+  // Only games that have servers get a filter, so the row stays readable.
+  const gameFilters: Array<{ id: typeof filter; label: string; count: number }> = [
+    { id: "minecraft", label: "Minecraft", count: servers.filter(isMinecraftServer).length },
+    { id: "vrising", label: "V Rising", count: servers.filter(isVRisingServer).length },
+    { id: "valheim", label: "Valheim", count: servers.filter(isValheimServer).length },
+    { id: "terraria", label: "Terraria", count: servers.filter(isTerrariaServer).length },
+    { id: "palworld", label: "Palworld", count: servers.filter(isPalworldServer).length },
+    ...MANAGED_GAMES.map((info) => ({ id: info.id as typeof filter, label: info.label, count: servers.filter((server) => isManagedGameServer(server, info.id)).length })),
+  ];
   return (
     <div class="page page--servers">
       <PageHead
@@ -8259,58 +8408,27 @@ export function ServersPage({
         >
           Helix <span>{helixManaged}</span>
         </button>
-        <button
-          class={filter === "minecraft" ? "is-active" : ""}
-          type="button"
-          onClick={() => setFilter("minecraft")}
-        >
-          Minecraft <span>{servers.filter(isMinecraftServer).length}</span>
-        </button>
-        <button
-          class={filter === "vrising" ? "is-active" : ""}
-          type="button"
-          onClick={() => setFilter("vrising")}
-        >
-          V Rising <span>{servers.filter(isVRisingServer).length}</span>
-        </button>
-        <button
-          class={filter === "valheim" ? "is-active" : ""}
-          type="button"
-          onClick={() => setFilter("valheim")}
-        >
-          Valheim <span>{servers.filter(isValheimServer).length}</span>
-        </button>
-        <button
-          class={filter === "terraria" ? "is-active" : ""}
-          type="button"
-          onClick={() => setFilter("terraria")}
-        >
-          Terraria <span>{servers.filter(isTerrariaServer).length}</span>
-        </button>
-        <button
-          class={filter === "palworld" ? "is-active" : ""}
-          type="button"
-          onClick={() => setFilter("palworld")}
-        >
-          Palworld <span>{servers.filter(isPalworldServer).length}</span>
-        </button>
-        {MANAGED_GAMES.map((info) => (
+        {gameFilters
+          .filter((entry) => entry.count > 0 || filter === entry.id)
+          .map((entry) => (
+            <button
+              key={entry.id}
+              class={filter === entry.id ? "is-active" : ""}
+              type="button"
+              onClick={() => setFilter(entry.id)}
+            >
+              {entry.label} <span>{entry.count}</span>
+            </button>
+          ))}
+        {(imported > 0 || filter === "imported") && (
           <button
-            key={info.id}
-            class={filter === info.id ? "is-active" : ""}
+            class={filter === "imported" ? "is-active" : ""}
             type="button"
-            onClick={() => setFilter(info.id)}
+            onClick={() => setFilter("imported")}
           >
-            {info.label} <span>{servers.filter((server) => isManagedGameServer(server, info.id)).length}</span>
+            Connections <span>{imported}</span>
           </button>
-        ))}
-        <button
-          class={filter === "imported" ? "is-active" : ""}
-          type="button"
-          onClick={() => setFilter("imported")}
-        >
-          Connections <span>{imported}</span>
-        </button>
+        )}
       </nav>
       <section class="server-list surface">
         <div class="server-list-head">

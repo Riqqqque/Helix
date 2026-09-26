@@ -106,6 +106,14 @@ const descriptors: Record<string, HookDescriptor> = {
   },
 };
 
+const actionBusyLabels: Record<HookServiceAction, string> = {
+  start: 'Starting…',
+  stop: 'Stopping…',
+  restart: 'Restarting…',
+  enable: 'Turning on…',
+  disable: 'Turning off…',
+};
+
 const actionLabels: Record<HookServiceAction, string> = {
   start: 'Start',
   stop: 'Stop',
@@ -218,7 +226,7 @@ function HookDetails({ hook, canManage, busyAction, plan, planLoading, planError
             {(hook.memoryUsedBytes !== null || hook.cpuPercent !== null) && <div><dt>Host resources</dt><dd>{[hook.memoryUsedBytes === null ? null : formatBytes(hook.memoryUsedBytes), hook.cpuPercent === null ? null : `${formatPercent(hook.cpuPercent)} CPU`].filter(Boolean).join(' · ')}</dd></div>}
           </dl>
           <div class="hook-actions">
-            {operationalActions.map((action) => <button key={action} class={`button ${action === 'stop' ? 'button--danger-quiet' : action === 'restart' ? 'button--quiet' : 'button--primary'}`} type="button" disabled={!canManage || !hook.controllable || busyAction !== null || (action === 'start' && hook.active) || (action === 'stop' && !hook.active)} onClick={() => onAction(action)} aria-busy={busyAction === action}><Icon name={action === 'start' ? 'play' : action === 'stop' ? 'stop' : 'restart'} size={14} />{busyAction === action ? `${actionLabels[action]}ing…` : actionLabels[action]}</button>)}
+            {operationalActions.map((action) => <button key={action} class={`button ${action === 'stop' ? 'button--danger-quiet' : action === 'restart' ? 'button--quiet' : 'button--primary'}`} type="button" disabled={!canManage || !hook.controllable || busyAction !== null || (action === 'start' && hook.active) || (action === 'stop' && !hook.active)} onClick={() => onAction(action)} aria-busy={busyAction === action}><Icon name={action === 'start' ? 'play' : action === 'stop' ? 'stop' : 'restart'} size={14} />{busyAction === action ? actionBusyLabels[action] : actionLabels[action]}</button>)}
             {href !== null && <a class="button button--quiet" href={href} target="_blank" rel="noopener noreferrer"><Icon name="external" size={14} />Open {descriptor.name}</a>}
           </div>
           {hook.kind === 'systemd' && <div class="hook-boot-control"><span><strong>Start after host boot</strong><small>Changes only <code>{hook.unit}</code>. It does not stop or start the service now.</small></span><button class="switch-button" role="switch" type="button" disabled={!canManage || !hook.controllable || busyAction !== null} aria-checked={busyAction === 'enable' ? true : busyAction === 'disable' ? false : hook.enabled} aria-busy={busyAction === 'enable' || busyAction === 'disable'} onClick={() => onAction(hook.enabled ? 'disable' : 'enable')}><i /><span>{busyAction === 'enable' || busyAction === 'disable' ? 'Saving…' : hook.enabled ? 'On' : 'Off'}</span></button></div>}

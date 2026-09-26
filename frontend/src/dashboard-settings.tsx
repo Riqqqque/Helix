@@ -882,7 +882,7 @@ function HelixDataSettings({
                       <div>
                         <strong>{server.name}</strong>
                         <small>
-                          {server.software} · {serverStatusLabel(server.status)} · port {server.gamePort || '—'}
+                          {server.software} · {serverStatusLabel(server.status, server.manager)} · port {server.gamePort || '—'}
                         </small>
                       </div>
                     </header>

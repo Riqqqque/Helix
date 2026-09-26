@@ -483,6 +483,37 @@ function validateMarketplaceId(value: string, label: string): void {
   if (!/^[A-Za-z0-9_-]{1,64}$/u.test(value)) throw new ApiError(`The marketplace ${label} ID is invalid.`);
 }
 
+/**
+ * A short-lived cache for catalog reads. Going back from a project to the
+ * results, paging back, or reopening the tab reuses a recent answer instead of
+ * asking Modrinth or CurseForge again. Installs clear the cache for that server
+ * so installed badges never go stale.
+ */
+const CATALOG_CACHE_TTL_MS = 60_000;
+const CATALOG_CACHE_LIMIT = 64;
+const catalogCache = new Map<string, { expires: number; value: Promise<unknown> }>();
+
+function cachedCatalogRead<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const hit = catalogCache.get(key);
+  if (hit !== undefined && hit.expires > now) return hit.value as Promise<T>;
+  const value = load();
+  catalogCache.set(key, { expires: now + CATALOG_CACHE_TTL_MS, value });
+  // Failed or aborted reads are never reused.
+  value.catch(() => { if (catalogCache.get(key)?.value === value) catalogCache.delete(key); });
+  while (catalogCache.size > CATALOG_CACHE_LIMIT) {
+    const oldest = catalogCache.keys().next().value;
+    if (oldest === undefined) break;
+    catalogCache.delete(oldest);
+  }
+  return value;
+}
+
+export function forgetMarketplaceCache(instanceId?: string): void {
+  if (instanceId === undefined) { catalogCache.clear(); return; }
+  for (const key of catalogCache.keys()) if (key.startsWith(`${instanceId}|`)) catalogCache.delete(key);
+}
+
 export function searchMarketplace(
   instanceId: string,
   query: string,
@@ -497,7 +528,10 @@ export function searchMarketplace(
   if (new TextEncoder().encode(trimmed).length > 120 || Array.from(trimmed).some((character) => /\p{Cc}/u.test(character))) throw new ApiError('Marketplace search text is invalid.');
   if (!Number.isInteger(offset) || offset < 0 || offset > 10_000 || !Number.isInteger(limit) || limit < 1 || limit > 50) throw new ApiError('Marketplace pagination is invalid.');
   const params = new URLSearchParams({ query: trimmed, offset: String(offset), limit: String(limit), provider, catalog });
-  return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/search?${params.toString()}`, parseMarketplaceSearchPage, { csrfToken, signal, timeoutMs: 40_000 });
+  // The shared request is not tied to one caller's abort signal; a caller that
+  // aborts simply ignores the answer while it still warms the cache.
+  const shared = cachedCatalogRead(`${instanceId}|search|${params.toString()}`, () => requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/search?${params.toString()}`, parseMarketplaceSearchPage, { csrfToken, timeoutMs: 40_000 }));
+  return abortable(shared, signal);
 }
 
 export function getMarketplaceProject(
@@ -509,7 +543,18 @@ export function getMarketplaceProject(
 ): Promise<MarketplaceProjectDetail> {
   validateMarketplaceId(projectId, 'project');
   const params = new URLSearchParams({ provider });
-  return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/projects/${encodeURIComponent(projectId)}?${params.toString()}`, parseMarketplaceProjectDetail, { csrfToken, signal, timeoutMs: 40_000 });
+  const shared = cachedCatalogRead(`${instanceId}|project|${projectId}|${provider}`, () => requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/projects/${encodeURIComponent(projectId)}?${params.toString()}`, parseMarketplaceProjectDetail, { csrfToken, timeoutMs: 40_000 }));
+  return abortable(shared, signal);
+}
+
+function abortable<T>(value: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return value;
+  if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    value.then((result) => { signal.removeEventListener('abort', onAbort); resolve(result); }, (error: unknown) => { signal.removeEventListener('abort', onAbort); reject(error); });
+  });
 }
 
 export function installMarketplaceProject(
@@ -521,6 +566,7 @@ export function installMarketplaceProject(
 ): Promise<MarketplaceInstallDispatch> {
   validateMarketplaceId(projectId, 'project');
   if (versionId !== null) validateMarketplaceId(versionId, 'version');
+  forgetMarketplaceCache(instanceId);
   return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/install`, parseInstallDispatch, {
     method: 'POST',
     body: { project_id: projectId, version_id: versionId, provider, restart_server: false },

@@ -144,7 +144,7 @@ export function OverviewPage({ data, themeLabel, csrfToken, canManageDocker, onS
           <div class="section-title"><div><h2>Servers</h2><p>Helix and imported workloads</p></div><a href="#servers">Manage <Icon name="chevron" size={14} /></a></div>
           <div class="compact-server-list">
             {(servers.data ?? []).slice().sort((a, b) => Number(serverIsLive(b.status)) - Number(serverIsLive(a.status))).slice(0, 6).map((server) => (
-              <div key={server.id}><span class={`status-dot status-dot--${serverStatusTone(server.status)}`} /><strong>{server.name}</strong><span>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers, server.playerCountVerified)}</span><small>{server.software} {server.version}</small></div>
+              <div key={server.id}><span class={`status-dot status-dot--${serverStatusTone(server.status)}`} /><strong>{server.name}</strong><span>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers, server.playerCountVerified, server.manager)}</span><small>{server.software} {server.version}</small></div>
             ))}
           </div>
         </section>

@@ -325,7 +325,7 @@ function ServersWidget({ servers }: Pick<HomePageProps, 'servers'>) {
         <a href="#servers" key={server.id}>
           <span class={`status-dot status-dot--${serverStatusTone(server.status)}`} />
           <strong>{server.name}</strong>
-          <small>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers, server.playerCountVerified)}</small>
+          <small>{serverStatusSummary(server.status, server.playersOnline, server.maxPlayers, server.playerCountVerified, server.manager)}</small>
           <span>{server.manager === 'helix' ? 'Helix' : 'AMP'}</span>
         </a>
       ))}
