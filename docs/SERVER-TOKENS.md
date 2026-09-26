@@ -46,7 +46,7 @@ support is unchanged; imported managers retain their actual adapter limits.
 | `files.write` | `server_files`: create, write, mkdir, move, trash, all upload steps |
 | `start`, `stop`, `restart`, `kill` | Matching `server_action` only |
 | `console` | `server_console` |
-| `settings` | `server_settings`, `update_server_settings`, `set_native_memory`, `set_native_cpu`, `set_native_start_on_boot`, `set_native_browser_listing` |
+| `settings` | `server_settings`, `update_server_settings`, `set_native_memory`, `set_native_cpu`, `set_native_extra_ports`, `set_native_start_on_boot`, `set_native_browser_listing` |
 | `update` | `change_native_runtime`, server_action update |
 | `backups.read` | `list_backups`, `server_backup_download` |
 | `backups.write` | server_action backup, `restore_backup`, `trash_backup`, `restore_trashed_backup`, `set_backup_policy`, `prune_backups` |

@@ -1562,6 +1562,86 @@
         }
       }
     },
+    "/servers/{instance_id}/ports": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "putServersInstanceIdPorts",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Replace the extra ports published on one native game container (host port equals container port); recreates the container and restarts it if it was running",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "ports"
+                ],
+                "properties": {
+                  "ports": {
+                    "type": "array",
+                    "maxItems": 16,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "port",
+                        "protocol"
+                      ],
+                      "properties": {
+                        "port": {
+                          "type": "integer",
+                          "minimum": 1024,
+                          "maximum": 65535
+                        },
+                        "protocol": {
+                          "type": "string",
+                          "enum": [
+                            "tcp",
+                            "udp",
+                            "both"
+                          ]
+                        },
+                        "label": {
+                          "type": "string",
+                          "maxLength": 40
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/servers/{instance_id}/memory": {
       "parameters": [
         {

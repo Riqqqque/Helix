@@ -534,6 +534,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 modpack: Some(installed_modpack),
+                extra_ports: Vec::new(),
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -873,6 +874,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 modpack: Some(installed_modpack),
+                extra_ports: Vec::new(),
             };
             write_manifest(&manifest_path, &manifest)?;
             self.chown_instance(&data_path, run_uid)?;
@@ -3627,6 +3629,7 @@ mod tests {
             backup_keep_count: 0,
             backup_keep_days: 0,
             modpack: Some(installed),
+            extra_ports: Vec::new(),
         };
         let backup_directory = backup_root.join(id);
         fs::create_dir(&backup_directory).expect("backup directory");

@@ -481,6 +481,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             put(set_native_start_on_boot),
         )
         .route("/servers/{instance_id}/memory", put(set_native_memory))
+        .route("/servers/{instance_id}/ports", put(set_native_extra_ports))
         .route(
             "/servers/{instance_id}/runtime",
             post(change_native_runtime),
@@ -1675,6 +1676,12 @@ struct NativeMemoryBody {
 #[serde(deny_unknown_fields)]
 struct NativeCpuBody {
     cpu_millis: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeExtraPortsBody {
+    ports: Vec<helix_privd::ExtraPortSpec>,
 }
 
 #[derive(Deserialize)]
@@ -3498,6 +3505,26 @@ async fn set_native_cpu(
         BrokerRequest::SetNativeCpu {
             instance_id,
             cpu_millis: body.cpu_millis,
+        },
+    )
+    .await
+}
+
+async fn set_native_extra_ports(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<NativeExtraPortsBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    helix_privd::validate_extra_ports(&body.ports).map_err(ApiError::BrokerRejected)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetNativeExtraPorts {
+            instance_id,
+            ports: body.ports,
         },
     )
     .await

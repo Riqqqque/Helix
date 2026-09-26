@@ -793,6 +793,9 @@ impl BrokerContext {
             } => self
                 .native_manager(&instance_id)
                 .and_then(|native| native.set_cpu_millis(&instance_id, cpu_millis)),
+            BrokerRequest::SetNativeExtraPorts { instance_id, ports } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.set_extra_ports(&instance_id, ports)),
             BrokerRequest::SetNativeBrowserListing {
                 instance_id,
                 list_on_browser,
