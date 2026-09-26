@@ -1,14 +1,14 @@
 import render from 'preact-render-to-string';
 import { describe, expect, it, vi } from 'vitest';
 import { parseExtraPorts, setNativeExtraPorts } from './control-api';
-import { ServerPortsCard, validatePortDraft } from './server-ports';
+import { ServerPortsCard, portProfile, validatePortDraft } from './server-ports';
 
 const base = {
   serverId: 'helix:test',
   kind: 'minecraft',
   gamePort: 25_566,
   queryPort: null,
-  joinProtocol: 'TCP',
+  software: 'Paper',
   lanAddress: '192.168.1.20',
   running: true,
   csrfToken: 'csrf',
@@ -30,7 +30,7 @@ describe('server ports card', () => {
   });
 
   it('offers presets only for Minecraft and locks editing without permission', () => {
-    const html = render(<ServerPortsCard {...base} kind="valheim" canManageServers={false} extraPorts={[]} />);
+    const html = render(<ServerPortsCard {...base} kind="valheim" software="Valheim" canManageServers={false} extraPorts={[]} />);
     expect(html).not.toContain('Simple Voice Chat');
     expect(html).toContain('No extra ports yet.');
     expect(html).toContain('Requires games.manage permission');
@@ -61,5 +61,22 @@ describe('server ports card', () => {
     expect(request.method).toBe('PUT');
     expect(JSON.parse(String(request.body))).toEqual({ ports: [{ port: 24_454, protocol: 'udp', label: 'Voice' }] });
     vi.unstubAllGlobals();
+  });
+  it('matches presets and protocols to each game and server software', () => {
+    const labels = (kind: string, software: string) => portProfile(kind, software).presets.map((preset) => preset.label);
+    expect(labels('minecraft', 'Paper')).toEqual(['Simple Voice Chat', 'BlueMap', 'Dynmap', 'Geyser (Bedrock)']);
+    expect(portProfile('minecraft', 'Paper').configNote).toBe('plugins/');
+    expect(portProfile('minecraft', 'Fabric').configNote).toBe('config/');
+    expect(labels('minecraft', 'Vanilla')).toEqual([]);
+    expect(labels('minecraft', 'Pumpkin')).toEqual([]);
+    expect(portProfile('minecraft', 'Pumpkin').queryLabel).toContain('Bedrock');
+    expect(labels('hytale', 'Hytale')).toEqual([]);
+    expect(portProfile('hytale', 'Hytale').gameProtocol).toBe('UDP (QUIC)');
+    expect(portProfile('satisfactory', 'Satisfactory')).toMatchObject({ gameProtocol: 'UDP', queryLabel: 'Beacon UDP' });
+    expect(portProfile('vintage_story', 'Vintage Story').gameProtocol).toBe('TCP');
+    const hytale = render(<ServerPortsCard {...base} kind="hytale" software="Hytale" gamePort={5_520} extraPorts={[]} />);
+    expect(hytale).not.toContain('Simple Voice Chat');
+    expect(hytale).not.toContain('BlueMap');
+    expect(hytale).toContain('UDP (QUIC)');
   });
 });

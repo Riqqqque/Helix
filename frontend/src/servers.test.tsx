@@ -158,7 +158,8 @@ describe('Servers route', () => {
     expect(markup).toContain('Don' + "'" + 't Starve Together');
     expect(markup).toContain('Vintage Story');
     expect(markup).toContain('Copy an existing server');
-    expect(markup).toContain('Click to install');
+    expect(markup).not.toContain('Click to install');
+    expect(markup).toContain('Hytale');
     expect(markup).toContain('game-mark--minecraft');
     expect(markup).toContain('game-mark--vrising');
     expect(markup).toContain('game-mark--palworld');

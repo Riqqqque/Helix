@@ -1624,6 +1624,20 @@ main {
   grid-template-columns: repeat(3, minmax(240px, 1fr));
   gap: 10px;
 }
+.interface-virtual {
+  margin: 12px 0 18px;
+}
+.interface-virtual > summary {
+  width: fit-content;
+  margin-bottom: 10px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.interface-virtual > summary:hover { color: var(--text); border-color: var(--line-strong); }
 .interface-panel {
   min-height: 205px;
   padding: 16px;
@@ -1891,12 +1905,14 @@ main {
 }
 .server-game-filters {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
   margin: 0 0 10px;
 }
 .server-game-filters button {
   min-height: 31px;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -1929,18 +1945,17 @@ main {
 }
 .game-create-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
   gap: 10px;
   padding: 0;
 }
 .game-create-grid > button,
 .game-create-grid > article {
   min-width: 0;
-  min-height: 142px;
+  min-height: 104px;
   display: grid;
-  grid-template-columns: 47px minmax(0, 1fr);
-  grid-template-rows: 1fr auto;
-  align-items: center;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
   gap: 8px 12px;
   padding: 16px;
   border: 1px solid var(--line);
@@ -2523,6 +2538,8 @@ textarea {
   border-radius: 4px;
   background: var(--bg);
   color: var(--text);
+  /* Form controls do not inherit the page's compact type scale. */
+  font-size: 11px;
 }
 .dialog-form input,
 .field input,
@@ -2551,13 +2568,41 @@ textarea:focus {
   margin: 4px calc(-1 * var(--dialog-inset, 24px)) -22px;
 }
 .dialog-copy {
+  display: grid;
+  gap: 12px;
   padding: 0;
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.65;
+  line-height: 1.6;
 }
 .dialog-copy p {
   margin: 0;
+}
+.dialog-copy strong {
+  color: var(--text);
+  font-weight: 650;
+}
+.dialog-points {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  list-style: none;
+}
+.dialog-points li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.dialog-points svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
 }
 .editor-path {
   padding: 10px 14px;
@@ -3673,7 +3718,9 @@ textarea:focus {
   border-radius: 6px;
   background: color-mix(in srgb, var(--accent) 5%, var(--surface));
 }
-.join-card > div {
+/* Only the compact join card stacks its children; the diagnostics card
+   lays out its own grid, evidence row, and actions. */
+.join-card:not(.join-card--diagnostics) > div {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -3764,6 +3811,7 @@ textarea:focus {
 .server-overview-grid {
   display: grid;
   grid-template-columns: 1.35fr 0.65fr;
+  align-items: start;
   gap: 12px;
 }
 .server-health {
@@ -3781,6 +3829,7 @@ textarea:focus {
 }
 .join-setup-actions {
   display: grid;
+  justify-items: start;
   gap: 12px;
   padding: 12px 16px 16px;
   border-top: 1px solid var(--line);
@@ -3813,6 +3862,10 @@ textarea:focus {
 }
 .allocated-memory-editor .field {
   margin: 0;
+}
+.allocated-memory-editor .field select {
+  height: 36px;
+  font-size: 10px;
 }
 .allocated-memory-editor .inline-error,
 .allocated-memory-editor .settings-port-note {
@@ -4382,8 +4435,8 @@ textarea:focus {
     "Cascadia Mono",
     monospace;
 }
-.backup-list {
-  min-height: 200px;
+.backup-list:empty {
+  display: none;
 }
 .backup-list > div:not(.empty-state) {
   min-height: 69px;
@@ -4438,15 +4491,28 @@ textarea:focus {
 }
 .backup-policy {
   display: grid;
-  gap: 10px;
-  margin: 0 16px 4px;
-  padding: 12px 0 4px;
+  gap: 12px;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--line);
+}
+.backup-policy__title {
+  margin: 0;
+  font-size: 11px;
+}
+.backup-policy__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.backup-policy__field small {
+  color: var(--quiet);
+  font-size: 9px;
+  white-space: nowrap;
 }
 .backup-policy > div {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: 14px 28px;
 }
 .backup-policy label {
   display: grid;
@@ -4454,9 +4520,15 @@ textarea:focus {
   color: var(--muted);
   font-size: 9px;
 }
+.backup-policy label > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
 .backup-policy input {
-  min-height: 32px;
-  width: 7rem;
+  min-height: 34px;
+  width: 5.5rem;
   padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -4519,11 +4591,27 @@ textarea:focus {
   border-bottom: 1px solid var(--line);
 }
 .deleted-backups__head h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   margin: 0;
   font-size: 11px;
 }
+.deleted-backups__head h3 > span {
+  min-width: 22px;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  color: var(--muted);
+  font-size: 8px;
+  text-align: center;
+}
+.deleted-backups__head > .button {
+  flex: none;
+}
 .deleted-backups__head p {
-  margin: 3px 0 0;
+  margin: 4px 0 0;
+  line-height: 1.5;
   color: var(--quiet);
   font-size: 8px;
 }
@@ -4552,6 +4640,16 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.deleted-backup-list > div > .backup-row-actions {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.dialog-progress {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
 }
 .deleted-backup-list strong {
   font-size: 9px;
@@ -4640,12 +4738,12 @@ textarea:focus {
 }
 .advanced-facts > div {
   min-width: 0;
-  min-height: 76px;
+  min-height: 48px;
   display: grid;
-  grid-template-columns: 135px 1fr;
+  grid-template-columns: 130px minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
-  padding: 12px 17px;
+  gap: 12px;
+  padding: 10px 18px;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
@@ -4655,22 +4753,32 @@ textarea:focus {
 .advanced-facts dt {
   display: flex;
   align-items: center;
-  gap: 6px;
-  color: var(--quiet);
-  font-size: 8px;
-  text-transform: uppercase;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
 }
 .advanced-facts dd {
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   margin: 0;
   overflow: hidden;
   font-size: 10px;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .advanced-facts code {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.advanced-facts__extra {
   color: var(--muted);
-  font-size: 8px;
-  word-break: break-all;
+  font-size: 9px;
 }
 .imported-notice {
   min-height: 105px;

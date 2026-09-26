@@ -161,7 +161,9 @@ const SERVER_STATUSES: readonly ServerStatus[] = [
   'failed',
 ];
 
-export function serverStatusLabel(status: ServerStatus): string {
+/** `manager_stopped` means the AMP panel is down for AMP servers, but simply
+ *  a stopped container for Helix-managed servers. */
+export function serverStatusLabel(status: ServerStatus, manager?: string): string {
   switch (status) {
     case 'online':
       return 'Online';
@@ -176,7 +178,7 @@ export function serverStatusLabel(status: ServerStatus): string {
     case 'offline':
       return 'Offline';
     case 'manager_stopped':
-      return 'AMP stopped';
+      return manager === 'helix' ? 'Stopped' : 'AMP stopped';
     case 'failed':
       return 'Failed';
   }
@@ -214,12 +216,13 @@ export function serverStatusSummary(
   playersOnline: number,
   maxPlayers: number,
   playerCountVerified = true,
+  manager?: string,
 ): string {
   if (status === 'online') {
     if (!playerCountVerified) return 'Online';
     return `${playersOnline}/${maxPlayers} players`;
   }
-  return serverStatusLabel(status);
+  return serverStatusLabel(status, manager);
 }
 
 export function serverPlayerHeadline(server: Pick<ManagedServer, 'status' | 'playersOnline' | 'maxPlayers' | 'playerCountVerified'>): string {
@@ -590,6 +593,8 @@ export interface ServerBackupKeepPolicy {
 export interface ServerBackupTrash {
   trashId: string;
   trashedAtUnixMs: number;
+  /** When the backup itself was made; null from brokers before 1.4. */
+  createdAtUnixMs: number | null;
   undoAvailable: boolean;
   sizeBytes: number;
   definitionPresent: boolean;
@@ -1172,6 +1177,7 @@ export function parseBackupCatalog(value: unknown): ServerBackupCatalog {
       return {
         trashId: trashId(trash, 'trash_id', 'deleted backup'),
         trashedAtUnixMs: number(trash, 'trashed_at_unix_ms'),
+        createdAtUnixMs: typeof trash.created_at_unix_ms === 'number' ? trash.created_at_unix_ms : null,
         undoAvailable: boolean(trash, 'undo_available'),
         sizeBytes: number(trash, 'size_bytes'),
         definitionPresent: boolean(trash, 'definition_present'),

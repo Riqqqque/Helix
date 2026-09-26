@@ -80,23 +80,47 @@ export function StoragePage({ data, csrfToken, onSessionExpired }: { data: Dashb
   );
 }
 
+/** Docker bridges, veth pairs, and loopback: rarely what someone looks for. */
+export function isVirtualInterface(name: string): boolean {
+  return name === 'lo' || name === 'docker0' || /^(br-|veth|docker)/u.test(name);
+}
+
+type InterfaceItem = NonNullable<DashboardData['inventory']['data']>['interfaces'][number];
+
+function InterfacePanel({ item }: { item: InterfaceItem }) {
+  return (
+    <div class="interface-panel">
+      <header><div><span class={`status-dot status-dot--${item.state.toLowerCase() === 'up' ? 'good' : 'idle'}`} /><strong>{item.name}</strong></div><span>{item.state}</span></header>
+      <div class="interface-addresses">{item.addresses.length === 0 ? <span>No addresses</span> : item.addresses.map((address) => <code key={`${address.family}-${address.address}`}>{address.address}/{address.prefixLength}</code>)}</div>
+      <dl><div><dt>Received</dt><dd>{formatBytes(item.receivedBytes)}</dd></div><div><dt>Sent</dt><dd>{formatBytes(item.transmittedBytes)}</dd></div><div><dt>MTU</dt><dd>{item.mtu}</dd></div><div><dt>Errors</dt><dd>{item.receivedErrors + item.transmittedErrors}</dd></div></dl>
+      <small>{item.mac ?? 'No hardware address'}</small>
+    </div>
+  );
+}
+
 export function NetworkPage({ data, csrfToken, canManageFirewall, onSessionExpired }: { data: DashboardData; csrfToken: string; canManageFirewall: boolean; onSessionExpired: () => void }) {
   const inventory = data.inventory.data;
+  const interfaces = inventory?.interfaces ?? [];
+  const primaryInterfaces = interfaces.filter((item) => !isVirtualInterface(item.name));
+  const virtualInterfaces = interfaces.filter((item) => isVirtualInterface(item.name));
   return (
     <div class="page page--network">
       <PageHead title="Network" detail="Interfaces, routing, listeners, and game port allocation." />
       <InlineError message={data.inventory.error} />
-      <div class="section-title section-title--plain"><div><h2>Interfaces <InfoTip text="A network interface is a physical, virtual, bridge, or tunnel connection. Its addresses show how this host can be reached on each network." /></h2><p>Physical, virtual, container, and tunnel connections</p></div></div>
+      <div class="section-title section-title--plain"><div><h2>Interfaces <InfoTip text="A network interface is a physical, virtual, bridge, or tunnel connection. Its addresses show how this host can be reached on each network." /></h2><p>Network connections first; Docker bridges and loopback are folded below</p></div></div>
       <section class="interface-grid">
-        {(inventory?.interfaces ?? []).map((item) => (
-          <div class="interface-panel" key={item.name}>
-            <header><div><span class={`status-dot status-dot--${item.state.toLowerCase() === 'up' ? 'good' : 'idle'}`} /><strong>{item.name}</strong></div><span>{item.state}</span></header>
-            <div class="interface-addresses">{item.addresses.length === 0 ? <span>No addresses</span> : item.addresses.map((address) => <code key={`${address.family}-${address.address}`}>{address.address}/{address.prefixLength}</code>)}</div>
-            <dl><div><dt>Received</dt><dd>{formatBytes(item.receivedBytes)}</dd></div><div><dt>Sent</dt><dd>{formatBytes(item.transmittedBytes)}</dd></div><div><dt>MTU</dt><dd>{item.mtu}</dd></div><div><dt>Errors</dt><dd>{item.receivedErrors + item.transmittedErrors}</dd></div></dl>
-            <small>{item.mac ?? 'No hardware address'}</small>
-          </div>
+        {primaryInterfaces.map((item) => (
+          <InterfacePanel item={item} key={item.name} />
         ))}
       </section>
+      {virtualInterfaces.length > 0 && (
+        <details class="interface-virtual">
+          <summary>{virtualInterfaces.length} Docker and loopback interface{virtualInterfaces.length === 1 ? '' : 's'}</summary>
+          <section class="interface-grid">
+            {virtualInterfaces.map((item) => <InterfacePanel item={item} key={item.name} />)}
+          </section>
+        </details>
+      )}
       <section class="surface infrastructure-section">
         <div class="section-title"><div><h2>Routes <InfoTip text="Routes decide which interface and gateway Linux uses for each destination. The default route handles traffic that has no more specific match." /></h2><p>Kernel routing table</p></div></div>
         <div class="table-scroll"><table class="data-table"><thead><tr><th>Destination</th><th>Gateway</th><th>Interface</th><th>Metric</th></tr></thead><tbody>{(inventory?.routes ?? []).map((route, index) => <tr key={`${route.destination}-${route.gateway}-${index}`}><td><code>{route.destination}</code></td><td>{route.gateway ?? 'Direct'}</td><td>{route.interface ?? '—'}</td><td>{route.metric ?? '—'}</td></tr>)}</tbody></table></div>

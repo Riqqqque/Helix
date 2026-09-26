@@ -1,6 +1,7 @@
 .server-ports {
   display: grid;
   gap: 14px;
+  margin-bottom: 12px;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 9px;

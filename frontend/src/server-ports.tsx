@@ -3,6 +3,7 @@ import { ApiError } from './api';
 import { type ExtraPort, type ExtraPortProtocol, setNativeExtraPorts } from './control-api';
 import { InlineError } from './dashboard-ui';
 import { Icon } from './icons';
+import { MANAGED_GAMES } from './managed-games';
 import './server-ports.css';
 
 const MAX_PORTS = 16;
@@ -22,12 +23,57 @@ interface PortPreset {
   hint: string;
 }
 
-const MINECRAFT_PRESETS: PortPreset[] = [
-  { label: 'Simple Voice Chat', port: 24_454, protocol: 'udp', hint: 'Set port=24454 in voicechat-server.properties (plugins/voicechat/ or config/voicechat/).' },
-  { label: 'BlueMap', port: 8_100, protocol: 'tcp', hint: 'BlueMap’s webserver.conf uses 8100 by default.' },
-  { label: 'Dynmap', port: 8_123, protocol: 'tcp', hint: 'Dynmap’s configuration.txt uses webserver-port 8123 by default.' },
-  { label: 'Geyser (Bedrock)', port: 19_132, protocol: 'udp', hint: 'Geyser listens on 19132 UDP by default.' },
-];
+const VOICE_CHAT_PLUGIN: PortPreset = { label: 'Simple Voice Chat', port: 24_454, protocol: 'udp', hint: 'Set port=24454 in plugins/voicechat/voicechat-server.properties.' };
+const VOICE_CHAT_MOD: PortPreset = { label: 'Simple Voice Chat', port: 24_454, protocol: 'udp', hint: 'Set port=24454 in config/voicechat/voicechat-server.properties.' };
+const BLUEMAP: PortPreset = { label: 'BlueMap', port: 8_100, protocol: 'tcp', hint: 'BlueMap’s webserver.conf uses port 8100 by default.' };
+const DYNMAP: PortPreset = { label: 'Dynmap', port: 8_123, protocol: 'tcp', hint: 'Dynmap’s configuration.txt uses webserver-port 8123 by default.' };
+const GEYSER: PortPreset = { label: 'Geyser (Bedrock)', port: 19_132, protocol: 'udp', hint: 'Geyser listens on 19132 UDP by default.' };
+
+const PLUGIN_SOFTWARE = new Set(['paper', 'purpur', 'folia', 'leaves', 'pufferfish', 'spigot', 'bukkit']);
+const MOD_SOFTWARE = new Set(['fabric', 'forge', 'neoforge', 'quilt']);
+
+export interface PortProfile {
+  /** Protocol players use on the game port. */
+  gameProtocol: string;
+  /** What the second managed port is, when the game has one. */
+  queryLabel: string;
+  /** One sentence on what extra ports are for on this game. */
+  purpose: string;
+  presets: PortPreset[];
+  /** Where the matching port setting usually lives, shown with presets. */
+  configNote: string | null;
+}
+
+/** Game- and software-specific wording and presets for the Ports card. */
+export function portProfile(kind: string, software: string): PortProfile {
+  const soft = software.trim().toLowerCase();
+  if (kind === 'minecraft') {
+    if (soft === 'pumpkin') {
+      return { gameProtocol: 'TCP (Java)', queryLabel: 'Bedrock (TCP + UDP)', purpose: 'Open extra ports for tools that listen on their own port. Pumpkin runs its own native plugins, so Java plugin presets do not apply.', presets: [], configNote: null };
+    }
+    if (PLUGIN_SOFTWARE.has(soft)) {
+      return { gameProtocol: 'TCP', queryLabel: 'Query', purpose: 'Open extra ports for plugins that listen on their own port, such as voice chat, a web map, or Bedrock players through Geyser.', presets: [VOICE_CHAT_PLUGIN, BLUEMAP, DYNMAP, GEYSER], configNote: 'plugins/' };
+    }
+    if (MOD_SOFTWARE.has(soft)) {
+      return { gameProtocol: 'TCP', queryLabel: 'Query', purpose: 'Open extra ports for mods that listen on their own port, such as voice chat or a web map.', presets: [VOICE_CHAT_MOD, BLUEMAP, DYNMAP, GEYSER], configNote: 'config/' };
+    }
+    return { gameProtocol: 'TCP', queryLabel: 'Query', purpose: 'Open extra ports for anything in this server that listens on its own port.', presets: [], configNote: null };
+  }
+  if (kind === 'hytale') {
+    return { gameProtocol: 'UDP (QUIC)', queryLabel: 'Query', purpose: 'Open extra ports for Hytale mods or plugins that run their own listener, such as a web map or an API. Check the mod’s configuration for its port.', presets: [], configNote: null };
+  }
+  const known: Record<string, { gameProtocol: string; queryLabel: string }> = {
+    vrising: { gameProtocol: 'UDP', queryLabel: 'Steam query (UDP)' },
+    valheim: { gameProtocol: 'UDP', queryLabel: 'Steam query (UDP)' },
+    palworld: { gameProtocol: 'UDP', queryLabel: 'Query (UDP)' },
+    terraria: { gameProtocol: 'TCP', queryLabel: 'Query' },
+  };
+  const managed = MANAGED_GAMES.find((game) => game.id === kind);
+  const base = known[kind] ?? (managed === undefined
+    ? { gameProtocol: 'TCP', queryLabel: 'Query' }
+    : { gameProtocol: managed.joinProtocol.toUpperCase(), queryLabel: managed.queryPortLabel || 'Query' });
+  return { ...base, purpose: 'Open extra ports for mods or tools that listen on their own port, such as a web panel or admin tool. Check the mod’s configuration for its port.', presets: [], configNote: null };
+}
 
 const PROTOCOL_LABEL: Record<ExtraPortProtocol, string> = { tcp: 'TCP', udp: 'UDP', both: 'TCP + UDP' };
 
@@ -52,9 +98,9 @@ function samePorts(left: ExtraPort[], right: ExtraPort[]): boolean {
 export function ServerPortsCard({
   serverId,
   kind,
+  software,
   gamePort,
   queryPort,
-  joinProtocol,
   extraPorts,
   lanAddress,
   running,
@@ -65,9 +111,9 @@ export function ServerPortsCard({
 }: {
   serverId: string;
   kind: string;
+  software: string;
   gamePort: number;
   queryPort: number | null;
-  joinProtocol: string;
   extraPorts: ExtraPort[];
   lanAddress: string | null;
   running: boolean;
@@ -84,7 +130,8 @@ export function ServerPortsCard({
   const reserved = useMemo(() => [gamePort, ...(queryPort === null ? [] : [queryPort])], [gamePort, queryPort]);
   const dirty = !samePorts(draft, extraPorts);
   const draftError = validatePortDraft(draft, reserved);
-  const presets = kind === 'minecraft' ? MINECRAFT_PRESETS.filter((preset) => !draft.some((entry) => entry.port === preset.port)) : [];
+  const profile = useMemo(() => portProfile(kind, software), [kind, software]);
+  const presets = profile.presets.filter((preset) => !draft.some((entry) => entry.port === preset.port));
   const manageTitle = canManageServers ? undefined : 'Requires games.manage permission';
 
   const update = (index: number, change: Partial<ExtraPort>) => setDraft((current) => current.map((entry, position) => position === index ? { ...entry, ...change } : entry));
@@ -114,21 +161,21 @@ export function ServerPortsCard({
       <header class="server-ports__head">
         <div>
           <h2 id="server-ports-title">Ports</h2>
-          <p>Open extra ports for plugins and mods that listen on their own port, such as voice chat or a web map. Each port is published on this host with the same number inside the server.</p>
+          <p>{profile.purpose} Each port is published on this host with the same number inside the server.</p>
         </div>
       </header>
       <ul class="server-ports__list">
         <li class="server-ports__fixed">
           <span class="server-ports__badge">Game</span>
           <strong>{gamePort}</strong>
-          <span>{joinProtocol}</span>
+          <span>{profile.gameProtocol}</span>
           <small>Managed by Helix</small>
         </li>
         {queryPort !== null && (
           <li class="server-ports__fixed">
             <span class="server-ports__badge">Query</span>
             <strong>{queryPort}</strong>
-            <span>Second game port</span>
+            <span>{profile.queryLabel}</span>
             <small>Managed by Helix</small>
           </li>
         )}
@@ -168,8 +215,8 @@ export function ServerPortsCard({
           </button>
         ))}
       </div>
-      {draft.some((entry) => entry.label === 'Simple Voice Chat') && (
-        <p class="server-ports__hint"><Icon name="info" size={14} />Simple Voice Chat must use the same port: set <code>port=24454</code> in <code>voicechat-server.properties</code> (Files → <code>plugins/voicechat/</code> or <code>config/voicechat/</code>).</p>
+      {profile.configNote !== null && draft.some((entry) => entry.label === 'Simple Voice Chat') && (
+        <p class="server-ports__hint"><Icon name="info" size={14} />Simple Voice Chat must use the same port: set <code>port=24454</code> in <code>voicechat-server.properties</code> (Files → <code>{profile.configNote}voicechat/</code>).</p>
       )}
       <InlineError message={dirty ? (draftError ?? error) : error} />
       {notice !== null && <p class="server-ports__notice" role="status">{notice}</p>}

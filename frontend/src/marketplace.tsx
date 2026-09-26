@@ -7,6 +7,7 @@ import {
   getMarketplaceInstallJob,
   getMarketplaceProject,
   installMarketplaceProject,
+  forgetMarketplaceCache,
   marketplaceProfileForSoftware,
   marketplaceResponseMatchesServer,
   searchMarketplace,
@@ -364,7 +365,7 @@ function InstallDialog({
         <div class="job-progress marketplace-job-progress" role="status" aria-live="polite">
           <div class="job-icon job-icon--running"><Icon name="update" size={25} /></div>
           <strong>{job.stage}</strong>
-          <span>Helix is verifying and copying the selected files. Minecraft is not stopped.</span>
+          <span>Helix is verifying and copying the selected files. The server keeps running.</span>
           <ProgressBar value={Math.max(job.progressPercent, 4)} />
           <small>{job.progressPercent}%</small>
         </div>
@@ -536,10 +537,11 @@ export function MarketplacePanel({ server, csrfToken, canManageServers, onSessio
   }, [csrfToken, detailRevision, onSessionExpired, profile, selectedHit, serverId, serverMinecraftVersion, serverSoftware]);
 
   const refreshAfterInstall = useCallback(async (): Promise<void> => {
+    forgetMarketplaceCache(serverId);
     setSearchRevision((value) => value + 1);
     setDetailRevision((value) => value + 1);
     await onInstalled();
-  }, [onInstalled]);
+  }, [onInstalled, serverId]);
 
   const installFromList = async (hit: MarketplaceSearchHit): Promise<void> => {
     if (!canManageServers || listInstallingId !== null) return;

@@ -42,6 +42,19 @@ function confirmationFor(control: SecurityControl, next: boolean): string {
   return (next ? control.confirmationEnable : control.confirmationDisable) ?? '';
 }
 
+/** Turn raw probe output (`Y`, `systemd is-enabled=enabled`) into a word. */
+export function readableHostFact(value: string | null | undefined): string {
+  if (value === null || value === undefined || value.trim() === '') return '—';
+  const raw = value.trim();
+  const tail = (raw.includes('=') ? raw.slice(raw.lastIndexOf('=') + 1) : raw).trim().toLowerCase();
+  const words: Record<string, string> = {
+    y: 'Enabled', yes: 'Enabled', enabled: 'Enabled', active: 'Active', true: 'Enabled',
+    n: 'Disabled', no: 'Disabled', disabled: 'Disabled', inactive: 'Inactive', false: 'Disabled',
+    masked: 'Masked', 'not-found': 'Not installed', missing: 'Not installed', unknown: 'Unknown',
+  };
+  return words[tail] ?? raw;
+}
+
 export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, onSessionExpired }: SecurityPageProps) {
   const [inventory, setInventory] = useState<SecurityInventory | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -112,9 +125,9 @@ export function SecurityPage({ csrfToken, canManage, themeLabel, helixVersion, o
       <section class="security-identity">
         <div><span>Helix</span><strong>{helixVersion ?? '—'}</strong><small>{themeLabel} theme</small></div>
         <div><span>Kernel</span><strong>{inventory?.facts.kernel ?? '—'}</strong><small>Observed from this host</small></div>
-        <div><span>AppArmor</span><strong>{inventory?.facts.apparmor ?? '—'}</strong><small>Linux confinement</small></div>
+        <div><span>AppArmor</span><strong>{readableHostFact(inventory?.facts.apparmor)}</strong><small>Linux confinement</small></div>
         <div><span>UFW</span><strong>{inventory?.facts.ufw ?? '—'}</strong><small>Host firewall status</small></div>
-        <div><span>Fail2ban</span><strong>{inventory?.facts.fail2ban ?? '—'}</strong><small>SSH brute-force jail</small></div>
+        <div><span>Fail2ban</span><strong>{readableHostFact(inventory?.facts.fail2ban)}</strong><small>SSH brute-force jail</small></div>
       </section>
       <div class="security-toolbar">
         <p>This page is about the Linux host. Recommended defaults are the usual hardening for a private game box. Writable switches still require typing an exact phrase. Helix will not disable UFW, rewrite sshd, or expose a root shell from here.</p>
