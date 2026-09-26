@@ -144,6 +144,7 @@ import {
 import { Dialog } from "./modal";
 import { ServerConfigNotice } from "./server-config-notice";
 import { HytaleSignIn } from "./hytale-sign-in";
+import { ServerPortsCard } from "./server-ports";
 export { ServerConfigNotice } from "./server-config-notice";
 import { purgeTrashedNativeServer } from "./native-server-trash-api";
 import {
@@ -5416,6 +5417,20 @@ function NativeServerPage({
                 </div>
               )}
             </section>
+            <ServerPortsCard
+              serverId={detail.id}
+              kind={detail.kind}
+              gamePort={detail.gamePort}
+              queryPort={detail.queryPort}
+              joinProtocol={usesUdpJoin ? "UDP" : "TCP"}
+              extraPorts={detail.extraPorts}
+              lanAddress={network?.addresses.privateIpv4 ?? null}
+              running={detail.status !== "stopped"}
+              csrfToken={csrfToken}
+              canManageServers={canManageServers}
+              onSaved={refresh}
+              onSessionExpired={onSessionExpired}
+            />
             <div class="server-overview-grid">
               <section class="surface server-health">
                 <div class="section-title">

@@ -1,0 +1,93 @@
+.server-ports {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+.server-ports__head h2 { margin: 0; font-size: 13px; }
+.server-ports__head p { margin: 6px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.server-ports__list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.server-ports__fixed {
+  display: grid;
+  grid-template-columns: 64px 80px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 10px;
+  color: var(--muted);
+}
+.server-ports__fixed strong { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.server-ports__fixed small { color: var(--quiet); font-size: 9px; }
+.server-ports__badge {
+  justify-self: start;
+  padding: 2px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.server-ports__row {
+  display: grid;
+  grid-template-columns: 110px 130px minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg));
+}
+.server-ports__row label { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.server-ports__row label > span { color: var(--muted); font-size: 9px; font-weight: 600; }
+.server-ports__row input,
+.server-ports__row select { width: 100%; height: 34px; padding: 0 9px; font-size: 10px; }
+.server-ports__meta { display: flex; align-items: center; gap: 8px; min-height: 34px; }
+.server-ports__meta code { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.server-ports__empty { margin: 0; color: var(--quiet); font-size: 10px; }
+.server-ports__add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.server-ports__preset {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.server-ports__preset small { color: var(--quiet); font-size: 9px; }
+.server-ports__preset:hover:not(:disabled) { border-color: var(--accent); }
+.server-ports__preset:disabled { cursor: not-allowed; opacity: 0.55; }
+.server-ports__hint,
+.server-ports__notice { display: flex; align-items: flex-start; gap: 7px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.server-ports__hint svg { flex: none; margin-top: 2px; color: var(--accent); }
+.server-ports__notice { color: var(--good); }
+.server-ports__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px -18px -18px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--sidebar);
+}
+.server-ports__foot > span { margin-right: auto; color: var(--quiet); font-size: 9px; line-height: 1.5; }
+.server-ports__foot .button { flex: none; }
+@media (max-width: 720px) {
+  .server-ports__row { grid-template-columns: 1fr 1fr; }
+  .server-ports__label { grid-column: 1 / -1; }
+  .server-ports__fixed { grid-template-columns: auto auto 1fr; }
+  .server-ports__fixed small { display: none; }
+  .server-ports__foot { flex-wrap: wrap; }
+}
