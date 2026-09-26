@@ -6431,6 +6431,7 @@ function MigrateServerDialog({
   const [eula, setEula] = useState(false);
   const [sourceStopped, setSourceStopped] = useState(false);
   const [copyAcknowledged, setCopyAcknowledged] = useState(false);
+  const [keepPort, setKeepPort] = useState(true);
   const [inspecting, setInspecting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -6458,9 +6459,8 @@ function MigrateServerDialog({
       setMemory(result.memoryMb);
       setPlayers(result.maxPlayers);
       if (result.software !== null) setSoftware(result.software);
-      setVersion(
-        result.copyServerJar && result.versionUsedLatest ? "" : result.version,
-      );
+      setVersion(result.versionUsedLatest ? "" : result.version);
+      setKeepPort(result.sourceGamePort !== null && (result.running || result.sourcePortAvailable));
       if (!result.running) setSourceStopped(true);
     } catch (requestError) {
       if (isSessionError(requestError)) onSessionExpired();
@@ -6518,6 +6518,7 @@ function MigrateServerDialog({
         source_stopped: sourceStopped,
         copy_acknowledged: copyAcknowledged,
         ...cpuMillisFields(cpuMillis),
+        ...(keepPort && preflight.sourceGamePort !== null ? { game_port: preflight.sourceGamePort } : {}),
       };
       if (preflight.game === "minecraft") {
         payload.software = software;
@@ -6549,9 +6550,10 @@ function MigrateServerDialog({
   const installing = job !== null && (job.status === "queued" || job.status === "running");
   const busy = submitting || inspecting || stopping || installing;
   const blocked = preflight !== null && preflight.blockers.length > 0;
-  const needsExactVersion =
-    preflight?.game === "minecraft" &&
-    (software === "custom" || Boolean(preflight.copyServerJar));
+  // Installing "latest" over an existing world upgrades it for good, so copies always pin a version.
+  const needsExactVersion = preflight?.game === "minecraft";
+  const olderThanWorld =
+    preflight?.detectedVersion != null && minecraftVersionIsOlder(version.trim(), preflight.detectedVersion);
   const canCopy =
     preflight !== null &&
     !blocked &&
@@ -6559,7 +6561,8 @@ function MigrateServerDialog({
     copyAcknowledged &&
     sourceStopped &&
     (preflight.game !== "minecraft" || eula) &&
-    (!needsExactVersion || (version.trim().length > 0 && version.trim().toLowerCase() !== "latest"));
+    (!needsExactVersion || (version.trim().length > 0 && version.trim().toLowerCase() !== "latest")) &&
+    !olderThanWorld;
 
   return (
     <Dialog
@@ -6582,6 +6585,13 @@ function MigrateServerDialog({
               job,
             )}
           />
+          {job.status === "complete" && (
+            <ul class="dialog-points migrate-result">
+              {migrateResultLines(job.result, preflight?.sourceStartOnBoot === true).map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
           {polling.error !== null && (
             <ServerFault
               message={polling.error}
@@ -6610,9 +6620,9 @@ function MigrateServerDialog({
       ) : (
         <>
           <p>
-            Helix copies worlds, plugins, mods, and saves into a <strong>new native server</strong>.
-            AMP and Pterodactyl keep their files. The new server gets a free Helix port, so the old
-            instance can keep running on its number until you retire it.
+            Helix copies worlds, plugins, mods, and saves into a <strong>new native server</strong> and
+            starts it. It keeps the same Minecraft version, settings, and (if you choose) the same port,
+            so players join exactly as before. AMP and Pterodactyl keep their files untouched.
           </p>
           <div class="form-grid">
             <label class="field">
@@ -6711,6 +6721,42 @@ function MigrateServerDialog({
               {preflight.copies.length > 0 && (
                 <p>Will copy: {preflight.copies.join(", ")}</p>
               )}
+              {(preflight.sourceGamePort !== null || preflight.pluginPorts.length > 0) && (
+                <section class="migrate-ports" aria-label="Ports">
+                  {preflight.sourceGamePort !== null && (
+                    <label class="check-row">
+                      <input
+                        class="toggle-input"
+                        type="checkbox"
+                        checked={keepPort}
+                        disabled={busy || (!preflight.running && !preflight.sourcePortAvailable)}
+                        onChange={(event) => setKeepPort(event.currentTarget.checked)}
+                      />
+                      <span>
+                        <strong>Keep port {preflight.sourceGamePort}</strong>
+                        <small>
+                          {!preflight.running && !preflight.sourcePortAvailable && preflight.sourcePortProblem !== null
+                            ? `Not available: ${preflight.sourcePortProblem} Helix will pick a free port instead.`
+                            : "Players and router forwarding keep working with the same address. Do not start the AMP copy again afterwards."}
+                        </small>
+                      </span>
+                    </label>
+                  )}
+                  {preflight.pluginPorts.length > 0 && (
+                    <div class="migrate-ports__addons">
+                      <strong>Add-on ports opened too</strong>
+                      <ul class="dialog-points">
+                        {preflight.pluginPorts.map((entry) => (
+                          <li key={entry.port}>
+                            {entry.label} · {entry.port} {entry.protocol === "both" ? "TCP+UDP" : entry.protocol.toUpperCase()}
+                            {!entry.available && entry.reason !== null && <small> — skipped: {entry.reason}</small>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </section>
+              )}
               {preflight.running && sourceMode === "amp" && (
                 <div class="dialog-actions">
                   <button
@@ -6759,9 +6805,18 @@ function MigrateServerDialog({
                         type="text"
                         value={version}
                         disabled={busy}
-                        placeholder={needsExactVersion ? "1.21.8" : "latest"}
+                        placeholder="1.21.8"
                         onInput={(event) => setVersion(event.currentTarget.value)}
                       />
+                      <small class={olderThanWorld ? "field-error" : "field-hint"}>
+                        {olderThanWorld
+                          ? `This world last ran ${preflight.detectedVersion}. An older version would damage it.`
+                          : preflight.detectedVersion !== null
+                            ? version.trim() === preflight.detectedVersion
+                              ? "Same version the server last ran."
+                              : `The server last ran ${preflight.detectedVersion}. A newer version upgrades the world permanently.`
+                            : "Enter the exact version the world last ran."}
+                      </small>
                     </label>
                   </>
                 )}
@@ -6918,6 +6973,50 @@ function MigrateServerDialog({
       )}
     </Dialog>
   );
+}
+
+/** Numeric release compare; snapshots and unknown formats are never called older. */
+export function minecraftVersionIsOlder(target: string, ran: string): boolean {
+  const parse = (value: string) => (/^\d+(\.\d+){0,3}$/.test(value) ? value.split(".").map(Number) : null);
+  const a = parse(target);
+  const b = parse(ran);
+  if (a === null || b === null) return false;
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const left = a[index] ?? 0;
+    const right = b[index] ?? 0;
+    if (left !== right) return left < right;
+  }
+  return false;
+}
+
+/** Plain-language summary of a finished copy: address, add-on ports, and what to do in AMP. */
+export function migrateResultLines(result: unknown, sourceStartsOnBoot: boolean): string[] {
+  const record = result !== null && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  const lines: string[] = [];
+  if (typeof record.game_port === "number") {
+    lines.push(
+      record.port_allocated_automatically === true
+        ? `Running on port ${record.game_port}. This is a new port, so update router forwarding and tell players the new address.`
+        : `Running on port ${record.game_port}, the same address players used before.`,
+    );
+  }
+  const ports = (key: string) =>
+    Array.isArray(record[key])
+      ? (record[key] as Array<Record<string, unknown>>).filter((entry) => typeof entry?.port === "number")
+      : [];
+  const opened = ports("extra_ports");
+  if (opened.length > 0) {
+    lines.push(`Also opened: ${opened.map((entry) => `${typeof entry.label === "string" && entry.label ? entry.label : "Port"} ${entry.port}`).join(", ")}.`);
+  }
+  for (const entry of ports("extra_ports_skipped")) {
+    lines.push(`Not opened: ${typeof entry.label === "string" && entry.label ? entry.label : "Port"} ${entry.port}${typeof entry.reason === "string" ? ` (${entry.reason})` : ""}. Add it later from Overview → Ports.`);
+  }
+  lines.push(
+    sourceStartsOnBoot
+      ? "In AMP, turn off autostart for the old instance and leave it stopped so it does not take these ports back."
+      : "Leave the old AMP instance stopped so it does not take these ports back.",
+  );
+  return lines;
 }
 
 export function NewServerChooser({

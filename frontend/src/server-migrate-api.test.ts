@@ -43,6 +43,31 @@ describe('server migrate API', () => {
     expect(parsed.blockers[0]).toContain('Stop the source server first');
   });
 
+  it('reads the kept port, detected version, and add-on ports', () => {
+    const parsed = parseMigratePreflight({
+      ...preflight,
+      detected_version: '1.21.8',
+      source_game_port: 25565,
+      source_port_available: true,
+      source_port_problem: null,
+      source_start_on_boot: true,
+      plugin_ports: [
+        { port: 24454, protocol: 'udp', label: 'Simple Voice Chat', available: true, reason: null },
+        { port: 8100, protocol: 'tcp', label: 'BlueMap', available: false, reason: 'port 8100 is in use' },
+        { port: 70000, protocol: 'tcp', label: 'Bad', available: true, reason: null },
+      ],
+    });
+    expect(parsed.detectedVersion).toBe('1.21.8');
+    expect(parsed.sourceGamePort).toBe(25565);
+    expect(parsed.sourcePortAvailable).toBe(true);
+    expect(parsed.sourceStartOnBoot).toBe(true);
+    expect(parsed.pluginPorts.map((entry) => entry.port)).toEqual([24454, 8100]);
+    expect(parsed.pluginPorts[1]?.available).toBe(false);
+    const older = parseMigratePreflight(preflight);
+    expect(older.sourceGamePort).toBeNull();
+    expect(older.pluginPorts).toEqual([]);
+  });
+
   it('parses a folder Terraria preflight', () => {
     const parsed = parseMigratePreflight({
       ...preflight,
