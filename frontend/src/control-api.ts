@@ -432,6 +432,7 @@ export interface NativeServerDetail {
   browserListing: NativeBrowserListing | null;
   modpack: NativeInstalledModpack | null;
   hytaleAuth: HytaleAuthPrompt | null;
+  extraPorts: ExtraPort[];
 }
 
 export interface ServerConfigChanges {
@@ -466,6 +467,48 @@ export interface NativeInstalledModpack {
   minecraftVersion: string;
   loader: string;
   loaderVersion: string;
+}
+
+export type ExtraPortProtocol = 'tcp' | 'udp' | 'both';
+
+export interface ExtraPort {
+  port: number;
+  protocol: ExtraPortProtocol;
+  label: string;
+}
+
+export function parseExtraPorts(value: unknown): ExtraPort[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 16).flatMap((entry) => {
+    if (entry === null || typeof entry !== 'object') return [];
+    const record = entry as Record<string, unknown>;
+    const port = record.port;
+    const protocol = record.protocol;
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65_535) return [];
+    if (protocol !== 'tcp' && protocol !== 'udp' && protocol !== 'both') return [];
+    const label = typeof record.label === 'string' ? record.label.slice(0, 40) : '';
+    return [{ port, protocol, label }];
+  });
+}
+
+export function setNativeExtraPorts(
+  id: string,
+  ports: ExtraPort[],
+  csrfToken: string,
+): Promise<{ extraPorts: ExtraPort[]; changed: boolean; wasRunning: boolean }> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/ports`, (value) => {
+    const root = expectRecord(value, 'server ports');
+    return {
+      extraPorts: parseExtraPorts(root.extra_ports),
+      changed: boolean(root, 'changed'),
+      wasRunning: root.was_running === true,
+    };
+  }, {
+    method: 'PUT',
+    body: { ports: ports.map((entry) => ({ port: entry.port, protocol: entry.protocol, label: entry.label.trim() })) },
+    csrfToken,
+    timeoutMs: 240_000,
+  });
 }
 
 export interface HytaleAuthPrompt {
@@ -1030,6 +1073,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     browserListing: parseBrowserListing(root.browser_listing),
     modpack: parseNativeInstalledModpack(root.modpack),
     hytaleAuth: parseHytaleAuth(root.hytale_auth),
+    extraPorts: parseExtraPorts(root.extra_ports),
   };
 }
 
