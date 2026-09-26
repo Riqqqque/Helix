@@ -4,6 +4,43 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.4.0 - 2026-09-26
+
+### Changed
+
+- The Ports card matches each game and server software: Paper and other plugin
+  servers get Simple Voice Chat, BlueMap, Dynmap, and Geyser presets with the
+  right `plugins/` config path, mod loaders get the `config/` path, and Vanilla,
+  Pumpkin, Hytale, and the other games get no Minecraft presets. The game port
+  shows its real protocol (for example UDP (QUIC) for Hytale).
+- Server software updates on the Advanced tab are one card with three clear
+  choices — update build, change version, or repair files — one confirmation,
+  and a result that says what changed. An update that is already current
+  returns immediately without a backup or restart.
+- Backups: clearer automatic-cleanup fields, the trash shows its total size,
+  when each deleted backup was originally made, a warning past 20 GiB, and an
+  **Empty trash** action. Helix still never empties the trash on its own.
+- Marketplace reads are cached for a minute, so returning to results or
+  reopening the tab is instant; installs refresh installed badges.
+- Network lists real interfaces first and folds Docker bridges and loopback.
+- New server shows all games in a compact grid; the Servers list only shows
+  filters for games you have.
+
+### Fixed
+
+- The join-address card on a server's Overview laid its LAN, Tailscale, and
+  public addresses out in one stretched column because of a CSS selector
+  collision; the diagnostics line no longer repeats itself.
+- Spacing around the Ports card and in dialogs (paragraphs no longer run
+  together, for example in Remove server).
+- Form fields used the browser's default text size instead of Helix's.
+- A server's Files tab could browse above the server's own folder into other
+  servers' data; it now stays inside the server.
+- Helix-managed servers that are stopped were labelled "AMP stopped".
+- Paper servers showed their software twice ("Paper Paper 26.2").
+- Security showed raw probe values for AppArmor and Fail2ban.
+- Hook buttons said "Stoping…".
+
 ## 1.3.0 - 2026-09-26
 
 ### Added
