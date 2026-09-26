@@ -56,11 +56,30 @@ export interface FileManagerProps {
   csrfToken: string;
   onSessionExpired: () => void;
   initialPath: string;
+  /** Keep browsing inside this folder (a server's data folder); the label replaces its host path in the breadcrumb. */
+  root?: { path: string; label: string };
   analysis?: { path: string; mode: StorageAnalysisMode } | null;
   onAnalysisClose?: () => void;
 }
 
-export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis = null, onAnalysisClose }: FileManagerProps) {
+/** Whether `path` is `root` or inside it. */
+export function isWithinRoot(path: string, root: string): boolean {
+  const base = root.endsWith('/') && root !== '/' ? root.slice(0, -1) : root;
+  return path === base || path.startsWith(base === '/' ? '/' : `${base}/`);
+}
+
+/** Breadcrumb segments as [label, target path]. */
+export function fileCrumbs(path: string, root?: { path: string; label: string }): Array<[string, string]> {
+  if (root !== undefined && isWithinRoot(path, root.path)) {
+    const rest = path.slice(root.path.replace(/\/$/u, '').length).split('/').filter(Boolean);
+    const base = root.path.replace(/\/$/u, '');
+    return [[root.label, base], ...rest.map((part, index): [string, string] => [part, `${base}/${rest.slice(0, index + 1).join('/')}`])];
+  }
+  const parts = path.split('/').filter(Boolean);
+  return [['/', '/'], ...parts.map((part, index): [string, string] => [part, `/${parts.slice(0, index + 1).join('/')}`])];
+}
+
+export function FileManager({ csrfToken, onSessionExpired, initialPath, root, analysis = null, onAnalysisClose }: FileManagerProps) {
   const [path, setPath] = useState(initialPath);
   const [listing, setListing] = useState<DirectoryListing | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -134,8 +153,8 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
 
   const navigate = useCallback((nextPath: string): void => {
     setCursorHistory([null]);
-    void load(nextPath, null, 0);
-  }, [load]);
+    void load(root !== undefined && !isWithinRoot(nextPath, root.path) ? root.path : nextPath, null, 0);
+  }, [load, root]);
 
   useEffect(() => {
     setCursorHistory([null]);
@@ -147,7 +166,8 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
     const query = search.trim().toLowerCase();
     return (listing?.entries ?? []).filter((entry) => query.length === 0 || entry.name.toLowerCase().includes(query));
   }, [listing, search]);
-  const crumbs = path === '/' ? ['/'] : ['/', ...path.split('/').filter(Boolean)];
+  const crumbs = fileCrumbs(path, root);
+  const atRoot = root !== undefined && !isWithinRoot(listing?.parent ?? '', root.path);
   const totalPages = Math.max(1, Math.ceil((listing?.totalEntries ?? 0) / pageSize));
 
   const mutate = async (operation: () => Promise<unknown>, after: () => void): Promise<void> => {
@@ -285,9 +305,8 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
       )}
       <div class="file-toolbar">
         <div class="breadcrumbs" aria-label="Current path">
-          {crumbs.map((crumb, index) => {
-            const target = index === 0 ? '/' : `/${crumbs.slice(1, index + 1).join('/')}`;
-            return <span key={`${crumb}-${index}`}><button type="button" onClick={() => navigate(target)}>{crumb}</button>{index < crumbs.length - 1 && <Icon name="chevron" size={12} />}</span>;
+          {crumbs.map(([crumb, target], index) => {
+            return <span key={`${target}-${index}`}><button type="button" title={target} onClick={() => navigate(target)}>{crumb}</button>{index < crumbs.length - 1 && <Icon name="chevron" size={12} />}</span>;
           })}
         </div>
         <div class="file-actions">
@@ -311,7 +330,7 @@ export function FileManager({ csrfToken, onSessionExpired, initialPath, analysis
         <table class="data-table file-table">
           <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th>Mode</th><th><span class="sr-only">Actions</span></th></tr></thead>
           <tbody>
-            {listing?.parent !== null && listing !== null && <tr class="file-row file-row--parent" onDblClick={() => listing.parent !== null && navigate(listing.parent)}><td><button type="button" onClick={() => listing.parent !== null && navigate(listing.parent)}><Icon name="folder" />..</button></td><td>Parent folder</td><td>—</td><td>—</td><td>—</td><td /></tr>}
+            {listing?.parent !== null && listing !== null && !atRoot && <tr class="file-row file-row--parent" onDblClick={() => listing.parent !== null && navigate(listing.parent)}><td><button type="button" onClick={() => listing.parent !== null && navigate(listing.parent)}><Icon name="folder" />..</button></td><td>Parent folder</td><td>—</td><td>—</td><td>—</td><td /></tr>}
             {entries.map((entry) => {
               const editable = isTextEditable(entry);
               return <tr class="file-row" key={entry.path} onDblClick={() => void openEntry(entry)}>
