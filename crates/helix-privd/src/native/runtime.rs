@@ -114,6 +114,26 @@ impl NativeManager {
             }
         };
         validate_version_change(&manifest.minecraft_version, &artifact.version)?;
+        if spec.version.is_some()
+            && artifact.version == manifest.minecraft_version
+            && artifact.build == manifest.build
+            && file_sha256(
+                &self
+                    .instance_path(&manifest.id)?
+                    .join(manifest.artifact_name()),
+            )
+            .is_ok_and(|digest| digest == manifest.artifact_sha256)
+        {
+            // Nothing to install: skip the stop, backup and restart.
+            return Ok(json!({
+                "already_current": true,
+                "version": manifest.minecraft_version,
+                "build": manifest.build,
+                "server_was_running": self.container_running(&manifest.container_name),
+                "runtime_validation_performed": false,
+                "restart_required": false
+            }));
+        }
         self.activate_runtime(&manifest, artifact, &mut progress)
     }
 
