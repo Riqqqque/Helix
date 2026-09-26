@@ -4,6 +4,14 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.5.2 - 2026-09-26
+
+### Fixed
+
+- A port added on the Ports card (for example the Simple Voice Chat preset) no
+  longer disappears a few seconds later when the server page refreshes. Unsaved
+  ports stay until you save or discard them.
+
 ## 1.5.1 - 2026-09-26
 
 ### Fixed

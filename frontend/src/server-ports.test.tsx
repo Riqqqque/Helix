@@ -1,7 +1,7 @@
 import render from 'preact-render-to-string';
 import { describe, expect, it, vi } from 'vitest';
 import { parseExtraPorts, setNativeExtraPorts } from './control-api';
-import { ServerPortsCard, portProfile, validatePortDraft } from './server-ports';
+import { ServerPortsCard, followSavedPorts, portProfile, validatePortDraft } from './server-ports';
 
 const base = {
   serverId: 'helix:test',
@@ -78,5 +78,22 @@ describe('server ports card', () => {
     expect(hytale).not.toContain('Simple Voice Chat');
     expect(hytale).not.toContain('BlueMap');
     expect(hytale).toContain('UDP (QUIC)');
+  });
+});
+
+describe('ports draft across refreshes', () => {
+  const voice = { port: 24_454, protocol: 'udp' as const, label: 'Simple Voice Chat' };
+  const map = { port: 8_100, protocol: 'tcp' as const, label: 'BlueMap' };
+  it('keeps a clicked preset when the page refreshes with the same saved ports', () => {
+    const saved: typeof voice[] = [];
+    const draft = [voice];
+    expect(followSavedPorts(draft, saved, [])).toEqual([voice]);
+  });
+  it('follows a real saved change when nothing is being edited', () => {
+    expect(followSavedPorts([], [], [map])).toEqual([map]);
+    expect(followSavedPorts([map], [map], [])).toEqual([]);
+  });
+  it('does not overwrite unsaved edits when the saved ports change elsewhere', () => {
+    expect(followSavedPorts([voice], [], [map])).toEqual([voice]);
   });
 });

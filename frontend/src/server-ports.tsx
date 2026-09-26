@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { ApiError } from './api';
 import { type ExtraPort, type ExtraPortProtocol, setNativeExtraPorts } from './control-api';
 import { InlineError } from './dashboard-ui';
@@ -95,6 +95,11 @@ function samePorts(left: ExtraPort[], right: ExtraPort[]): boolean {
   return key(left) === key(right);
 }
 
+/** The draft after the saved ports change: follow them unless the user has unsaved edits. */
+export function followSavedPorts(draft: ExtraPort[], previousSaved: ExtraPort[], nextSaved: ExtraPort[]): ExtraPort[] {
+  return samePorts(draft, previousSaved) ? nextSaved : draft;
+}
+
 export function ServerPortsCard({
   serverId,
   kind,
@@ -126,7 +131,15 @@ export function ServerPortsCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  useEffect(() => { setDraft(extraPorts); }, [extraPorts]);
+  // Background refreshes hand over a new array each time; only follow real saved changes,
+  // and never throw away ports the user added but has not saved yet.
+  const savedKey = JSON.stringify(extraPorts);
+  const lastSaved = useRef(extraPorts);
+  useEffect(() => {
+    const previous = lastSaved.current;
+    lastSaved.current = extraPorts;
+    setDraft((current) => followSavedPorts(current, previous, extraPorts));
+  }, [savedKey]);
   const reserved = useMemo(() => [gamePort, ...(queryPort === null ? [] : [queryPort])], [gamePort, queryPort]);
   const dirty = !samePorts(draft, extraPorts);
   const draftError = validatePortDraft(draft, reserved);
