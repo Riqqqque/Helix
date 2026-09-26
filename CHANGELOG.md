@@ -4,6 +4,24 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.3.0 - 2026-09-26
+
+### Added
+
+- Extra ports for Helix game servers. A **Ports** card on each server's
+  Overview lists the game port and lets you open up to 16 more (TCP, UDP, or
+  both) for plugins and mods with their own listener — with one-click presets
+  for Simple Voice Chat (24454/UDP), BlueMap, Dynmap, and Geyser. Saving
+  checks the port is free on the host and not used by another server, then
+  recreates the container with the ports published and restarts it if it was
+  running. Also available as `PUT /api/v1/servers/{instance_id}/ports` and to
+  server tokens with the `settings` permission.
+
+### Upgrade note
+
+- A server with extra ports saved cannot be loaded by a broker older than
+  1.3.0. Remove its extra ports before rolling the broker back.
+
 ## 1.2.0 - 2026-09-25
 
 ### Added
