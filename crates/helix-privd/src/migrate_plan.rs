@@ -725,7 +725,9 @@ pub fn should_copy_minecraft_relative(relative: &str, copy_server_jar: bool) -> 
     {
         return CopyDecision::Skip;
     }
-    if !copy_server_jar && segments.len() == 1 && minecraft_root_jar_name(segments[0]) {
+    // Helix installs its own server JAR; loose launcher JARs in the root are never used.
+    if !copy_server_jar && segments.len() == 1 && segments[0].to_ascii_lowercase().ends_with(".jar")
+    {
         return CopyDecision::Skip;
     }
     CopyDecision::Copy
@@ -2214,6 +2216,34 @@ mod tests {
         assert_eq!(java_for_minecraft_version("1.21.8"), 21);
         assert_eq!(java_for_minecraft_version("1.20.6"), 21);
         assert_eq!(java_for_minecraft_version("1.20.4"), 17);
+    }
+
+    #[test]
+    fn copies_leave_loose_launcher_jars_behind() {
+        for jar in [
+            "paperclip.jar",
+            "fabric.jar",
+            "server.jar",
+            "Paper-1.21.8.JAR",
+        ] {
+            assert_eq!(
+                should_copy_minecraft_relative(jar, false),
+                CopyDecision::Skip,
+                "{jar}"
+            );
+        }
+        assert_eq!(
+            should_copy_minecraft_relative("plugins/Geyser.jar", false),
+            CopyDecision::Copy
+        );
+        assert_eq!(
+            should_copy_minecraft_relative("mods/sodium.jar", false),
+            CopyDecision::Copy
+        );
+        assert_eq!(
+            should_copy_minecraft_relative("paperclip.jar", true),
+            CopyDecision::Copy
+        );
     }
 
     #[test]

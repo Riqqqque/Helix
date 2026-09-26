@@ -482,3 +482,13 @@ describe('server copies', () => {
     expect(moved.at(-1)).toContain('Leave the old AMP instance stopped');
   });
 });
+
+describe('memory labels', () => {
+  it('rounds panel sizes instead of printing long fractions', async () => {
+    const { formatMemoryGiB } = await import('./servers');
+    expect(formatMemoryGiB(4_096)).toBe('4 GiB');
+    expect(formatMemoryGiB(4_000)).toBe('3.9 GiB');
+    expect(formatMemoryGiB(12_000)).toBe('11.7 GiB');
+    expect(formatMemoryGiB(512)).toBe('512 MiB');
+  });
+});

@@ -980,8 +980,10 @@ function publicAccessCopy(
   };
 }
 
-function formatMemoryGiB(memoryMb: number): string {
-  return Number.isInteger(memoryMb / 1024) ? `${memoryMb / 1024} GiB` : `${memoryMb} MiB`;
+export function formatMemoryGiB(memoryMb: number): string {
+  const gib = memoryMb / 1024;
+  if (Number.isInteger(gib)) return `${gib} GiB`;
+  return gib >= 1 ? `${Number(gib.toFixed(1))} GiB` : `${memoryMb} MiB`;
 }
 
 export function serverActionDescription(
@@ -2077,7 +2079,7 @@ function CreateServerDialog({
             <div>
               <dt>Resources</dt>
               <dd>
-                {memory / 1024} GiB · {formatCpuLimit(cpuMillis)} · {players} players
+                {formatMemoryGiB(memory)} · {formatCpuLimit(cpuMillis)} · {players} players
               </dd>
             </div>
             <div>
@@ -2524,7 +2526,7 @@ function ServerRow({
         <strong>
           {showStats
             ? `${formatBytes(server.memoryUsedMb * 1024 * 1024)} / ${formatBytes(server.memoryLimitMb * 1024 * 1024)}`
-            : `${server.memoryLimitMb / 1024} GiB limit`}
+            : `${formatMemoryGiB(server.memoryLimitMb)} limit`}
         </strong>
         {live && (
           <ProgressBar
@@ -6447,6 +6449,7 @@ function MigrateServerDialog({
     return path.length === 0 ? null : { kind: "folder", path };
   };
 
+  const autoName = useRef("");
   const inspect = async (): Promise<void> => {
     const next = source();
     if (next === null || inspecting) return;
@@ -6455,7 +6458,11 @@ function MigrateServerDialog({
     try {
       const result = await migrateServerPreflight(next, csrfToken);
       setPreflight(result);
-      setName((current) => (current.trim().length === 0 ? result.sourceName : current));
+      // Follow the chosen source unless the name was typed by hand.
+      setName((current) =>
+        current.trim().length === 0 || current === autoName.current ? result.sourceName : current,
+      );
+      autoName.current = result.sourceName;
       setMemory(result.memoryMb);
       setPlayers(result.maxPlayers);
       if (result.software !== null) setSoftware(result.software);
@@ -6830,7 +6837,7 @@ function MigrateServerDialog({
                     {allocatedMemoryOptions(migrateMemoryKind(preflight.game), memory).map(
                       (value) => (
                         <option key={value} value={value}>
-                          {value >= 1024 ? `${value / 1024} GiB` : `${value} MiB`}
+                          {formatMemoryGiB(value)}
                         </option>
                       ),
                     )}
