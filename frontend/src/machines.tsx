@@ -1,3 +1,4 @@
+import { CopyButton } from './copy-button';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { InlineError, Metric, PageHead, ProgressBar, toneForPercent } from './dashboard-ui';
 import { formatBytes, formatDuration, formatPercent, formatTimestamp } from './format';
@@ -909,14 +910,6 @@ function MachineDetail({
 }
 
 function IdentityPanel({ identity }: { identity: HubIdentity | null }) {
-  const [copied, setCopied] = useState(false);
-  const copyKey = (): void => {
-    if (identity?.publicKey == null) return;
-    void navigator.clipboard?.writeText(identity.publicKey).then(() => {
-      setCopied(true);
-      globalThis.setTimeout(() => setCopied(false), 2_000);
-    });
-  };
   return (
     <section class="surface machines-identity">
       <header><Icon name="security" size={18} /><strong>Hub SSH identity</strong></header>
@@ -929,7 +922,7 @@ function IdentityPanel({ identity }: { identity: HubIdentity | null }) {
           <p>Authorize this public key in <code>~{identity.user ?? 'user'}/.ssh/authorized_keys</code> on each machine, then Helix can probe and open terminals without passwords.</p>
           <div class="machines-identity-key">
             <code>{identity.publicKey}</code>
-            <button class="button button--quiet" type="button" onClick={copyKey}>{copied ? 'Copied' : 'Copy'}</button>
+            {identity.publicKey != null && <CopyButton text={identity.publicKey} class="button button--quiet" />}
           </div>
           <p class="machines-identity-fingerprint">Fingerprint <code>{identity.fingerprintSha256}</code> · runs as <code>{identity.user}</code> · dedicated known-hosts file</p>
         </>

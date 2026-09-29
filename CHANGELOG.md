@@ -4,6 +4,15 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.7.2 - 2026-09-29
+
+### Fixed
+
+- **Copy** did nothing for API tokens, Hytale sign-in codes, and the machine
+  hub's SSH key when the dashboard is opened over plain HTTP on a LAN, where
+  browsers block the clipboard API. These buttons now use the same fallback as
+  the join-address Copy button and say "Couldn't copy" if both paths fail.
+
 ## 1.7.1 - 2026-09-28
 
 ### Fixed
