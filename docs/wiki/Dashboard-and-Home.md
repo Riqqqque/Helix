@@ -41,13 +41,28 @@ anything. Export is the easiest portable copy, while the authoritative layouts
 are also stored in Helix's revisioned state database and included in state
 backups.
 
-Choose **Edit layout** to add widgets, drag them by their handle, or move them
-with keyboard-accessible controls. Every widget can choose width, height, title,
-and accent color. Click a tile to select it, then **Copy** (or Ctrl+C / Cmd+C)
-and **Paste** (or Ctrl+V / Cmd+V) to duplicate it on this Home or another one.
-Widget settings also has **Copy to another Home**. The grid reflows at desktop,
-tablet, and mobile widths, so a layout with one widget and a layout at the
-configured maximum both stay usable.
+### Arranging widgets
+
+Choose **Edit layout**. Home is a 12-column grid, and every widget keeps exactly
+the same size while you edit.
+
+- **Move:** drag a widget by its title bar (or the grip in its toolbar). It
+  follows your cursor, a dashed outline shows where it will land, and the other
+  widgets move out of the way as you go. Drop it anywhere — beside, above, or
+  under other widgets, including in the space under a short widget next to a
+  tall one. Widgets settle upward so there are no empty holes above them.
+- **Resize:** drag the corner at a widget's bottom right. It snaps to whole
+  columns and rows, and each widget has a sensible minimum size.
+- **Keyboard:** click a widget to select it, then use the arrow keys to nudge it
+  one cell, or Shift and the arrow keys to resize it. Escape cancels a drag.
+- **Settings:** the gear in a widget's toolbar opens its settings above the grid
+  — title, exact width and height, accent color, and **Copy to another Home**.
+
+Click a tile to select it, then **Copy** (or Ctrl+C / Cmd+C) and **Paste** (or
+Ctrl+V / Cmd+V) to duplicate it on this Home or another one; pasted widgets find
+the first free spot. Positions are saved with the layout and follow you between
+browsers. On narrow windows, Home stacks widgets in one column in reading order;
+widen the window to move or resize them.
 
 Available widgets are Clock, Host pulse, Live graphs, Servers, Storage, Docker,
 Weather, Notes, Shortcut, Strand, and Globe. Shortcuts accept only validated HTTP(S)
