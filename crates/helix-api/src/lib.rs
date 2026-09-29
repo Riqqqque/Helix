@@ -1488,6 +1488,8 @@ fn validate_home_widgets(widgets: &[HomeWidgetPreference]) -> Result<(), ()> {
             return Err(());
         }
         match widget.kind {
+            // A newly added shortcut has no address until the owner types one.
+            HomeWidgetKind::Shortcut if widget.url.is_empty() => {}
             HomeWidgetKind::Shortcut => {
                 let uri = widget.url.parse::<axum::http::Uri>().map_err(|_| ())?;
                 if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.authority().is_none()
@@ -5148,6 +5150,24 @@ mod tests {
                 .contains(&PrimaryDashboardSection::Globe)
         );
         assert!(validate_dashboard_preferences(&preferences).is_ok());
+    }
+
+    #[test]
+    fn a_new_shortcut_without_an_address_still_saves() {
+        let mut preferences = DashboardPreferences::default();
+        let mut shortcut = home_widget(
+            "shortcut-new",
+            HomeWidgetKind::Shortcut,
+            HomeWidgetSize::Compact,
+            "Shortcut",
+        );
+        preferences.home_widgets.push(shortcut.clone());
+        preferences.home_templates[0].widgets.push(shortcut.clone());
+        assert!(validate_dashboard_preferences(&preferences).is_ok());
+        shortcut.url = "javascript:alert(1)".to_owned();
+        *preferences.home_widgets.last_mut().unwrap() = shortcut.clone();
+        *preferences.home_templates[0].widgets.last_mut().unwrap() = shortcut;
+        assert!(validate_dashboard_preferences(&preferences).is_err());
     }
 
     #[test]
