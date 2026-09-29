@@ -1,3 +1,4 @@
+import { CopyButton } from './copy-button';
 import { useState } from 'preact/hooks';
 import { ApiError, expectArray, expectNumber, expectRecord, expectString, requestJson } from './api';
 import type { ManagedServer } from './control-api';
@@ -67,13 +68,12 @@ export function ServerTokenSettings({ csrfToken, servers }: { csrfToken: string;
   const [selected, setSelected] = useState<string[]>([]);
   const [permissions, setPermissions] = useState<string[]>([ALL_PERMISSIONS]);
   const [secret, setSecretValue] = useState<{ token: string; title: string; note: string } | null>(null);
-  const [copied, setCopied] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
   const [confirmRotate, setConfirmRotate] = useState<string | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
   const [password, setPassword] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
-  function setSecret(value: { token: string; title: string; note: string } | null) { setSecretValue(value); setCopied(false); }
+  function setSecret(value: { token: string; title: string; note: string } | null) { setSecretValue(value); }
   async function refresh() { setData(await requestJson('/api/v1/auth/server-tokens', catalog, { csrfToken })); }
   async function run(operation: () => Promise<void>) {
     if (busy) return;
@@ -117,7 +117,7 @@ export function ServerTokenSettings({ csrfToken, servers }: { csrfToken: string;
         <small>{secret.note}</small>
         <div class="server-token-settings__secret-row">
           <input aria-label="API token" readOnly value={secret.token} autoComplete="off" spellcheck={false} onFocus={(e) => e.currentTarget.select()} />
-          <button class="button button--primary" type="button" onClick={() => { void navigator.clipboard?.writeText(secret.token).then(() => setCopied(true), () => setCopied(false)); }}>{copied ? 'Copied' : 'Copy'}</button>
+          <CopyButton key={secret.token} text={secret.token} class="button button--primary" />
           <button class="button button--quiet" type="button" onClick={() => setSecret(null)}>Hide</button>
         </div>
       </div>}

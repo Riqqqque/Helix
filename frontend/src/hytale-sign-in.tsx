@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { CopyButton } from './copy-button';
 import { safeHytaleUrl, type HytaleAuthPrompt } from './control-api';
 import { Icon } from './icons';
 import './hytale-sign-in.css';
@@ -28,7 +28,6 @@ export function StageText({ text }: { text: string }) {
  * broker's own validation).
  */
 export function HytaleSignIn({ auth, running }: { auth: HytaleAuthPrompt | null; running: boolean }) {
-  const [copied, setCopied] = useState(false);
   if (!running || auth === null || auth.state !== 'needs_sign_in') return null;
   const url = safeHytaleUrl(auth.url);
   if (url === null) return null;
@@ -45,7 +44,7 @@ export function HytaleSignIn({ auth, running }: { auth: HytaleAuthPrompt | null;
           {auth.code !== null && (
             <span class="hytale-sign-in__code">
               Code <code>{auth.code}</code>
-              <button class="button button--quiet" type="button" onClick={() => { void navigator.clipboard?.writeText(auth.code ?? '').then(() => setCopied(true), () => setCopied(false)); }}>{copied ? 'Copied' : 'Copy'}</button>
+              <CopyButton text={auth.code} class="button button--quiet" />
             </span>
           )}
         </div>
