@@ -1,8 +1,15 @@
 # API and integrations
 
-Use Helix's API to connect trusted scripts and tools without guessing server
-directories or exposing Docker. The API stays on the configured private entry
-point; this feature does not publish your dashboard to the internet.
+Use Helix's API to connect trusted scripts, plugin build pipelines, and AI
+assistants without guessing server directories or exposing Docker. The API stays
+on the configured private entry point; it does not publish your dashboard to the
+internet.
+
+**Automating game servers?** Start with [Server API Tokens](https://github.com/Riqqqque/Helix/wiki/Server-API-Tokens).
+A token scoped to exact servers — with **Full access** in one click — lets a tool
+upload plugins, run console commands, restart, update, back up, install from the
+marketplace, and [copy a setup between servers](https://github.com/Riqqqque/Helix/wiki/Copying-Between-Servers), without
+your login. The steps below are for tools that use a signed-in owner session.
 
 1. Read the [integration guide](https://github.com/Riqqqque/Helix/blob/main/docs/INTEGRATIONS.md).
 2. Log in with an authorized Helix session and keep its cookie and CSRF proof together.
@@ -36,7 +43,9 @@ handles those details instead of making integrations track fragile upload state.
 - An owner session carries owner permissions. For automation, create a token
   in **Settings → Server API tokens**, choosing exact servers and permissions.
   Read the [token guide](https://github.com/Riqqqque/Helix/blob/main/docs/SERVER-TOKENS.md)
-  for headless uploads, lifecycle actions, expiration and revocation.
+  for every operation, headless uploads, transfers, expiration and revocation.
+  Give the token to a tool through an environment variable, never in chat or a
+  file it reads.
 - Use the inventory item's `id` exactly, including `helix:` or another manager
   prefix. A display name, port or Minecraft version does not identify a server.
 - A returned job ID means the operation was accepted, not that it completed.

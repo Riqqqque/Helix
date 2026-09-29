@@ -55,6 +55,24 @@ source archive and `SHA256SUMS`; it does not run `git pull`.
 
 Never upload an artifact built from an uncommitted local tree.
 
+## Installing a new host broker
+
+The dashboard updater rebuilds the `helixd` and gateway containers. The host
+broker, `helix-privd`, runs as a root systemd service outside those containers,
+so a release that changes it needs one owner step on the host. Build the
+`privd` target from the verified release source, then keep the previous binary
+and install the new one:
+
+```bash
+sudo cp -a /usr/local/libexec/helix-privd /usr/local/libexec/helix-privd.previous
+sudo install -m 0755 ./helix-privd /usr/local/libexec/helix-privd
+sudo systemctl restart helix-privd
+```
+
+Game containers keep running while the broker restarts. To roll back, install
+`helix-privd.previous` the same way. The broker skips a configured storage root
+that no longer exists, with a warning, instead of refusing to start.
+
 ## Verification
 
 After publication, download the public asset into a clean directory, verify its
