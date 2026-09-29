@@ -3726,8 +3726,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             Err(_) => fs::remove_file(&config.socket)?,
         }
     }
-    let managed_roots = config.managed_roots.clone();
-    let analysis_roots = configured_analysis_roots(&config);
+    // A folder that was removed later (for example an uninstalled AMP) must not stop the
+    // whole broker; skip it with a warning. Unsafe folders are still refused below.
+    let managed_roots = existing_roots(&config.managed_roots, "managed root")?;
+    let analysis_roots = existing_roots(&configured_analysis_roots(&config), "analysis root")?;
     let storage = StorageAnalysisManager::new(analysis_roots).map_err(io::Error::other)?;
     let files = FileManager::new(managed_roots.clone()).map_err(io::Error::other)?;
     let amp = config
@@ -3895,6 +3897,31 @@ fn load_config(path: &Path) -> Result<BrokerConfig, Box<dyn Error>> {
         );
     }
     Ok(config)
+}
+
+#[cfg(target_os = "linux")]
+/// Drops configured roots that no longer exist, keeping every other error for the strict checks.
+fn existing_roots(roots: &[PathBuf], label: &str) -> io::Result<Vec<PathBuf>> {
+    let kept = roots
+        .iter()
+        .filter(|root| match fs::symlink_metadata(root) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                eprintln!(
+                    "helix-privd: {label} {} no longer exists; skipping it. Remove it from the broker config to silence this.",
+                    root.display()
+                );
+                false
+            }
+            _ => true,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if kept.is_empty() && !roots.is_empty() {
+        return Err(io::Error::other(format!(
+            "none of the configured {label}s exist"
+        )));
+    }
+    Ok(kept)
 }
 
 #[cfg(target_os = "linux")]
@@ -4196,6 +4223,16 @@ mod tests {
             configured_analysis_roots(&config),
             vec![PathBuf::from("/srv")]
         );
+    }
+
+    #[test]
+    fn removed_storage_folders_are_skipped_instead_of_stopping_the_broker() {
+        let temp = tempfile::tempdir().unwrap();
+        let kept = temp.path().to_path_buf();
+        let gone = temp.path().join("amp-was-uninstalled");
+        let roots = existing_roots(&[gone.clone(), kept.clone()], "managed root").unwrap();
+        assert_eq!(roots, vec![kept]);
+        assert!(existing_roots(&[gone], "managed root").is_err());
     }
 
     #[test]

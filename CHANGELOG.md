@@ -4,6 +4,15 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.7.1 - 2026-09-28
+
+### Fixed
+
+- The host broker no longer refuses to start when a configured storage folder
+  has been removed, for example after uninstalling AMP. It skips the missing
+  folder with a warning and keeps running; folders that exist but are unsafe
+  are still refused.
+
 ## 1.7.0 - 2026-09-28
 
 ### Added
