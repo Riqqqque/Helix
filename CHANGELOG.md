@@ -23,6 +23,13 @@ release, not a public-internet support promise.
 - On narrow windows Home stacks widgets in one column; moving and resizing wait
   for a wider window.
 
+### Fixed
+
+- Adding a Shortcut widget stopped the Home layout from saving ("Using this
+  browser's saved copy") until a web address was typed, because the server
+  rejected a shortcut without one. An empty shortcut now saves; a filled-in
+  address must still be an http or https link.
+
 ## 1.7.2 - 2026-09-29
 
 ### Fixed
