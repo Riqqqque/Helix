@@ -497,6 +497,14 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             "/servers/{instance_id}/runtime",
             post(change_native_runtime),
         )
+        .route(
+            "/servers/{instance_id}/transfer/preflight",
+            post(server_transfer_preflight),
+        )
+        .route(
+            "/servers/{instance_id}/transfer",
+            post(transfer_server_content),
+        )
         .route("/servers/{instance_id}/cpu", put(set_native_cpu))
         .route(
             "/servers/{instance_id}/browser-listing",
@@ -3495,6 +3503,57 @@ async fn change_native_runtime(
     broker_json(
         &state,
         BrokerRequest::ChangeNativeRuntime { instance_id, spec },
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransferPreflightBody {
+    target_id: String,
+    parts: Vec<helix_privd::TransferPart>,
+}
+
+async fn server_transfer_preflight(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<TransferPreflightBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::ServerTransferPreflight {
+            instance_id,
+            target_id: body.target_id,
+            parts: body.parts,
+        },
+    )
+    .await
+}
+
+async fn transfer_server_content(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<helix_privd::ServerTransferSpec>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(spec) = body.map_err(auth::map_json_rejection)?;
+    if spec.parts.iter().any(|part| {
+        matches!(
+            part,
+            helix_privd::TransferPart::PluginData | helix_privd::TransferPart::Worlds
+        )
+    }) {
+        auth::require_capability(&state, &headers, "games.backups.manage").await?;
+    }
+    broker_json(
+        &state,
+        BrokerRequest::TransferServerContent { instance_id, spec },
     )
     .await
 }

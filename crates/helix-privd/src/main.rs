@@ -790,6 +790,16 @@ impl BrokerContext {
             BrokerRequest::ChangeNativeRuntime { instance_id, spec } => {
                 self.start_runtime_job(instance_id, spec)
             }
+            BrokerRequest::ServerTransferPreflight {
+                instance_id,
+                target_id,
+                parts,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.transfer_preflight(&instance_id, &target_id, &parts)),
+            BrokerRequest::TransferServerContent { instance_id, spec } => {
+                self.start_transfer_job(instance_id, spec)
+            }
             BrokerRequest::SetNativeCpu {
                 instance_id,
                 cpu_millis,
@@ -1944,6 +1954,55 @@ impl BrokerContext {
         {
             self.finish_job(&job_id, Err("Could not start runtime job".to_owned()), "");
             return Err("Could not start runtime job".to_owned());
+        }
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+
+    fn start_transfer_job(
+        self: &Arc<Self>,
+        instance_id: String,
+        spec: helix_privd::ServerTransferSpec,
+    ) -> Result<Value, String> {
+        spec.validate()?;
+        self.native_manager(&instance_id)?;
+        self.native_manager(&spec.target_id)
+            .map_err(|_| "the target must be a Helix-managed server".to_owned())?;
+        let native = Arc::clone(
+            self.native
+                .as_ref()
+                .ok_or("Server manager is unavailable")?,
+        );
+        let reuse_key = serde_json::to_string(&(&instance_id, &spec)).map_err(|e| e.to_string())?;
+        let (job_id, reused) = self.queue_job(
+            "server_transfer",
+            Some(&format!("server:{}", spec.target_id)),
+            Some(&reuse_key),
+        )?;
+        if reused {
+            return Ok(json!({"job_id": job_id, "reused": true}));
+        }
+        let context = Arc::clone(self);
+        let worker_id = job_id.clone();
+        if thread::Builder::new()
+            .name(format!("transfer-{}", &job_id[..8]))
+            .spawn(move || {
+                let result = native.transfer_content(&instance_id, &spec, |stage, percent| {
+                    context.update_job(&worker_id, |job| {
+                        job.status = JobState::Running;
+                        job.stage = stage.to_owned();
+                        job.progress_percent = percent;
+                    });
+                });
+                context.finish_job(
+                    &worker_id,
+                    result,
+                    "Copied; the target's safety backup is in its Backups",
+                );
+            })
+            .is_err()
+        {
+            self.finish_job(&job_id, Err("Could not start the transfer".to_owned()), "");
+            return Err("Could not start the transfer".to_owned());
         }
         Ok(json!({"job_id": job_id, "reused": false}))
     }

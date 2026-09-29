@@ -53,7 +53,7 @@ impl NativeManager {
         }
     }
 
-    fn stop_runtime_for_files(&self, manifest: &InstanceManifest) -> Result<(), String> {
+    pub(super) fn stop_runtime_for_files(&self, manifest: &InstanceManifest) -> Result<(), String> {
         if self.runtime_running_checked(manifest)? {
             self.stop_preserving_minecraft_settings(manifest)?;
         }

@@ -50,6 +50,7 @@ mod satisfactory;
 mod seven_days_to_die;
 mod sons_of_the_forest;
 mod terraria;
+mod transfer;
 mod valheim;
 mod valheim_manage;
 mod vintage_story;

@@ -336,6 +336,21 @@ fn bearer(headers: &HeaderMap) -> Result<OpaqueToken, ApiError> {
     OpaqueToken::from_encoded(encoded).map_err(|_| ApiError::AuthenticationRequired)
 }
 
+/// Source, target, and the permission needed on the target for a server-to-server transfer.
+fn transfer_servers(request: &BrokerRequest) -> Option<(&str, &str, &'static str)> {
+    match request {
+        BrokerRequest::ServerTransferPreflight {
+            instance_id,
+            target_id,
+            ..
+        } => Some((instance_id, target_id, "view")),
+        BrokerRequest::TransferServerContent { instance_id, spec } => {
+            Some((instance_id, &spec.target_id, "files.write"))
+        }
+        _ => None,
+    }
+}
+
 fn scope(request: &BrokerRequest) -> Option<(&str, &'static str)> {
     use BrokerRequest::*;
     Some(match request {
@@ -449,6 +464,39 @@ async fn execute(
         .map_err(|_| ApiError::ApplicationCapacityExhausted)?;
     let token = authenticate_token(&state, &headers).await?;
     let Json(request) = body.map_err(auth::map_json_rejection)?;
+    if let Some((source, target, target_permission)) = transfer_servers(&request) {
+        // A transfer touches two servers: the token must list both, read the source,
+        // and write the target.
+        let allowed = token.servers.iter().any(|s| s == source)
+            && token.servers.iter().any(|s| s == target)
+            && grants(&token.permissions, "files.read")
+            && grants(&token.permissions, target_permission);
+        let db = Arc::clone(&state.databases);
+        let audit_token = token.clone();
+        let audit_server = target.to_owned();
+        auth::run_blocking_state(&state.blocking_tasks, move || {
+            db.state().audit_api_token(
+                &audit_token,
+                "transfer",
+                &audit_server,
+                if allowed { "success" } else { "denied" },
+                now(),
+            )
+        })
+        .await?;
+        if !allowed {
+            return Err(ApiError::AuthorizationDenied);
+        }
+        let target = target.to_owned();
+        let guard = state.blocking_tasks.start();
+        return tokio::spawn(async move {
+            let _guard = guard;
+            let _permit = permit;
+            complete_request(state, token, request, target).await
+        })
+        .await
+        .map_err(|_| ApiError::ServiceUnavailable)?;
+    }
     let owned_job_server;
     let (server, permission) = if let BrokerRequest::JobStatus { job_id } = &request {
         let db = Arc::clone(&state.databases);
@@ -611,6 +659,22 @@ mod tests {
             confirmation_name: "One".into(),
         };
         assert_eq!(scope(&remove), Some(("helix:one", "remove")));
+    }
+
+    #[test]
+    fn transfers_need_both_servers_on_the_token() {
+        let request: BrokerRequest = serde_json::from_value(json!({
+            "operation": "transfer_server_content",
+            "instance_id": "helix:test",
+            "spec": {"target_id": "helix:prod", "parts": ["plugins"], "confirmation_name": "Prod"}
+        }))
+        .expect("transfer request");
+        assert_eq!(
+            transfer_servers(&request),
+            Some(("helix:test", "helix:prod", "files.write"))
+        );
+        // Transfers never fall through to the single-server scope table.
+        assert!(scope(&request).is_none());
     }
 
     #[test]

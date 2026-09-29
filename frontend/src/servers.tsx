@@ -91,6 +91,7 @@ import {
   formatTimestamp,
 } from "./format";
 import { ServerReadySummary } from "./server-ready";
+import { ServerTransferCard } from "./server-transfer";
 import { ServerRuntimeControls, runtimeSoftware } from "./server-runtime";
 import { ValheimPanelRoute as ValheimPanel, ValheimFieldsRoute as ValheimSettingsFields } from "./valheim-route";
 import { defaultValheimSettings } from "./valheim-api";
@@ -5827,6 +5828,7 @@ function NativeServerPage({
               </div>
             </div>
             <ServerRuntimeControls detail={detail} csrfToken={csrfToken} canManage={canManageServers} onComplete={refresh} onSessionExpired={onSessionExpired} onBackups={() => setTab("backups")} />
+            <ServerTransferCard detail={detail} servers={servers} csrfToken={csrfToken} canManage={canManageServers} onComplete={refresh} onSessionExpired={onSessionExpired} />
             {isReadyMarkerGame && (
               <>
                 <AllocatedMemoryEditor
