@@ -345,6 +345,17 @@ pub enum BrokerRequest {
         instance_id: String,
         spec: NativeRuntimeChangeSpec,
     },
+    /// Read-only: what copying `parts` from this server onto `target_id` would do.
+    ServerTransferPreflight {
+        instance_id: String,
+        target_id: String,
+        parts: Vec<TransferPart>,
+    },
+    /// Copies the chosen parts from this server onto another Helix server.
+    TransferServerContent {
+        instance_id: String,
+        spec: ServerTransferSpec,
+    },
     SetNativeCpu {
         instance_id: String,
         cpu_millis: u32,
@@ -1737,6 +1748,66 @@ pub struct NativeRuntimeChangeSpec {
     pub expected_version: String,
     pub expected_build: String,
     pub confirmation_name: String,
+}
+
+/// What a server-to-server transfer copies. Player data never moves unless asked for.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferPart {
+    /// Plugin JARs and their configuration files, without databases or player data.
+    Plugins,
+    /// Everything under `plugins/`, including databases and player data.
+    PluginData,
+    /// Mod JARs in `mods/`.
+    Mods,
+    /// Server and loader configuration: bukkit/spigot/paper/purpur files and `config/`.
+    Configs,
+    /// Gameplay settings from `server.properties`; the target keeps its ports and identity.
+    ServerProperties,
+    /// Datapacks in the world's `datapacks/` folder.
+    Datapacks,
+    /// Whitelist, operators, and ban lists.
+    PlayerLists,
+    /// The world folders, replacing the target's worlds.
+    Worlds,
+}
+
+pub const MAX_TRANSFER_PARTS: usize = 8;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerTransferSpec {
+    pub target_id: String,
+    pub parts: Vec<TransferPart>,
+    /// The target server's exact name, typed to confirm.
+    pub confirmation_name: String,
+    /// Also remove target plugin or mod JARs that the source does not have.
+    #[serde(default)]
+    pub remove_missing_jars: bool,
+}
+
+impl ServerTransferSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_transfer_parts(&self.parts)?;
+        if self.confirmation_name.trim().is_empty() || self.confirmation_name.len() > 128 {
+            return Err("type the target server's name to confirm".to_owned());
+        }
+        if self.target_id.is_empty() || self.target_id.len() > 128 {
+            return Err("choose a target server".to_owned());
+        }
+        Ok(())
+    }
+}
+
+pub fn validate_transfer_parts(parts: &[TransferPart]) -> Result<(), String> {
+    if parts.is_empty() || parts.len() > MAX_TRANSFER_PARTS {
+        return Err("choose what to copy".to_owned());
+    }
+    let unique = parts.iter().collect::<std::collections::BTreeSet<_>>();
+    if unique.len() != parts.len() {
+        return Err("each part can be listed once".to_owned());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

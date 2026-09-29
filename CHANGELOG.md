@@ -4,6 +4,31 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.7.0 - 2026-09-28
+
+### Added
+
+- Copy a finished setup from one Helix Minecraft server to another, for example
+  from a test server to the public one: **Advanced → Copy to another server**,
+  `POST /api/v1/servers/{id}/transfer` (with a read-only `/transfer/preflight`),
+  or the token operations `server_transfer_preflight` and
+  `transfer_server_content`. Choose plugins and their settings, mods, server
+  configuration, datapacks, gameplay settings, player lists, all plugin data, or
+  worlds. By default plugin databases, logs, and player files stay on the target.
+- The source is packed read-only in a locked-down container as its own user, so
+  links inside it cannot reach host files. The target gets a verified backup, is
+  stopped, written without following links, started again, and checked; any
+  failure restores the backup.
+- A newer plugin or mod JAR replaces the target JAR with the same declared plugin
+  or mod name, so version upgrades do not leave duplicate plugins. Optionally
+  remove target JARs the source no longer has.
+- Gameplay settings move while the target keeps its ports, RCON, world name,
+  seed, player limit, MOTD, and whitelist settings. Plugins only move between
+  plugin servers, mods between the same loader, and worlds never onto an older
+  Minecraft version.
+- Tokens can run transfers when they list both servers, with `files.read` and
+  `files.write` (Full access covers it).
+
 ## 1.6.0 - 2026-09-28
 
 ### Added

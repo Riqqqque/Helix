@@ -161,7 +161,7 @@
       "post":{"operationId":"revealServerToken","summary":"Show a stored token secret again after the owner re-enters their dashboard password; audited","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}},{"$ref":"#/components/parameters/Origin"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":["current_password"],"properties":{"current_password":{"type":"string"}}}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token secret"},"401":{"description":"Password rejected (current_password_rejected) or session expired"},"404":{"description":"Unknown or revoked token, or no stored copy"}}}
     },
     "/automation/server": {
-      "post":{"operationId":"executeScopedServerRequest","summary":"Run a permitted operation on a token-scoped server","description":"Bearer token only. Cookie and Origin headers are rejected. See SERVER-TOKENS.md for operation fields and permissions. No host/global operations are allowed; job_status is restricted to this token's accepted jobs.","security":[{"ServerToken":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["operation"],"properties":{"operation":{"type":"string","enum":["server_capabilities","server_detail","server_logs","server_log_history","server_files","server_action","server_console","server_settings","update_server_settings","set_native_memory","set_native_cpu","set_native_start_on_boot","set_native_browser_listing","change_native_runtime","list_backups","server_backup_download","restore_backup","trash_backup","restore_trashed_backup","set_backup_policy","prune_backups","job_status"]},"instance_id":{"type":"string"},"job_id":{"type":"string"}}},"examples":{"stop":{"value":{"operation":"server_action","instance_id":"helix:EXACT-UUID","action":"stop"}},"files":{"value":{"operation":"server_files","instance_id":"helix:EXACT-UUID","request":{"action":"list","path":"","limit":50}}}}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Operation response or job ID; check job completion separately"},"401":{"description":"Invalid, expired or revoked token"},"403":{"description":"Server, operation or permission is outside token scope"},"429":{"description":"Token request rate exceeded"}}}
+      "post":{"operationId":"executeScopedServerRequest","summary":"Run a permitted operation on a token-scoped server","description":"Bearer token only. Cookie and Origin headers are rejected. See SERVER-TOKENS.md for operation fields and permissions. No host/global operations are allowed; job_status is restricted to this token's accepted jobs. Transfers (server_transfer_preflight, transfer_server_content) involve two servers: the token must list both, with files.read and view (preflight) or files.write (transfer); Full access covers all.","security":[{"ServerToken":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["operation"],"properties":{"operation":{"type":"string","enum":["server_capabilities","server_detail","server_logs","server_log_history","server_files","server_action","server_console","server_settings","update_server_settings","set_native_memory","set_native_cpu","set_native_start_on_boot","set_native_browser_listing","change_native_runtime","list_backups","server_backup_download","restore_backup","trash_backup","restore_trashed_backup","set_backup_policy","prune_backups","set_native_extra_ports","server_marketplace_search","server_marketplace_project","install_server_marketplace_content","purge_backup_trash","set_server_network_exposure","trash_native_server","server_transfer_preflight","transfer_server_content","job_status"]},"instance_id":{"type":"string"},"job_id":{"type":"string"}}},"examples":{"stop":{"value":{"operation":"server_action","instance_id":"helix:EXACT-UUID","action":"stop"}},"files":{"value":{"operation":"server_files","instance_id":"helix:EXACT-UUID","request":{"action":"list","path":"","limit":50}}}}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Operation response or job ID; check job completion separately"},"401":{"description":"Invalid, expired or revoked token"},"403":{"description":"Server, operation or permission is outside token scope"},"429":{"description":"Token request rate exceeded"}}}
     },
     "/automation/jobs": {
       "get":{"operationId":"listScopedServerJobs","summary":"List the last 256 jobs accepted through this token","security":[{"ServerToken":[]}],"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token-owned job IDs and server IDs"},"401":{"description":"Invalid token"}}}
@@ -2778,6 +2778,108 @@
         }
       }
     },
+    "/servers/{instance_id}/transfer/preflight": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdTransferPreflight",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Show what copying parts of this server onto another Helix server would do, without changing anything",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "target_id",
+                  "parts"
+                ],
+                "properties": {
+                  "target_id": {
+                    "type": "string"
+                  },
+                  "parts": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/TransferPart"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/transfer": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdTransfer",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Copy parts of this server onto another Helix server as a job: backs up the target, stops it, copies, restarts it, and restores the backup if it does not start",
+        "x-helix-capability": "games.manage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerTransferSpec"
+              }
+            }
+          }
+        }
+      }
+    },
     "/servers/{instance_id}/backups/{backup_id}/download": {
       "parameters": [
         {
@@ -4336,6 +4438,53 @@
           },
           "provider": {
             "$ref": "#/components/schemas/ModpackProvider"
+          }
+        }
+      },
+      "TransferPart": {
+        "type": "string",
+        "enum": [
+          "plugins",
+          "plugin_data",
+          "mods",
+          "configs",
+          "server_properties",
+          "datapacks",
+          "player_lists",
+          "worlds"
+        ],
+        "description": "plugins = plugin JARs and config files without databases or player data; plugin_data = everything under plugins/; mods = mods/*.jar; configs = bukkit/spigot/paper/purpur files and config/; server_properties = gameplay settings (the target keeps its ports, RCON, level name, seed, player limit, MOTD and whitelist); datapacks = the world's datapacks; player_lists = whitelist, ops and bans; worlds = replaces the target's worlds"
+      },
+      "ServerTransferSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "target_id",
+          "parts",
+          "confirmation_name"
+        ],
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "description": "Helix-managed target server, for example helix:UUID"
+          },
+          "parts": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/TransferPart"
+            }
+          },
+          "confirmation_name": {
+            "type": "string",
+            "description": "The target server's exact name"
+          },
+          "remove_missing_jars": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also delete target plugin or mod JARs that the source does not have"
           }
         }
       },
