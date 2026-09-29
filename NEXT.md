@@ -4,7 +4,7 @@ Last updated: 2026-08-29
 
 ## Current resumption point
 
-Helix is a working private-LAN 1.0 release with a native Docker-backed Minecraft manager,
+Helix is a working private-LAN release with a native Docker-backed Minecraft manager,
 an optional separate AMP bridge, persistent console history, recoverable
 backups, multi-layout Home, Hooks, storage analysis, guarded selected-package
 updates, host controls, and an optional non-root terminal.

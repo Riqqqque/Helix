@@ -76,6 +76,40 @@ console archives and backups are bounded on disk; backup deletion moves exact
 known artifacts into recoverable trash. File deletion also uses configured
 trash rather than claiming an irreversible delete.
 
+### Server API tokens at rest
+
+Helix authenticates server API tokens with a one-way fingerprint. So the owner
+can view a token again, it also keeps an encrypted copy (XChaCha20-Poly1305,
+envelope-encrypted under a master key). That key lives in `secrets/` in the data
+folder, outside the `state/` database folder, so a copied state database or a
+`helixctl backup-state` snapshot does not reveal any token; someone with the
+whole data volume could. Viewing a token needs the owner's current password and
+is audited. Revoking or rotating a token deletes its stored copy. Changing the
+owner password invalidates every token.
+
+### Game server safety
+
+Game servers run in containers under their own numeric users. The broker never
+follows links that a server places in its own folder when it reads or writes
+there, and a server's Files tab cannot leave that server's folder. Copying a
+setup between servers reads the source inside a locked-down container running
+as the source's user, with no network, so links in a server folder cannot reach
+host files.
+
+Server software updates, modpack updates, restores, and copies between servers
+all take a verified full backup first and restore it automatically if the server
+does not start afterwards.
+
+### Broker startup
+
+The broker checks every configured storage root at startup. A root that no
+longer exists — for example after uninstalling AMP — is skipped with a warning
+in the broker's journal instead of stopping the broker. A root that exists but
+is unsafe, such as a symbolic link, still stops it. If the dashboard shows the
+broker as unavailable, check `journalctl -u helix-privd` on the host.
+
+### State snapshots
+
 `helixctl backup-state` creates a verified critical-state snapshot. Native
 backup creation and restore exist, but complete clean-host, interrupted-write,
 disk-full, and off-host recovery drills are not finished. Helix must not be the

@@ -4,95 +4,103 @@
 
 # Helix Wiki
 
-Helix is a local-first Linux dashboard for the host, its files, and game
-servers. It pairs a fast web interface with an unprivileged daemon and a narrow
-typed Linux broker, so useful host controls do not require a general root shell.
+Helix is one private dashboard for a Linux host, its storage, and your game
+servers. A fast web interface talks to an unprivileged daemon and a narrow, typed
+Linux broker, so useful host controls never require a general root shell.
 
-> Helix 1.0 is a private-LAN release. Keep it on a network you control, do not
-> expose it directly to the public internet, and do not trust it as the only
+> [!CAUTION]
+> Helix is a private-LAN release. Keep it on a network you control, do not expose
+> the dashboard directly to the public internet, and do not treat it as the only
 > copy of important data.
-
-The source is licensed under `AGPL-3.0-or-later`. Open source availability does
-not imply production support or a completed security review.
-
-## Why it is useful
-
-Helix brings the common jobs for one server into one place:
-
-- multiple exportable Home layouts with drag-and-drop/resizable status, clock,
-  weather, graphs, Docker, paged-note, shortcut, Strand, and Globe widgets plus color controls;
-  pin the site to open Home, or use full-screen Home;
-- live host, storage, network, service, process, Docker, and Helix resource views;
-- a Security center for explained, confirmed host and Helix protections;
-- mounted-drive browsing, bounded text editing, recoverable deletion, and
-  cancellable largest-file/folder analysis;
-- a native Docker-backed manager for Minecraft (Paper, Purpur, Folia, Leaves,
-  Fabric, Forge, NeoForge, Quilt, Pufferfish, Vanilla, custom JAR), V Rising,
-  Valheim, and Terraria;
-- [Valheim world settings and mods](https://github.com/Riqqqque/Helix/wiki/Valheim),
-  including crossplay, Thunderstore dependencies, manual updates and full backups;
-- persistent bounded console history, settings with restart guidance, backups,
-  a compatibility-aware Modrinth marketplace, and server-safe Modrinth or
-  CurseForge modpack create;
-- optional AMP discovery and control without pretending AMP instances are
-  Helix-native;
-- Hooks for Plex, AMP, Tailscale, Pterodactyl Wings, Jellyfin, Docker, and
-  Portainer, including eligible one-click Tailscale/Jellyfin installs;
-- an optional current-password-gated non-root Linux PTY;
-- Strands: drop in someone else's `.strand.zip` (or pack your own) for isolated
-  pages/widgets that can call metrics, namespaced storage, or an allowlisted
-  HTTPS API; and
-- selected APT updates, immediate/recurring host reboot, UFW safety activation,
-  and exact Helix start-on-boot controls with explicit preflight/confirmation.
-
-The dashboard is the control plane, not the game process or player network
-path. Closing Helix does not stop a native game container. Actual player
-capacity still depends on the host, world, server software, configuration, and
-mods or plugins.
 
 ## Start here
 
-On 64-bit systemd Linux, clone the source and run
-`./scripts/install-from-source.sh`. On a terminal that one command walks
-through yes/no setup and puts `helixd` on loopback (another port if 8080 is
-taken). Create the owner with your own display name. Host files, firewall,
-packages, and native game servers still need the broker from the container
-deployment guide. Nothing ships with a demo city or demo server.
+New to Helix? On 64-bit systemd Linux, clone the source and run
+`./scripts/install-from-source.sh`. The script walks through a few yes/no
+questions and puts `helixd` on loopback. Game servers, host files, the firewall,
+and packages also need the broker from the container deployment guide.
 
-- [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started)
-- [How Helix Works](https://github.com/Riqqqque/Helix/wiki/How-Helix-Works)
-- [Dashboard and Home](https://github.com/Riqqqque/Helix/wiki/Dashboard-and-Home)
-- [Storage and Files](https://github.com/Riqqqque/Helix/wiki/Storage-and-Files)
-- [Servers and Marketplace](https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace)
-- [Copy a server into Helix](https://github.com/Riqqqque/Helix/wiki/Server-Migration)
-- [Network, Host, and Updates](https://github.com/Riqqqque/Helix/wiki/Network-Host-and-Updates)
-- [Hooks and Terminal](https://github.com/Riqqqque/Helix/wiki/Hooks-and-Terminal)
-- [Architecture](https://github.com/Riqqqque/Helix/wiki/Architecture)
-- [Security and Recovery](https://github.com/Riqqqque/Helix/wiki/Security-and-Recovery)
-- [Game Hosting and Capacity](https://github.com/Riqqqque/Helix/wiki/Game-Hosting-and-Capacity)
-- [Building Strands](https://github.com/Riqqqque/Helix/wiki/Building-Strands)
-- [Roadmap and Status](https://github.com/Riqqqque/Helix/wiki/Roadmap-and-Status)
+1. [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started) — install, first sign-in, and the broker.
+2. [Dashboard and Home](https://github.com/Riqqqque/Helix/wiki/Dashboard-and-Home) — layouts, widgets, themes.
+3. [Servers and Marketplace](https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace) — create and run game
+   servers, plugins, mods, modpacks, ports, and backups.
 
-## Important limits
+## Game servers
 
-Broad/unattended package upgrades, public-network
-exposure, portable Wasm Strands, and native Strand sidecars are not implemented.
-Helix can apply a SHA-256-pinned GitHub release to itself from Host → Linux
-updates.
-Exact selected APT candidates do have a guarded path but no rollback claim.
-Helix can inspect UFW, manage exact owned allow rules, and separately enable
-inactive UFW only after preserving a verified SSH listener; it cannot configure
-a router or prove outside reachability. It can work behind an already configured
-private Tailscale route and install/start the exact service on eligible
-Debian/Ubuntu hosts, but it does not authenticate the tailnet or widen network
-trust.
+- [Servers and Marketplace](https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace) — Minecraft and every other
+  game: console, files, settings, ports, updates, backups, marketplace.
+- [Hytale](https://github.com/Riqqqque/Helix/wiki/Hytale) — sign-in, UDP ports, CurseForge mods, updates.
+- [Pumpkin](https://github.com/Riqqqque/Helix/wiki/Pumpkin) — the native Rust Minecraft server.
+- [Valheim](https://github.com/Riqqqque/Helix/wiki/Valheim) — world rules, crossplay, Thunderstore mods.
+- [Copy a server into Helix](https://github.com/Riqqqque/Helix/wiki/Server-Migration) — bring an AMP or Pterodactyl
+  server over with the same version and port.
+- [Copying Between Servers](https://github.com/Riqqqque/Helix/wiki/Copying-Between-Servers) — promote a test setup to
+  your public server.
+- [Game Hosting and Capacity](https://github.com/Riqqqque/Helix/wiki/Game-Hosting-and-Capacity) — what to expect from
+  your hardware.
 
-Modpack creation searches Modrinth, and CurseForge when an owner API key is
-saved in Settings → Catalogs. If you use CurseForge, this host needs a normal
-ISP IP; VPS and VPN exits are often blocked. Create pins a supported loader
-(Fabric, Forge, NeoForge, or Quilt) and starts an isolated server. The result is
-a server-safe subset, not a full client copy. Broad pack matrices and every
-upstream failure mode stay open.
+## Automation and AI
 
-The authoritative implementation ledger is
-[`PROGRESS.md`](https://github.com/Riqqqque/Helix/blob/main/PROGRESS.md).
+- [Server API Tokens](https://github.com/Riqqqque/Helix/wiki/Server-API-Tokens) — Full access in one click, view a token
+  again, and hand a token to an AI assistant safely.
+- [API and Integrations](https://github.com/Riqqqque/Helix/wiki/API-and-Integrations) — the HTTP API, OpenAPI contract,
+  and Python client.
+- [Building Strands](https://github.com/Riqqqque/Helix/wiki/Building-Strands) — shareable dashboard pages and widgets.
+
+## Host and operations
+
+- [Storage and Files](https://github.com/Riqqqque/Helix/wiki/Storage-and-Files) — browse, edit, and find what fills a
+  drive.
+- [Network, Host, and Updates](https://github.com/Riqqqque/Helix/wiki/Network-Host-and-Updates) — addresses, firewall,
+  packages, reboots, and updating Helix.
+- [Hooks and Terminal](https://github.com/Riqqqque/Helix/wiki/Hooks-and-Terminal) — Plex, Tailscale, Jellyfin, Wings,
+  Docker, and the optional terminal.
+- [Security and Recovery](https://github.com/Riqqqque/Helix/wiki/Security-and-Recovery) — boundaries, backups, and
+  what to do when something breaks.
+
+## Under the hood
+
+- [How Helix Works](https://github.com/Riqqqque/Helix/wiki/How-Helix-Works) — the request path from browser to host.
+- [Architecture](https://github.com/Riqqqque/Helix/wiki/Architecture) — the crates and their responsibilities.
+- [Development and Testing](https://github.com/Riqqqque/Helix/wiki/Development-and-Testing) — build and test locally.
+- [Roadmap and Status](https://github.com/Riqqqque/Helix/wiki/Roadmap-and-Status) — releases so far and what comes
+  next.
+
+## What Helix can do
+
+- Run Minecraft (Paper, Purpur, Folia, Leaves, Pufferfish, Fabric, Quilt, Forge,
+  NeoForge, Vanilla, Pumpkin, or your own JAR), Hytale, Valheim, V Rising,
+  Terraria and tModLoader, Palworld, Satisfactory, Project Zomboid, 7 Days to
+  Die, Rust, Sons of the Forest, Factorio, Don't Starve Together, and Vintage
+  Story in isolated containers.
+- Install plugins, mods, and modpacks from Modrinth and CurseForge, filtered to
+  the server's software and version.
+- Update, repair, back up, and restore servers with automatic rollback.
+- Open extra ports with presets that match each game and server software.
+- Copy a finished setup from one server to another, and bring servers in from
+  AMP or Pterodactyl without changing their address.
+- Hand scoped, viewable API tokens to scripts and AI assistants.
+- Watch the host, clean Docker safely, manage the firewall, apply selected
+  package updates, schedule reboots, and update Helix itself from a pinned
+  release.
+- Arrange a Home page of widgets, notes, and shortcuts that follows you between
+  browsers.
+
+The dashboard manages servers; it is not the game process or the player's
+network path. Closing Helix does not stop a server, and player capacity still
+depends on the host, the world, the server software, and its plugins or mods.
+
+## Honest limits
+
+Helix does not expose the dashboard publicly, configure routers without
+compatible UPnP, prove a game port is reachable from outside, perform broad
+unattended upgrades, or replace off-host backups. Exact selected APT candidates
+have a guarded path with no rollback promise. Tailscale is installed and started
+on eligible hosts, but you sign in yourself.
+
+What is verified and what is still open is tracked in
+[`PROGRESS.md`](https://github.com/Riqqqque/Helix/blob/main/PROGRESS.md). Release
+notes are on the [Releases](https://github.com/Riqqqque/Helix/releases) page.
+
+The source is licensed under `AGPL-3.0-or-later`. Open source availability does
+not imply production support or a completed security review.

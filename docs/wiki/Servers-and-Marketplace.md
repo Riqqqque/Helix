@@ -5,13 +5,23 @@ For SSH, scripts, and external tools, see
 It explains exact name/UUID discovery, host file paths, and safe file replacement
 without exposing server credentials.
 
-For the native Rust server, see [Pumpkin setup, compatibility, ports, and recovery](Pumpkin).
+For the native Rust server, see [Pumpkin setup, compatibility, ports, and recovery](https://github.com/Riqqqque/Helix/wiki/Pumpkin).
 
 ## Choosing a game
 
-## Runtime versions and repairs
+**New server** shows every game Helix can run. Minecraft offers Paper, Purpur,
+Folia, Leaves, Pufferfish, Fabric, Quilt, Forge, NeoForge, Vanilla, Pumpkin, a
+modpack, or your own JAR. The other native games are
+[Hytale](https://github.com/Riqqqque/Helix/wiki/Hytale), [Valheim](https://github.com/Riqqqque/Helix/wiki/Valheim), V Rising, Terraria and tModLoader,
+Palworld, Satisfactory, Project Zomboid, 7 Days to Die, Rust, Sons of the Forest,
+Factorio, Don't Starve Together, and Vintage Story. Each runs in its own
+container under its own numeric user and gets ports, settings, console, files,
+and backups that fit that game.
 
-### Applying Minecraft settings
+The Servers list only shows filter buttons for games you actually have. A server
+that is stopped shows **Stopped**.
+
+## Minecraft settings
 
 Flip a switch or edit a value, then choose **Save settings** to apply it on the
 next restart, or **Save & restart** to do both. Unsaved edits are not applied by
@@ -32,16 +42,29 @@ Game mode is the default for new players; existing players and world difficulty
 can also be controlled by world data or plugins. File verification is not a
 guarantee that third-party mods respect a setting.
 
-Open a native Minecraft server and choose **Advanced → Server software**.
-**Repair current runtime** reinstalls the exact runtime and loader libraries.
-**Choose version / update build** lets you select a published version without
-recreating the server. Both require confirmation and a full safety backup.
-Running servers restart and roll back the full backup if startup fails. Stopped
-servers stay stopped and need a manual start to test; use **Backups & restore**
-if that start fails. Modpacks keep their pinned Minecraft/loader pair and update
-through the pack controls. Custom JARs need a backed-up manual replacement.
-World downgrades are blocked; restore a matching backup or use a separate server.
-See [the full runtime guide](https://github.com/Riqqqque/Helix/blob/main/docs/SERVER-RUNTIME.md).
+## Server software updates
+
+Open a Minecraft server and choose **Advanced → Server software**. Pick one of
+three choices, tick the confirmation, and start:
+
+- **Update build** installs the newest build of the Minecraft version you already
+  run. Worlds, plugins, mods, and settings stay. If you already have the newest
+  build, Helix says so and changes nothing — no backup, no restart.
+- **Change version** moves to a newer Minecraft version. Check that your plugins
+  and mods support it first. Downgrades are refused because they damage worlds.
+- **Repair files** downloads the exact version and build you have again and
+  rebuilds loader libraries, for a damaged or edited server JAR.
+
+Every choice makes a full backup first. A running server restarts on the new
+files and is checked; if it does not start, Helix restores the backup
+automatically. A stopped server stays stopped, so start it yourself and restore
+from **Backups** if that start fails. The result says exactly what changed.
+
+Pumpkin tracks releases instead of builds, so it offers **Change release** and
+**Repair files**. Modpacks keep their Minecraft and loader versions together and
+update the whole pack from **Check for update**. Custom JARs are replaced by hand
+after a backup. See
+[the full runtime guide](https://github.com/Riqqqque/Helix/blob/main/docs/SERVER-RUNTIME.md).
 
 ## Creating servers
 
@@ -201,19 +224,24 @@ auto-purges. This is not an off-host backup.
 
 ## Backups
 
-**Back up now** stops a running server, archives the data folder, then starts it
-again. Restore replaces the live data with that archive.
+**Back up now** stops a running server, archives its data folder, verifies the
+archive, then starts the server again. **Restore** replaces the live data with a
+backup and keeps a safety copy of what it replaced.
 
-You can delete any backup at any time. The default delete moves it to
-**Deleted backups**, where **Undo** puts it back. **Delete forever** (from the
-active list or from trash, after a confirm) removes it from disk.
+**Automatic cleanup** sets how many backups to keep (1–50, or 0 to keep all) and
+how old they may get (1–365 days, or 0 for no limit). After each backup, or when
+you choose **Apply rules now**, extras move to the trash, oldest first. The
+backup that just finished is always kept.
 
-Each server can keep a maximum number of backups (1–50, or 0 for no count
-limit) and/or a maximum age in days (1–365, or 0 for no age limit). After a
-backup, or when you save / apply those rules, extras move to trash oldest first.
-The newest copy from the backup that just finished is kept even if the count
-would otherwise drop it. Trash is not auto-purged; delete forever is always a
-person clicking it.
+Deleting a backup moves it to **Trash**, where **Undo** puts it back and the
+bin deletes it forever. The Trash header shows how many backups it holds and how
+much disk they use, and each entry shows when the backup was originally made.
+Helix warns once the trash passes 20 GiB. **Empty trash** deletes every trashed
+backup for that server after you confirm. Helix never empties the trash on its
+own.
+
+Backups live on the same disk as the server. Copy important worlds somewhere
+else too.
 
 ## Server icons
 
@@ -359,6 +387,34 @@ If AMP already claims a port, choose a free port or change it in AMP first.
 Helix automatically skips AMP-owned ports during allocation and never changes
 AMP instance files. Old router forwards, including AMP forwards, must be changed
 in the router. For Minecraft, enable the whitelist to restrict who can join.
+
+## Ports
+
+Each server's **Overview** has a **Ports** card. The game port is shown with its
+real protocol — TCP for Minecraft Java, UDP (QUIC) for Hytale, UDP for most
+Steam games — and is managed by Helix.
+
+**Add port** opens another port for anything in the server that listens on its
+own, such as a voice chat plugin, a web map, or Bedrock players through Geyser.
+Each extra port is published on the host with the same number inside the
+container, as TCP, UDP, or both. The presets match the server software:
+
+- Paper, Purpur, Folia, Leaves, and Pufferfish offer Simple Voice Chat (UDP
+  24454), BlueMap (TCP 8100), Dynmap (TCP 8123), and Geyser (UDP 19132), with
+  the matching `plugins/` config path.
+- Fabric, Quilt, Forge, and NeoForge offer the mod versions with their
+  `config/` path.
+- Vanilla, Pumpkin, Hytale, and the other games get no Minecraft presets; add the
+  port a mod or tool documents.
+
+**Save ports** recreates the container and restarts the server, so players are
+disconnected for about a minute. The port must be free on the host: if another
+program already uses it, Helix says so instead of failing silently. Remember to
+set the same port in the plugin's own config, and forward it on your router for
+players outside your network.
+
+Ports you add but have not saved stay on the card until you save or discard
+them, even while the page refreshes.
 
 ## Port pools
 

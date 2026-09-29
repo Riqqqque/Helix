@@ -466,6 +466,14 @@ master credential may be unrecoverable. Reserved schema fields are not proof a
 workflow exists.
 
 Passwords and verification-only tokens are hashed, not encrypted for recovery.
+Server API tokens are the one exception, by owner request: each token is still
+authenticated by a domain-separated verifier, and an encrypted copy is stored in
+the secret store so the owner can view it again after re-entering the current
+password (audited as `api_token.revealed`). The store's master credential is
+generated on first use and kept in `secrets/token-vault.key` (mode 0600, in a
+0700 folder) under the data directory, outside `state/`, so a state database copy
+or `helixctl backup-state` snapshot alone does not reveal tokens; the whole data
+volume does. Revocation and rotation delete the stored copy.
 Secret types avoid revealing debug/display output, while documentation remains
 honest that copies can still exist in allocators, libraries, kernels, or a
 compromised process.

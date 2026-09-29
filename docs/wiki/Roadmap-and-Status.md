@@ -3,35 +3,51 @@
 Helix keeps plans and evidence separate:
 
 - [`PROGRESS.md`](https://github.com/Riqqqque/Helix/blob/main/PROGRESS.md) records
-  implemented behavior and its validation level.
+  what is implemented and how well it is verified.
+- [`CHANGELOG.md`](https://github.com/Riqqqque/Helix/blob/main/CHANGELOG.md) and
+  the [Releases](https://github.com/Riqqqque/Helix/releases) page list every
+  change by version.
 - [`NEXT.md`](https://github.com/Riqqqque/Helix/blob/main/NEXT.md) lists the next
   concrete validation work.
 - [`ROADMAP.md`](https://github.com/Riqqqque/Helix/blob/main/ROADMAP.md) describes
   dependency order, not promises or dates.
 
-The current private-LAN 1.0 release includes the authenticated dashboard, modular Home,
-typed Linux broker, configured-root storage tools, native Docker-backed
-Minecraft manager, separate AMP bridge, persistent console history, recoverable
-backups, safe host controls, network/UFW inventory and narrow owned-rule
-management, guarded selected-package updates, Hooks, an optional non-root host
-terminal, and a compatibility-aware Modrinth marketplace. A narrow “Start with a modpack” path creates
-declared-hash-verified server-safe subsets from listed stable server-capable
-Fabric `.mrpack` releases.
+## Where Helix is today
+
+Helix is a private-LAN release: an authenticated dashboard, a typed Linux
+broker, native game servers in Docker, storage and host tools, network and UFW
+management, guarded package updates, Hooks, an optional non-root terminal,
+installable Strands, scoped server API tokens, and a SHA-256-pinned updater.
 
 Public-internet release remains blocked on supported-host lifecycle matrices,
-independent security review, recovery and fault drills, live disposable UFW and
-reboot validation, independently signed artifacts, accessibility/mobile
-review, and real Minecraft version matrices.
+an independent security review, recovery and fault drills, independently signed
+artifacts, accessibility and mobile review, and broad game-version matrices.
 
-Broad/unattended Package Apply and package rollback are
-unavailable. Exact selected APT candidates can be applied after strict preflight
-and explicit confirmation. Helix can apply a digest-pinned GitHub release to
-itself. Public exposure is not supported. Modpack create is a server-safe subset from
-Modrinth or CurseForge catalogs (CurseForge needs an owner API key and a normal
-ISP exit on this host), not a full client copy. Unknown loaders
-and every upstream pack remain unclaimed.
+## Release history
 
-Owners can install UI-only Strands from a zip or https zip URL after reviewing
-the exact host calls. Portable Wasm, native sidecars, signatures, and a
-Helix-operated store are still not a runtime. Modular Home widgets are built
-into Helix; a Strand can also be pinned there when it declares `helix:ui.widget`.
+| Release | Highlights |
+| --- | --- |
+| 1.7.1 | The broker keeps running when a configured storage folder was removed, such as after uninstalling AMP |
+| 1.7.0 | [Copy a setup between servers](https://github.com/Riqqqque/Helix/wiki/Copying-Between-Servers) from the dashboard or API, with backup and automatic rollback |
+| 1.6.0 | **View token** with password check and encrypted copies, **Full access** tokens, marketplace/network/removal permissions for tokens, dashboard preferences sync again |
+| 1.5.2 | Ports added on the Ports card no longer disappear when the page refreshes |
+| 1.5.1 | Tidier server copy dialog, rounded memory sizes, loose launcher JARs skipped |
+| 1.5.0 | [Server imports](https://github.com/Riqqqque/Helix/wiki/Server-Migration) keep the Minecraft version, the port, and add-on ports; panel `server-ip` cleared |
+| 1.4.0 | Ports that match each game and software, three-choice software updates, backup trash size and **Empty trash**, marketplace caching, GUI polish across every page |
+| 1.3.0 | Extra container ports with presets for voice chat, web maps, and Geyser |
+| 1.2.0 | [Hytale](https://github.com/Riqqqque/Helix/wiki/Hytale) servers with sign-in, CurseForge mods, and updates; a security and stability review |
+| 1.1.1 | The in-app updater works on real hosts |
+| 1.1.0 | Server API tokens with expiry and rotation, server file APIs and OpenAPI, safe Docker cleanup, Valheim, Pumpkin, runtime repair and version choice |
+| 1.0.0 | First private-LAN release |
+
+## What is intentionally not there
+
+- Broad or unattended package upgrades and package rollback. Exact selected APT
+  candidates can be applied after strict preflight and confirmation.
+- Public exposure of the dashboard.
+- A full client modpack copy. Modpack servers are a server-safe subset from
+  Modrinth or CurseForge (CurseForge needs your own API key and a normal ISP
+  exit on this host).
+- Portable Wasm Strands, native sidecars, Strand signatures, or a Helix-operated
+  store. Owners install UI-only Strands from a zip after reviewing the exact host
+  calls they declare.
