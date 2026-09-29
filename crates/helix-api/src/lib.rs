@@ -10,6 +10,7 @@ mod static_root;
 mod strand_net;
 mod strands;
 mod terminal;
+mod token_vault;
 mod weather;
 
 use axum::{
@@ -87,6 +88,7 @@ pub struct ApiState {
     broker: Option<BrokerClient>,
     terminal: Option<terminal::TerminalConnector>,
     terminal_tickets: terminal::TerminalTicketStore,
+    pub(crate) token_vault: Option<Arc<token_vault::TokenVault>>,
     #[cfg(test)]
     overview_test_gate: Option<OverviewTestGate>,
 }
@@ -124,9 +126,18 @@ impl ApiState {
             broker,
             terminal: None,
             terminal_tickets: terminal::TerminalTicketStore::default(),
+            token_vault: None,
             #[cfg(test)]
             overview_test_gate: None,
         })
+    }
+
+    /// Enables viewing server API tokens after creation. Without it, tokens still work
+    /// but are shown only once.
+    pub fn enable_token_vault(&mut self, data_dir: &std::path::Path) -> Result<(), String> {
+        let vault = token_vault::TokenVault::load_or_create(data_dir, self.databases.state())?;
+        self.token_vault = Some(Arc::new(vault));
+        Ok(())
     }
 
     pub fn with_terminal_socket(
@@ -908,6 +919,7 @@ enum PrimaryDashboardSection {
     Host,
     Security,
     Terminal,
+    Machines,
     Servers,
     Hooks,
     Strands,
@@ -1059,6 +1071,7 @@ impl Default for DashboardPreferences {
                 PrimaryDashboardSection::Host,
                 PrimaryDashboardSection::Security,
                 PrimaryDashboardSection::Terminal,
+                PrimaryDashboardSection::Machines,
                 PrimaryDashboardSection::Servers,
                 PrimaryDashboardSection::Hooks,
                 PrimaryDashboardSection::Strands,
@@ -1252,6 +1265,19 @@ fn reconcile_legacy_home_preferences(preferences: &mut DashboardPreferences) {
     }
     if !preferences
         .navigation_order
+        .contains(&PrimaryDashboardSection::Machines)
+    {
+        let insertion = preferences
+            .navigation_order
+            .iter()
+            .position(|section| *section == PrimaryDashboardSection::Servers)
+            .unwrap_or(preferences.navigation_order.len());
+        preferences
+            .navigation_order
+            .insert(insertion, PrimaryDashboardSection::Machines);
+    }
+    if !preferences
+        .navigation_order
         .contains(&PrimaryDashboardSection::Hooks)
     {
         preferences
@@ -1307,7 +1333,7 @@ fn validate_dashboard_preferences(preferences: &DashboardPreferences) -> Result<
     if !matches!(
         preferences.metrics_refresh_ms,
         1_000 | 2_000 | 5_000 | 10_000 | 30_000
-    ) || preferences.navigation_order.len() != 11
+    ) || preferences.navigation_order.len() != 12
         || preferences.home_widgets.len() > 32
         || preferences.home_templates.is_empty()
         || preferences.home_templates.len() > 8
@@ -1328,17 +1354,18 @@ fn validate_dashboard_preferences(preferences: &DashboardPreferences) -> Result<
             PrimaryDashboardSection::Hooks => 1 << 8,
             PrimaryDashboardSection::Strands => 1 << 9,
             PrimaryDashboardSection::Globe => 1 << 10,
+            PrimaryDashboardSection::Machines => 1 << 11,
         };
         if section_mask & bit != 0 {
             return Err(());
         }
         section_mask |= bit;
     }
-    if section_mask != 0b111_1111_1111 {
+    if section_mask != 0b1111_1111_1111 {
         return Err(());
     }
     let mut hidden_mask = 0_u16;
-    if preferences.hidden_pages.len() > 11 {
+    if preferences.hidden_pages.len() > 12 {
         return Err(());
     }
     for section in &preferences.hidden_pages {
@@ -1354,6 +1381,7 @@ fn validate_dashboard_preferences(preferences: &DashboardPreferences) -> Result<
             PrimaryDashboardSection::Hooks => 1 << 8,
             PrimaryDashboardSection::Strands => 1 << 9,
             PrimaryDashboardSection::Globe => 1 << 10,
+            PrimaryDashboardSection::Machines => 1 << 11,
         };
         if hidden_mask & bit != 0 {
             return Err(());
@@ -4404,6 +4432,127 @@ mod tests {
         assert_eq!(revoked_rotation.status(), StatusCode::NOT_FOUND);
     }
 
+    #[tokio::test]
+    async fn owners_can_view_a_token_again_after_proving_their_password() {
+        let key_dir = tempfile::tempdir().expect("vault key directory");
+        let key_path = key_dir.path().to_path_buf();
+        let context = test_app_with_state(DatabaseStatus::Ok, move |mut state| {
+            state.enable_token_vault(&key_path).expect("vault");
+            state
+        })
+        .await;
+        let client = claim_owner(&context, &install_bootstrap(&context)).await;
+        let now = i64::try_from(unix_timestamp_ms()).unwrap();
+        let owner = context
+            .databases
+            .state()
+            .credential_by_login("owner", now)
+            .unwrap()
+            .unwrap();
+        let first = OpaqueToken::generate().unwrap();
+        let id = context
+            .databases
+            .state()
+            .create_api_token(helix_state::NewApiToken {
+                user_id: owner.user_id.clone(),
+                auth_version: owner.auth_version,
+                verifier: *first.verification_hash(TokenDomain::ServerApi).as_bytes(),
+                name: "plugin deploys".into(),
+                servers: vec!["helix:one".into()],
+                permissions: vec!["all".into()],
+                now,
+                expires_at: i64::MAX,
+            })
+            .unwrap();
+        let listed = |context: &TestApp, client: &AuthClient| {
+            let app = context.app.clone();
+            let request = with_csrf(
+                with_cookie(get("/api/v1/auth/server-tokens"), &client.cookie),
+                &client.csrf,
+            );
+            async move { response_json(app.oneshot(request).await.unwrap()).await }
+        };
+        assert_eq!(
+            listed(&context, &client).await["tokens"][0]["viewable"],
+            false
+        );
+        let rotated = context
+            .app
+            .clone()
+            .oneshot(with_csrf(
+                with_cookie(
+                    post_json(
+                        &format!("/api/v1/auth/server-tokens/{id}/rotate"),
+                        &json!({}),
+                        61,
+                    ),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rotated.status(), StatusCode::OK);
+        let rotated = response_json(rotated).await;
+        assert_eq!(rotated["viewable"], true);
+        let secret = rotated["token"].as_str().unwrap().to_owned();
+        let listing = listed(&context, &client).await;
+        assert_eq!(listing["tokens"][0]["viewable"], true);
+        assert!(!listing.to_string().contains(&secret));
+        let reveal_uri = format!("/api/v1/auth/server-tokens/{id}/reveal");
+        let reveal = |password: &str, octet: u8| {
+            with_csrf(
+                with_cookie(
+                    post_json(&reveal_uri, &json!({"current_password": password}), octet),
+                    &client.cookie,
+                ),
+                &client.csrf,
+            )
+        };
+        let wrong = context
+            .app
+            .clone()
+            .oneshot(reveal("not-the-password", 62))
+            .await
+            .unwrap();
+        assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response_json(wrong).await["code"],
+            "current_password_rejected"
+        );
+        let shown = context
+            .app
+            .clone()
+            .oneshot(reveal(PASSWORD, 63))
+            .await
+            .unwrap();
+        assert_eq!(shown.status(), StatusCode::OK);
+        assert_eq!(shown.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(shown).await["token"], secret);
+        assert!(
+            context
+                .databases
+                .state()
+                .revoke_api_token(&owner.user_id, &id, now)
+                .unwrap()
+        );
+        let gone = context
+            .app
+            .clone()
+            .oneshot(reveal(PASSWORD, 64))
+            .await
+            .unwrap();
+        assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+        assert!(
+            context
+                .databases
+                .state()
+                .api_token_secret_id(&id)
+                .unwrap()
+                .is_none()
+        );
+    }
+
     async fn test_app(metrics: DatabaseStatus) -> TestApp {
         test_app_with_state(metrics, |state| state).await
     }
@@ -4817,6 +4966,7 @@ mod tests {
                 PrimaryDashboardSection::Host,
                 PrimaryDashboardSection::Security,
                 PrimaryDashboardSection::Terminal,
+                PrimaryDashboardSection::Machines,
                 PrimaryDashboardSection::Servers,
                 PrimaryDashboardSection::Hooks,
                 PrimaryDashboardSection::Strands,
@@ -4911,6 +5061,35 @@ mod tests {
                 .contains(&PrimaryDashboardSection::Globe)
         );
         assert!(validate_dashboard_preferences(&preferences).is_ok());
+    }
+
+    #[test]
+    fn dashboards_from_before_machines_still_save() {
+        let mut preferences = DashboardPreferences::default();
+        preferences
+            .navigation_order
+            .retain(|section| *section != PrimaryDashboardSection::Machines);
+        assert!(validate_dashboard_preferences(&preferences).is_err());
+        reconcile_legacy_home_preferences(&mut preferences);
+        let machines = preferences
+            .navigation_order
+            .iter()
+            .position(|section| *section == PrimaryDashboardSection::Machines);
+        let servers = preferences
+            .navigation_order
+            .iter()
+            .position(|section| *section == PrimaryDashboardSection::Servers);
+        assert_eq!(machines.map(|index| index + 1), servers);
+        assert!(validate_dashboard_preferences(&preferences).is_ok());
+        let parsed: DashboardPreferences = serde_json::from_value(json!({
+            "navigationOrder": ["overview","home","storage","network","host","security","terminal","machines","servers","hooks","strands","globe"]
+        }).as_object().map(|order| {
+            let mut value = serde_json::to_value(DashboardPreferences::default()).expect("value");
+            value["navigationOrder"] = order["navigationOrder"].clone();
+            value
+        }).expect("value"))
+        .expect("the dashboard's twelve-page order parses");
+        assert!(validate_dashboard_preferences(&parsed).is_ok());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import render from 'preact-render-to-string';
 import { describe, expect, it } from 'vitest';
-import { ServerTokenSettings, catalog, tokenStatus } from './server-token-settings';
+import { ALL_PERMISSIONS, ServerTokenSettings, catalog, individualPermissions, permissionLabel, tokenStatus } from './server-token-settings';
 
 describe('server token settings', () => {
   it('loads token management on demand without exposing any credentials', () => {
@@ -30,5 +30,17 @@ describe('server token settings', () => {
     expect(tokenStatus(expired!, 100).label).toBe('Expired');
     expect(tokenStatus(invalid!, 100).usable).toBe(false);
     expect(tokenStatus(revoked!, 100).label).toBe('Revoked');
+  });
+
+  it('marks which tokens can be viewed again and names permissions plainly', () => {
+    const data = catalog({ permissions: ['view', 'files.write', 'all'], tokens: [
+      { id: 'one', name: 'AI', servers: ['helix:one'], permissions: ['all'], expires_at: null, revoked_at: null, viewable: true },
+      { id: 'two', name: 'Old', servers: ['helix:one'], permissions: ['view'], expires_at: null, revoked_at: null },
+    ] });
+    expect(data.tokens.map((t) => t.viewable)).toEqual([true, false]);
+    expect(permissionLabel(ALL_PERMISSIONS)).toBe('Full access');
+    expect(permissionLabel('files.write')).toBe('Write files');
+    expect(permissionLabel('something-new')).toBe('something-new');
+    expect(individualPermissions(data.permissions)).toEqual(['view', 'files.write']);
   });
 });

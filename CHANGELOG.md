@@ -4,6 +4,31 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.6.0 - 2026-09-28
+
+### Added
+
+- Server API tokens can be viewed again. **View token** asks for your dashboard
+  password, then shows the value. Helix keeps an encrypted copy (XChaCha20-Poly1305
+  via the existing secret store) whose key lives in `secrets/` under the data
+  directory, outside `state/`, so a copied state database or state backup does
+  not reveal tokens. Viewing is audited. Tokens made before this release have no
+  copy; rotate one once to make it viewable.
+- **Full access** token permission (`all`): every server permission on the
+  selected servers, including ones added later, in one click. Host controls stay
+  out of reach. Permissions also get **Select all** and plain names.
+- Tokens can now install marketplace plugins and mods (`files.write`), search the
+  marketplace (`view`), empty backup trash (`backups.write`), open a server to
+  the internet (`network`), and move a server to Removed servers (`remove`).
+  Creating a token with `network` or Full access needs the firewall permission.
+
+### Fixed
+
+- Dashboard preferences were never saved to the server ("Preference service
+  unavailable · using the browser copy") because the server did not know the
+  Machines page and rejected every save. Older dashboards that send the previous
+  page list are repaired instead of rejected.
+
 ## 1.5.2 - 2026-09-26
 
 ### Fixed

@@ -57,3 +57,20 @@
   .server-token-settings__actions { max-width: none; justify-content: flex-start; }
   .server-token-settings__actions small { text-align: left; }
 }
+
+.server-token-settings .button--small { height: 24px; padding: 0 9px; font-size: 9px; }
+.server-token-settings__legend-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.server-token-settings__legend-row legend { margin-bottom: 0; }
+.server-token-settings__full { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; }
+.server-token-settings__full:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); background: color-mix(in srgb, var(--accent) 9%, var(--bg)); }
+.server-token-settings__full input { flex: 0 0 auto; width: 15px; height: 15px; margin: 1px 0 0; accent-color: var(--accent); }
+.server-token-settings__full span { display: grid; gap: 4px; min-width: 0; }
+.server-token-settings__full strong { font-size: 11px; }
+.server-token-settings__full small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.server-token-settings__choices small.server-token-settings__hint { overflow: visible; color: var(--muted); font-family: inherit; white-space: normal; }
+.server-token-settings__actions .button { display: inline-flex; align-items: center; gap: 5px; }
+.server-token-settings__reveal { display: grid; gap: 6px; width: min(260px, 100%); }
+.server-token-settings__reveal input { height: 32px; padding: 0 10px; font-size: 10px; }
+.server-token-settings__reveal > div { display: flex; justify-content: flex-end; gap: 6px; }
+.server-token-settings__reveal small { text-align: left; }
+.server-token-settings__actions small.server-token-settings__reveal-error { color: var(--danger); }

@@ -1,7 +1,7 @@
 use crate::{ApiError, ApiState, auth, broker_value};
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, State, rejection::JsonRejection},
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -11,7 +11,7 @@ use helix_privd::{BrokerRequest, ServerFileRequest};
 use helix_state::{ApiTokenRecord, MAX_API_TOKEN_EXPIRY_DAYS, NewApiToken};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 const PERMISSIONS: &[&str] = &[
     "view",
@@ -27,13 +27,45 @@ const PERMISSIONS: &[&str] = &[
     "update",
     "backups.read",
     "backups.write",
+    "network",
+    "remove",
+    ALL,
 ];
+
+/// Grants every server permission, including ones added in later Helix releases.
+/// It still only reaches the servers listed on the token, never host controls.
+const ALL: &str = "all";
+
+fn grants(permissions: &[String], permission: &str) -> bool {
+    permissions.iter().any(|p| p == permission || p == ALL)
+}
+
+/// Capabilities the creator must already hold before handing a permission to a token.
+async fn require_delegable(
+    state: &ApiState,
+    headers: &HeaderMap,
+    permissions: &[String],
+) -> Result<(), ApiError> {
+    let has = |wanted: &str| {
+        permissions
+            .iter()
+            .any(|p| p == wanted || p.starts_with(&format!("{wanted}.")))
+    };
+    if has("backups") || has(ALL) {
+        auth::require_capability(state, headers, "games.backups.manage").await?;
+    }
+    if has("network") || has(ALL) {
+        auth::require_capability(state, headers, "network.firewall.write").await?;
+    }
+    Ok(())
+}
 
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
         .route("/auth/server-tokens", get(list).post(create))
         .route("/auth/server-tokens/{id}", delete(revoke))
         .route("/auth/server-tokens/{id}/rotate", post(rotate))
+        .route("/auth/server-tokens/{id}/reveal", post(reveal))
         .route("/automation/jobs", get(jobs))
         .route(
             "/automation/server",
@@ -49,7 +81,20 @@ fn now() -> i64 {
 }
 
 fn metadata(t: ApiTokenRecord) -> Value {
-    json!({"id":t.id,"name":t.name,"servers":t.servers,"permissions":t.permissions,"created_at":t.created_at,"expires_at":public_expiry(t.expires_at),"revoked_at":t.revoked_at,"last_used_at":t.last_used_at,"authorized":t.authorized})
+    json!({"id":t.id,"name":t.name,"servers":t.servers,"permissions":t.permissions,"created_at":t.created_at,"expires_at":public_expiry(t.expires_at),"revoked_at":t.revoked_at,"last_used_at":t.last_used_at,"authorized":t.authorized,"viewable":t.viewable && t.revoked_at.is_none()})
+}
+
+/// Stores an encrypted copy of a freshly issued token. Failure only means it is shown once.
+async fn remember_token(state: &ApiState, id: String, token: String) -> bool {
+    let Some(vault) = state.token_vault.clone() else {
+        return false;
+    };
+    let db = Arc::clone(&state.databases);
+    tokio::task::spawn_blocking(move || vault.remember(db.state(), &id, &token))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .is_some()
 }
 
 fn public_expiry(expires_at: i64) -> Option<i64> {
@@ -98,9 +143,7 @@ async fn create(
     auth::require_capability(&state, &headers, "games.manage").await?;
     auth::require_capability(&state, &headers, "games.view").await?;
     let Json(mut body) = body.map_err(auth::map_json_rejection)?;
-    if body.permissions.iter().any(|p| p.starts_with("backups.")) {
-        auth::require_capability(&state, &headers, "games.backups.manage").await?;
-    }
+    require_delegable(&state, &headers, &body.permissions).await?;
     if body.name.trim().is_empty()
         || body.name.len() > 80
         || body.name.chars().any(char::is_control)
@@ -157,8 +200,10 @@ async fn create(
         })
     })
     .await?;
+    let secret = token.encode().expose_secret().to_owned();
+    let viewable = remember_token(&state, id.clone(), secret.clone()).await;
     Ok(response(
-        json!({"id":id,"token":token.encode().expose_secret(),"expires_at":public_expiry(expires_at)}),
+        json!({"id":id,"token":secret,"expires_at":public_expiry(expires_at),"viewable":viewable}),
     ))
 }
 
@@ -202,24 +247,71 @@ async fn rotate(
     })
     .await?
     .ok_or(ApiError::NotFound)?;
-    if permissions
-        .iter()
-        .any(|permission| permission.starts_with("backups."))
-    {
-        auth::require_capability(&state, &headers, "games.backups.manage").await?;
-    }
+    require_delegable(&state, &headers, &permissions).await?;
     let token = OpaqueToken::generate().map_err(|_| ApiError::ServiceUnavailable)?;
     let verifier = *token.verification_hash(TokenDomain::ServerApi).as_bytes();
     let db = Arc::clone(&state.databases);
+    let rotated_id = id.clone();
     let changed = auth::run_blocking_state(&state.blocking_tasks, move || {
         db.state()
-            .rotate_api_token(&owner.user_id, &id, &verifier, now())
+            .rotate_api_token(&owner.user_id, &rotated_id, &verifier, now())
     })
     .await?;
     if !changed {
         return Err(ApiError::NotFound);
     }
-    Ok(response(json!({"token":token.encode().expose_secret()})))
+    let secret = token.encode().expose_secret().to_owned();
+    let viewable = remember_token(&state, id, secret.clone()).await;
+    Ok(response(json!({"token":secret,"viewable":viewable})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevealToken {
+    current_password: auth::SecretString,
+}
+
+/// Shows a stored token again after the owner re-enters their dashboard password.
+async fn reveal(
+    State(state): State<ApiState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<RevealToken>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    let owner = auth::authorize_terminal_for_capability(
+        &state,
+        peer.ip(),
+        &headers,
+        body.current_password,
+        "system.settings.write",
+    )
+    .await?;
+    let vault = state.token_vault.clone().ok_or(ApiError::NotFound)?;
+    let db = Arc::clone(&state.databases);
+    let token = auth::run_blocking_state(&state.blocking_tasks, move || {
+        let state = db.state();
+        let owned = state
+            .list_api_tokens(&owner.user_id)?
+            .into_iter()
+            .any(|entry| entry.id == id && entry.revoked_at.is_none());
+        if !owned {
+            return Ok(None);
+        }
+        let Some(secret_id) = state.api_token_secret_id(&id)? else {
+            return Ok(None);
+        };
+        let Ok(token) = vault.reveal(state, &secret_id) else {
+            return Ok(None);
+        };
+        state.audit_api_token_revealed(&owner.user_id, &id, now())?;
+        Ok(Some(token))
+    })
+    .await?
+    .ok_or(ApiError::NotFound)?;
+    Ok(response(json!({"token":token})))
 }
 
 fn bearer(headers: &HeaderMap) -> Result<OpaqueToken, ApiError> {
@@ -298,6 +390,11 @@ fn scope(request: &BrokerRequest) -> Option<(&str, &'static str)> {
         | SetNativeStartOnBoot { instance_id, .. }
         | SetNativeBrowserListing { instance_id, .. } => (instance_id, "settings"),
         ChangeNativeRuntime { instance_id, .. } => (instance_id, "update"),
+        ServerMarketplaceSearch { instance_id, .. }
+        | ServerMarketplaceProject { instance_id, .. } => (instance_id, "view"),
+        InstallServerMarketplaceContent { instance_id, .. } => (instance_id, "files.write"),
+        SetServerNetworkExposure { instance_id, .. } => (instance_id, "network"),
+        TrashNativeServer { instance_id, .. } => (instance_id, "remove"),
         ListBackups { instance_id } | ServerBackupDownload { instance_id, .. } => {
             (instance_id, "backups.read")
         }
@@ -305,7 +402,8 @@ fn scope(request: &BrokerRequest) -> Option<(&str, &'static str)> {
         | TrashBackup { instance_id, .. }
         | RestoreTrashedBackup { instance_id, .. }
         | SetBackupPolicy { instance_id, .. }
-        | PruneBackups { instance_id } => (instance_id, "backups.write"),
+        | PruneBackups { instance_id }
+        | PurgeBackupTrash { instance_id, .. } => (instance_id, "backups.write"),
         _ => return None,
     })
 }
@@ -383,7 +481,7 @@ async fn execute(
         return denied_operation(&state, token).await;
     }
     let allowed = token.servers.iter().any(|s| s == server)
-        && (permission == "jobs" || token.permissions.iter().any(|p| p == permission));
+        && (permission == "jobs" || grants(&token.permissions, permission));
     let db = Arc::clone(&state.databases);
     let audit_token = token.clone();
     let audit_server = server.to_owned();
@@ -483,6 +581,38 @@ mod tests {
             assert_eq!(scope(&request), Some(("helix:one", permission)));
         }
     }
+    #[test]
+    fn all_covers_every_server_permission_but_nothing_on_the_host() {
+        let all = vec![ALL.to_owned()];
+        for permission in PERMISSIONS {
+            assert!(grants(&all, permission), "{permission}");
+        }
+        assert!(grants(&all, "a-permission-added-later"));
+        assert!(!grants(&["view".to_owned()], "files.write"));
+        for request in [
+            BrokerRequest::HostInventory {},
+            BrokerRequest::ListServers {},
+            BrokerRequest::CheckHelixUpdate {},
+        ] {
+            assert!(scope(&request).is_none(), "host controls stay out of reach");
+        }
+    }
+
+    #[test]
+    fn plugin_installs_and_server_removal_are_reachable_with_their_own_permissions() {
+        let install: BrokerRequest = serde_json::from_value(json!({
+            "operation": "install_server_marketplace_content",
+            "instance_id": "helix:one", "project_id": "abc", "version_id": null
+        }))
+        .expect("install request");
+        assert_eq!(scope(&install), Some(("helix:one", "files.write")));
+        let remove = BrokerRequest::TrashNativeServer {
+            instance_id: "helix:one".into(),
+            confirmation_name: "One".into(),
+        };
+        assert_eq!(scope(&remove), Some(("helix:one", "remove")));
+    }
+
     #[test]
     fn ambiguous_and_browser_credentials_are_rejected() {
         let token = OpaqueToken::generate().unwrap().encode();
