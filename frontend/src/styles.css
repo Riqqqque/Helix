@@ -5076,127 +5076,155 @@ textarea:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Home is a positioned 12-column canvas: every tile has an exact cell rectangle, so
+   editing never changes a tile's size and tiles can sit anywhere, including under a
+   shorter neighbour beside a tall one. */
 .home-grid {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-auto-flow: row dense;
-  gap: 12px;
+  position: relative;
+  min-height: 120px;
 }
 .home-grid.is-editing {
-  padding: 10px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 7px;
+  outline: 1px dashed var(--line-strong);
+  outline-offset: 8px;
+  border-radius: 2px;
+}
+.home-grid.is-editing::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  z-index: -1;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 35%, transparent);
+  pointer-events: none;
+}
+.home-grid.is-stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .home-widget {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  min-height: 220px;
-  overflow: visible;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface);
 }
-.home-widget > :last-child {
+.home-grid.is-stacked .home-widget {
+  position: relative;
+  width: 100%;
+}
+.home-widget > :last-child,
+.home-widget > .home-widget__body {
   min-width: 0;
   max-width: 100%;
 }
-.home-grid.is-editing .home-widget {
-  border-color: color-mix(
-    in srgb,
-    var(--home-accent, var(--accent)) 22%,
-    var(--line)
-  );
-}
-.home-widget.is-dragging {
-  opacity: 0.5;
-  transform: scale(0.99);
-}
-.home-widget.is-drop-before,
-.home-widget.is-drop-after {
-  border-color: var(--home-accent, var(--accent));
-  box-shadow: 0 0 0 2px
-    color-mix(in srgb, var(--home-accent, var(--accent)) 20%, transparent);
-}
-.home-widget.is-drop-before::before,
-.home-widget.is-drop-after::after {
-  content: "";
-  position: absolute;
-  z-index: 2;
-  left: 9px;
-  right: 9px;
-  height: 3px;
-  border-radius: 99px;
-  background: var(--home-accent, var(--accent));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--home-accent, var(--accent)) 16%, transparent);
-  pointer-events: none;
-}
-.home-widget.is-drop-before::before {
-  top: -7px;
-}
-.home-widget.is-drop-after::after {
-  bottom: -7px;
-}
-.home-widget--compact {
-  grid-column: span 4;
-}
-.home-widget--wide {
-  grid-column: span 8;
-}
-.home-widget--full {
-  grid-column: 1 / -1;
-}
-.home-widget--height-short {
-  min-height: 170px;
-}
-.home-widget--height-medium {
-  min-height: 220px;
-}
-.home-widget--height-tall {
-  min-height: 340px;
-}
-.home-widget--height-short > :last-child {
-  min-height: 115px;
-}
-.home-widget--height-tall > :last-child {
-  min-height: 285px;
-}
-.home-widget--kind-globe {
-  display: flex;
-  flex-direction: column;
-}
-.home-widget--kind-globe > :last-child {
+.home-widget > header ~ :not(.home-widget__toolbar):not(.home-widget__resize) {
   flex: 1 1 auto;
   min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.home-grid.is-editing .home-widget {
+  border-color: color-mix(in srgb, var(--home-accent, var(--accent)) 22%, var(--line));
+  transition: transform 180ms ease, width 180ms ease, height 180ms ease, box-shadow 120ms ease;
+}
+.home-grid.is-editing:not(.is-stacked) .home-widget > header {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.home-grid.is-arranging,
+.home-grid.is-arranging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+.home-grid.is-editing .home-widget.is-dragging {
+  z-index: 20;
+  transition: none;
+  border-color: var(--home-accent, var(--accent));
+  box-shadow: 0 18px 40px rgb(0 0 0 / 35%), 0 0 0 1px color-mix(in srgb, var(--home-accent, var(--accent)) 35%, transparent);
+  opacity: 0.94;
+}
+.home-grid__placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  border: 2px dashed var(--home-accent, var(--accent));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--home-accent, var(--accent)) 10%, transparent);
+  transition: transform 120ms ease, width 120ms ease, height 120ms ease;
+  pointer-events: none;
+}
+.home-widget__toolbar {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 3;
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 22%);
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+.home-widget:hover .home-widget__toolbar,
+.home-widget.is-selected .home-widget__toolbar,
+.home-widget__toolbar:focus-within {
+  opacity: 1;
+}
+.home-widget__toolbar button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.home-widget__toolbar button:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.home-widget__toolbar button.is-danger:hover {
+  color: var(--danger);
+}
+.home-widget__toolbar .home-widget__grip {
+  color: var(--home-accent, var(--accent));
+  cursor: grab;
+  touch-action: none;
+}
+.home-widget__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background:
+    linear-gradient(135deg, transparent 50%, color-mix(in srgb, var(--home-accent, var(--accent)) 70%, transparent) 50%, color-mix(in srgb, var(--home-accent, var(--accent)) 70%, transparent) 58%, transparent 58%, transparent 70%, color-mix(in srgb, var(--home-accent, var(--accent)) 70%, transparent) 70%, color-mix(in srgb, var(--home-accent, var(--accent)) 70%, transparent) 78%, transparent 78%);
+  border-bottom-right-radius: 6px;
+}
+.home-widget--kind-globe > :last-child {
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 .home-widget.home-widget--kind-shortcut {
-  min-height: 0;
   border-radius: 12px;
-}
-.home-widget--kind-shortcut.home-widget--compact {
-  grid-column: span 2;
-}
-.home-widget--kind-shortcut.home-widget--wide {
-  grid-column: span 3;
-}
-.home-widget--kind-shortcut.home-widget--full {
-  grid-column: span 4;
-}
-.home-grid.is-editing .home-widget--kind-shortcut {
-  min-height: 168px;
-}
-.home-grid:not(.is-editing) .home-widget--kind-shortcut {
-  align-self: start;
-  width: 100%;
-  height: auto;
-  min-height: 0;
-  overflow: hidden;
-  aspect-ratio: 1 / 1;
-  display: flex;
-  flex-direction: column;
 }
 .home-grid:not(.is-editing) .home-widget--kind-shortcut > header {
   display: none;
@@ -5334,10 +5362,21 @@ textarea:focus {
 }
 .home-widget-settings {
   display: grid;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface-raised) 75%, transparent);
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--home-accent, var(--accent)) 35%, var(--line));
+  border-radius: 8px;
+  background: var(--surface);
+}
+.home-widget-settings__grid > label.home-widget-settings__title {
+  grid-column: 1 / -1;
+}
+.home-widget-settings__grid input:not([type]) {
+  width: 100%;
+  height: 31px;
+  padding: 0 8px;
+  font-size: 10px;
 }
 .home-widget-settings__head {
   display: flex;

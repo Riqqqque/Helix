@@ -985,7 +985,24 @@ struct HomeWidgetPreference {
     color: String,
     #[serde(default)]
     icon: String,
+    /// Grid position; older dashboards omit it and the browser places the widget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layout: Option<HomeWidgetLayout>,
 }
+
+/// A widget's cell rectangle on the 12-column Home grid.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct HomeWidgetLayout {
+    x: u8,
+    y: u16,
+    w: u8,
+    h: u8,
+}
+
+const HOME_GRID_COLUMNS: u8 = 12;
+const HOME_GRID_MAX_ROW: u16 = 400;
+const HOME_GRID_MAX_HEIGHT: u8 = 24;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1117,6 +1134,7 @@ fn home_widget(
         url: String::new(),
         color: String::new(),
         icon: String::new(),
+        layout: None,
     }
 }
 
@@ -1457,6 +1475,15 @@ fn validate_home_widgets(widgets: &[HomeWidgetPreference]) -> Result<(), ()> {
             || widget.content.chars().count() > 8_000
             || widget.url.chars().count() > 2_048
             || (!widget.color.is_empty() && !valid_hex_color(&widget.color))
+            // Overlaps are not rejected: the browser resolves them, and refusing a save
+            // here would silently stop preference sync.
+            || widget.layout.is_some_and(|layout| {
+                layout.w == 0
+                    || layout.x.saturating_add(layout.w) > HOME_GRID_COLUMNS
+                    || layout.h == 0
+                    || layout.h > HOME_GRID_MAX_HEIGHT
+                    || layout.y > HOME_GRID_MAX_ROW
+            })
         {
             return Err(());
         }
@@ -5014,6 +5041,7 @@ mod tests {
                 url: String::new(),
                 color: String::new(),
                 icon: String::new(),
+                layout: None,
             })
             .collect();
         let mut preferences = DashboardPreferences {
@@ -5120,6 +5148,70 @@ mod tests {
                 .contains(&PrimaryDashboardSection::Globe)
         );
         assert!(validate_dashboard_preferences(&preferences).is_ok());
+    }
+
+    #[test]
+    fn home_widget_positions_are_optional_and_bounded() {
+        let mut preferences = DashboardPreferences::default();
+        assert!(validate_dashboard_preferences(&preferences).is_ok());
+        let place = |preferences: &mut DashboardPreferences, layout: HomeWidgetLayout| {
+            preferences.home_widgets[0].layout = Some(layout);
+            preferences.home_templates[0].widgets[0].layout = Some(layout);
+        };
+        place(
+            &mut preferences,
+            HomeWidgetLayout {
+                x: 8,
+                y: 30,
+                w: 4,
+                h: 6,
+            },
+        );
+        assert!(validate_dashboard_preferences(&preferences).is_ok());
+        let json = serde_json::to_value(&preferences).expect("json");
+        assert_eq!(
+            json["homeWidgets"][0]["layout"],
+            json!({"x": 8, "y": 30, "w": 4, "h": 6})
+        );
+        assert!(json["homeWidgets"][1].get("layout").is_none());
+        for bad in [
+            HomeWidgetLayout {
+                x: 9,
+                y: 0,
+                w: 4,
+                h: 4,
+            },
+            HomeWidgetLayout {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 4,
+            },
+            HomeWidgetLayout {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 0,
+            },
+            HomeWidgetLayout {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 25,
+            },
+            HomeWidgetLayout {
+                x: 0,
+                y: 401,
+                w: 4,
+                h: 4,
+            },
+        ] {
+            place(&mut preferences, bad);
+            assert!(
+                validate_dashboard_preferences(&preferences).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

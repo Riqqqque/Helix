@@ -4,6 +4,25 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.8.0 - 2026-09-29
+
+### Changed
+
+- Home layout editing is rebuilt around a real 12-column grid. Drag a widget by
+  its title bar and it follows the cursor; the other widgets move out of the way
+  as you go and settle upward, so a widget can be dropped anywhere, including
+  under a shorter widget that sits beside a tall one. Drag a widget's corner to
+  resize it by columns and rows. Escape cancels a drag. Select a widget and use
+  the arrow keys to nudge it, or Shift and the arrow keys to resize.
+- Widgets keep exactly the same size in edit mode. The edit controls float over
+  the tile instead of adding a row to it, and widget settings (now including the
+  title and the exact width and height) open in a panel above the grid instead
+  of inside the widget.
+- Each widget's position is saved with the layout. Existing layouts are placed
+  automatically the first time and keep their order.
+- On narrow windows Home stacks widgets in one column; moving and resizing wait
+  for a wider window.
+
 ## 1.7.2 - 2026-09-29
 
 ### Fixed
