@@ -134,6 +134,9 @@ async fn main() -> Result<(), DynError> {
         broker,
     )
     .await?;
+    if let Err(error) = api_state.enable_token_vault(&config.data_dir) {
+        warn!(%error, "server API tokens will only be shown once");
+    }
     if let Some(path) = terminal_socket {
         info!(socket = %path.display(), "unprivileged terminal bridge configured");
         api_state = api_state.with_terminal_socket(path)?;

@@ -51,7 +51,8 @@ export type IconName =
   | 'expand'
   | 'bell'
   | 'machines'
-  | 'power';
+  | 'power'
+  | 'eye';
 
 const paths: Record<IconName, JSX.Element> = {
   overview: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
@@ -105,6 +106,7 @@ const paths: Record<IconName, JSX.Element> = {
   bell: <><path d="M6 9a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></>,
   machines: <><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01M11 7h5M11 17h5"/></>,
   power: <><path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></>,
+  eye: <><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></>,
 };
 
 export function Icon({ name, size = 18, class: className }: { name: IconName; size?: number; class?: string | undefined }) {

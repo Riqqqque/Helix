@@ -56,6 +56,18 @@ pub struct ApiTokenRecord {
     pub last_used_at: Option<i64>,
     /// False when a password or account change has invalidated the token.
     pub authorized: bool,
+    /// True when an encrypted copy is stored so the owner can view the token again.
+    pub viewable: bool,
+}
+
+/// Encrypted copies of token secrets live in `secret_records` under this scope.
+const SECRET_SCOPE: &str = "api_token";
+
+fn forget_token_secrets(tx: &rusqlite::Transaction<'_>, token_id: &str) -> rusqlite::Result<usize> {
+    tx.execute(
+        "DELETE FROM secret_records WHERE scope_type=?1 AND scope_id=?2",
+        params![SECRET_SCOPE, token_id],
+    )
 }
 
 fn record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiTokenRecord> {
@@ -78,10 +90,11 @@ fn record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiTokenRecord> {
         revoked_at: row.get(7)?,
         last_used_at: row.get(8)?,
         authorized: row.get(9)?,
+        viewable: row.get(10)?,
     })
 }
 
-const COLUMNS: &str = "t.id,t.user_id,t.name,t.servers,t.permissions,t.created_at,t.expires_at,t.revoked_at,t.last_used_at,(u.status='active' AND u.auth_version=t.auth_version)";
+const COLUMNS: &str = "t.id,t.user_id,t.name,t.servers,t.permissions,t.created_at,t.expires_at,t.revoked_at,t.last_used_at,(u.status='active' AND u.auth_version=t.auth_version),EXISTS(SELECT 1 FROM secret_records s WHERE s.scope_type='api_token' AND s.scope_id=t.id)";
 
 /// Longest finite lifetime; `i64::MAX` marks a token that never expires.
 pub const MAX_EXPIRY_DAYS: i64 = 365;
@@ -142,6 +155,11 @@ impl StateDatabase {
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let current: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM users WHERE id=?1 AND auth_version=?2 AND status='active')", params![input.user_id,input.auth_version], |r| r.get(0))?;
         tx.execute(
+            "DELETE FROM secret_records WHERE scope_type=?1 AND scope_id IN
+             (SELECT id FROM server_api_tokens WHERE revoked_at IS NOT NULL OR expires_at<=?2)",
+            params![SECRET_SCOPE, input.now],
+        )?;
+        tx.execute(
             "DELETE FROM server_api_tokens WHERE revoked_at IS NOT NULL OR expires_at<=?1",
             [input.now],
         )?;
@@ -181,6 +199,7 @@ impl StateDatabase {
         let tx = connection.transaction()?;
         let changed = tx.execute("UPDATE server_api_tokens SET revoked_at=COALESCE(revoked_at,?3) WHERE user_id=?1 AND id=?2",params![user_id,id,now])? > 0;
         if changed {
+            forget_token_secrets(&tx, id)?;
             append_audit(
                 &tx,
                 now,
@@ -212,6 +231,8 @@ impl StateDatabase {
             params![id, user_id, now, verifier.as_slice()],
         )? > 0;
         if changed {
+            // The old secret no longer works; the caller stores the new one.
+            forget_token_secrets(&tx, id)?;
             append_audit(
                 &tx,
                 now,
@@ -224,6 +245,40 @@ impl StateDatabase {
         }
         tx.commit()?;
         Ok(changed)
+    }
+
+    /// Newest encrypted copy of a token's secret, if one was stored.
+    pub fn api_token_secret_id(&self, token_id: &str) -> Result<Option<String>, StateError> {
+        let connection = self.lock()?;
+        Ok(connection
+            .query_row(
+                "SELECT id FROM secret_records WHERE scope_type=?1 AND scope_id=?2
+                 ORDER BY created_at_unix_ms DESC LIMIT 1",
+                params![SECRET_SCOPE, token_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn audit_api_token_revealed(
+        &self,
+        user_id: &str,
+        token_id: &str,
+        now: i64,
+    ) -> Result<(), StateError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction()?;
+        append_audit(
+            &tx,
+            now,
+            Some(user_id),
+            "api_token.revealed",
+            Some("api_token"),
+            Some(token_id),
+            "success",
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn authenticate_api_token(
