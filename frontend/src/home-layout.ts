@@ -12,6 +12,23 @@ export interface HomeWidget {
   url: string;
   color: string;
   icon: string;
+  /** Cell position on the 12-column Home grid; missing means Helix places it. */
+  layout?: HomeWidgetLayout;
+}
+
+export interface HomeWidgetLayout { x: number; y: number; w: number; h: number }
+
+function parseWidgetLayout(value: unknown): HomeWidgetLayout | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const whole = (candidate: unknown, min: number, max: number): number | null =>
+    typeof candidate === 'number' && Number.isInteger(candidate) && candidate >= min && candidate <= max ? candidate : null;
+  const x = whole(record.x, 0, 11);
+  const y = whole(record.y, 0, 400);
+  const w = whole(record.w, 1, 12);
+  const h = whole(record.h, 1, 24);
+  if (x === null || y === null || w === null || h === null || x + w > 12) return undefined;
+  return { x, y, w, h };
 }
 
 export interface HomeTemplate {
@@ -179,6 +196,7 @@ export function collectHomeWidgets(value: unknown): HomeWidget[] {
           : '',
       color: normalizeWidgetColor(record.color),
       icon: kind === 'shortcut' ? normalizeShortcutUrl(record.icon) : '',
+      ...(parseWidgetLayout(record.layout) === undefined ? {} : { layout: parseWidgetLayout(record.layout)! }),
     });
   }
 

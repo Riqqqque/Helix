@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ComponentType } from 'preact';
 import { serverIsLive, serverStatusSummary, serverStatusTone, type HostInventory, type ManagedServer } from './control-api';
 import { calculatePercent, formatBytes, formatDuration, formatPercent } from './format';
@@ -16,15 +16,11 @@ import {
   homeShortcutUrls,
   importHomeTemplate,
   importHomarrOntoHome,
-  moveHomeWidget,
   newHomarrShortcuts,
-  nextHomeWidgetHeight,
-  nextHomeWidgetSize,
   normalizeShortcutUrl,
   parseGlobeWidgetConfiguration,
   parseNoteWidgetConfiguration,
   parseWeatherWidgetConfiguration,
-  reorderHomeWidgets,
   serializeGlobeWidgetConfiguration,
   serializeNoteWidgetConfiguration,
   serializeWeatherWidgetConfiguration,
@@ -34,6 +30,22 @@ import {
   type NoteWidgetConfiguration,
 } from './home-layout';
 import { copyFlashLabel, useCopyFlash } from './copy-button';
+import {
+  GRID_COLUMNS,
+  GRID_MAX_HEIGHT,
+  GRID_ROW_PX,
+  applyLayout,
+  cellToPixels,
+  clampRect,
+  gridHeight,
+  minimumSpan,
+  pixelsToCell,
+  pixelsToSpan,
+  placeItem,
+  resolveLayout,
+  type GridItem,
+  type GridRect,
+} from './home-grid';
 import { DockerInventoryPanel } from './docker-panel';
 import { getHomarrCatalog, type HomarrWidgetCandidate } from './docker-api';
 import { shortcutIconUrl, shortcutLetter } from './shortcut-icons';
@@ -128,50 +140,29 @@ function CopyGlyph({ size = 14 }: { size?: number }) {
   );
 }
 
-function WidgetControls({
+/** Floating edit toolbar. It overlays the tile so editing never changes a tile's size. */
+function WidgetToolbar({
   widget,
-  first,
-  last,
-  onMove,
-  onResize,
-  onHeight,
   onSettings,
   onCopy,
   onRemove,
-  onDragStart,
-  onDragEnd,
+  onGrab,
   copied = false,
+  canDrag,
 }: {
   widget: HomeWidget;
-  first: boolean;
-  last: boolean;
-  onMove: (offset: -1 | 1) => void;
-  onResize: () => void;
-  onHeight: () => void;
   onSettings: () => void;
   onCopy: () => void;
   onRemove: () => void;
-  onDragStart: (event: DragEvent) => void;
-  onDragEnd: () => void;
+  onGrab: (event: PointerEvent) => void;
   copied?: boolean;
+  canDrag: boolean;
 }) {
   return (
-    <div class="home-widget__controls" aria-label={`Arrange ${widget.title}`}>
-      <button class="home-widget__drag" type="button" draggable onDragStart={onDragStart} onDragEnd={onDragEnd} title="Drag to move" aria-label={`Drag ${widget.title}`}>
-        <Icon name="menu" size={14} />
-      </button>
-      <button type="button" disabled={first} onClick={() => onMove(-1)} aria-label={`Move ${widget.title} earlier`}>
-        <Icon name="chevron" size={14} class="icon--back" />
-      </button>
-      <button type="button" disabled={last} onClick={() => onMove(1)} aria-label={`Move ${widget.title} later`}>
-        <Icon name="chevron" size={14} />
-      </button>
-      <button type="button" onClick={onResize} title="Cycle widget width">
-        {widget.size}
-      </button>
-      {widget.kind !== 'shortcut' && (
-        <button type="button" onClick={onHeight} title="Cycle widget height">
-          {widget.height}
+    <div class="home-widget__toolbar" aria-label={`Arrange ${widget.title}`}>
+      {canDrag && (
+        <button class="home-widget__grip" type="button" onPointerDown={onGrab} title="Drag to move" aria-label={`Move ${widget.title}. Select it and use arrow keys to move, Shift and arrows to resize.`}>
+          <Icon name="menu" size={14} />
         </button>
       )}
       <button type="button" class={copied ? 'is-copied' : undefined} onClick={onCopy} aria-label={copied ? 'Copied' : `Copy ${widget.title}`} title={copied ? 'Copied' : 'Copy widget'}>
@@ -180,7 +171,7 @@ function WidgetControls({
       <button type="button" onClick={onSettings} aria-label={`Open ${widget.title} settings`} title="Widget settings">
         <Icon name="settings" size={14} />
       </button>
-      <button class="is-danger" type="button" onClick={onRemove} aria-label={`Remove ${widget.title}`}>
+      <button class="is-danger" type="button" onClick={onRemove} aria-label={`Remove ${widget.title}`} title="Remove widget">
         <Icon name="trash" size={14} />
       </button>
     </div>
@@ -578,46 +569,35 @@ function WidgetBody({ widget, editing, onChange, data, csrfToken, canManageDocke
   );
 }
 
-function WidgetSettings({ widget, otherHomes, onChange, onCopyToHome, onClose }: {
+function WidgetSettings({ widget, rect, otherHomes, onChange, onResize, onCopyToHome, onClose }: {
   widget: HomeWidget;
+  rect: GridRect;
   otherHomes: HomeTemplate[];
   onChange: (patch: Partial<HomeWidget>) => void;
+  onResize: (span: { w: number; h: number }) => void;
   onCopyToHome: (homeId: string) => void;
   onClose: () => void;
 }) {
   const note = widget.kind === 'note' ? parseNoteWidgetConfiguration(widget.content) : null;
+  const min = minimumSpan(widget.kind);
+  const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index);
   return (
-    <div class="home-widget-settings" role="group" aria-label={`${widget.title} settings`}>
-      <div class="home-widget-settings__head"><strong>Widget settings</strong><button type="button" onClick={onClose} aria-label="Close widget settings"><Icon name="close" size={14} /></button></div>
+    <section class="home-widget-settings" aria-label={`${widget.title} settings`}>
+      <div class="home-widget-settings__head"><strong>{widget.title} settings</strong><button type="button" onClick={onClose} aria-label="Close widget settings"><Icon name="close" size={14} /></button></div>
       <div class="home-widget-settings__grid">
+        <label class="home-widget-settings__title"><span>Title</span><input value={widget.title} maxLength={80} onInput={(event) => onChange({ title: event.currentTarget.value })} onBlur={(event) => { if (event.currentTarget.value.trim().length === 0) onChange({ title: widget.kind }); }} /></label>
         <label>
           <span>Width</span>
-          <select value={widget.size} onChange={(event) => onChange({ size: event.currentTarget.value as HomeWidget['size'] })}>
-            {widget.kind === 'shortcut' ? (
-              <>
-                <option value="compact">Square</option>
-                <option value="wide">Large</option>
-                <option value="full">Extra large</option>
-              </>
-            ) : (
-              <>
-                <option value="compact">Compact</option>
-                <option value="wide">Wide</option>
-                <option value="full">Full row</option>
-              </>
-            )}
+          <select value={rect.w} onChange={(event) => onResize({ w: Number(event.currentTarget.value), h: rect.h })}>
+            {range(min.w, GRID_COLUMNS).map((columns) => <option key={columns} value={columns}>{columns === GRID_COLUMNS ? 'Full row' : `${columns} of ${GRID_COLUMNS} columns`}</option>)}
           </select>
         </label>
-        {widget.kind !== 'shortcut' && (
-          <label>
-            <span>Height</span>
-            <select value={widget.height} onChange={(event) => onChange({ height: event.currentTarget.value as HomeWidget['height'] })}>
-              <option value="short">Short</option>
-              <option value="medium">Medium</option>
-              <option value="tall">Tall</option>
-            </select>
-          </label>
-        )}
+        <label>
+          <span>Height</span>
+          <select value={rect.h} onChange={(event) => onResize({ w: rect.w, h: Number(event.currentTarget.value) })}>
+            {range(min.h, GRID_MAX_HEIGHT).map((rows) => <option key={rows} value={rows}>{rows} rows · {rows * GRID_ROW_PX + (rows - 1) * 12}px</option>)}
+          </select>
+        </label>
         <label><span>Accent</span><span class="home-color-control"><input type="color" value={widget.color || '#d7f64d'} onInput={(event) => onChange({ color: event.currentTarget.value.toLowerCase() })} /><button type="button" onClick={() => onChange({ color: '' })}>Use Home color</button></span></label>
         {otherHomes.length > 0 && (
           <label>
@@ -639,7 +619,7 @@ function WidgetSettings({ widget, otherHomes, onChange, onCopyToHome, onClose }:
           </label>
         );
       })()}
-    </div>
+    </section>
   );
 }
 
@@ -723,9 +703,23 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
   const [adding, setAdding] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [settingsWidgetId, setSettingsWidgetId] = useState<string | null>(null);
-  const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
-  const [dropPlacement, setDropPlacement] = useState<'before' | 'after'>('before');
+  const gridRef = useRef<HTMLElement | null>(null);
+  const [gridWidth, setGridWidth] = useState(0);
+  const [preview, setPreview] = useState<GridItem[] | null>(null);
+  const [floating, setFloating] = useState<{ id: string; left: number; top: number; width: number; height: number } | null>(null);
+  const dragRef = useRef<{
+    id: string;
+    mode: 'move' | 'resize';
+    start: GridItem[];
+    rect: GridItem;
+    grabX: number;
+    grabY: number;
+    startWidth: number;
+    startHeight: number;
+    pointerX: number;
+    pointerY: number;
+    latest: GridItem[] | null;
+  } | null>(null);
   const [homarrOpen, setHomarrOpen] = useState(false);
   const [homarrLoading, setHomarrLoading] = useState(false);
   const [homarrError, setHomarrError] = useState<string | null>(null);
@@ -755,11 +749,120 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
     changeWidgets((current) => [...current, makeWidget(kind)]);
     setAdding(false);
   };
-  const finishDrag = (): void => {
-    setDraggedWidgetId(null);
-    setDropTargetId(null);
-    setDropPlacement('before');
+  const layout = useMemo(() => resolveLayout(widgets), [widgets]);
+  const items = preview ?? layout;
+  const rectFor = (id: string): GridItem | undefined => items.find((item) => item.id === id);
+  const stacked = gridWidth > 0 && gridWidth < 720;
+  const commitLayout = (next: GridItem[]): void => {
+    changeWidgets((current) => applyLayout(current, next));
   };
+  const setWidgetRect = (id: string, rect: GridRect): void => {
+    const widget = widgets.find((item) => item.id === id);
+    if (widget === undefined) return;
+    commitLayout(placeItem(layout, id, clampRect(rect, widget.kind)));
+  };
+  const finishDrag = (): void => {
+    dragRef.current = null;
+    setPreview(null);
+    setFloating(null);
+  };
+
+  useLayoutEffect(() => {
+    const element = gridRef.current;
+    if (element === null) return;
+    const measure = (): void => setGridWidth(element.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const beginPointer = (event: PointerEvent, id: string, mode: 'move' | 'resize'): void => {
+    if (!editing || stacked || event.button !== 0) return;
+    const rect = layout.find((item) => item.id === id);
+    const grid = gridRef.current;
+    if (rect === undefined || grid === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = grid.getBoundingClientRect();
+    const box = cellToPixels(rect, gridWidth);
+    dragRef.current = {
+      id, mode, start: layout, rect,
+      grabX: event.clientX - bounds.left - box.left,
+      grabY: event.clientY - bounds.top - box.top,
+      startWidth: box.width, startHeight: box.height,
+      pointerX: event.clientX, pointerY: event.clientY,
+      latest: null,
+    };
+    setSelectedWidgetId(id);
+    setSettingsWidgetId(null);
+    setFloating({ id, ...box });
+  };
+
+  useEffect(() => {
+    if (!editing) return;
+    const move = (event: PointerEvent): void => {
+      const drag = dragRef.current;
+      const grid = gridRef.current;
+      if (drag === null || grid === null) return;
+      const widget = widgets.find((item) => item.id === drag.id);
+      if (widget === undefined) return;
+      const bounds = grid.getBoundingClientRect();
+      let target: GridRect;
+      if (drag.mode === 'move') {
+        const left = event.clientX - bounds.left - drag.grabX;
+        const top = event.clientY - bounds.top - drag.grabY;
+        setFloating({ id: drag.id, left, top, width: drag.startWidth, height: drag.startHeight });
+        target = { ...pixelsToCell(left, top, gridWidth), w: drag.rect.w, h: drag.rect.h };
+      } else {
+        const width = Math.max(40, drag.startWidth + event.clientX - drag.pointerX);
+        const height = Math.max(40, drag.startHeight + event.clientY - drag.pointerY);
+        const origin = cellToPixels(drag.rect, gridWidth);
+        setFloating({ id: drag.id, left: origin.left, top: origin.top, width, height });
+        target = { x: drag.rect.x, y: drag.rect.y, ...pixelsToSpan(width, height, gridWidth) };
+      }
+      const next = placeItem(drag.start, drag.id, clampRect(target, widget.kind));
+      drag.latest = next;
+      setPreview(next);
+      if (event.clientY < 72) window.scrollBy({ top: -14, behavior: 'auto' });
+      else if (event.clientY > window.innerHeight - 72) window.scrollBy({ top: 14, behavior: 'auto' });
+    };
+    const up = (): void => {
+      const drag = dragRef.current;
+      if (drag === null) return;
+      if (drag.latest !== null) commitLayout(drag.latest);
+      finishDrag();
+    };
+    const key = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && dragRef.current !== null) {
+        event.preventDefault();
+        finishDrag();
+        return;
+      }
+      if (dragRef.current !== null || selectedWidgetId === null || stacked) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && /^(?:INPUT|TEXTAREA|SELECT)$/u.test(target.tagName)) return;
+      const step: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      const delta = step[event.key];
+      const rect = layout.find((item) => item.id === selectedWidgetId);
+      if (delta === undefined || rect === undefined) return;
+      event.preventDefault();
+      setWidgetRect(rect.id, event.shiftKey
+        ? { x: rect.x, y: rect.y, w: rect.w + delta[0], h: rect.h + delta[1] }
+        : { x: rect.x + delta[0], y: rect.y + delta[1], w: rect.w, h: rect.h });
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', finishDrag);
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', finishDrag);
+      window.removeEventListener('keydown', key);
+    };
+  }, [editing, widgets, layout, gridWidth, selectedWidgetId, stacked, templates, activeTemplate.id]);
   const rememberClipboard = (copied: HomeWidget[]): void => {
     saveWidgetClipboard(copied);
     try {
@@ -929,7 +1032,7 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
           )}
           <button class={`button${homeFocus ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={homeFocus} onClick={onHomeFocusToggle}><Icon name="expand" size={15} />{homeFocus ? 'Exit full screen' : 'Full screen'}</button>
           <button class={`button${templatesOpen ? ' button--primary' : ' button--quiet'}`} type="button" aria-pressed={templatesOpen} onClick={() => setTemplatesOpen((value) => !value)}><Icon name="home" size={15} />Homes</button>
-          <button class={`button${editing ? ' button--primary' : ''}`} type="button" aria-pressed={editing} onClick={() => { setEditing((value) => !value); setAdding(false); setSettingsWidgetId(null); setSelectedWidgetId(null); finishDrag(); }}><Icon name={editing ? 'check' : 'edit'} size={15} />{editing ? 'Done editing' : 'Edit layout'}</button>
+          <button class={`button${editing ? ' button--primary' : ''}`} type="button" aria-pressed={editing} onClick={() => { if (!editing && widgets.some((widget) => widget.layout === undefined)) commitLayout(layout); setEditing((value) => !value); setAdding(false); setSettingsWidgetId(null); setSelectedWidgetId(null); finishDrag(); }}><Icon name={editing ? 'check' : 'edit'} size={15} />{editing ? 'Done editing' : 'Edit layout'}</button>
         </div>
       </div>
       <div class={`home-local-note home-local-note--${syncStatus}`}><Icon name={syncStatus === 'synced' ? 'check' : syncStatus === 'local' ? 'warning' : 'refresh'} size={14} /><span>{syncStatus === 'synced' ? 'Layout synced through Helix' : syncStatus === 'saving' ? 'Saving layout…' : syncStatus === 'loading' ? 'Loading your layout…' : 'Using this browser’s saved copy'}</span><InfoTip text={syncStatus === 'local' ? 'Changes remain in this browser and retry automatically.' : 'This layout follows the owner account across browsers, with a local fallback.'} /></div>
@@ -978,44 +1081,66 @@ export function HomePage({ overview, inventory, servers, displayName, templates,
           {(['clock', 'host', 'graphs', 'servers', 'storage', 'docker', 'weather', 'note', 'shortcut', 'strand', 'globe'] as const).map((kind) => <button type="button" key={kind} onClick={() => addWidget(kind)}><Icon name={widgetIcons[kind]} /><span><strong>{kind === 'host' ? 'Host pulse' : kind === 'graphs' ? 'Live graphs' : kind === 'docker' ? 'Docker' : kind === 'strand' ? 'Strand' : kind === 'globe' ? 'Globe' : kind[0]?.toUpperCase() + kind.slice(1)}</strong><small>{kind === 'shortcut' ? 'Open a website' : kind === 'note' ? 'Keep synced notes' : kind === 'weather' ? 'Five-day forecast' : kind === 'graphs' ? 'CPU, memory, and load' : kind === 'docker' ? 'All containers on this host' : kind === 'strand' ? 'An installed Strand page' : kind === 'globe' ? 'World map of this host and connections' : 'Live dashboard data'}</small></span></button>)}
         </section>
       )}
-      {editing && <div class="home-editing-hint"><Icon name="menu" size={14} /><span>Drag a widget by its handle, or use the arrow controls. Copy all copies every tile on this Home; Paste or Paste onto another Home drops them together. Width, height, color, and Copy to another Home are under Settings.</span></div>}
+      {editing && <div class="home-editing-hint"><Icon name="menu" size={14} /><span>{stacked
+        ? 'Widen the window to move and resize widgets. Settings, copy, and remove still work here.'
+        : 'Drag a widget by its title bar to move it anywhere; other widgets make room. Drag the corner to resize. Select a widget and use the arrow keys to nudge it, or Shift and arrows to resize.'}</span></div>}
+      {editing && settingsWidgetId !== null && (() => {
+        const widget = widgets.find((item) => item.id === settingsWidgetId);
+        const rect = rectFor(settingsWidgetId);
+        if (widget === undefined || rect === undefined) return null;
+        return <WidgetSettings widget={widget} rect={rect} otherHomes={otherHomes} onChange={(patch) => updateWidget(widget.id, patch)} onResize={(span) => setWidgetRect(widget.id, { x: rect.x, y: rect.y, ...span })} onCopyToHome={(homeId) => { setSelectedWidgetId(widget.id); rememberClipboard([widget]); applyPaste([widget], homeId); }} onClose={() => setSettingsWidgetId(null)} />;
+      })()}
       {layoutNotice !== null && <div class="home-layout-notice" role="status"><Icon name="check" size={14} /><span>{layoutNotice}</span></div>}
-      <section class={`home-grid${editing ? ' is-editing' : ''}`} aria-label="Home widgets">
-        {widgets.map((widget, index) => (
-          <article
-            class={`home-widget home-widget--${widget.size} home-widget--height-${widget.height} home-widget--kind-${widget.kind}${draggedWidgetId === widget.id ? ' is-dragging' : ''}${dropTargetId === widget.id ? ` is-drop-${dropPlacement}` : ''}${editing && selectedWidgetId === widget.id ? ' is-selected' : ''}`}
-            key={widget.id}
-            style={widget.color.length > 0 ? { '--widget-accent': widget.color } : undefined}
-            onClick={(event) => {
-              if (!editing) return;
-              const target = event.target;
-              if (target instanceof HTMLElement && target.closest('button, input, select, textarea, a')) return;
-              setSelectedWidgetId(widget.id);
-            }}
-            onDragOver={(event) => {
-              if (!editing || draggedWidgetId === null || draggedWidgetId === widget.id) return;
-              event.preventDefault();
-              const bounds = event.currentTarget.getBoundingClientRect();
-              const verticalLayout = bounds.width >= window.innerWidth * 0.7;
-              const placement = verticalLayout
-                ? (event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after')
-                : (event.clientX < bounds.left + bounds.width / 2 ? 'before' : 'after');
-              setDropTargetId(widget.id);
-              setDropPlacement(placement);
-              if (event.clientY < 72) window.scrollBy({ top: -18, behavior: 'auto' });
-              else if (event.clientY > window.innerHeight - 72) window.scrollBy({ top: 18, behavior: 'auto' });
-            }}
-            onDragLeave={() => { if (dropTargetId === widget.id) setDropTargetId(null); }}
-            onDrop={(event) => { event.preventDefault(); if (draggedWidgetId !== null) changeWidgets((current) => reorderHomeWidgets(current, draggedWidgetId, widget.id, dropPlacement)); finishDrag(); }}
-          >
-            <header>
-              <div>{widget.kind === 'shortcut' ? <ShortcutMark name={widget.title} url={widget.url} icon={widget.icon} size={16} /> : <Icon name={widgetIcons[widget.kind]} size={16} />}{editing ? <input class="home-widget__title-input" value={widget.title} maxLength={80} aria-label={`${widget.kind} widget title`} onInput={(event) => updateWidget(widget.id, { title: event.currentTarget.value })} /> : <h2>{widget.title}</h2>}</div>
-              {editing && <WidgetControls widget={widget} first={index === 0} last={index === widgets.length - 1} copied={copyFlash.flash === 'copied' && copiedSource === widget.id} onMove={(offset) => changeWidgets((current) => moveHomeWidget(current, widget.id, offset))} onResize={() => updateWidget(widget.id, { size: nextHomeWidgetSize(widget.size) })} onHeight={() => updateWidget(widget.id, { height: nextHomeWidgetHeight(widget.height) })} onSettings={() => { setSelectedWidgetId(widget.id); setSettingsWidgetId((current) => current === widget.id ? null : widget.id); }} onCopy={() => { setSelectedWidgetId(widget.id); copyWidgets([widget], 'selection'); }} onDragStart={(event) => { setSelectedWidgetId(widget.id); setDraggedWidgetId(widget.id); event.dataTransfer?.setData('text/plain', widget.id); if (event.dataTransfer !== null) event.dataTransfer.effectAllowed = 'move'; }} onDragEnd={finishDrag} onRemove={() => changeWidgets((current) => current.filter((candidate) => candidate.id !== widget.id))} />}
-            </header>
-            {editing && settingsWidgetId === widget.id && <WidgetSettings widget={widget} otherHomes={otherHomes} onChange={(patch) => updateWidget(widget.id, patch)} onCopyToHome={(homeId) => { setSelectedWidgetId(widget.id); rememberClipboard([widget]); applyPaste([widget], homeId); }} onClose={() => setSettingsWidgetId(null)} />}
-            <WidgetBody widget={widget} editing={editing} onChange={(patch) => updateWidget(widget.id, patch)} data={{ overview, inventory, servers }} csrfToken={csrfToken} canManageDocker={canManageDocker} onSessionExpired={onSessionExpired} />
-          </article>
-        ))}
+      <section
+        ref={gridRef}
+        class={`home-grid${editing ? ' is-editing' : ''}${stacked ? ' is-stacked' : ''}${floating !== null ? ' is-arranging' : ''}`}
+        aria-label="Home widgets"
+        style={stacked || gridWidth === 0 ? undefined : { height: `${gridHeight(items, editing ? 3 : 0)}px` }}
+      >
+        {editing && !stacked && floating !== null && (() => {
+          const target = rectFor(floating.id);
+          if (target === undefined) return null;
+          const box = cellToPixels(target, gridWidth);
+          return <div class="home-grid__placeholder" aria-hidden="true" style={{ transform: `translate(${box.left}px, ${box.top}px)`, width: `${box.width}px`, height: `${box.height}px` }} />;
+        })()}
+        {[...widgets].sort((a, b) => {
+          const ra = rectFor(a.id);
+          const rb = rectFor(b.id);
+          return ra === undefined || rb === undefined ? 0 : ra.y - rb.y || ra.x - rb.x;
+        }).map((widget) => {
+          const rect = rectFor(widget.id);
+          const dragging = floating?.id === widget.id;
+          const box = rect === undefined || gridWidth === 0 ? null : cellToPixels(rect, gridWidth);
+          const style: Record<string, string> = {};
+          if (widget.color.length > 0) style['--widget-accent'] = widget.color;
+          if (stacked && rect !== undefined) style.height = `${rect.h * GRID_ROW_PX + (rect.h - 1) * 12}px`;
+          else if (dragging && floating !== null) Object.assign(style, { transform: `translate(${floating.left}px, ${floating.top}px)`, width: `${floating.width}px`, height: `${floating.height}px` });
+          else if (box !== null) Object.assign(style, { transform: `translate(${box.left}px, ${box.top}px)`, width: `${box.width}px`, height: `${box.height}px` });
+          return (
+            <article
+              class={`home-widget home-widget--kind-${widget.kind}${dragging ? ' is-dragging' : ''}${editing && selectedWidgetId === widget.id ? ' is-selected' : ''}`}
+              key={widget.id}
+              style={style}
+              onClick={(event) => {
+                if (!editing) return;
+                const target = event.target;
+                if (target instanceof HTMLElement && target.closest('button, input, select, textarea, a')) return;
+                setSelectedWidgetId(widget.id);
+              }}
+            >
+              <header onPointerDown={(event) => {
+                const target = event.target;
+                if (target instanceof HTMLElement && target.closest('button, input, select, textarea, a')) return;
+                beginPointer(event, widget.id, 'move');
+              }}>
+                <div>{widget.kind === 'shortcut' ? <ShortcutMark name={widget.title} url={widget.url} icon={widget.icon} size={16} /> : <Icon name={widgetIcons[widget.kind]} size={16} />}<h2>{widget.title}</h2></div>
+              </header>
+              {editing && <WidgetToolbar widget={widget} canDrag={!stacked} copied={copyFlash.flash === 'copied' && copiedSource === widget.id} onGrab={(event) => beginPointer(event, widget.id, 'move')} onSettings={() => { setSelectedWidgetId(widget.id); setSettingsWidgetId((current) => current === widget.id ? null : widget.id); }} onCopy={() => { setSelectedWidgetId(widget.id); copyWidgets([widget], 'selection'); }} onRemove={() => { if (settingsWidgetId === widget.id) setSettingsWidgetId(null); changeWidgets((current) => current.filter((candidate) => candidate.id !== widget.id)); }} />}
+              <WidgetBody widget={widget} editing={editing} onChange={(patch) => updateWidget(widget.id, patch)} data={{ overview, inventory, servers }} csrfToken={csrfToken} canManageDocker={canManageDocker} onSessionExpired={onSessionExpired} />
+              {editing && !stacked && <span class="home-widget__resize" role="presentation" title="Drag to resize" onPointerDown={(event) => beginPointer(event, widget.id, 'resize')} />}
+            </article>
+          );
+        })}
         {widgets.length === 0 && <div class="home-grid-empty"><Icon name="overview" size={26} /><strong>This Home is empty</strong><span>Use Add widget to build the layout you want.</span></div>}
       </section>
     </div>

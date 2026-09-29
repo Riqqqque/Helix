@@ -18,10 +18,12 @@ export function newHomeWidgetId(kind: HomeWidgetKind, salt = ''): string {
 
 export function cloneHomeWidgets(widgets: readonly HomeWidget[]): HomeWidget[] {
   const stamp = Date.now().toString(36);
-  return widgets.map((widget, index) => ({
-    ...widget,
-    id: newHomeWidgetId(widget.kind, `${stamp}${index.toString(36)}`),
-  }));
+  // Copies find their own free spot on the Home they land on.
+  return widgets.map((widget, index) => {
+    const copy: HomeWidget = { ...widget, id: newHomeWidgetId(widget.kind, `${stamp}${index.toString(36)}`) };
+    delete copy.layout;
+    return copy;
+  });
 }
 
 function totalHomeWidgetCount(templates: readonly HomeTemplate[]): number {

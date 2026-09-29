@@ -17,7 +17,7 @@ cover native games. OpenAPI lists every server route/method; per-server
 capabilities report adapter limits. This is not server-scoped credential support,
 universal imported-manager control, or a live game-boot compatibility claim.
 
-Helix is a **private-LAN release** (currently 1.7.2). The authenticated dashboard, typed Linux broker,
+Helix is a **private-LAN release** (currently 1.8.0). The authenticated dashboard, typed Linux broker,
 native Minecraft manager, optional AMP bridge, Hooks, multi-layout Home,
 storage tools, selected package updates, host controls, optional
 unprivileged terminal, and installable UI-only Strands are implemented. Portable tests and focused mock/pure
