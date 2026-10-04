@@ -24,7 +24,9 @@ ProtectHome=read-only
 # Managed content roots stay explicit. The OS package, UFW, and recurring-reboot
 # operations also need the package-managed trees and kernel firewall controls;
 # removing these exceptions intentionally makes those mutations fail closed.
-ReadWritePaths=/run/helix /run/docker.sock /var/run/docker.sock /var/lib/helix /srv/helix /srv/storage /srv/amp/instances /boot /etc /usr /var
+# A leading '-' lets the unit start when an optional root does not exist on this
+# host; extra storage roots are added by a drop-in such as storage.conf.
+ReadWritePaths=/run/helix -/run/docker.sock -/var/run/docker.sock /var/lib/helix -/srv/helix -/srv/storage -/srv/amp/instances -/boot /etc /usr /var
 ProtectKernelLogs=true
 ProtectControlGroups=true
 ProtectClock=true
