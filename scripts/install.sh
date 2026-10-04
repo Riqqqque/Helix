@@ -211,12 +211,16 @@ bootstrap_release() {
 resolve_source() {
   if [ -n "$SOURCE_DIR" ]; then
     SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
-    [ -f "$SOURCE_DIR/compose.yaml" ] && [ -f "$SOURCE_DIR/Dockerfile" ] || die "$SOURCE_DIR is not a Helix source tree"
+    if [ ! -f "$SOURCE_DIR/compose.yaml" ] || [ ! -f "$SOURCE_DIR/Dockerfile" ]; then
+      die "$SOURCE_DIR is not a Helix source tree"
+    fi
     return
   fi
   # Running from a checkout or an extracted release: use the tree this script lives in.
   local here
-  here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+  # Piped from curl there is no script file, so always download a release then.
+  here=""
+  if [ -f "${BASH_SOURCE[0]:-}" ] && cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null; then here="$(pwd)"; cd - >/dev/null; fi
   if [ -n "$here" ] && [ -f "$here/../compose.yaml" ] && [ -f "$here/../Dockerfile" ] && [ -z "$VERSION" ]; then
     SOURCE_DIR="$(cd "$here/.." && pwd)"
     return
@@ -345,7 +349,9 @@ detect_network() {
   [ "${LAN_CIDR#*/}" -ge 8 ] || die "$LAN_CIDR is too broad; use your LAN subnet"
   PORT="${PORT:-$(env_value HELIX_LAN_PORT 2>/dev/null || true)}"
   PORT="${PORT:-$DEFAULT_PORT}"
-  [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1024 ] && [ "$PORT" -le 65535 ] || die "port must be between 1024 and 65535"
+  if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then
+    die "port must be between 1024 and 65535"
+  fi
   if ss -Hltn "sport = :$PORT" 2>/dev/null | grep -q . && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$PROJECT"; then
     die "port $PORT is already in use on this server; choose another with --port"
   fi
