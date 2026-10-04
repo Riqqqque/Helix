@@ -86,9 +86,11 @@ LABEL org.opencontainers.image.title="Helix LAN gateway" \
       org.opencontainers.image.source="https://github.com/Riqqqque/Helix" \
       org.opencontainers.image.revision="${HELIX_SOURCE_REVISION}"
 USER root
+# At least the patched OpenSSL; newer security releases are accepted so a fresh
+# build does not fail once Alpine stops serving an exact older package.
 RUN apk add --no-cache --upgrade \
-      libcrypto3=3.5.8-r0 \
-      libssl3=3.5.8-r0 && \
+      'libcrypto3>=3.5.8-r0' \
+      'libssl3>=3.5.8-r0' && \
     sed -i 's/^worker_processes  *auto;/worker_processes 1;/' /etc/nginx/nginx.conf && \
     install -d -o 101 -g 101 -m 0755 /etc/nginx/templates
 COPY --chown=101:101 --chmod=0444 deploy/nginx/default.conf.template /etc/nginx/templates/default.conf.template
