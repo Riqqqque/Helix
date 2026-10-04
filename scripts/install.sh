@@ -536,13 +536,20 @@ dashboard_exists() { docker ps -a --format '{{.Names}}' | grep -qx "$PROJECT"; }
 
 issue_token() {
   # Prints the owner setup token, or nothing when an owner already exists.
-  local output
-  if output="$(compose run --rm --no-deps -T --entrypoint /app/bin/helixctl dashboard --config /app/config/helix.toml setup-token 2>&1)"; then
-    printf '%s\n' "$output" | sed -n '2p'
-  elif printf '%s' "$output" | grep -q "owner account already exists"; then
+  # Compose writes progress to stderr; the token is the line after helixctl's label on stdout.
+  local output errors token
+  errors="$(mktemp)"
+  if output="$(compose run --rm --no-deps -T --entrypoint /app/bin/helixctl dashboard --config /app/config/helix.toml setup-token 2>"$errors")"; then
+    rm -f "$errors"
+    token="$(printf '%s\n' "$output" | awk 'found { print; exit } /^Owner setup token/ { found = 1 }' | tr -d '[:space:]')"
+    [ -n "$token" ] || die "helixctl did not print an owner setup token"
+    printf '%s' "$token"
+  elif grep -q "owner account already exists" "$errors"; then
+    rm -f "$errors"
     printf ''
   else
-    printf '%s\n' "$output" >&2
+    cat "$errors" >&2
+    rm -f "$errors"
     die "could not create the owner setup token"
   fi
 }

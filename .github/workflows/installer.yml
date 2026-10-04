@@ -82,7 +82,7 @@ jobs:
             -H 'Content-Type: application/json' --data "$body" \
             "http://$HELIX_IP:$HELIX_PORT/api/v1/setup/owner")"
           echo "owner setup status: $code"
-          test "$code" -ge 200 && test "$code" -lt 300
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then jq -c . /tmp/setup.json || cat /tmp/setup.json; exit 1; fi
 
       - name: Re-running the installer keeps the install and data
         run: |
