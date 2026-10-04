@@ -1,0 +1,116 @@
+name: Installer
+
+# Installs Helix with scripts/install.sh on fresh Ubuntu machines, the same way a
+# headless server would, then checks the dashboard, owner setup, re-runs, the
+# health check, and uninstall.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/install.sh
+      - deploy/**
+      - compose.yaml
+      - Dockerfile
+      - .github/workflows/installer.yml
+  pull_request:
+    paths:
+      - scripts/install.sh
+      - deploy/**
+      - compose.yaml
+      - Dockerfile
+      - .github/workflows/installer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    name: Fresh install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-22.04]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Lint the installer
+        run: |
+          bash -n scripts/install.sh
+          shellcheck -s bash scripts/install.sh
+
+      - name: Install Helix
+        run: sudo bash scripts/install.sh --yes --source "$GITHUB_WORKSPACE" --token-file /tmp/helix-token
+
+      - name: Broker and containers are up
+        run: |
+          systemctl is-active helix-privd
+          test -S /run/helix/privd.sock
+          for name in server-dashboard server-dashboard-gateway; do
+            test "$(docker inspect -f '{{.State.Health.Status}}' "$name")" = healthy
+          done
+          sudo test "$(sudo stat -c %a /opt/helix/helix.env)" = 600
+          sudo test "$(sudo stat -c %a /etc/helix/privd.json)" = 600
+
+      - name: Dashboard answers on the LAN address and refuses wrong hosts
+        run: |
+          ip="$(sudo sed -n 's/^HELIX_LAN_BIND_ADDRESS=//p' /opt/helix/helix.env)"
+          port="$(sudo sed -n 's/^HELIX_LAN_PORT=//p' /opt/helix/helix.env)"
+          echo "HELIX_IP=$ip" >> "$GITHUB_ENV"
+          echo "HELIX_PORT=$port" >> "$GITHUB_ENV"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $ip" "http://$ip:$port/healthz")" = 204
+          code="$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: attacker.example' "http://$ip:$port/healthz" || true)"
+          test "$code" != 204
+
+      - name: Owner can be created with the printed token
+        run: |
+          token="$(sudo cat /tmp/helix-token)"
+          echo "::add-mask::$token"
+          password="$(openssl rand -base64 24)"
+          echo "::add-mask::$password"
+          body="$(jq -n --arg t "$token" --arg p "$password" '{bootstrapToken:$t, loginName:"owner", displayName:"Installer test", password:$p}')"
+          code="$(curl -s -o /tmp/setup.json -w '%{http_code}' -X POST \
+            -H "Host: $HELIX_IP" -H "Origin: http://$HELIX_IP:$HELIX_PORT" \
+            -H 'Content-Type: application/json' --data "$body" \
+            "http://$HELIX_IP:$HELIX_PORT/api/v1/setup/owner")"
+          echo "owner setup status: $code"
+          test "$code" -ge 200 && test "$code" -lt 300
+
+      - name: Re-running the installer keeps the install and data
+        run: |
+          sudo bash scripts/install.sh --yes --source "$GITHUB_WORKSPACE"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $HELIX_IP" "http://$HELIX_IP:$HELIX_PORT/api/v1/setup/status")" = 200
+          curl -s -H "Host: $HELIX_IP" "http://$HELIX_IP:$HELIX_PORT/api/v1/setup/status" | jq -e '.ownerExists == true'
+
+      - name: Health check passes
+        run: sudo bash scripts/install.sh --check
+
+      - name: Broker failures show up in the health check
+        run: |
+          sudo systemctl stop helix-privd
+          if sudo bash scripts/install.sh --check; then echo "check should fail with the broker stopped"; exit 1; fi
+          sudo systemctl start helix-privd
+
+      - name: Uninstall keeps data
+        run: |
+          sudo bash scripts/install.sh --uninstall --yes
+          if systemctl is-active --quiet helix-privd; then echo "broker still running"; exit 1; fi
+          if docker inspect server-dashboard >/dev/null 2>&1; then echo "dashboard container still exists"; exit 1; fi
+          test ! -e /usr/local/libexec/helix-privd
+          sudo test -d /srv/helix/instances
+          sudo test -f /opt/helix/helix.env
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          sudo journalctl -u helix-privd --no-pager -n 80 || true
+          docker logs server-dashboard 2>&1 | tail -40 || true
+          docker logs server-dashboard-gateway 2>&1 | tail -40 || true
