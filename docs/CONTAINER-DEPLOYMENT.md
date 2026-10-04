@@ -1,5 +1,18 @@
 # Private-LAN Container Deployment
 
+> [!TIP]
+> Most people should use the installer instead of this guide:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/Riqqqque/Helix/main/scripts/install.sh | sudo bash
+> ```
+>
+> It performs every step below with safe defaults — groups, folders, broker and
+> deployment settings, systemd units, the build, the first owner token, and an
+> optional UFW rule — and `--check` diagnoses the result. See
+> [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started).
+> This guide remains the reference for reviewing or customising each piece.
+
 ## Status
 
 This is a private-LAN deployment example, not a public-internet installer. Use it

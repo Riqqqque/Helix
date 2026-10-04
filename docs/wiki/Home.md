@@ -15,12 +15,16 @@ Linux broker, so useful host controls never require a general root shell.
 
 ## Start here
 
-New to Helix? On 64-bit systemd Linux, clone the source and run
-`./scripts/install-from-source.sh`. The script walks through a few yes/no
-questions and puts `helixd` on loopback. Game servers, host files, the firewall,
-and packages also need the broker from the container deployment guide.
+New to Helix? It is made for a headless Linux server. SSH in and run:
 
-1. [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started) — install, first sign-in, and the broker.
+```bash
+curl -fsSL https://raw.githubusercontent.com/Riqqqque/Helix/main/scripts/install.sh | sudo bash
+```
+
+It installs everything, then prints the address to open from your laptop and a
+one-time owner token.
+
+1. [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started) — requirements, the installer, and its options.
 2. [Dashboard and Home](https://github.com/Riqqqque/Helix/wiki/Dashboard-and-Home) — layouts, widgets, themes.
 3. [Servers and Marketplace](https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace) — create and run game
    servers, plugins, mods, modpacks, ports, and backups.

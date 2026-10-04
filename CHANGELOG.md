@@ -4,6 +4,45 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.9.0 - 2026-10-04
+
+### Added
+
+- One-command installer for headless Linux servers:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/Riqqqque/Helix/main/scripts/install.sh | sudo bash
+  ```
+
+  It checks the server, offers to install Docker, downloads the latest release
+  and verifies its SHA-256 checksum, detects the server's private address and
+  subnet, creates the Helix groups and folders, writes the broker and deployment
+  settings, builds the containers and broker, installs the systemd units
+  (including the in-app update finalizer), starts everything, optionally opens
+  UFW for the LAN, and prints the dashboard URL and a one-time owner token.
+  `--yes` and flags make it unattended; re-running repairs or upgrades in
+  place; `--check` diagnoses an install; `--uninstall` removes Helix while
+  keeping game servers, worlds, and backups. A server with only a public
+  address is refused instead of exposing the dashboard.
+- An Installer workflow installs Helix on fresh Ubuntu 22.04 and 24.04 machines
+  and checks the dashboard, owner setup with the printed token, re-runs, the
+  health check, and uninstall.
+
+### Fixed
+
+- Fresh builds of the gateway image failed because it pinned OpenSSL to an exact
+  Alpine package that is no longer published. It now requires at least the
+  patched version and accepts newer security releases.
+- The broker's systemd unit failed to start on hosts without the optional
+  `/srv/storage` or `/srv/amp/instances` folders; those sandbox paths are now
+  optional.
+
+### Changed
+
+- The README, Getting Started, and deployment guides lead with the installer.
+  The manual container deployment remains documented for review and
+  customisation.
+
 ## 1.8.0 - 2026-09-29
 
 ### Changed

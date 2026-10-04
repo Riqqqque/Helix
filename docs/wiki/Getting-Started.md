@@ -1,139 +1,126 @@
 # Getting Started
 
-## Before you run Helix
+Helix is built for a headless Linux server: you install it over SSH with one
+command, then use it from a browser on any other computer on your network.
 
-Helix 1.0 is a private-LAN release. Evaluate it on a
-private network with backups and a clear rollback path. Do not forward its
-dashboard port to the public internet or use live data as a first test.
+> [!CAUTION]
+> Helix is a private-LAN release. Keep it on a network you control, do not
+> forward its dashboard port to the internet, and keep independent backups of
+> anything important.
 
-The repository is licensed under `AGPL-3.0-or-later`; that does not turn this
-source workflow into a supported distribution.
+## What you need
 
-Building the complete source requires Rust 1.88 or newer, Node.js 22.12 or
-newer, and npm. Full host and native-server controls additionally require a
-reviewed Linux broker configuration and Docker on the Linux host.
+- A 64-bit Linux server (x86_64 or ARM64) with **systemd**: Ubuntu, Debian,
+  Fedora, Rocky/Alma, openSUSE, Arch, and similar. The installer is tested on
+  fresh Ubuntu 22.04 and 24.04 machines.
+- **Docker Engine with the Compose plugin** (`docker compose`). If it is
+  missing, the installer can install it for you with Docker's official script.
+- A private network address on the server, such as `192.168.1.50`.
+- About 10 GB of free disk and 4 GB of RAM for the first build. Game servers
+  need their own memory on top of that.
+- `curl`, which almost every server already has.
 
-## Choose a path
+You do not need Rust, Node.js, or a desktop on the server. Everything is built
+inside Docker.
 
-1. **Linux systemd package** on a 64-bit x86_64 or aarch64 host you control.
-   Clone the source and run `./scripts/install-from-source.sh`. On a terminal
-   that one command walks through yes/no setup, compiles Helix, and installs
-   `helixd` on loopback (another port if 8080 is taken). Host, file, and
-   native-server controls stay unavailable until `helix-privd` is configured.
-2. **Loopback preview** from a local `cargo`/`npm` build on Windows, macOS, or
-   Linux. This is enough to create the owner, see Home greet your name, and use
-   read-only dashboard pages.
-3. **Private LAN with host and game controls.** Copy the examples, replace
-   every placeholder with that host's address, groups, and storage roots, then
-   follow the container deployment guide.
+## Install
 
-The Linux script is one command after clone, then yes/no questions on a
-terminal. It is still an unsigned source build of a [scoped package lifecycle](https://github.com/Riqqqque/Helix/blob/main/docs/INSTALLATION.md),
-not a signed or supported production installer.
-
-## Install on Linux
-
-From the repository root on a systemd host:
+SSH into the server and run:
 
 ```bash
-./scripts/install-from-source.sh
+curl -fsSL https://raw.githubusercontent.com/Riqqqque/Helix/main/scripts/install.sh | sudo bash
 ```
 
-On a terminal the script asks before installing missing compiler packages,
-offers rustup when Rust is missing or too old, picks another loopback port
-when 8080 is busy (or you can pass `--port 8081`), and asks whether to start
-helixd. Fresh installs print a one-time owner token; open the URL it prints
-and paste the token. Need another token:
+The installer:
 
-```bash
-sudo -u helix -- helixctl --config /etc/helix/helix.toml setup-token
-```
-
-CI and pipes stay non-interactive. Pass `--yes` to skip prompts, or
-`--install-deps` to install only the compiler packages. Rust 1.88+ and
-Node.js 22.12+ are still required for the compile.
-
-Debian/Ubuntu CI covers the package lifecycle. Fedora, RHEL-family, openSUSE,
-Arch, and other systemd GNU/Linux distros are intended source-install targets.
-The installer follows `/etc/os-release` even when it is a symlink, accepts
-`pkgconf` when `pkg-config` is missing, and requires GNU coreutils plus
-util-linux (BusyBox is not enough). OpenRC-only Alpine, NixOS, and Guix are
-not installer targets. Selected APT updates, UFW writes, and one-click
-Tailscale/Jellyfin installs remain Debian-family features.
-
-## Build the source
-
-From the repository root:
+1. Checks the server: Linux, systemd, a 64-bit CPU, and the tools it needs.
+2. Checks Docker and offers to install it if it is missing.
+3. Downloads the latest Helix release and verifies its SHA-256 checksum.
+4. Finds the server's private address and network (for example
+   `192.168.1.50` on `192.168.1.0/24`) and asks you to confirm them.
+5. Creates the `helix-broker` and `helix-terminal` system groups and the folders
+   under `/srv/helix` for game servers, backups, and Helix's own data.
+6. Writes the broker settings to `/etc/helix/privd.json` and the deployment
+   settings to `/opt/helix/helix.env`, both readable only by root.
+7. Builds the Helix containers and the host broker. The first build takes
+   several minutes; later builds reuse most of the work.
+8. Installs and starts the `helix-privd` service, then the dashboard and gateway
+   containers.
+9. If UFW is active, offers to allow your network to reach the dashboard port.
+10. Checks the dashboard responds, then prints where to go:
 
 ```text
-cd frontend
-npm ci --no-audit --no-fund
-npm run build
-cd ..
+Helix is running.
 
-cargo build --locked --release --workspace --all-features
+  Open http://192.168.1.50:3100 from any computer on 192.168.1.0/24.
+  One-time owner setup token: Zm9vYmFy…
+  Paste it within 15 minutes, then create your login.
 ```
 
-`npm run check` and the workspace test/clippy gates are the contributor
-verification path. They are not required just to produce `frontend/dist` and
-the release binaries.
+Open that address on your laptop, paste the token, and choose a login, a
+password, and the name Helix should greet you with. That's it — head to
+**Servers → New server** to create your first game server.
 
-## Run a loopback preview
+## Installer options
 
-This path works on Windows, macOS, and Linux. Host mutations still need the
-Linux broker.
-
-From the repository root in a Bash shell (Git Bash or WSL is fine on Windows):
+Pass options after `bash -s --`, for example:
 
 ```bash
-mkdir -p .helix-data/development
-
-./target/release/helixctl \
-  --data-dir "$(pwd)/.helix-data/development" \
-  setup-token
-
-./target/release/helixd \
-  --listen 127.0.0.1:8080 \
-  --data-dir "$(pwd)/.helix-data/development" \
-  --web-root "$(pwd)/frontend/dist"
+curl -fsSL https://raw.githubusercontent.com/Riqqqque/Helix/main/scripts/install.sh | sudo bash -s -- --storage /mnt/media
 ```
 
-Open the loopback URL printed by the daemon. Paste the one-time token and
-create the owner with a login you will remember and a **display name**. Home
-greets that name. The token expires after 15 minutes and is invalidated when
-replaced or consumed.
+| Option | What it does |
+| --- | --- |
+| `--yes` | Accept the defaults and answer yes, for scripts and provisioning tools |
+| `--lan-ip ADDRESS` | Use this private address instead of the detected one |
+| `--cidr NETWORK/BITS` | The network allowed to open Helix (default: the detected subnet) |
+| `--port PORT` | Dashboard port (default 3100) |
+| `--storage DIR` | A folder Helix may browse and manage, such as a media drive; repeatable |
+| `--terminal-user USER` | Turn on the in-browser terminal for an existing non-root login |
+| `--install-docker` | Install Docker without asking if it is missing |
+| `--open-firewall` | Add the UFW rule without asking when UFW is active |
+| `--version vX.Y.Z` | Install a specific release |
+| `--reconfigure` | Rewrite the generated settings, for example after the server's address changes |
+| `--new-token` | Issue a fresh owner token if the first one expired before you used it |
+| `--token-file FILE` | Write the owner token to a file instead of printing it |
 
-Do not put the token or password in `.env`, shell history, logs, screenshots,
-or source.
+A fully unattended install, for cloud-init, Ansible, or a provisioning script:
 
-## Put it on a Linux server
+```bash
+curl -fsSL https://raw.githubusercontent.com/Riqqqque/Helix/main/scripts/install.sh \
+  | sudo bash -s -- --yes --install-docker --open-firewall --token-file /root/helix-token
+```
 
-The repository contains a constrained dashboard/gateway Compose example and a
-separate systemd example for the root broker. Every bind address, Host, Origin,
-client CIDR, broker group, socket, and managed storage root must match the
-target host before anything starts.
+## Check, repair, update, and remove
 
-1. Copy `.env.example` to `.env`. Replace `192.168.1.10` and `192.168.1.0/24`
-   with this server's private IPv4, the origin you will type in a browser, and
-   the subnet those browsers sit on. Set the two distinct broker/terminal GIDs
-   and the persistent data/backup directories. Wildcards are not allowed.
-2. Copy `deploy/privd.example.json` to `/etc/helix/privd.json`. Replace every
-   `/srv/...` path with directories you created on this host. Do not copy the
-   example roots blindly. `/` as an analysis root is for largest-file scans, not
-   a custom-JAR import boundary.
-3. Keep `ReadWritePaths` in `deploy/helix-privd.service` aligned with those
-   same directories, including `/run/docker.sock` so Overview can list
-   containers. Hosts that already customized that unit can drop
-   `deploy/helix-privd.docker-sock.conf` into `helix-privd.service.d/`.
-4. Follow the
-   [container deployment guide](https://github.com/Riqqqque/Helix/blob/main/docs/CONTAINER-DEPLOYMENT.md)
-   and the
-   [current security model](https://github.com/Riqqqque/Helix/blob/main/docs/SECURITY.md).
+The installer stays on the server at
+`/opt/helix/releases/<version>/scripts/install.sh`. You can also run the
+one-line command again at any time.
 
-The optional Hooks installer can install and start the exact Tailscale package
-on an eligible Debian/Ubuntu host, but the owner must authenticate it and
-explicitly configure the secondary private gateway. Helix does not open router
-ports for the dashboard.
+- **Health check:** `sudo bash /opt/helix/releases/<version>/scripts/install.sh --check`
+  reports whether Docker, the broker, the containers, and the dashboard address
+  are healthy, with the broker's last log lines when something is wrong.
+- **Repair:** running the installer again fixes missing pieces and keeps your
+  settings, data, and game servers.
+- **Update:** use **Host → Update Helix** in the dashboard. It downloads the
+  SHA-256-pinned release, rebuilds Helix, replaces the broker, health-checks,
+  and rolls back on failure. Game servers keep running.
+- **Uninstall:** `--uninstall` stops and removes Helix's containers, services,
+  and binaries, and keeps `/srv/helix` (game servers, worlds, backups) and your
+  settings. `--uninstall --purge` also deletes those after you type `DELETE`.
+
+## Using Helix from outside your home network
+
+Helix only listens on your private network. To reach it from elsewhere, join
+the server and your devices to a private network such as Tailscale (Helix's
+**Hooks** page can install Tailscale on Debian and Ubuntu), then reinstall with
+`--reconfigure --lan-ip <the server's Tailscale 100.x address>`. Never forward
+the dashboard port on your router.
+
+A server with only a public address (most cloud VPS plans) has no private
+network for Helix to use. The installer stops and explains this instead of
+exposing the dashboard to the internet. Add the VPS to Tailscale first, then
+install with `--lan-ip` set to its Tailscale address.
 
 ## Make the dashboard yours
 
@@ -142,17 +129,31 @@ After the first owner exists:
 - type your city on the Home weather widget;
 - use the scratchpad note for ISP details, port forwards, or weekend plans, not
   passwords;
-- open **Edit layout** to add shortcuts and rearrange widgets;
-- create the first native Minecraft server from **Servers → New server** (Helix
-  Native stays separate from any AMP import);
-- pick a theme in Settings, and use **Arrange** (or Settings → Navigation) to
-  hide, add, or reorder pages. Globe starts hidden. That layout stays after a
-  refresh; Helix saves it to this host.
-- Settings → Signed-in session can turn off the 30-minute idle / eight-hour
-  cap if you want this browser to stay signed in until you sign out or change
-  the password. That setting now survives page reloads on the same Helix URL;
-  changing the scheme, host, or port is a different browser origin and requires
-  sign-in.
+- open **Edit layout** to add shortcuts and drag widgets wherever you like;
+- create your first game server from **Servers → New server**, or bring one over
+  from AMP or Pterodactyl with **Copy an existing server**;
+- pick a theme in Settings, and use **Arrange** to hide, add, or reorder pages.
 
-Never post setup tokens, passwords, cookies, CSRF proofs, private addresses,
-hostnames, storage paths, server logs, or world data in an issue or screenshot.
+Never post setup tokens, passwords, cookies, private addresses, hostnames,
+storage paths, server logs, or world data in an issue or screenshot.
+
+## Other ways to run Helix
+
+- **Manual deployment.** Every step the installer automates is documented in the
+  [container deployment guide](https://github.com/Riqqqque/Helix/blob/main/docs/CONTAINER-DEPLOYMENT.md),
+  for operators who want to review or customise each piece.
+- **Dashboard only.** `./scripts/install-from-source.sh` from a clone installs
+  just the web service on loopback, without game servers or host controls.
+- **Loopback preview for development** on Windows, macOS, or Linux:
+
+  ```bash
+  (cd frontend && npm ci --no-audit --no-fund && npm run build)
+  cargo build --locked --release --workspace
+  mkdir -p .helix-data/development
+  ./target/release/helixctl --data-dir "$(pwd)/.helix-data/development" setup-token
+  ./target/release/helixd --listen 127.0.0.1:8080 \
+    --data-dir "$(pwd)/.helix-data/development" --web-root "$(pwd)/frontend/dist"
+  ```
+
+  This needs Rust 1.88+ and Node.js 22.12+, and host controls stay unavailable
+  without the Linux broker.

@@ -57,11 +57,14 @@ Never upload an artifact built from an uncommitted local tree.
 
 ## Installing a new host broker
 
-The dashboard updater rebuilds the `helixd` and gateway containers. The host
-broker, `helix-privd`, runs as a root systemd service outside those containers,
-so a release that changes it needs one owner step on the host. Build the
-`privd` target from the verified release source, then keep the previous binary
-and install the new one:
+Hosts installed with `scripts/install.sh` get broker updates automatically:
+**Host → Update Helix** stages the new `helix-privd` and `helix-terminald`, and
+the `helix-finalize-update` unit installs them, restarts the broker, and rolls
+back on failure. Re-running the installer also rebuilds and reinstalls them.
+
+Hosts deployed by hand without the finalize unit need one owner step when a
+release changes the broker. Build the `privd` target from the verified release
+source, keep the previous binary, and install the new one:
 
 ```bash
 sudo cp -a /usr/local/libexec/helix-privd /usr/local/libexec/helix-privd.previous
@@ -72,6 +75,11 @@ sudo systemctl restart helix-privd
 Game containers keep running while the broker restarts. To roll back, install
 `helix-privd.previous` the same way. The broker skips a configured storage root
 that no longer exists, with a warning, instead of refusing to start.
+
+The installer itself ships inside every release archive, so a release must keep
+`scripts/install.sh`, `compose.yaml`, `Dockerfile`, and `deploy/` together. The
+**Installer** workflow installs each change to those files on fresh Ubuntu
+22.04 and 24.04 machines; tag only after it passes.
 
 ## Verification
 
