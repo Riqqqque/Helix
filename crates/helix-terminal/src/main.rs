@@ -28,6 +28,25 @@ mod linux_daemon {
 
     type DynError = Box<dyn Error + Send + Sync>;
     const MAX_CONCURRENT_TERMINALS: usize = 8;
+
+    /// Takes one terminal slot if fewer than the maximum are in use.
+    fn reserve_slot(active: &AtomicUsize) -> bool {
+        let mut current = active.load(Ordering::Acquire);
+        loop {
+            if current >= MAX_CONCURRENT_TERMINALS {
+                return false;
+            }
+            match active.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+    }
     const OUTPUT_CHUNK_BYTES: usize = 16 * 1024;
     const PATH_VALUE: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
@@ -123,11 +142,7 @@ mod linux_daemon {
                 warn!(%error, "rejected terminal socket peer");
                 continue;
             }
-            let reserved = active
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                    (current < MAX_CONCURRENT_TERMINALS).then_some(current + 1)
-                })
-                .is_ok();
+            let reserved = reserve_slot(&active);
             if !reserved {
                 let _ = send_error(
                     &stream,
