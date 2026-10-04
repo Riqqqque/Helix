@@ -1,5 +1,10 @@
 # Installation Model
 
+> [!NOTE]
+> This page describes the dashboard-only source package. To install the complete
+> Helix — game servers, storage, and host controls — on a server, use the
+> one-command installer in [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started).
+
 ## Current status
 
 The checksummed local release-bundle lifecycle is **SCOPED LIFECYCLE TESTED — PUBLIC SUPPORT BLOCKED**. It includes transactional package-file install/upgrade, explicit package-file rollback, and conservative uninstall scripts. It is not a supported production installer.

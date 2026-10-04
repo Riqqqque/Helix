@@ -114,3 +114,23 @@ jobs:
           sudo journalctl -u helix-privd --no-pager -n 80 || true
           docker logs server-dashboard 2>&1 | tail -40 || true
           docker logs server-dashboard-gateway 2>&1 | tail -40 || true
+
+  published:
+    # Run by hand after a release: the exact one-line command from the README,
+    # which downloads and verifies the latest published release.
+    name: One-line install from the latest release
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Install with the README command
+        run: curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh" | sudo bash -s -- --yes --token-file /tmp/helix-token
+
+      - name: Dashboard answers and the token was issued
+        run: |
+          ip="$(sudo sed -n 's/^HELIX_LAN_BIND_ADDRESS=//p' /opt/helix/helix.env)"
+          port="$(sudo sed -n 's/^HELIX_LAN_PORT=//p' /opt/helix/helix.env)"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $ip" "http://$ip:$port/healthz")" = 204
+          sudo bash -c 'test "$(wc -c < /tmp/helix-token)" -gt 20'
+          ls /opt/helix/releases
+          sudo bash /opt/helix/releases/*/scripts/install.sh --check
