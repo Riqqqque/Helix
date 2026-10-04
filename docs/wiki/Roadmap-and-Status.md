@@ -27,6 +27,9 @@ artifacts, accessibility and mobile review, and broad game-version matrices.
 
 | Release | Highlights |
 | --- | --- |
+| 1.9.0 | [One-command installer](https://github.com/Riqqqque/Helix/wiki/Getting-Started) for headless servers, tested on fresh Ubuntu 22.04 and 24.04; fresh gateway builds fixed |
+| 1.8.0 | Home layout editor rebuilt: drag anywhere, resize from the corner, tiles keep their size while editing |
+| 1.7.2 | Copy buttons work over plain HTTP on a LAN |
 | 1.7.1 | The broker keeps running when a configured storage folder was removed, such as after uninstalling AMP |
 | 1.7.0 | [Copy a setup between servers](https://github.com/Riqqqque/Helix/wiki/Copying-Between-Servers) from the dashboard or API, with backup and automatic rollback |
 | 1.6.0 | **View token** with password check and encrypted copies, **Full access** tokens, marketplace/network/removal permissions for tokens, dashboard preferences sync again |
