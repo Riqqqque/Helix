@@ -98,8 +98,8 @@ instead: the response has `"pending": true` and a `revision` such as
 again. Nothing the game reads changes until the next start, restart, or deploy,
 which installs every staged change while the server is stopped. Replaced and
 deleted files go to `.helix-trash`, as with direct writes. `move` still needs a
-stopped server. Folders for a new staged file are created right away (empty
-folders do not affect a running game). A direct change to a stopped server
+stopped server. Staged files are kept in Helix's own state folder; folders a new
+file needs are created when the change is installed. A direct change to a stopped server
 replaces anything staged for the same path.
 
 Reads take no lock. File changes share the server with each other but wait for a

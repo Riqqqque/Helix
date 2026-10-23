@@ -30,7 +30,7 @@ body:
     id: run_method
     attributes:
       label: Install or run method
-      description: For example, source build, local release bundle, or another exact command.
+      description: For example, the one-command installer, manual container deployment, or a source build.
     validations:
       required: true
   - type: textarea

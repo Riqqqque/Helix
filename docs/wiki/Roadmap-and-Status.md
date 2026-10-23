@@ -27,6 +27,7 @@ artifacts, accessibility and mobile review, and broad game-version matrices.
 
 | Release | Highlights |
 | --- | --- |
+| 1.10.1 | `job_wait` works through the gateway, the installer adds pigz, the Python client waits and deploys, the wiki is rewritten |
 | 1.10.0 | Backups without stopping Minecraft, faster and smaller backups, the backup trash empties itself, file changes staged while a server runs, one-call deploy with rollback, queued jobs, memory overcommit warning |
 | 1.9.0 | [One-command installer](https://github.com/Riqqqque/Helix/wiki/Getting-Started) for headless servers, tested on fresh Ubuntu 22.04 and 24.04; fresh gateway builds fixed |
 | 1.8.0 | Home layout editor rebuilt: drag anywhere, resize from the corner, tiles keep their size while editing |
@@ -43,6 +44,17 @@ artifacts, accessibility and mobile review, and broad game-version matrices.
 | 1.1.1 | The in-app updater works on real hosts |
 | 1.1.0 | Server API tokens with expiry and rotation, server file APIs and OpenAPI, safe Docker cleanup, Valheim, Pumpkin, runtime repair and version choice |
 | 1.0.0 | First private-LAN release |
+
+## Being considered next
+
+These are ideas under consideration, not promises or dates:
+
+- Incremental backups and quick backups of a single folder, such as one plugin.
+- SHA-256 hashes in file listings and downloading a folder as one archive.
+- Larger upload chunks and more than one upload per server at a time.
+- A `patch_text` file action for small edits without resending a whole file.
+- Helix-run maintenance jobs on the host, such as fixing permissions.
+- Off-disk snapshots and server clones.
 
 ## What is intentionally not there
 

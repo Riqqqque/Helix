@@ -20,7 +20,7 @@
   <a href="#install">Install</a> ·
   <a href="https://github.com/Riqqqque/Helix/wiki">User guide</a> ·
   <a href="https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace">Game servers</a> ·
-  <a href="https://github.com/Riqqqque/Helix/wiki/Server-API-Tokens">Automation and AI</a> ·
+  <a href="https://github.com/Riqqqque/Helix/wiki/Automation-API">Automation API</a> ·
   <a href="https://github.com/Riqqqque/Helix/releases">Releases</a> ·
   <a href="PROGRESS.md">What is verified</a>
 </p>
@@ -64,8 +64,15 @@ first and restores it automatically if the server does not come back.
 - **Ports that match the game.** Extra ports for voice chat, web maps, or
   Bedrock players come with presets for the software you run, and collision-safe
   port pools pick free numbers automatically.
-- **Backups** with keep rules, recoverable deletion, a trash that shows its size,
-  and one-click emptying when you choose.
+- **[Backups without downtime](https://github.com/Riqqqque/Helix/wiki/Backups)**:
+  a running Minecraft server is archived while players stay connected. Backups
+  compress on several cores, leave out logs and caches, and are checked before
+  they are kept. Keep rules, recoverable deletion, and a trash that empties
+  itself after the days you choose.
+- **[Safe deploys](https://github.com/Riqqqque/Helix/wiki/Deploying-File-Changes)**:
+  upload plugins and configs while the server runs; they wait until the next
+  restart, or one Deploy call backs up, installs, restarts, checks the server
+  is ready, and puts the old files back if it does not come up.
 - **[Copy a setup between servers](https://github.com/Riqqqque/Helix/wiki/Copying-Between-Servers)**
   — promote a finished test server to your public one: plugins and their
   settings, mods, configuration, datapacks, and optionally worlds. Player data
@@ -74,7 +81,7 @@ first and restores it automatically if the server does not come back.
   with the same Minecraft version, the same port, and the same add-on ports, so
   players join exactly as before.
 
-### Automation and AI
+### Automation
 
 - **[Server API tokens](https://github.com/Riqqqque/Helix/wiki/Server-API-Tokens)**
   scoped to exact servers, with a one-click **Full access** option, expiry you
@@ -83,8 +90,12 @@ first and restores it automatically if the server does not come back.
 - Tokens can run everything a server needs — files and uploads, console,
   lifecycle, settings, updates, backups, marketplace installs, and transfers —
   and never reach host controls.
-- A documented [OpenAPI contract](docs/openapi.json), a Python client, and an
-  audit trail for every token call.
+- A documented [OpenAPI contract](docs/openapi.json), a
+  [full API reference](https://github.com/Riqqqque/Helix/wiki/Automation-API),
+  a Python client, `job_wait` instead of polling, and an audit trail for every
+  token call.
+- Jobs for the same server wait in line and say what they are waiting for
+  instead of failing.
 
 ### Host, storage, and network
 
@@ -179,7 +190,7 @@ access away from home, is in
 ```mermaid
 flowchart LR
   Browser[Web dashboard] --> Gateway[Private gateway]
-  Tools[Scripts, plugins, AI tools] -->|scoped server token| Gateway
+  Tools[Scripts and build pipelines] -->|scoped server token| Gateway
   Gateway --> Daemon[helixd]
   Daemon --> State[(State, preferences, encrypted token copies)]
   Daemon -->|typed local protocol| Broker[helix-privd]
@@ -252,13 +263,13 @@ Useful starting points:
 - [Wiki](https://github.com/Riqqqque/Helix/wiki) — the operator guide
 - [Changelog](CHANGELOG.md) — what changed in each release
 - [Progress](PROGRESS.md) — what is implemented and what is verified
-- [Server tokens](docs/SERVER-TOKENS.md) and [API contract](docs/API.md)
+- [Automation API](https://github.com/Riqqqque/Helix/wiki/Automation-API), [server tokens](docs/SERVER-TOKENS.md), and [API contract](docs/API.md)
 - [Security model](docs/SECURITY.md) and [security policy](SECURITY.md)
 - [Roadmap](ROADMAP.md) and [next work](NEXT.md)
 
 ## License
 
-Helix is versioned as `1.10.0` and licensed under the
+Helix is versioned as `1.10.1` and licensed under the
 [GNU Affero General Public License v3.0 or later](LICENSE).
 
 Public source availability does not mean production support, stable

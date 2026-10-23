@@ -23,9 +23,15 @@ restores that backup automatically.
    part, the plugin and mod JARs involved, and anything that would stop the copy.
 5. Type the target server's name and choose **Copy to …**.
 
+The copy runs as a background job. If either server is busy, for example with a
+backup, an update, or a deploy, the copy waits in line until both are free, and
+the job stage says what it is waiting for. While the copy runs, other jobs on
+either server wait behind it.
+
 The target stops while files are copied and starts again if it was running, so
 players are disconnected for a minute or two. The result lists how many files
-were copied, which older JARs were replaced, and where the backup is.
+were copied per part, which older JARs were replaced or removed, any warnings,
+and the ID of the target's backup.
 
 ## What you can copy
 
@@ -72,12 +78,21 @@ are missing from the source, so both servers end up with the same set.
 
 - Copying to an AMP or other imported server. Helix never writes AMP files;
   [bring the server into Helix](https://github.com/Riqqqque/Helix/wiki/Server-Migration) first.
-- Plugins onto a mod server, or mods onto a different loader.
-- Server configuration between different kinds of server software.
+- Plugins onto a mod server, or from a mod server. Plugins move between Paper,
+  Purpur, Folia, Leaves, Pufferfish, and custom JAR servers.
+- Mods onto a different loader. Fabric and Quilt count as one loader; Forge and
+  NeoForge are separate.
+- Server configuration between different software families (plugin servers,
+  Fabric and Quilt, Forge, NeoForge, Vanilla). A custom JAR server on either side
+  is allowed.
 - Worlds or datapacks onto an older Minecraft version, which would damage them.
-- Pumpkin servers, which use their own plugin format.
-- Copies larger than 64 GiB, or when the disk lacks room for the copy and the
-  target's backup.
+- Pumpkin servers, which use their own plugin format, and servers for other
+  games. Transfers work only between Helix Java Minecraft servers.
+- Copies larger than 64 GiB in total, more than 400,000 files, or any single
+  file over 1 GiB.
+- Copies when the disk lacks room for the copy and the target's backup: Helix
+  wants at least twice the size of each part plus 1 GiB free.
+- A copy where the source has nothing for the parts you chose.
 
 Different Minecraft versions on the two servers are allowed with a warning;
 check that every plugin supports the target's version.
@@ -94,9 +109,14 @@ writes every file without following links. It then restores ownership, starts
 the server, and waits until it responds. Any failure restores the backup and the
 server's previous running state.
 
+The target's backup is taken before the target stops, without pausing world
+saves. If the target's world matters and you are not copying worlds, stop the
+target first, or take a backup of it yourself, so the safety copy has every last
+change. See [Backups](https://github.com/Riqqqque/Helix/wiki/Backups).
+
 ## From the API
 
-Scripts and AI assistants can do the same with a
+Scripts can do the same with a
 [server API token](https://github.com/Riqqqque/Helix/wiki/Server-API-Tokens) that lists **both** servers. Full access
 covers it; otherwise the token needs **Read files** plus **View** for the check,
 or **Write files** for the copy.

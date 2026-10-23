@@ -277,6 +277,25 @@ ensure_docker() {
   fi
 }
 
+# pigz lets backups compress on several cores. Helix falls back to gzip without
+# it, so a failed install only warns.
+ensure_pigz() {
+  if have pigz; then
+    info "pigz present for parallel backups"
+    return
+  fi
+  if have apt-get; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq pigz >/dev/null 2>&1       || { apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq pigz >/dev/null 2>&1; } || true
+  elif have dnf; then
+    dnf install -y -q pigz >/dev/null 2>&1 || true
+  fi
+  if have pigz; then
+    info "Installed pigz for parallel backups"
+  else
+    warn "pigz is not installed; backups will compress on one core. Install the pigz package to make them faster."
+  fi
+}
+
 is_private_ipv4() {
   local ip="$1" a b
   IFS=. read -r a b _ _ <<< "$ip"
@@ -702,6 +721,7 @@ main() {
   resolve_source
   info "Source: $SOURCE_DIR ($(source_version "$SOURCE_DIR"))"
   ensure_docker
+  ensure_pigz
   detect_network
   ensure_groups
   ensure_directories

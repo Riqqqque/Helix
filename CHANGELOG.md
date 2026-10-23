@@ -4,6 +4,32 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.10.1 - 2026-10-22
+
+### Fixed
+
+- `GET /api/v1/automation/jobs/{job_id}/wait` works through the bundled
+  gateway. In 1.10.0 the gateway added an `Origin` header to it, so token calls
+  were refused.
+- The deploy dialog no longer promises that players stay online during the
+  backup on Pumpkin, which stops for backups.
+
+### Added
+
+- The installer installs `pigz` when it is missing (APT or DNF), so backups
+  compress on several cores on new hosts. Without it Helix still uses gzip.
+- The Python token client has `wait_job`, a `wait_for_job` that uses the wait
+  route instead of polling, and `deploy` for staged changes.
+
+### Changed
+
+- The wiki was rewritten and expanded: installation and configuration
+  reference, troubleshooting and FAQ, backups, deploying file changes, a full
+  owner API reference, a full automation API reference with curl, Python, and
+  PowerShell examples, and a glossary.
+- Token settings and the README describe tokens as being for scripts, plugins,
+  and build pipelines.
+
 ## 1.10.0 - 2026-10-22
 
 ### Added

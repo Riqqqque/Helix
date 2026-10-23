@@ -5,6 +5,7 @@ import base64
 import hashlib
 import ipaddress
 import json
+import re
 import math
 import os
 import stat as file_stat
@@ -82,7 +83,8 @@ class HelixClient:
         headers = {"Accept": "application/json"}
         api_token = getattr(self, "_api_token", None)
         if api_token is not None:
-            if path not in ("/api/v1/automation/server", "/api/v1/automation/jobs"):
+            if parts.path not in ("/api/v1/automation/server", "/api/v1/automation/jobs") and not re.fullmatch(
+                    r"/api/v1/automation/jobs/[0-9a-f-]{36}/wait", parts.path):
                 raise ValueError("Server tokens can only call the automation API")
             headers["Authorization"] = "Bearer " + api_token
         if self._csrf:
@@ -446,3 +448,41 @@ class HelixTokenClient(HelixClient):
 
     def job_status(self, job_id, *, timeout=None):
         return self.request("POST", "/api/v1/automation/server", {"operation": "job_status", "job_id": job_id}, _timeout=timeout)
+
+    def wait_job(self, job_id, *, timeout_seconds=12):
+        """Wait up to 12 seconds for a job; the result has finished true or false."""
+        if not re.fullmatch(r"[0-9a-f-]{36}", job_id or ""):
+            raise ValueError("Invalid job ID")
+        seconds = max(0, min(12, int(timeout_seconds)))
+        return self.request(
+            "GET",
+            "/api/v1/automation/jobs/" + job_id + "/wait?timeout_seconds=" + str(seconds),
+            _timeout=max(self.timeout, seconds + 10),
+        )
+
+    def wait_for_job(self, job_id, *, timeout=300, interval=2):
+        """Wait for a job to finish using job_wait instead of polling."""
+        if not (math.isfinite(timeout) and timeout > 0):
+            raise ValueError("Job timeout must be finite and positive")
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise HelixError(None, "job_deadline_reached_not_cancelled")
+            job = self.wait_job(job_id, timeout_seconds=min(12, max(1, int(remaining))))
+            if not isinstance(job, dict) or job.get("id") != job_id:
+                raise HelixError(200, "invalid_job_response")
+            status = job.get("status")
+            if status == "complete":
+                return job
+            if status == "failed":
+                raise HelixError(200, "job_failed")
+            if status not in ("queued", "running"):
+                raise HelixError(200, "unknown_job_status")
+
+    def deploy(self, server_id, *, backup=True, start=True, expect_log=None, revert_on_failure=True):
+        """Install the server's staged file changes as one job and return its job ID."""
+        options = {"backup": backup, "start": start, "revert_on_failure": revert_on_failure}
+        if expect_log:
+            options["expect_log"] = expect_log
+        return self.execute("deploy_pending_changes", instance_id=server_id, options=options)

@@ -34,7 +34,7 @@ describe('server token settings', () => {
 
   it('marks which tokens can be viewed again and names permissions plainly', () => {
     const data = catalog({ permissions: ['view', 'files.write', 'all'], tokens: [
-      { id: 'one', name: 'AI', servers: ['helix:one'], permissions: ['all'], expires_at: null, revoked_at: null, viewable: true },
+      { id: 'one', name: 'Deploy script', servers: ['helix:one'], permissions: ['all'], expires_at: null, revoked_at: null, viewable: true },
       { id: 'two', name: 'Old', servers: ['helix:one'], permissions: ['view'], expires_at: null, revoked_at: null },
     ] });
     expect(data.tokens.map((t) => t.viewable)).toEqual([true, false]);

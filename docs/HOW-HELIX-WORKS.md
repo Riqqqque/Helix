@@ -94,8 +94,8 @@ permanent or unlimited.
 Per-instance guards serialize incompatible work. Creation, update, backup, and
 marketplace installs expose background job status. The browser keeps only an
 opaque job receipt so a reload reattaches to status instead of submitting the
-mutation again. Current job state still lives for the broker process lifetime
-and is not yet a crash-persistent queue. Native
+mutation again. Job records are saved and survive a broker restart; a job that
+was running when the broker stopped is reported as failed, not resumed. Native
 kill is a confirmed SIGKILL that can run beside a hung stop or restart; it is
 not offered for AMP.
 

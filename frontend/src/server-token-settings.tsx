@@ -106,10 +106,10 @@ export function ServerTokenSettings({ csrfToken, servers }: { csrfToken: string;
   }
 
   return <section class="settings-card server-token-settings">
-    <div class="settings-card__head"><div><Icon name="servers" /><span><h2>Server API tokens</h2><p>Give a tool or AI access to selected servers without sharing your login.</p></span></div></div>
+    <div class="settings-card__head"><div><Icon name="servers" /><span><h2>Server API tokens</h2><p>Give a script or tool access to selected servers without sharing your login.</p></span></div></div>
     {error !== null && <div class="server-token-settings__error"><InlineError message={error} /></div>}
     {data === null ? <div class="server-token-settings__intro">
-      <p>Create, view, rotate, and revoke tokens for scripts, plugins, and AI tools.</p>
+      <p>Create, view, rotate, and revoke tokens for scripts, plugins, and build pipelines.</p>
       <button class="button button--quiet" type="button" disabled={busy} onClick={() => void run(refresh)}>{busy ? 'Loading…' : 'Manage tokens'}</button>
     </div> : <>
       {secret !== null && <div class="server-token-settings__secret" role="status">

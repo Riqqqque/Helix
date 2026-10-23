@@ -38,7 +38,7 @@ Current bounded behavior includes:
   excludes optional/client-only files, and atomically rolls back incomplete
   fresh instances.
 
-Current job state is broker-lifetime state, not a durable distributed queue.
+Job records survive a broker restart, but jobs are not resumed and there is no distributed queue.
 Helix does not dynamically increase a server heap, alter player caps, shard a
 world, move players between hosts, or horizontally scale Minecraft.
 

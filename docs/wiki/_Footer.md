@@ -1,0 +1,1 @@
+Helix is a private-LAN release licensed under AGPL-3.0-or-later. Found a mistake on this page? [Open an issue](https://github.com/Riqqqque/Helix/issues/new/choose) or edit [`docs/wiki`](https://github.com/Riqqqque/Helix/tree/main/docs/wiki) in the repository; the wiki is published from there.

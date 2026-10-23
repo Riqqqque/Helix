@@ -10,8 +10,10 @@ updater.
 
 Check these first:
 
-- [Getting Started](docs/wiki/Getting-Started.md), including the Linux
-  from-source install;
+- [Troubleshooting and FAQ](https://github.com/Riqqqque/Helix/wiki/Troubleshooting-and-FAQ);
+- [Getting Started](https://github.com/Riqqqque/Helix/wiki/Getting-Started) and
+  [Installation and Configuration](https://github.com/Riqqqque/Helix/wiki/Installation-and-Configuration);
+- the output of `sudo bash install.sh --check` on the server;
 - [current verified status](PROGRESS.md);
 - [known next work and release gates](NEXT.md);
 - [private-LAN container boundaries](docs/CONTAINER-DEPLOYMENT.md);

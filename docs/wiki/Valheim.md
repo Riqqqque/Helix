@@ -1,20 +1,22 @@
 # Valheim servers
 
-Helix runs the Linux dedicated server in its own container. Each server has its own world data, password, resource limits, mods, backups and console history. AMP and other managers stay separate.
+Helix runs the Linux Valheim dedicated server in its own container. Each server has its own world data, password, resource limits, mods, backups and console history. AMP and other managers stay separate.
+
+This integration was checked on Linux with Valheim 1.0.7, the Thunderstore BepInEx pack 5.4.2350 and Jötunn 2.29.2: install, startup, world generation, stop and reload, mods, crossplay registration, file repair, and backup restore. A real external player joining was not tested. See [`docs/VALHEIM-VALIDATION.md`](https://github.com/Riqqqque/Helix/blob/main/docs/VALHEIM-VALIDATION.md).
 
 ## Create a server
 
 1. Open **Servers → New server → Valheim**.
-2. Choose a name, memory and optional CPU limit. Start with 4 GiB of memory; larger mod lists may need more. Vanilla Valheim supports up to 10 players. Higher limits need a compatible mod and are not a built-in launch setting.
+2. Choose a name, memory (1–16 GiB) and optional CPU limit. Start with 4 GiB of memory; larger mod lists may need more. Vanilla Valheim supports up to 10 players. Higher limits need a compatible mod and are not a built-in launch setting.
 3. Choose a world name and join password. A blank password during creation generates one; it is available in the server's Settings afterward.
-4. Leave ports on Automatic, or choose two consecutive UDP ports from your Valheim pool.
+4. Leave ports on Automatic, or choose a game port from your Valheim pool. Helix publishes it and the next port, both UDP.
 5. Choose Steam-only or Crossplay, then create the server. SteamCMD installs the current stable build on the first boot. Later starts reuse it; game updates are manual.
 
-The first install includes downloading SteamCMD and the server, then generating the world. It is not instantaneous. Helix waits for the game's connection message instead of declaring success after an arbitrary delay. A SteamCMD cold-start metadata failure gets a bounded retry.
+The first install includes downloading SteamCMD and the server, then generating the world. It is not instantaneous. Helix waits for the game's connection message instead of declaring success after an arbitrary delay, for up to 20 minutes. A SteamCMD cold-start metadata failure gets a bounded retry.
 
 ## Joining
 
-**Steam-only:** use the host's LAN IP and game port on your own network. For players outside the LAN, manually forward the game UDP port and the next UDP port to that host. The defaults are **2456–2457 UDP**. Helix can prepare its host firewall rules but never changes the router.
+**Steam-only:** use the host's LAN address and game port on your own network. For players outside the LAN, forward the game UDP port and the next UDP port to that host in your router. The defaults are **2456–2457 UDP**. Helix can prepare its host firewall rules for both ports when UFW is active, but never changes the router.
 
 **Crossplay:** use the code in Console, the in-game list, or the public-IP method supported by the game. PlayFab relays do not require router forwarding. Local and loopback IP connections do not work in crossplay mode. Crossplay is separate from showing the server in the public list. Xbox players cannot install client-side mods.
 
@@ -45,6 +47,12 @@ Settings has a shortcut to the access files in the server root:
 - `permittedlist.txt`: allowed players. A non-empty list excludes everyone else.
 
 Use one case-sensitive `Platform_UserID` per line, as shown in a player's F2 screen or server log. Vanilla Valheim does not provide an ordinary stdin/RCON command console. Helix's Console shows persistent output; use the game's supported administrator commands in game.
+
+## Starting, stopping and backups
+
+Start, Restart and deploys wait until the runtime reports that the server accepts connections. Stop gives Valheim up to 120 seconds to save the world and exit.
+
+Valheim backups stop the server. **Back up now** on a running Valheim server stops it (with the same 120-second save), archives the whole server folder, starts it again and waits until it is ready. Live backups without a restart are only for Java Minecraft. The archive leaves out only the Files trash. Mod installs, updates and removals make their own full backup first and need the server stopped anyway. See [Backups](https://github.com/Riqqqque/Helix/wiki/Backups) for restore, keep rules and the trash.
 
 ## Mods and modpacks
 

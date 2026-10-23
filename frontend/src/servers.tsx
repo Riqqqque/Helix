@@ -4416,7 +4416,7 @@ function DeployChangesDialog({
         <input type="checkbox" checked={backup} disabled={busy} onChange={(event) => setBackup(event.currentTarget.checked)} />
         <span>
           <strong>Back up first</strong>
-          <small>{detail.kind === "minecraft" ? "Players stay online during the backup." : "The server stops for the backup."}</small>
+          <small>{detail.kind === "minecraft" && detail.software.toLowerCase() !== "pumpkin" ? "Players stay online during the backup." : "The server stops for the backup."}</small>
         </span>
       </label>
       <label class="field">

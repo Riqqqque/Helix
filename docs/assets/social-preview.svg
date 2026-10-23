@@ -34,18 +34,18 @@
     <circle cx="122" cy="122" r="6" fill="#a0f0c1"/>
   </g>
 
-  <text x="334" y="188" fill="#8d99aa" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" letter-spacing="7">LOCAL-FIRST LINUX SERVER DASHBOARD</text>
+  <text x="334" y="188" fill="#8d99aa" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="700" letter-spacing="7">SELF-HOSTED LINUX SERVER DASHBOARD</text>
   <text x="326" y="294" fill="#f5f7fb" font-family="Segoe UI, Arial, sans-serif" font-size="112" font-weight="800" letter-spacing="13">HELIX</text>
   <text x="110" y="394" fill="#c8d0dc" font-family="Segoe UI, Arial, sans-serif" font-size="31" font-weight="400">Private host and game-server manager.</text>
-  <text x="110" y="438" fill="#c8d0dc" font-family="Segoe UI, Arial, sans-serif" font-size="31" font-weight="400">Modular dashboard. Real Linux controls.</text>
+  <text x="110" y="438" fill="#c8d0dc" font-family="Segoe UI, Arial, sans-serif" font-size="31" font-weight="400">Live backups, safe deploys, real Linux controls.</text>
 
   <rect x="110" y="500" width="210" height="56" rx="28" fill="#71e6a3" fill-opacity="0.10" stroke="#71e6a3" stroke-opacity="0.35"/>
-  <rect x="338" y="500" width="190" height="56" rx="28" fill="#71e6a3" fill-opacity="0.10" stroke="#71e6a3" stroke-opacity="0.35"/>
-  <rect x="546" y="500" width="252" height="56" rx="28" fill="#71e6a3" fill-opacity="0.10" stroke="#71e6a3" stroke-opacity="0.35"/>
-  <rect x="816" y="500" width="230" height="56" rx="28" fill="#71e6a3" fill-opacity="0.10" stroke="#71e6a3" stroke-opacity="0.35"/>
-  <text x="215" y="537" text-anchor="middle" fill="#a0f0c1" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="2">PRIVATE ALPHA</text>
-  <text x="433" y="537" text-anchor="middle" fill="#a0f0c1" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="2">PRIVATE NETWORK</text>
-  <text x="672" y="537" text-anchor="middle" fill="#a0f0c1" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="2">NATIVE SERVERS</text>
-  <text x="931" y="537" text-anchor="middle" fill="#a0f0c1" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="2">SOURCE BUILD</text>
+  <rect x="340" y="500" width="240" height="56" rx="28" fill="#71e6a3" fill-opacity="0.10" stroke="#71e6a3" stroke-opacity="0.35"/>
+  <rect x="600" y="500" width="240" height="56" rx="28" fill="#71e6a3" fill-opacity="0.10" stroke="#71e6a3" stroke-opacity="0.35"/>
+  <rect x="860" y="500" width="220" height="56" rx="28" fill="#71e6a3" fill-opacity="0.10" stroke="#71e6a3" stroke-opacity="0.35"/>
+  <text x="215" y="537" text-anchor="middle" fill="#a0f0c1" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2">PRIVATE LAN</text>
+  <text x="460" y="537" text-anchor="middle" fill="#a0f0c1" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2">GAME SERVERS</text>
+  <text x="720" y="537" text-anchor="middle" fill="#a0f0c1" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2">LIVE BACKUPS</text>
+  <text x="970" y="537" text-anchor="middle" fill="#a0f0c1" font-family="Segoe UI, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2">SCOPED API</text>
   <rect x="104" y="472" width="1072" height="2" fill="url(#line)"/>
 </svg>

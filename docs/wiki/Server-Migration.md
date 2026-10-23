@@ -42,7 +42,7 @@ custom server — type the exact Minecraft version, not latest. Bedrock stays in
 AMP. If AMP is updating or still starting, Helix treats that as running and
 refuses the copy.
 
-## Folder path (Pterodactyl, AMP V Rising / Valheim / Terraria, manual)
+## Folder path (Pterodactyl, AMP non-Minecraft games, manual)
 
 1. Stop the server in Pterodactyl or AMP.
 2. Make sure the parent folder is a helix-privd `managed_roots` path. The
@@ -52,10 +52,14 @@ refuses the copy.
 3. **New server → Copy an existing server → Folder on this host**, paste the
    absolute path, Inspect, then copy.
 
-AMP V Rising, Valheim, and Terraria are not in Helix’s Minecraft-only AMP
-inventory. Use the instance folder (`/home/amp/.ampdata/instances/Name` on a
-typical AMP host). Helix looks inside for saves, worlds, and mods. Wine and
-SteamCMD trees are skipped; Helix installs those games itself.
+Helix's AMP inventory is Minecraft-only, so copy any other AMP game from its
+instance folder (`/home/amp/.ampdata/instances/Name` on a typical AMP host).
+Helix looks inside the folder, and a few levels below it, for a game it
+recognizes: Minecraft Java, V Rising, Valheim, Terraria, Palworld, Satisfactory,
+Project Zomboid, 7 Days to Die, Rust, Sons of the Forest, Factorio, Don't Starve
+Together, or Vintage Story. Hytale servers and Minecraft Bedrock or PocketMine
+folders are not recognized; Bedrock stays in its current manager. Wine, SteamCMD,
+and server binaries are skipped, because Helix installs each game itself.
 
 ## What gets copied
 
@@ -65,6 +69,18 @@ SteamCMD trees are skipped; Helix installs those games itself.
 | V Rising | Saves and host settings (`SaveName`, password, description kept). Helix rewrites ports, listing, and the Helix server name. AMP `save-data/Saves` lands in Helix `save/Saves`. | Wine prefix, SteamCMD, dedicated binaries |
 | Valheim | Worlds (`worlds` and `worlds_local`) and BepInEx plugins. A copy named `Dedicated` is kept if the world used another name | SteamCMD, server binaries |
 | Terraria | Worlds and `.tmod` files. A copy named `world.wld` is kept if the world used another name | SteamCMD, server binaries |
+| Palworld | The `Saved` folder (saves and configuration) and `PalWorldSettings.ini`, placed where the Linux server reads them | SteamCMD, engine and server binaries, logs, AMP kvp |
+| Satisfactory | `Saved` (saves) and top-level `.ini` files | SteamCMD, binaries, logs |
+| Project Zomboid | The `Zomboid` folder. Multiplayer saves, the server `.ini`, and `SandboxVars.lua` are renamed to the Helix server's name | Java runtime, server binaries |
+| 7 Days to Die | Saves and generated worlds. Helix writes its own `serverconfig.xml` | Server binaries, `Mods` folder |
+| Rust | The server identity folder (under Helix's identity), `oxide` or `carbon`, and `cfg` files such as `users.cfg` and `bans.cfg` | Server binaries, loose map and save files |
+| Sons of the Forest | `userdata` and saves | Wine prefix, server binaries, the dedicated server config |
+| Factorio | `saves`, `mods`, `scenarios`, `config`, and `script-output`. Loose `.zip` saves go to `saves` | `bin`, `data`, `server-settings.json` (Helix writes its own) |
+| Don't Starve Together | The cluster: `Master` and `Caves` shards, `cluster.ini`, cluster token, and admin, white, and block lists. A copied Caves shard keeps Caves on | Server binaries, downloaded mods, SteamCMD |
+| Vintage Story | The data folder, saves, and mods | Server binaries |
+
+For the Steam and dedicated-server games from Satisfactory down, `steamcmd`,
+`steamapps`, logs, crash dumps, and old backup folders are always skipped.
 
 Limits: 128 GiB, 250,000 files, depth 24, no symbolic links.
 
@@ -136,6 +152,9 @@ automatically; the job result lists them under `extra_ports` and any that were
 taken under `extra_ports_skipped`. The job starts the new server when the copy
 and first boot finish. AMP and Pterodactyl are not deleted.
 
+Sending the same copy again while a copy of that source is still running returns
+the running job (`"reused": true`) instead of starting a second one.
+
 Stop an imported AMP instance first if needed:
 
 ```http
@@ -146,6 +165,10 @@ Content-Type: application/json
 ```
 
 ## After the copy
+
+Take a first backup of the new server once it runs. A running Java Minecraft
+server is backed up without a restart; see
+[Backups](https://github.com/Riqqqque/Helix/wiki/Backups).
 
 If you kept the port, players join exactly as before. If Helix picked a new
 port, update your router forwarding and tell players the new address.
