@@ -4,6 +4,33 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.11.0 - 2026-10-23
+
+### Added
+
+- **Your address** on each server's Overview: type in your own domain or address
+  (for example `play.example.com:25565`) and copy it with one click. Helix only
+  stores and shows it. Available in the API as `custom_address`, `PUT
+  /servers/{id}/address`, and the token operation `set_server_address`
+  (`settings` permission).
+- Console and Logs show colors like a terminal: ANSI colors, 256-color and true
+  color codes, Minecraft `§` codes in command replies, and yellow warnings and
+  red errors and stack traces for plain lines. Minecraft servers now send colored
+  output. **Hide Helix status checks** hides the RCON lines Helix's own checks
+  add.
+- Memory fields accept what you type: `6G`, `6.5 GB`, `6144`, `512 MB`, with
+  common sizes offered as suggestions, on creation, settings, and server copies.
+
+### Changed
+
+- Game containers are created for many players: up to 4096 threads (was 1024 to
+  2048) and 65,536 open files and connections each. Minecraft uses G1 garbage
+  collection tuned for busy Paper servers, with a larger-heap variant above
+  12 GiB. Existing servers are rebuilt with these settings on their next start,
+  restart, or deploy; the old container is kept if the rebuild fails.
+- Minecraft servers can be given up to 64 GiB of memory (was 24 GiB).
+- The deploy job's console-line check ignores color codes.
+
 ## 1.10.2 - 2026-10-23
 
 ### Added

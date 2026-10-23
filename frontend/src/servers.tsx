@@ -37,6 +37,7 @@ import {
   getPendingChanges,
   discardPendingChanges,
   deployPendingChanges,
+  setServerAddress,
   type PendingChange,
   pruneServerBackups,
   purgeTrashedServerBackup,
@@ -117,6 +118,8 @@ import {
   START_WITH_HOST_TITLE,
 } from "./start-with-host";
 import { useJobPolling, type JobPollingController } from "./job-polling";
+import { ConsoleText, isHelixStatusCheckLine } from "./console-format";
+import { MemoryInput } from "./memory-input";
 import {
   getNetworkInventory,
   type GamePortMapping,
@@ -861,7 +864,7 @@ export function memoryBoundsForKind(
     case "palworld":
       return { min: 4_096, max: 32_768 };
     case "minecraft":
-      return { min: 1_024, max: 24_576 };
+      return { min: 1_024, max: 65_536 };
     default:
       return managedGameInfo(kind).memory;
   }
@@ -2020,20 +2023,15 @@ function CreateServerDialog({
             </fieldset>
             <label class="field">
               <span>Memory</span>
-              <select
+              <MemoryInput
+                id="create-minecraft-memory"
                 value={memory}
-                onChange={(event) => {
+                {...memoryBoundsForKind("minecraft")}
+                onChange={(value) => {
                   setMemoryManuallyChanged(true);
-                  setMemory(Number(event.currentTarget.value));
+                  setMemory(value);
                 }}
-              >
-                <option value="2048">2 GiB</option>
-                <option value="4096">4 GiB</option>
-                <option value="6144">6 GiB</option>
-                <option value="8192">8 GiB</option>
-                <option value="12288">12 GiB</option>
-                <option value="16384">16 GiB</option>
-              </select>
+              />
               {mode === "modpack" && modpack !== null && (
                 <small>
                   {memoryManuallyChanged
@@ -2752,6 +2750,7 @@ function ConsolePanel({
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [live, setLive] = useState(true);
+  const [hideStatusChecks, setHideStatusChecks] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [commandNotice, setCommandNotice] = useState<string | null>(null);
@@ -3003,6 +3002,15 @@ function ConsolePanel({
           />
           <span>Live updates</span>
         </label>
+        <label title="Helix checks the server over RCON once a minute, which Minecraft logs as two lines.">
+          <input
+            class="toggle-input"
+            type="checkbox"
+            checked={hideStatusChecks}
+            onChange={(event) => setHideStatusChecks(event.currentTarget.checked)}
+          />
+          <span>Hide Helix status checks</span>
+        </label>
       </div>
       <div
         ref={consoleRef}
@@ -3033,7 +3041,9 @@ function ConsolePanel({
             </span>
           </div>
         ) : (
-          entries.map((entry, index) => {
+          entries
+            .filter((entry) => !hideStatusChecks || entry.kind !== "output" || !isHelixStatusCheckLine(entry.text))
+            .map((entry, index) => {
             const time = entryTime(entry);
             if (entry.kind === "boot")
               return (
@@ -3068,7 +3078,7 @@ function ConsolePanel({
                   key={`${consoleHistoryEntryKey(entry)}-${index}`}
                 >
                   <span>↳</span>
-                  <pre>{entry.text.replace(/^\[helix \d+\] < ?/u, "")}</pre>
+                  <pre><ConsoleText text={entry.text.replace(/^\[helix \d+\] < ?/u, "")} /></pre>
                   {time !== null && <time>{time}</time>}
                 </div>
               );
@@ -3082,7 +3092,7 @@ function ConsolePanel({
                 key={`${consoleHistoryEntryKey(entry)}-${index}`}
               >
                 {time !== null && <time>{time}</time>}
-                <pre>{outputText}</pre>
+                <pre><ConsoleText text={outputText} /></pre>
               </div>
             );
           })
@@ -3326,20 +3336,14 @@ export function SettingsPanel({
             Memory {restartLabel("memory_mb")}{" "}
             <InfoTip text="Helix rebinds the published container when this changes so Java and Docker both get the new limit." />
           </span>
-          <select
+          <MemoryInput
+            id="settings-memory"
             value={settings.memoryMb}
+            {...memoryBoundsForKind("minecraft")}
             disabled={!canManageServers}
             title={manageTitle}
-            onChange={(event) =>
-              update("memoryMb", Number(event.currentTarget.value))
-            }
-          >
-            {allocatedMemoryOptions("minecraft", settings.memoryMb).map((value) => (
-              <option key={value} value={value}>
-                {formatMemoryGiB(value)}
-              </option>
-            ))}
-          </select>
+            onChange={(value) => update("memoryMb", value)}
+          />
         </label>
         <label class="field">
           <span>Game mode {restartLabel("game_mode")}</span>
@@ -3596,18 +3600,14 @@ function AllocatedMemoryEditor({
           Allocated memory{" "}
           <InfoTip text="Helix rebinds the published container when this changes so the new limit is actually used." />
         </span>
-        <select
+        <MemoryInput
+          id={`memory-${detail.id}`}
           value={memoryMb}
+          {...memoryBoundsForKind(detail.kind)}
           disabled={!canManageServers || busy}
           title={manageTitle}
-          onChange={(event) => setMemoryMb(Number(event.currentTarget.value))}
-        >
-          {allocatedMemoryOptions(detail.kind, memoryMb).map((value) => (
-            <option key={value} value={value}>
-              {formatMemoryGiB(value)}
-            </option>
-          ))}
-        </select>
+          onChange={setMemoryMb}
+        />
       </label>
       <button
         class="button button--primary"
@@ -3778,7 +3778,7 @@ function LogsPanel({
           ? "Loading logs…"
           : snapshot.lines.length === 0
             ? "No log output yet."
-            : snapshot.lines.join("\n")}
+            : <ConsoleText text={snapshot.lines.join("\n")} />}
       </pre>
       <small class="tool-foot">
         {snapshot === null
@@ -4200,6 +4200,110 @@ function EmptyBackupTrashDialog({
         </button>
       </div>
     </Dialog>
+  );
+}
+
+/** The owner's own address for players, such as a domain, with a copy button. */
+function CustomAddressCard({
+  detail,
+  csrfToken,
+  canManageServers,
+  onSaved,
+  onSessionExpired,
+}: {
+  detail: NativeServerDetail;
+  csrfToken: string;
+  canManageServers: boolean;
+  onSaved: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(detail.customAddress ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!editing) setDraft(detail.customAddress ?? "");
+  }, [detail.customAddress, editing]);
+  const save = async (value: string | null): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setServerAddress(detail.id, value, csrfToken);
+      setEditing(false);
+      await onSaved();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (editing) {
+    return (
+      <article class="custom-address-card">
+        <span>YOUR ADDRESS</span>
+        <form
+          class="custom-address-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save(draft.trim() === "" ? null : draft.trim());
+          }}
+        >
+          <input
+            type="text"
+            value={draft}
+            maxLength={255}
+            placeholder="play.example.com"
+            aria-label="Your address for players"
+            disabled={busy}
+            onInput={(event) => setDraft(event.currentTarget.value)}
+          />
+          <button class="button button--primary" type="submit" disabled={busy}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+          <button class="button button--quiet" type="button" disabled={busy} onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        </form>
+        <small>A domain or address you set up yourself. Helix only shows it here so you can copy it.</small>
+        <InlineError message={error} />
+      </article>
+    );
+  }
+  return (
+    <article class="custom-address-card">
+      <span>YOUR ADDRESS</span>
+      <strong>{detail.customAddress ?? "Not set"}</strong>
+      <small>
+        {detail.customAddress === null
+          ? "Add a domain you point at this server, such as play.example.com, to copy it quickly."
+          : "Your own address for this server."}
+      </small>
+      <div class="custom-address-actions">
+        {detail.customAddress !== null && <CopyButton text={detail.customAddress} />}
+        <button
+          class="button button--quiet"
+          type="button"
+          disabled={!canManageServers}
+          title={canManageServers ? undefined : "Requires games.manage permission"}
+          onClick={() => setEditing(true)}
+        >
+          <Icon name="edit" size={13} />
+          {detail.customAddress === null ? "Add" : "Edit"}
+        </button>
+        {detail.customAddress !== null && (
+          <button
+            class="button button--quiet"
+            type="button"
+            disabled={!canManageServers || busy}
+            onClick={() => void save(null)}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <InlineError message={error} />
+    </article>
   );
 }
 
@@ -5767,6 +5871,13 @@ function NativeServerPage({
           <>
             <section class="join-card join-card--diagnostics">
               <div class="join-address-grid">
+                <CustomAddressCard
+                  detail={detail}
+                  csrfToken={csrfToken}
+                  canManageServers={canManageServers}
+                  onSaved={refresh}
+                  onSessionExpired={onSessionExpired}
+                />
                 <article>
                   <span>LOCAL / LAN</span>
                   <strong>{joinAddress}</strong>
@@ -7157,19 +7268,13 @@ function MigrateServerDialog({
                 )}
                 <label class="field">
                   <span>Memory</span>
-                  <select
+                  <MemoryInput
+                    id="migrate-memory"
                     value={memory}
+                    {...memoryBoundsForKind(migrateMemoryKind(preflight.game))}
                     disabled={busy}
-                    onChange={(event) => setMemory(Number(event.currentTarget.value))}
-                  >
-                    {allocatedMemoryOptions(migrateMemoryKind(preflight.game), memory).map(
-                      (value) => (
-                        <option key={value} value={value}>
-                          {formatMemoryGiB(value)}
-                        </option>
-                      ),
-                    )}
-                  </select>
+                    onChange={setMemory}
+                  />
                 </label>
                 <CpuCapField
                   value={cpuMillis}
@@ -7659,8 +7764,8 @@ function CreateVRisingDialog({
               <input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} />
             </label>
             <label class="field">
-              <span>Memory (MiB)</span>
-              <input type="number" min={2048} max={24576} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} />
+              <span>Memory</span>
+              <MemoryInput value={memory} min={2048} max={24576} disabled={busy} onChange={setMemory} />
             </label>
             <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
             <label class="field">
@@ -7851,7 +7956,7 @@ export function CreateValheimDialog({
           <p class="dialog-intro">A private Valheim world on your Linux server. Steam installs once; updates are manual. Add mods and their dependencies from the Mods tab after setup.</p>
           <div class="form-grid">
             <label class="field field--wide"><span>Server name</span><input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} /></label>
-            <label class="field"><span>Memory (MiB)</span><input type="number" min={1024} max={16384} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} /></label>
+            <label class="field"><span>Memory</span><MemoryInput value={memory} min={1024} max={16384} disabled={busy} onChange={setMemory} /></label>
             <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
             <div class="field"><span>Players</span><strong>Up to 10</strong><small>Vanilla Valheim’s limit. Higher limits need a compatible mod on the server and clients.</small></div>
             <label class="field field--wide"><span>Ports</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Valheim pool{portPolicy?.nextAvailablePort ? ` (next ${portPolicy.nextAvailablePort})` : ""}</option><option value="manual">Specific UDP game port (also uses the next port)</option></select></label>
@@ -8003,7 +8108,7 @@ function CreateTerrariaDialog({
           <div class="form-grid">
             <label class="field field--wide"><span>Server name</span><input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} /></label>
             <label class="field field--wide"><span>Software</span><select value={software} disabled={busy} onChange={(event) => setSoftware(event.currentTarget.value as "vanilla" | "tmodloader")}><option value="vanilla">Vanilla dedicated</option><option value="tmodloader">tModLoader</option></select></label>
-            <label class="field"><span>Memory (MiB)</span><input type="number" min={512} max={8192} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} /></label>
+            <label class="field"><span>Memory</span><MemoryInput value={memory} min={512} max={8192} disabled={busy} onChange={setMemory} /></label>
             <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
             <label class="field"><span>Player limit</span><input type="number" min={1} max={255} value={players} disabled={busy} onInput={(event) => setPlayers(Number(event.currentTarget.value))} /></label>
             <label class="field field--wide"><span>Port</span><select value={portMode} disabled={busy} onChange={(event) => setPortMode(event.currentTarget.value as "automatic" | "manual")}><option value="automatic">Automatic from the Terraria pool{portPolicy?.nextAvailablePort ? ` (next ${portPolicy.nextAvailablePort})` : ""}</option><option value="manual">Specific TCP port</option></select></label>
@@ -8171,8 +8276,8 @@ function CreatePalworldDialog({
               <input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} />
             </label>
             <label class="field">
-              <span>Memory (MiB)</span>
-              <input type="number" min={4096} max={32768} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} />
+              <span>Memory</span>
+              <MemoryInput value={memory} min={4096} max={32768} disabled={busy} onChange={setMemory} />
             </label>
             <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
             <label class="field">
@@ -8420,8 +8525,8 @@ function CreateManagedGameDialog({
               <input value={name} disabled={busy} onInput={(event) => setName(event.currentTarget.value)} maxlength={80} />
             </label>
             <label class="field">
-              <span>Memory (MiB)</span>
-              <input type="number" min={info.memory.min} max={info.memory.max} step={256} value={memory} disabled={busy} onInput={(event) => setMemory(Number(event.currentTarget.value))} />
+              <span>Memory</span>
+              <MemoryInput value={memory} min={info.memory.min} max={info.memory.max} disabled={busy} onChange={setMemory} />
             </label>
             <CpuCapField value={cpuMillis} onChange={setCpuMillis} logicalCores={logicalCores} disabled={busy} />
             <label class="field">

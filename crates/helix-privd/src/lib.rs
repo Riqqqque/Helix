@@ -305,6 +305,12 @@ pub enum BrokerRequest {
         instance_id: String,
         days: u16,
     },
+    /// Saves the address shown with a copy button for a server; empty clears it.
+    SetServerAddress {
+        instance_id: String,
+        #[serde(default)]
+        address: Option<String>,
+    },
     /// Installs the server's staged file changes as one job.
     DeployPendingChanges {
         instance_id: String,
@@ -1234,8 +1240,8 @@ impl ServerMigrateSpec {
                 if !self.eula_accepted {
                     return Err("the Minecraft EULA must be explicitly accepted".to_owned());
                 }
-                if !(1_024..=24_576).contains(&self.memory_mb) {
-                    return Err("memory must be between 1 and 24 GiB".to_owned());
+                if !(1_024..=65_536).contains(&self.memory_mb) {
+                    return Err("memory must be between 1 and 64 GiB".to_owned());
                 }
                 if !(1..=10_000).contains(&self.max_players) {
                     return Err("player limit must be between 1 and 10,000".to_owned());

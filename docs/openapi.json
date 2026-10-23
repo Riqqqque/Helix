@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "Helix server integration API",
-    "version": "1.10.2",
+    "version": "1.11.0",
     "description": "Private-LAN server management API. Session cookie AND CSRF proof are required together; mutations and file commands require exact Origin. Account capabilities are not per-server credentials. All server routes are listed; broker response objects are not yet all fully typed. Consult per-server capabilities before acting. Do not automatically replay mutations or treat a job ID as completion."
   },
   "servers": [
@@ -565,6 +565,7 @@
                       "purge_backup_trash_older_than",
                       "deploy_pending_changes",
                       "valheim_manage",
+                      "set_server_address",
                       "set_server_network_exposure",
                       "trash_native_server",
                       "server_transfer_preflight",
@@ -5583,6 +5584,59 @@
           }
         },
         "x-helix-capability": "system.view; session cookie, no CSRF"
+      }
+    },
+    "/servers/{instance_id}/address": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "putServersInstanceIdAddress",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Save or clear your own address for players, shown with a copy button",
+        "x-helix-capability": "games.manage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "address": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 255
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     }
   },

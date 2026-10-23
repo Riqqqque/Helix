@@ -754,6 +754,12 @@ impl BrokerContext {
             } => self.native_manager(&instance_id).and_then(|native| {
                 native.set_backup_policy(&instance_id, keep_count, keep_days, trash_days)
             }),
+            BrokerRequest::SetServerAddress {
+                instance_id,
+                address,
+            } => self
+                .native_manager(&instance_id)
+                .and_then(|native| native.set_custom_address(&instance_id, address.as_deref())),
             BrokerRequest::DeployPendingChanges {
                 instance_id,
                 options,

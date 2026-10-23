@@ -153,7 +153,13 @@ host records output even when no browser is open, across restarts, up to the
 configured size limit. Minecraft commands go through RCON on `127.0.0.1` only.
 That port is for the host talking to itself; it is never published to the LAN or
 the internet, and Advanced shows it as **Console: Loopback only**. Helix filters
-out the RCON connect and disconnect lines its own TPS sampling would add.
+out the RCON connect and disconnect lines its own TPS sampling would add, and
+**Hide Helix status checks** (on by default) hides any that remain.
+
+Console and Logs show colors like a terminal: ANSI colors from the server,
+Minecraft `§` color codes in command replies, and, for plain lines, warnings in
+yellow and errors and stack traces in red. Since 1.11.0, Minecraft servers send
+colored output (`-Dterminal.ansi=true`), so plugin colors show up too.
 
 The TPS column for native Minecraft is a short `/tps` sample over the same RCON
 channel. Paper, Purpur, Folia, Leaves, Pufferfish, and some plugins report a
@@ -248,6 +254,9 @@ running, so players are disconnected briefly.
   For Java Minecraft, the setting is also the Java heap (`-Xmx`); the container
   gets about 1 GiB more for Java's own overhead.
 - The CPU cap is off, or 0.25 to 128 cores.
+- Type memory the way you think of it: `6G`, `6.5 GB`, `6144`, or `512 MB` all
+  work, and the field lists common sizes. A bare number under 256 means GiB.
+  Minecraft allows 1 to 64 GiB.
 
 The Servers page warns when the servers' memory settings add up to more than the
 machine has, and the memory setting shows the same warning before you save.
@@ -274,9 +283,15 @@ default to the pack's catalog artwork; **Restore default** brings it back.
 
 ### Join addresses
 
-Overview shows the LAN address, a Tailscale address when one is detected, and the
-public address plus game port when a WAN address is known. **Copy** copies the
-address.
+Overview shows **Your address** (a domain or address you type in yourself), the
+LAN address, a Tailscale address when one is detected, and the public address
+plus game port when a WAN address is known. **Copy** copies any of them.
+
+**Your address** is only for convenience: enter something like
+`play.example.com` or `play.example.com:25565` with **Add**, and Helix keeps it
+with the server and shows it with a copy button. Helix does not create DNS
+records or check that the address points at this host. The API returns it as
+`custom_address` in the server details.
 
 ### The Ports card
 

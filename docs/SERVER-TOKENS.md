@@ -50,7 +50,7 @@ support is unchanged; imported managers retain their actual adapter limits.
 | `files.write` | `server_files`: create, write, mkdir, move, trash, all upload steps, pending_discard; `install_server_marketplace_content` |
 | `start`, `stop`, `restart`, `kill` | Matching `server_action` only; `restart` also allows `deploy_pending_changes` |
 | `console` | `server_console` |
-| `settings` | `server_settings`, `update_server_settings`, `set_native_memory`, `set_native_cpu`, `set_native_extra_ports`, `set_native_start_on_boot`, `set_native_browser_listing`, `valheim_manage` settings actions |
+| `settings` | `server_settings`, `update_server_settings`, `set_native_memory`, `set_native_cpu`, `set_native_extra_ports`, `set_native_start_on_boot`, `set_native_browser_listing`, `set_server_address`, `valheim_manage` settings actions |
 | `update` | `change_native_runtime`, server_action update, `valheim_manage` package and software actions |
 | `backups.read` | `list_backups`, `server_backup_download` |
 | `backups.write` | server_action backup, `restore_backup`, `trash_backup`, `restore_trashed_backup`, `set_backup_policy`, `prune_backups`, `purge_backup_trash`, `purge_backup_trash_older_than` |

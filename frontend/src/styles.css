@@ -3833,7 +3833,40 @@ textarea:focus {
 }
 .join-address-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.custom-address-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.custom-address-form {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.custom-address-form input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: 12px "DM Mono", "Cascadia Mono", monospace;
+}
+.memory-input {
+  display: grid;
+  gap: 3px;
+}
+.memory-input__hint {
+  color: var(--muted);
+  font-size: 9px;
+}
+.memory-input__hint--error {
+  color: var(--danger, #f87171);
 }
 .join-address-grid article {
   min-width: 0;
@@ -4097,6 +4130,21 @@ textarea:focus {
   margin: 4px 0 0;
   white-space: pre-wrap;
   font: inherit;
+}
+.console-level--warn {
+  color: #facc15;
+}
+.console-level--error {
+  color: #f87171;
+}
+.console-level--debug {
+  opacity: 0.6;
+}
+.log-screen .console-level--warn {
+  color: #facc15;
+}
+.log-screen .console-level--error {
+  color: #f87171;
 }
 .console-empty {
   min-height: 370px;

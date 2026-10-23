@@ -34,7 +34,7 @@ Increase the server memory and try again`.
 
 | Game | Allowed | Create default |
 | --- | --- | --- |
-| Minecraft Java | 1–24 GiB | 4 GiB (modpacks: suggested from the loader and free memory) |
+| Minecraft Java | 1–64 GiB | 4 GiB (modpacks: suggested from the loader and free memory) |
 | V Rising | 2–24 GiB | 4 GiB |
 | Valheim | 1–16 GiB | 4 GiB |
 | Terraria | 512 MiB – 8 GiB | 2 GiB |
@@ -145,6 +145,28 @@ important archives to another machine.
 See [Servers and Marketplace](https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace#ports)
 for ports and [Network, Host, and Updates](https://github.com/Riqqqque/Helix/wiki/Network-Host-and-Updates)
 for the host side.
+
+## Built for busy servers
+
+Since 1.11.0 every game container is created with room for many players:
+
+- **Threads:** up to 4096 per container (was 1024 to 2048). Java counts every
+  thread, and large plugin sets and modpacks with many players can use hundreds.
+- **Open files and connections:** 65,536 per container. Every player connection
+  is one open file, alongside world region files and plugin databases.
+- **Minecraft garbage collection:** G1 with the widely used tuning for Paper
+  servers, switching to the larger-heap variant above 12 GiB, so pauses stay
+  short as player counts grow.
+
+Existing servers pick these up on their next **Start**, **Restart**, or deploy:
+Helix rebuilds a stopped server's container when it was made with older
+settings, and keeps the old container if the rebuild fails.
+
+Player traffic goes straight from the internet to the game container through
+Docker's port forwarding; it never passes through the dashboard, so the number
+of players does not load Helix itself. What limits a server is the host's CPU
+(Minecraft's main thread runs on one core), memory, disk speed, and upload
+bandwidth, plus the server software and its plugins or mods.
 
 ## How Helix stays light under load
 

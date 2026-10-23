@@ -424,6 +424,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             post(server_files).layer(tower::limit::ConcurrencyLimitLayer::new(2)),
         )
         .route("/servers/{instance_id}/deploy", post(deploy_server_changes))
+        .route("/servers/{instance_id}/address", put(set_server_address))
         .route(
             "/servers/{instance_id}/appearance",
             get(server_appearance)
@@ -3292,6 +3293,31 @@ async fn server_files(
         BrokerRequest::ServerFiles {
             instance_id,
             request,
+        },
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServerAddressBody {
+    address: Option<String>,
+}
+
+async fn set_server_address(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<ServerAddressBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::SetServerAddress {
+            instance_id,
+            address: body.address,
         },
     )
     .await

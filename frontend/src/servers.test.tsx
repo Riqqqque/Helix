@@ -361,7 +361,7 @@ describe('Servers route', () => {
 
   it('lists allocated memory steps inside each game bound', () => {
     expect(allocatedMemoryOptions('minecraft', 4096)).toEqual([
-      1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576,
+      1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576, 32768, 49152, 65536,
     ]);
     expect(allocatedMemoryOptions('vrising', 4096)[0]).toBe(2048);
     expect(allocatedMemoryOptions('valheim', 4096)).not.toContain(24576);

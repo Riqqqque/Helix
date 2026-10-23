@@ -403,6 +403,7 @@ Deploy options and results are in
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/v1/servers/{instance_id}/marketplace/search` | `games.view` | Query `query`, `offset`, `limit` (default 20, 1–50), `provider`, `catalog` (`content` or `modpacks`) | Search filtered to this server's game version and loader |
 | `GET` | `/api/v1/servers/{instance_id}/marketplace/projects/{project_id}` | `games.view` | Query `provider` | Project and version detail |
+| `PUT` | `/api/v1/servers/{instance_id}/address` | `games.manage` | `address` (string or null) | Saves or clears your own address for players, shown with a copy button |
 | `POST` | `/api/v1/servers/{instance_id}/marketplace/install` | `games.manage` | `project_id`, `version_id` (or null), optional `provider`, optional `restart_server` (boolean) | Job: installs verified JARs into `plugins/` or `mods/`. With `restart_server` on a running server, restarts it, checks it starts, and puts the old files back if not |
 | `GET` | `/api/v1/marketplace/modrinth/image` | `games.view`; session cookie, no CSRF | Query `path` | Same-origin proxy for Modrinth artwork |
 | `GET` | `/api/v1/marketplace/curseforge/image` | `games.view`; session cookie, no CSRF | Query `path` | Same-origin proxy for CurseForge artwork |

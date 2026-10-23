@@ -177,6 +177,10 @@ struct InstanceManifest {
     /// until someone deletes it. None follows the host default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     backup_trash_days: Option<u16>,
+    /// An address the owner types in for players, such as play.example.com. Only
+    /// shown and copied; Helix does not resolve or configure it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    custom_address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     modpack: Option<InstalledModpack>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1859,6 +1863,7 @@ impl NativeManager {
             // runtime's ready marker), which is after Paper prints "Done (…)!".
             "ready": detail_status == "online",
             "busy_with": self.busy_with(&manifest.id),
+        "custom_address": manifest.custom_address,
         "pending_changes": self.pending_path(&manifest.id).ok().and_then(|path| self.api_files.pending_changes(&path).ok()).map_or(0, |changes| changes.len()),
             "players_online": status.as_ref().map_or(0, |value| value.players_online),
             "max_players": status.as_ref().map_or(u64::from(manifest.max_players), |value| value.max_players),
@@ -2141,6 +2146,7 @@ impl NativeManager {
                 self.clear_ready_marker(&manifest)?;
                 let expected = self.minecraft_settings_snapshot(&manifest)?;
                 let since = (now_unix_ms() / 1_000).saturating_sub(1).to_string();
+                self.refresh_container_if_outdated(&manifest)?;
                 self.docker(["start", manifest.container_name.as_str()], 90)?;
                 progress("Waiting until the game is ready", 75);
                 self.wait_until_ready(&manifest, self.ready_timeout(&manifest), |_| {})?;
@@ -2162,8 +2168,12 @@ impl NativeManager {
                             20,
                         )
                         .unwrap_or_default();
-                    if let Some(line) = logs.lines().find(|line| line.contains(expect)) {
-                        return Ok(Some(one_line_tail(line, 300)));
+                    if let Some(line) = logs
+                        .lines()
+                        .map(strip_terminal_sequences)
+                        .find(|line| line.contains(expect))
+                    {
+                        return Ok(Some(one_line_tail(&line, 300)));
                     }
                     if Instant::now() >= deadline {
                         return Err(format!(
@@ -3446,6 +3456,7 @@ impl NativeManager {
                 let expected = self.minecraft_settings_snapshot(manifest)?;
                 if !was_running {
                     self.clear_ready_marker(manifest)?;
+                    self.refresh_container_if_outdated(manifest)?;
                     self.docker(["start", manifest.container_name.as_str()], 90)?;
                 }
                 self.wait_until_ready(manifest, self.ready_timeout(manifest), |_| {})?;
@@ -3465,6 +3476,7 @@ impl NativeManager {
                 }
                 let (applied, pending_error) = self.install_pending_for_start(manifest);
                 let expected = self.minecraft_settings_snapshot(manifest)?;
+                self.refresh_container_if_outdated(manifest)?;
                 self.docker(["start", manifest.container_name.as_str()], 90)?;
                 self.wait_until_ready(manifest, self.ready_timeout(manifest), |_| {})?;
                 self.verify_minecraft_settings(manifest, expected)?;
@@ -3929,6 +3941,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 backup_trash_days: None,
+                custom_address: None,
                 modpack: None,
                 extra_ports: kept_extra_ports.clone(),
             };
@@ -4101,6 +4114,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 backup_trash_days: None,
+                custom_address: None,
                 modpack: None,
                 extra_ports: Vec::new(),
             };
@@ -4275,6 +4289,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 backup_trash_days: None,
+                custom_address: None,
                 modpack: None,
                 extra_ports: Vec::new(),
             };
@@ -4422,6 +4437,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 backup_trash_days: None,
+                custom_address: None,
                 modpack: None,
                 extra_ports: Vec::new(),
             };
@@ -4566,6 +4582,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 backup_trash_days: None,
+                custom_address: None,
                 modpack: None,
                 extra_ports: Vec::new(),
             };
@@ -4725,6 +4742,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 backup_trash_days: None,
+                custom_address: None,
                 modpack: None,
                 extra_ports: Vec::new(),
             };
@@ -6355,7 +6373,11 @@ impl NativeManager {
             "--memory-swap".to_owned(),
             memory,
             "--pids-limit".to_owned(),
-            "1024".to_owned(),
+            "4096".to_owned(),
+            "--ulimit".to_owned(),
+            "nofile=65536:65536".to_owned(),
+            "--label".to_owned(),
+            RUNTIME_PROFILE_LABEL.to_owned(),
             "--cap-drop".to_owned(),
             "ALL".to_owned(),
             "--security-opt".to_owned(),
@@ -6388,10 +6410,8 @@ impl NativeManager {
             manifest.runtime_image.clone(),
             xms,
             xmx,
-            "-XX:+UseG1GC".to_owned(),
-            "-XX:+ParallelRefProcEnabled".to_owned(),
-            "-XX:+DisableExplicitGC".to_owned(),
         ];
+        args.extend(minecraft_jvm_flags(manifest.memory_mb));
         if manifest.is_pumpkin() {
             let unused_udp = format!("0.0.0.0:{0}:{0}/udp", manifest.game_port);
             if let Some(index) = args.iter().position(|arg| arg == &unused_udp) {
@@ -6498,7 +6518,11 @@ impl NativeManager {
             "--memory-swap".to_owned(),
             memory,
             "--pids-limit".to_owned(),
-            "2048".to_owned(),
+            "4096".to_owned(),
+            "--ulimit".to_owned(),
+            "nofile=65536:65536".to_owned(),
+            "--label".to_owned(),
+            RUNTIME_PROFILE_LABEL.to_owned(),
             "--cap-drop".to_owned(),
             "ALL".to_owned(),
             "--security-opt".to_owned(),
@@ -6573,7 +6597,11 @@ impl NativeManager {
             "--memory-swap".to_owned(),
             memory,
             "--pids-limit".to_owned(),
-            "2048".to_owned(),
+            "4096".to_owned(),
+            "--ulimit".to_owned(),
+            "nofile=65536:65536".to_owned(),
+            "--label".to_owned(),
+            RUNTIME_PROFILE_LABEL.to_owned(),
             "--cap-drop".to_owned(),
             "ALL".to_owned(),
             "--security-opt".to_owned(),
@@ -6654,7 +6682,11 @@ impl NativeManager {
             "--memory-swap".to_owned(),
             memory,
             "--pids-limit".to_owned(),
-            "1024".to_owned(),
+            "4096".to_owned(),
+            "--ulimit".to_owned(),
+            "nofile=65536:65536".to_owned(),
+            "--label".to_owned(),
+            RUNTIME_PROFILE_LABEL.to_owned(),
             "--cap-drop".to_owned(),
             "ALL".to_owned(),
             "--security-opt".to_owned(),
@@ -6749,7 +6781,11 @@ impl NativeManager {
             "--memory-swap".to_owned(),
             memory,
             "--pids-limit".to_owned(),
-            "2048".to_owned(),
+            "4096".to_owned(),
+            "--ulimit".to_owned(),
+            "nofile=65536:65536".to_owned(),
+            "--label".to_owned(),
+            RUNTIME_PROFILE_LABEL.to_owned(),
             "--cap-drop".to_owned(),
             "ALL".to_owned(),
             "--security-opt".to_owned(),
@@ -6839,7 +6875,11 @@ impl NativeManager {
             "--memory-swap".to_owned(),
             memory,
             "--pids-limit".to_owned(),
-            "2048".to_owned(),
+            "4096".to_owned(),
+            "--ulimit".to_owned(),
+            "nofile=65536:65536".to_owned(),
+            "--label".to_owned(),
+            RUNTIME_PROFILE_LABEL.to_owned(),
             "--cap-drop".to_owned(),
             "ALL".to_owned(),
             "--security-opt".to_owned(),
@@ -7765,6 +7805,59 @@ impl NativeManager {
     fn instance_path(&self, id: &str) -> Result<PathBuf, String> {
         validate_id(id)?;
         Ok(self.instance_root.join(id))
+    }
+
+    /// Saves the address shown with a copy button on the server page.
+    pub fn set_custom_address(&self, id: &str, address: Option<&str>) -> Result<Value, String> {
+        let address = validate_custom_address(address.unwrap_or(""))?;
+        let mut manifest = self.load_manifest(native_id(id))?;
+        let _operation = self.begin_instance_operation(&manifest.id, "address update")?;
+        manifest.custom_address = address;
+        write_manifest(&self.manifest_path(&manifest.id)?, &manifest)?;
+        Ok(json!({
+            "instance_id": format!("helix:{}", manifest.id),
+            "custom_address": manifest.custom_address
+        }))
+    }
+
+    /// Rebuilds a stopped server's container when it was created with older
+    /// settings, so limits such as threads and open files apply without a manual
+    /// change. The old container is kept until the new one exists.
+    fn refresh_container_if_outdated(&self, manifest: &InstanceManifest) -> Result<(), String> {
+        let name = manifest.container_name.as_str();
+        if self.exact_container_identity(name)?.is_none() || self.container_running(name) {
+            return Ok(());
+        }
+        let profile = self
+            .docker(
+                [
+                    "inspect",
+                    "--format",
+                    "{{index .Config.Labels \"io.helix.runtime-profile\"}}",
+                    name,
+                ],
+                20,
+            )
+            .unwrap_or_default();
+        if profile.trim() == RUNTIME_PROFILE {
+            return Ok(());
+        }
+        let previous = format!("{name}-previous");
+        let _ = self.docker(["rm", previous.as_str()], 30);
+        self.docker(["rename", name, previous.as_str()], 30)?;
+        let data_path = self.instance_path(&manifest.id)?;
+        match self.create_container(manifest, &data_path) {
+            Ok(()) => {
+                let _ = self.docker(["rm", previous.as_str()], 60);
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.docker(["rm", name], 30);
+                let _ = self.docker(["rename", previous.as_str(), name], 30);
+                eprintln!("helix-privd: kept the existing container for {name}: {error}");
+                Ok(())
+            }
+        }
     }
 
     /// Where file changes made while the server runs wait, outside its folder.
@@ -8940,8 +9033,8 @@ fn validate_create_spec(spec: &MinecraftCreateSpec) -> Result<(), String> {
             validate_version(spec.version.trim())?;
         }
     }
-    if !(1_024..=24_576).contains(&spec.memory_mb) {
-        return Err("memory must be between 1 and 24 GiB".to_owned());
+    if !(1_024..=65_536).contains(&spec.memory_mb) {
+        return Err("memory must be between 1 and 64 GiB".to_owned());
     }
     helix_privd::validate_cpu_millis(spec.cpu_millis)?;
     if !(1..=10_000).contains(&spec.max_players) {
@@ -8958,7 +9051,7 @@ fn validate_create_spec(spec: &MinecraftCreateSpec) -> Result<(), String> {
 
 fn allocated_memory_bounds(kind: GameKind) -> (u32, u32) {
     match kind {
-        GameKind::Minecraft => (1_024, 24_576),
+        GameKind::Minecraft => (1_024, 65_536),
         GameKind::VRising => (2_048, 24_576),
         GameKind::Valheim => (1_024, 16_384),
         GameKind::Terraria => (512, 8_192),
@@ -8982,7 +9075,7 @@ fn validate_allocated_memory(kind: GameKind, memory_mb: u32) -> Result<(), Strin
         ));
     }
     Err(match kind {
-        GameKind::Minecraft => "memory must be between 1 and 24 GiB".to_owned(),
+        GameKind::Minecraft => "memory must be between 1 and 64 GiB".to_owned(),
         GameKind::VRising => "V Rising memory must be between 2 and 24 GiB".to_owned(),
         GameKind::Valheim => "Valheim memory must be between 1 and 16 GiB".to_owned(),
         GameKind::Terraria => "Terraria memory must be between 512 MiB and 8 GiB".to_owned(),
@@ -10237,6 +10330,67 @@ fn cached_disk_usage(path: &Path) -> u64 {
         cache.insert(path.to_path_buf(), (Instant::now(), bytes));
     }
     bytes
+}
+
+/// Bumped when game containers gain settings that need a rebuild; older
+/// containers are recreated on their next start.
+const RUNTIME_PROFILE: &str = "2";
+const RUNTIME_PROFILE_LABEL: &str = "io.helix.runtime-profile=2";
+
+/// JVM flags for Minecraft: G1 tuning for many players (the widely used
+/// recommendations for Paper servers, with the larger-heap variant above 12 GiB),
+/// and ANSI colors in the console so it reads like a terminal.
+fn minecraft_jvm_flags(heap_mb: u32) -> Vec<String> {
+    let large = heap_mb > 12_288;
+    let mut flags = vec![
+        "-XX:+UseG1GC",
+        "-XX:+ParallelRefProcEnabled",
+        "-XX:MaxGCPauseMillis=200",
+        "-XX:+UnlockExperimentalVMOptions",
+        "-XX:+DisableExplicitGC",
+        "-XX:G1HeapWastePercent=5",
+        "-XX:G1MixedGCCountTarget=4",
+        "-XX:G1MixedGCLiveThresholdPercent=90",
+        "-XX:G1RSetUpdatingPauseTimePercent=5",
+        "-XX:SurvivorRatio=32",
+        "-XX:+PerfDisableSharedMem",
+        "-XX:MaxTenuringThreshold=1",
+    ];
+    if large {
+        flags.extend([
+            "-XX:G1NewSizePercent=40",
+            "-XX:G1MaxNewSizePercent=50",
+            "-XX:G1HeapRegionSize=16M",
+            "-XX:G1ReservePercent=15",
+            "-XX:InitiatingHeapOccupancyPercent=20",
+        ]);
+    } else {
+        flags.extend([
+            "-XX:G1NewSizePercent=30",
+            "-XX:G1MaxNewSizePercent=40",
+            "-XX:G1HeapRegionSize=8M",
+            "-XX:G1ReservePercent=20",
+            "-XX:InitiatingHeapOccupancyPercent=15",
+        ]);
+    }
+    flags.extend(["-Dterminal.jline=false", "-Dterminal.ansi=true"]);
+    flags.into_iter().map(str::to_owned).collect()
+}
+
+/// A plain host name or address with an optional port, as players would type it.
+fn validate_custom_address(value: &str) -> Result<Option<String>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > 255
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-_:[]".contains(&byte))
+    {
+        return Err("enter a host name or address such as play.example.com or play.example.com:25565, without spaces or a protocol".to_owned());
+    }
+    Ok(Some(value.to_owned()))
 }
 
 const PIGZ: &str = "/usr/bin/pigz";
@@ -11789,6 +11943,7 @@ mod tests {
             backup_keep_count: 0,
             backup_keep_days: 0,
             backup_trash_days: None,
+            custom_address: None,
             modpack: None,
             extra_ports: Vec::new(),
         };
@@ -12511,7 +12666,7 @@ mod tests {
     fn allocated_memory_bounds_match_create_limits() {
         assert_eq!(
             allocated_memory_bounds(GameKind::Minecraft),
-            (1_024, 24_576)
+            (1_024, 65_536)
         );
         assert_eq!(allocated_memory_bounds(GameKind::VRising), (2_048, 24_576));
         assert_eq!(allocated_memory_bounds(GameKind::Valheim), (1_024, 16_384));
@@ -12854,6 +13009,7 @@ mod tests {
             backup_keep_count: 0,
             backup_keep_days: 0,
             backup_trash_days: None,
+            custom_address: None,
             modpack: None,
             extra_ports: Vec::new(),
         };
@@ -12994,6 +13150,7 @@ mod tests {
             backup_keep_count: 2,
             backup_keep_days: 0,
             backup_trash_days: None,
+            custom_address: None,
             modpack: None,
             extra_ports: Vec::new(),
         };
@@ -13123,6 +13280,31 @@ mod tests {
     }
 
     #[test]
+    fn minecraft_flags_scale_with_the_heap_and_enable_colors() {
+        let small = minecraft_jvm_flags(8_192);
+        assert!(small.contains(&"-XX:G1HeapRegionSize=8M".to_owned()));
+        assert!(small.contains(&"-Dterminal.ansi=true".to_owned()));
+        let large = minecraft_jvm_flags(16_384);
+        assert!(large.contains(&"-XX:G1HeapRegionSize=16M".to_owned()));
+        assert!(!large.contains(&"-XX:G1HeapRegionSize=8M".to_owned()));
+    }
+
+    #[test]
+    fn custom_addresses_accept_hosts_and_ports_only() {
+        assert_eq!(validate_custom_address("  ").unwrap(), None);
+        assert_eq!(
+            validate_custom_address(" play.example.com:25565 ")
+                .unwrap()
+                .as_deref(),
+            Some("play.example.com:25565")
+        );
+        assert!(validate_custom_address("[2001:db8::1]:25565").is_ok());
+        assert!(validate_custom_address("https://play.example.com").is_err());
+        assert!(validate_custom_address("play example").is_err());
+        assert!(validate_custom_address(&"a".repeat(256)).is_err());
+    }
+
+    #[test]
     fn trash_expiry_follows_the_current_window() {
         let record = BackupTrashRecord {
             schema_version: 1,
@@ -13209,6 +13391,7 @@ mod tests {
             backup_keep_count: 0,
             backup_keep_days: 0,
             backup_trash_days: None,
+            custom_address: None,
             modpack: None,
             extra_ports: Vec::new(),
         };

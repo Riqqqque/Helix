@@ -534,6 +534,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 backup_trash_days: None,
+                custom_address: None,
                 modpack: Some(installed_modpack),
                 extra_ports: Vec::new(),
             };
@@ -875,6 +876,7 @@ impl NativeManager {
                 backup_keep_count: 0,
                 backup_keep_days: 0,
                 backup_trash_days: None,
+                custom_address: None,
                 modpack: Some(installed_modpack),
                 extra_ports: Vec::new(),
             };
@@ -3631,6 +3633,7 @@ mod tests {
             backup_keep_count: 0,
             backup_keep_days: 0,
             backup_trash_days: None,
+            custom_address: None,
             modpack: Some(installed),
             extra_ports: Vec::new(),
         };

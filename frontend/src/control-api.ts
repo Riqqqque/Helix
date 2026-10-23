@@ -440,6 +440,8 @@ export interface NativeServerDetail {
   busyWith: string | null;
   /** File changes made while the server ran, waiting for the next start or deploy. */
   pendingChanges: number;
+  /** An address the owner typed in for players, shown with a copy button. */
+  customAddress: string | null;
 }
 
 export interface ServerConfigChanges {
@@ -1098,6 +1100,7 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     extraPorts: parseExtraPorts(root.extra_ports),
     busyWith: typeof root.busy_with === 'string' ? root.busy_with : null,
     pendingChanges: typeof root.pending_changes === 'number' ? root.pending_changes : 0,
+    customAddress: typeof root.custom_address === 'string' && root.custom_address.length > 0 ? root.custom_address : null,
   };
 }
 
@@ -1675,6 +1678,14 @@ export function setServerBackupPolicy(
     parseBackupCatalog,
     { method: 'PUT', body, csrfToken, timeoutMs: 20_000 },
   );
+}
+
+/** Saves the address players use for this server; null or empty clears it. */
+export function setServerAddress(id: string, address: string | null, csrfToken: string): Promise<string | null> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/address`, (value) => {
+    const root = expectRecord(value, 'server address');
+    return typeof root.custom_address === 'string' ? root.custom_address : null;
+  }, { method: 'PUT', body: { address }, csrfToken, timeoutMs: 20_000 });
 }
 
 export function parsePendingChanges(value: unknown): PendingChange[] {

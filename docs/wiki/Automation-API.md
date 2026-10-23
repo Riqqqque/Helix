@@ -149,13 +149,19 @@ audit log never stores the command text.
 
 ### Resources and ports
 
+Tokens can manage every port a server uses: the game port through
+`update_server_settings` (`game_port`), extra ports for voice chat, maps, and
+Bedrock players through `set_native_extra_ports`, and whether the game port is
+open to the internet through `set_server_network_exposure`.
+
 | Operation | Permission | Fields | Notes |
 | --- | --- | --- | --- |
-| `set_native_memory` | `settings` | `memory_mb` (integer) | Same bounds as creation, for example Minecraft 1024–24576. Recreates the container; starts it again only if it was running |
+| `set_native_memory` | `settings` | `memory_mb` (integer) | Same bounds as creation, for example Minecraft 1024–65536. Recreates the container; starts it again only if it was running |
 | `set_native_cpu` | `settings` | `cpu_millis` (0 for no cap, or 250–128000) | Docker `--cpus` in thousandths of a core. Recreates the container |
 | `set_native_extra_ports` | `settings` | `ports`: up to 16 of `{port, protocol, label}`. `port` is 1024 or higher and listed once; `protocol` is `tcp`, `udp` or `both`; `label` is optional, up to 40 characters | Extra host ports published straight to the container, for voice chat, maps and web panels |
 | `set_native_start_on_boot` | `settings` | `enabled` (boolean) | Sets the container restart policy. Does not start or stop the server now |
 | `set_native_browser_listing` | `settings` | `list_on_browser` (boolean) | V Rising server-list visibility. Reports `restart_required` when running |
+| `set_server_address` | `settings` | `address` (string up to 255 characters, or null/empty to clear) | Saves your own address for players, such as `play.example.com:25565`. Letters, digits, `.`, `-`, `_`, `:`, `[` and `]` only; no protocol. Shown with a copy button and returned as `custom_address` in `server_detail` |
 | `set_server_network_exposure` | `network` | `enabled` (boolean) | Adds or removes Helix-owned host firewall rules for the game port. Never changes your router |
 | `change_native_runtime` | `update` | `version` (string, or null to repair the current version), `expected_version`, `expected_build`, `confirmation_name` (the exact server name) | Published Minecraft software only. A job |
 
