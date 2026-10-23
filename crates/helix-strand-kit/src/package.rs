@@ -113,7 +113,10 @@ pub fn unpack_strand_package(bytes: &[u8]) -> Result<UnpackedStrand, StrandKitEr
         if entry.is_dir() {
             continue;
         }
-        let path = normalize_zip_path(entry.name())?;
+        let name = entry.name().map_err(|_| StrandKitError::PackageInvalid {
+            message: format!("Strand package entry {index} has an unreadable name"),
+        })?;
+        let path = normalize_zip_path(&name)?;
         if !seen.insert(path.clone()) {
             return Err(StrandKitError::PackageInvalid {
                 message: format!("Strand package contains duplicate path {path}"),

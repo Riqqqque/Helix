@@ -223,7 +223,7 @@ pub fn inspect_mrpack(
         validate_zip_entry_kind(&entry)?;
         let raw_name = std::str::from_utf8(entry.name_raw())
             .map_err(|_| "the modpack contains a non-UTF-8 archive path".to_owned())?;
-        if raw_name != entry.name() {
+        if entry.name().ok().as_deref() != Some(raw_name) {
             return Err("the modpack contains an ambiguous archive path encoding".to_owned());
         }
         let is_directory = entry.is_dir();
