@@ -433,7 +433,7 @@ export function parseMarketplaceInstallResult(value: unknown): MarketplaceInstal
   if (restartRequired && !serverWasRunning) throw new ApiError('Marketplace installation returned inconsistent restart state.');
   const runtimeValidationPerformed = boolean(root, 'runtime_validation_performed', 'marketplace installation result');
   const rollbackOnFailedStartup = boolean(root, 'rollback_on_failed_startup', 'marketplace installation result');
-  if (runtimeValidationPerformed || rollbackOnFailedStartup) {
+  if ((runtimeValidationPerformed || rollbackOnFailedStartup) && (!serverWasRunning || restartRequired)) {
     throw new ApiError('Marketplace installation returned unexpected runtime validation guarantees.');
   }
   return {
@@ -563,13 +563,14 @@ export function installMarketplaceProject(
   versionId: string | null,
   csrfToken: string,
   provider: MarketplaceProvider = 'modrinth',
+  restartServer = false,
 ): Promise<MarketplaceInstallDispatch> {
   validateMarketplaceId(projectId, 'project');
   if (versionId !== null) validateMarketplaceId(versionId, 'version');
   forgetMarketplaceCache(instanceId);
   return requestJson(`/api/v1/servers/${encodeURIComponent(instanceId)}/marketplace/install`, parseInstallDispatch, {
     method: 'POST',
-    body: { project_id: projectId, version_id: versionId, provider, restart_server: false },
+    body: { project_id: projectId, version_id: versionId, provider, restart_server: restartServer },
     csrfToken,
   timeoutMs: 40_000,
 });

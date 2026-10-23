@@ -63,6 +63,12 @@ malformed, stale, or wrong proof returns `403` with code `csrf_rejected`.
 
 ## Implemented routes
 
+The complete, current list of routes with capabilities and bodies is the
+[Dashboard API Reference](https://github.com/Riqqqque/Helix/wiki/Dashboard-API-Reference)
+wiki page and [`openapi.json`](openapi.json), which covers every route under
+`/api/v1`. The sections below explain the design of each area and may not list
+every route.
+
 ### Supervisor, setup, and account
 
 | Method | Route | Purpose |

@@ -196,6 +196,7 @@ Stopping:
   and nothing is killed; use **Kill** only as a last resort.
 - **Pumpkin:** the same clean container stop, without the `save-all flush` step.
 - **Valheim:** up to 120 seconds to save and exit.
+- **Hytale:** up to 100 seconds, so its own 90-second shutdown can finish.
 - **Other games:** up to 45 seconds, after which Docker stops the process.
 
 ### Busy servers and jobs waiting in line
@@ -416,8 +417,10 @@ HTTPS images from known hosts.
 as a job. Helix picks a compatible release (open the project to choose another),
 adds required dependencies, verifies every file, and writes it into `plugins/` or
 `mods/`. Optional dependencies are listed but never added. The server keeps
-running; restart it when you want the new files loaded. This path does not take a
-backup, so back up first for anything risky. After a successful install the card
+running; restart it when you want the new files loaded, or tick **Restart now and
+check it starts** in the install dialog. Helix then stops the server before the
+files change, starts it, waits until it is ready, and puts the previous files back
+if it does not come up. This path does not take a backup, so back up first for anything risky. After a successful install the card
 shows **Installed**.
 
 Project artwork comes through Helix's own image proxy, which checks the exact CDN

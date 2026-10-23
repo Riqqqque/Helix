@@ -3834,6 +3834,8 @@ pub(crate) enum ApiError {
     AccountRejected,
     ApplicationCapacityExhausted,
     AttemptRateLimited,
+    TokenRateLimited,
+    InvalidTokenRequest,
     AuthenticationRequired,
     AuthorizationDenied,
     BrokerRejected(String),
@@ -3954,6 +3956,22 @@ impl IntoResponse for ApiError {
                     message: "Too many authentication attempts.",
                 },
                 Some(HeaderValue::from_static("900")),
+            ),
+            Self::TokenRateLimited => (
+                StatusCode::TOO_MANY_REQUESTS,
+                ApiProblem {
+                    code: "token_rate_limited",
+                    message: "This server token made too many requests in the last minute.",
+                },
+                Some(HeaderValue::from_static("60")),
+            ),
+            Self::InvalidTokenRequest => (
+                StatusCode::BAD_REQUEST,
+                ApiProblem {
+                    code: "invalid_token_request",
+                    message: "The token name, servers, permissions, or expiry are invalid.",
+                },
+                None,
             ),
             Self::AuthenticationRequired => (
                 StatusCode::UNAUTHORIZED,

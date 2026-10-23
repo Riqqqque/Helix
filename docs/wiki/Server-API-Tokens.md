@@ -37,7 +37,8 @@ because you cannot hand out more than you have:
 Helix checks every server ID against the server manager before it issues the
 token. A token holds up to 64 servers. A request that breaks a rule (empty
 name, unknown permission, too many servers, an expiry outside 1 to 365 days)
-is refused with `403 authorization_denied`.
+is refused with `400 invalid_token_request` (before 1.10.2, `403
+authorization_denied`).
 
 ## Permissions
 

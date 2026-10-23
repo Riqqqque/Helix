@@ -4,6 +4,46 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.10.2 - 2026-10-23
+
+### Added
+
+- Marketplace installs can restart the server: tick **Restart now and check it
+  starts** (or send `"restart_server": true`). Helix stops a running server
+  before the files change, starts it, waits until it is ready, and puts the
+  previous files back if it does not come up. Before, the option was accepted
+  and ignored.
+- The installer refuses to build a release older than the running Helix unless
+  you pass `--allow-downgrade`, so an old copy under `/opt/helix/releases/`
+  cannot roll a host back.
+- `docs/openapi.json` now lists every route under `/api/v1` (170 operations,
+  up from 86), and includes `valheim_manage` in the automation operations.
+
+### Fixed
+
+- Repeating an identical staged upload after a lost response returns the staged
+  change instead of failing with "a change is already staged".
+- A setup copy onto a running Minecraft server takes its safety backup with world
+  saving paused and flushed, like other live backups.
+- Hytale gets 100 seconds to stop instead of 45, so its own shutdown can finish.
+- Uninstall removes the Docker cleanup and recurring reboot timers instead of
+  leaving them pointing at the removed broker.
+- The gateway accepts request bodies up to 12 MiB, so Strand packages up to the
+  documented 8 MiB install.
+- Server capabilities report `file_mutations_require_stopped: false`,
+  `file_changes_staged_while_running: true`, and `server_scoped_credentials:
+  true`.
+- Deleting a backup reports whether the trash empties itself instead of always
+  saying it does not.
+- A token over its request limit gets `429 token_rate_limited` with
+  `Retry-After: 60` instead of a 15-minute hint, and invalid token settings get
+  `400 invalid_token_request` instead of `403`.
+- rustls, rustls-webpki, webpki-roots, and zip were updated for their security
+  advisories. Helix did not use the affected zip extraction helpers.
+- Repository docs that no longer matched the code (recovery commands, installer
+  status, schema version, custom JAR folders, job persistence, terminal limits,
+  supported software) were corrected.
+
 ## 1.10.1 - 2026-10-22
 
 ### Fixed

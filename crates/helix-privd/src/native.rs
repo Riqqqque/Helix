@@ -1929,11 +1929,11 @@ impl NativeManager {
             json!({"instance_id": format!("helix:{}", manifest.id), "manager": "helix",
             "game": manifest.kind_slug(), "actions": actions,
             "files": true, "file_actions": crate::server_files::ACTIONS,
-            "file_mutations_require_stopped": true, "max_upload_bytes": crate::server_files::MAX_UPLOAD,
+            "file_mutations_require_stopped": false, "file_changes_staged_while_running": true, "max_upload_bytes": crate::server_files::MAX_UPLOAD,
             "max_chunk_bytes": crate::server_files::CHUNK, "console_commands": manifest.is_minecraft(),
             "settings": manifest.is_minecraft(), "logs": true, "backups": true, "backup_download": true,
             "valheim_management": manifest.is_valheim(),
-            "runtime_changes": manifest.is_minecraft() && !custom, "server_scoped_credentials": false}),
+            "runtime_changes": manifest.is_minecraft() && !custom, "server_scoped_credentials": true}),
         )
     }
 
@@ -3087,8 +3087,8 @@ impl NativeManager {
             "trashed_at_unix_ms": trashed_at_unix_ms,
             "undo_available": true,
             "undo_expires_at_unix_ms": Value::Null,
-            "purge_eligible_at_unix_ms": purge_eligible_at_unix_ms,
-            "automatic_purge_enabled": false
+            "purge_eligible_at_unix_ms": (self.trash_days(manifest) > 0).then_some(purge_eligible_at_unix_ms),
+            "automatic_purge_enabled": self.trash_days(manifest) > 0
         }))
     }
 
@@ -3604,6 +3604,14 @@ impl NativeManager {
                 .docker(
                     ["stop", "--time", "120", manifest.container_name.as_str()],
                     150,
+                )
+                .map(|_| ());
+        }
+        if matches!(manifest.kind, GameKind::Hytale) {
+            return self
+                .docker(
+                    ["stop", "--time", "100", manifest.container_name.as_str()],
+                    130,
                 )
                 .map(|_| ());
         }

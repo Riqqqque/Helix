@@ -27,7 +27,7 @@ other GNU-userland systemd distros are the intended compile/install targets.
 PID 1 must be systemd. NixOS and Guix are not FHS targets. BusyBox userland
 (default Alpine) is not enough.
 
-Do not use development binaries as a production installation, and do not publish a one-line installer until clean-install, upgrade, rollback, uninstall, permission, interruption, and fault-injection tests pass on supported Ubuntu releases. The bundle checksum detects accidental or local bundle modification; it is not a signature or proof of publisher authenticity.
+Do not use development binaries as a production installation. The one-command installer (`scripts/install.sh`, see the [Installation and Configuration](https://github.com/Riqqqque/Helix/wiki/Installation-and-Configuration) wiki page) is tested on fresh Ubuntu 22.04 and 24.04 machines in CI; broader fault-injection and interruption testing is still open. The bundle checksum detects accidental or local bundle modification; it is not a signature or proof of publisher authenticity.
 
 ## Supported environment policy
 

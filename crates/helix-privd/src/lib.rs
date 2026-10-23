@@ -958,19 +958,6 @@ impl ServerFileRequest {
                 | Self::PendingList { .. }
         )
     }
-
-    pub fn requires_stopped(&self) -> bool {
-        matches!(
-            self,
-            Self::Write { .. }
-                | Self::Create { .. }
-                | Self::Mkdir { .. }
-                | Self::Move { .. }
-                | Self::Trash { .. }
-                | Self::UploadFile { .. }
-                | Self::UploadFinish { .. }
-        )
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]

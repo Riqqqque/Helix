@@ -249,12 +249,12 @@ function InstallationResult({ job, onClose }: { job: MarketplaceInstallJob; onCl
       <span class="job-icon job-icon--complete"><Icon name="check" size={25} /></span>
       <div>
         <strong>{result.projectTitle} {result.versionNumber} installed</strong>
-        <p>{result.restartRequired ? 'The files are in the server folder. Restart Minecraft when you want them loaded.' : 'The files are in the server folder. Start the server when you want them loaded.'}</p>
+        <p>{result.runtimeValidationPerformed ? 'The server restarted with the new files and passed its startup check.' : result.restartRequired ? 'The files are in the server folder. Restart Minecraft when you want them loaded.' : 'The files are in the server folder. Start the server when you want them loaded.'}</p>
       </div>
       <dl>
         <div><dt>World backup</dt><dd>{result.backupId.length > 0 ? <code>{result.backupId}</code> : 'Not created'}</dd></div>
         <div><dt>Required dependencies</dt><dd>{result.dependencyCount}</dd></div>
-        <div><dt>Activation</dt><dd>{result.restartRequired ? 'Restart when you want' : 'Ready for first start'}</dd></div>
+        <div><dt>Activation</dt><dd>{result.runtimeValidationPerformed ? 'Loaded and checked' : result.restartRequired ? 'Restart when you want' : 'Ready for first start'}</dd></div>
         <div><dt>File rollback</dt><dd>Helix-managed files only</dd></div>
       </dl>
       {result.optionalDependenciesNotInstalled.length > 0 && <div class="marketplace-optional"><Icon name="info" size={15} /><span><strong>Optional dependencies were not installed</strong><small>{result.optionalDependenciesNotInstalled.join(', ')}</small></span></div>}
@@ -281,6 +281,7 @@ function InstallDialog({
   const installedRefresh = useRef(false);
   const active = dispatching || (error === null && (job?.status === 'queued' || job?.status === 'running'));
   const runtimeCopy = marketplaceInstallRuntimeCopy(server.status);
+  const [restartNow, setRestartNow] = useState(false);
   const metadataWarning = serverMetadataWarning(detail);
 
   useEffect(() => {
@@ -325,7 +326,7 @@ function InstallDialog({
     setDispatching(true);
     setError(null);
     try {
-      const dispatch = await installMarketplaceProject(server.id, detail.project.id, version.id, csrfToken, detail.provider);
+      const dispatch = await installMarketplaceProject(server.id, detail.project.id, version.id, csrfToken, detail.provider, restartNow && server.status !== 'stopped');
       setJobId(dispatch.jobId);
       setJob({
         id: dispatch.jobId,
@@ -358,7 +359,8 @@ function InstallDialog({
           <li><Icon name="restart" size={15} /><span><strong>You choose when to restart.</strong> {runtimeCopy.validation}</span></li>
         </ul>
         {metadataWarning !== null && <div class="marketplace-note marketplace-note--warning"><Icon name="warning" size={14} />{metadataWarning}</div>}
-        <label class="check-row marketplace-confirm-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.currentTarget.checked)} /><span><strong>Install this exact version</strong><small>I understand I need to restart the server myself for the files to load.</small></span></label>
+        <label class="check-row marketplace-confirm-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.currentTarget.checked)} /><span><strong>Install this exact version</strong><small>{restartNow && server.status !== 'stopped' ? 'Helix restarts the server after installing and puts the old files back if it does not start.' : 'I understand I need to restart the server myself for the files to load.'}</small></span></label>
+        {server.status !== 'stopped' && <label class="check-row marketplace-confirm-check"><input type="checkbox" checked={restartNow} onChange={(event) => setRestartNow(event.currentTarget.checked)} /><span><strong>Restart now and check it starts</strong><small>Players are disconnected for the restart. If the server does not come back, the previous files are restored and it starts again.</small></span></label>}
         <InlineError message={error} />
         <div class="dialog-actions"><button class="button button--quiet" type="button" onClick={onClose}>Cancel</button><button class="button button--primary" type="button" disabled={!confirmed || dispatching} onClick={() => void install()}>{dispatching ? 'Queuing…' : `Install ${detail.compatibility.contentKind}`}</button></div>
       </> : job.status === 'complete' || job.status === 'failed' ? <InstallationResult job={job} onClose={onClose} /> : <>

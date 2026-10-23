@@ -41,7 +41,7 @@ server {
     # The Rust routes apply tighter per-endpoint limits. This ceiling permits
     # bounded text-file edits and dashboard layouts without letting Nginx spool
     # an arbitrarily large request.
-    client_max_body_size 6m;
+    client_max_body_size 12m;
     client_body_timeout 10s;
     client_header_timeout 10s;
     keepalive_timeout 30s;

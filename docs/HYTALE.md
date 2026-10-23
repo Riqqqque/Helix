@@ -59,4 +59,6 @@ than next to the command.
 On every start Helix asks the Hytale Downloader for the latest release and
 updates the server files if a newer one exists. A failed update keeps the
 installed version running. To pin a version, set `"auto_update": false` in
-`hytale.json` from Files.
+`hytale.json` from Files. Helix reads this file when it creates the container,
+so the change takes effect after the next memory, CPU, or port change (which
+rebuilds the container), not on a plain restart.

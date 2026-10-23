@@ -81,7 +81,7 @@ A few routes use other checks:
 | Rack machines | 2 MiB (framework default) |
 | Server tokens and automation | 5 MiB |
 
-The bundled gateway also caps every request body at 6 MiB.
+The bundled gateway also caps every request body at 12 MiB (6 MiB before 1.10.2, which blocked large Strand packages).
 
 ## Health, setup and session
 
@@ -403,7 +403,7 @@ Deploy options and results are in
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/v1/servers/{instance_id}/marketplace/search` | `games.view` | Query `query`, `offset`, `limit` (default 20, 1–50), `provider`, `catalog` (`content` or `modpacks`) | Search filtered to this server's game version and loader |
 | `GET` | `/api/v1/servers/{instance_id}/marketplace/projects/{project_id}` | `games.view` | Query `provider` | Project and version detail |
-| `POST` | `/api/v1/servers/{instance_id}/marketplace/install` | `games.manage` | `project_id`, `version_id` (or null), optional `provider`, optional `restart_server` (currently ignored) | Job: installs verified JARs into `plugins/` or `mods/`. Does not restart the server |
+| `POST` | `/api/v1/servers/{instance_id}/marketplace/install` | `games.manage` | `project_id`, `version_id` (or null), optional `provider`, optional `restart_server` (boolean) | Job: installs verified JARs into `plugins/` or `mods/`. With `restart_server` on a running server, restarts it, checks it starts, and puts the old files back if not |
 | `GET` | `/api/v1/marketplace/modrinth/image` | `games.view`; session cookie, no CSRF | Query `path` | Same-origin proxy for Modrinth artwork |
 | `GET` | `/api/v1/marketplace/curseforge/image` | `games.view`; session cookie, no CSRF | Query `path` | Same-origin proxy for CurseForge artwork |
 | `GET` | `/api/v1/marketplace/curseforge/key` | `games.view` | | Whether a CurseForge API key is saved. Never returns the key |

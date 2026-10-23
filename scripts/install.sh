@@ -28,6 +28,7 @@ MODE="install"
 ASSUME_YES=0
 SOURCE_DIR=""
 VERSION=""
+ALLOW_DOWNGRADE=0
 LAN_IP=""
 LAN_CIDR=""
 PORT=""
@@ -78,6 +79,7 @@ Other modes:
   --check                  Diagnose an existing install and exit
   --uninstall              Remove Helix services and containers; keeps game servers and data
   --purge                  With --uninstall, also delete Helix data, configuration, and backups
+  --allow-downgrade        Install this release even if a newer Helix is already installed
   -h, --help               Show this help
 
 Game servers, worlds, and backups are never deleted unless you use --purge and confirm.
@@ -101,6 +103,7 @@ while [ $# -gt 0 ]; do
     --token-file) TOKEN_FILE="${2:?--token-file needs a path}"; shift ;;
     --check) MODE="check" ;;
     --uninstall) MODE="uninstall" ;;
+    --allow-downgrade) ALLOW_DOWNGRADE=1 ;;
     --purge) PURGE=1 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
@@ -498,11 +501,25 @@ EOF
   compose config -q || die "the generated deployment settings are invalid"
 }
 
+# An older copy of this script (for example one kept in releases/) must not roll
+# a host back after the in-app updater installed something newer.
+refuse_downgrade() {
+  local version="$1" installed
+  have docker || return 0
+  installed="$(docker inspect -f '{{.Config.Image}}' "$PROJECT" 2>/dev/null | sed -n 's/^helix-dashboard:\([0-9][0-9.]*\)$/\1/p')"
+  [ -n "$installed" ] || return 0
+  [ "$installed" = "$version" ] && return 0
+  if [ "$(printf '%s\n%s\n' "$installed" "$version" | sort -V | tail -n 1)" = "$installed" ] && [ "$ALLOW_DOWNGRADE" -eq 0 ]; then
+    die "Helix $installed is installed, which is newer than $version. Run the one-line installer to repair with the latest release, or pass --allow-downgrade"
+  fi
+}
+
 build_helix() {
   local version revision
   version="$(source_version "$SOURCE_DIR")"
   [ -n "$version" ] || die "could not read the Helix version from $SOURCE_DIR/Cargo.toml"
   revision="$(git -C "$SOURCE_DIR" rev-parse --short=12 HEAD 2>/dev/null || printf 'release-%s' "$version")"
+  refuse_downgrade "$version"
   export HELIX_IMAGE_TAG="$version" HELIX_SOURCE_REVISION="$revision"
   step "Building Helix $version (the first build takes several minutes)"
   compose build dashboard gateway
@@ -691,6 +708,12 @@ run_uninstall() {
     systemctl disable --now "$unit" >/dev/null 2>&1 || true
   done
   systemctl disable --now helix-privd.service >/dev/null 2>&1 || true
+  # Schedules created from the dashboard would otherwise keep calling the removed broker.
+  for unit in helix-docker-cleanup.timer helix-recurring-reboot.timer; do
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+  done
+  rm -f "$UNIT_DIR/helix-docker-cleanup.timer" "$UNIT_DIR/helix-docker-cleanup.service" \
+    "$UNIT_DIR/helix-recurring-reboot.timer" "$UNIT_DIR/helix-recurring-reboot.service"
   rm -f "$UNIT_DIR/helix-privd.service" "$UNIT_DIR/helix-finalize-update.service" "$UNIT_DIR/helix-terminald@.service" /etc/tmpfiles.d/helix.conf
   rm -rf "$UNIT_DIR/helix-privd.service.d"
   rm -f "$PRIVD_BIN" "$PRIVD_BIN.previous" "$TERMINALD_BIN"

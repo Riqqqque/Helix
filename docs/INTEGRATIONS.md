@@ -10,9 +10,9 @@ fetch `GET /api/v1/openapi.json`, or use [the checked-in contract](openapi.json)
 Both endpoints require authentication. They work even when the host broker is
 unavailable; discovery is not a health check or a promise that hosting is ready.
 
-The OpenAPI document lists every server route and method, with typed request
-bodies. It does not yet describe every host/dashboard operation or fully type
-every broker response. [Server automation API](SERVER-API.md) covers per-game
+The OpenAPI document lists every route and method under `/api/v1`. Server
+routes have typed request bodies; host and dashboard routes have summaries and
+capabilities but looser schemas, and broker responses are not fully typed. [Server automation API](SERVER-API.md) covers per-game
 capabilities, relative files, upload/download, transfers and backup exports.
 [API.md](API.md) documents the wider file, settings, marketplace, runtime,
 backup and host routes. Existing response fields retain their meaning within
@@ -139,6 +139,7 @@ cargo test --locked -p helix-api
 python3 -m unittest discover -s examples/integrations -p 'test_*.py' -v
 ```
 
-Delegated credentials, server-scoped credentials, complete typed response
-coverage, webhooks and generic idempotency are not implemented by this pass.
+Server-scoped credentials are available as [server API tokens](SERVER-TOKENS.md).
+Delegated user credentials, complete typed response coverage, webhooks and
+generic idempotency are not implemented.
 Do not advertise them as available or weaken the current checks to imitate them.

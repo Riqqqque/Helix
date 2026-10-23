@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "Helix server integration API",
-    "version": "1.0.0",
+    "version": "1.10.2",
     "description": "Private-LAN server management API. Session cookie AND CSRF proof are required together; mutations and file commands require exact Origin. Account capabilities are not per-server credentials. All server routes are listed; broker response objects are not yet all fully typed. Consult per-server capabilities before acting. Do not automatically replay mutations or treat a job ID as completion."
   },
   "servers": [
@@ -31,80 +31,190 @@
     },
     {
       "name": "Host"
+    },
+    {
+      "name": "Health, setup and session"
+    },
+    {
+      "name": "Overview, host and power"
+    },
+    {
+      "name": "Preferences and weather"
+    },
+    {
+      "name": "Storage and files"
+    },
+    {
+      "name": "Network and firewall"
+    },
+    {
+      "name": "Packages and Helix updates"
+    },
+    {
+      "name": "Docker"
+    },
+    {
+      "name": "Security center"
+    },
+    {
+      "name": "Hooks"
+    },
+    {
+      "name": "Terminal"
+    },
+    {
+      "name": "Rack machines"
+    },
+    {
+      "name": "Strands"
+    },
+    {
+      "name": "Servers: marketplace"
+    },
+    {
+      "name": "Servers: inventory and readiness"
     }
   ],
   "paths": {
     "/docker/cleanup": {
       "get": {
         "operationId": "getDockerCleanup",
-        "tags": ["Host"],
+        "tags": [
+          "Host"
+        ],
         "summary": "Measure Docker storage and read the fixed safe cleanup policy",
         "x-helix-capability": "system.view",
         "responses": {
           "200": {
             "description": "Storage, usage, schedule, durable last result, and active job",
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DockerCleanupStatus"}}}
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DockerCleanupStatus"
+                }
+              }
+            }
           },
-          "default": {"$ref": "#/components/responses/Problem"}
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
     "/docker/cleanup/run": {
       "post": {
         "operationId": "startDockerCleanup",
-        "tags": ["Host"],
+        "tags": [
+          "Host"
+        ],
         "summary": "Queue the fixed safe Docker cleanup profile",
         "description": "Never removes containers, volumes, named images, or active resources. A response only accepts the job; poll its job ID.",
         "x-helix-capability": "system.settings.write",
-        "parameters": [{"$ref": "#/components/parameters/Origin"}],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
         "requestBody": {
           "required": true,
-          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DockerCleanupRunRequest"}}}
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DockerCleanupRunRequest"
+              }
+            }
+          }
         },
         "responses": {
-          "200": {"$ref": "#/components/responses/BrokerObject"},
-          "default": {"$ref": "#/components/responses/Problem"}
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
     "/docker/cleanup/schedule": {
       "put": {
         "operationId": "setDockerCleanupSchedule",
-        "tags": ["Host"],
+        "tags": [
+          "Host"
+        ],
         "summary": "Create or replace the verified host-local cleanup schedule",
         "x-helix-capability": "system.settings.write",
-        "parameters": [{"$ref": "#/components/parameters/Origin"}],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
         "requestBody": {
           "required": true,
-          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DockerCleanupScheduleRequest"}}}
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DockerCleanupScheduleRequest"
+              }
+            }
+          }
         },
         "responses": {
-          "200": {"$ref": "#/components/responses/BrokerObject"},
-          "default": {"$ref": "#/components/responses/Problem"}
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       },
       "delete": {
         "operationId": "deleteDockerCleanupSchedule",
-        "tags": ["Host"],
+        "tags": [
+          "Host"
+        ],
         "summary": "Remove the exact verified Docker cleanup schedule",
         "x-helix-capability": "system.settings.write",
-        "parameters": [{"$ref": "#/components/parameters/Origin"}],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
         "responses": {
-          "200": {"$ref": "#/components/responses/BrokerObject"},
-          "default": {"$ref": "#/components/responses/Problem"}
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
     "/docker/cleanup/jobs/{job_id}": {
-      "parameters": [{"name": "job_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+      "parameters": [
+        {
+          "name": "job_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
       "get": {
         "operationId": "getDockerCleanupJob",
-        "tags": ["Jobs"],
+        "tags": [
+          "Jobs"
+        ],
         "summary": "Read one Docker cleanup job after refresh or reconnect",
         "x-helix-capability": "system.view",
         "responses": {
-          "200": {"$ref": "#/components/responses/BrokerObject"},
-          "default": {"$ref": "#/components/responses/Problem"}
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -148,24 +258,444 @@
       }
     },
     "/auth/server-tokens": {
-      "get": {"operationId":"listServerTokens","summary":"List token metadata (expires_at is null for never-expiring tokens; authorized is false after an owner account change; viewable is true when an encrypted copy can be shown again) and permission names; never returns secrets","responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token catalog"}}},
-      "post": {"operationId":"createServerToken","summary":"Issue a scoped server token with a 1–365 day or no expiration (null); owner session only. The permission all grants every server permission, including later ones, but never host controls","parameters":[{"$ref":"#/components/parameters/Origin"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":["name","servers","permissions","expires_in_days"],"properties":{"name":{"type":"string","minLength":1,"maxLength":80},"servers":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string"}},"permissions":{"type":"array","minItems":1,"items":{"type":"string","enum":["view","logs","files.read","files.write","start","stop","restart","kill","console","settings","update","backups.read","backups.write","network","remove","all"]}},"expires_in_days":{"oneOf":[{"type":"integer","minimum":1,"maximum":365},{"type":"null"}]}}}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token secret; viewable says whether the owner can show it again later"},"403":{"description":"Invalid scope or insufficient owner permissions"}}}
+      "get": {
+        "operationId": "listServerTokens",
+        "summary": "List token metadata (expires_at is null for never-expiring tokens; authorized is false after an owner account change; viewable is true when an encrypted copy can be shown again) and permission names; never returns secrets",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Token catalog"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createServerToken",
+        "summary": "Issue a scoped server token with a 1–365 day or no expiration (null); owner session only. The permission all grants every server permission, including later ones, but never host controls",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "servers",
+                  "permissions",
+                  "expires_in_days"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "servers": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "permissions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "view",
+                        "logs",
+                        "files.read",
+                        "files.write",
+                        "start",
+                        "stop",
+                        "restart",
+                        "kill",
+                        "console",
+                        "settings",
+                        "update",
+                        "backups.read",
+                        "backups.write",
+                        "network",
+                        "remove",
+                        "all"
+                      ]
+                    }
+                  },
+                  "expires_in_days": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 365
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Token secret; viewable says whether the owner can show it again later"
+          },
+          "403": {
+            "description": "Invalid scope or insufficient owner permissions"
+          }
+        }
+      }
     },
     "/auth/server-tokens/{id}": {
-      "delete":{"operationId":"revokeServerToken","summary":"Revoke a token without cancelling accepted jobs","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}},{"$ref":"#/components/parameters/Origin"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","maxProperties":0}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Revoked"},"404":{"description":"Unknown token"}}}
+      "delete": {
+        "operationId": "revokeServerToken",
+        "summary": "Revoke a token without cancelling accepted jobs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Revoked"
+          },
+          "404": {
+            "description": "Unknown token"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
     },
     "/auth/server-tokens/{id}/rotate": {
-      "post":{"operationId":"rotateServerToken","summary":"Replace a live token secret while preserving its scope and expiration","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}},{"$ref":"#/components/parameters/Origin"}],"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"New token secret; old secret invalidated and its stored copy deleted"},"404":{"description":"Unknown, expired or revoked token"}}}
+      "post": {
+        "operationId": "rotateServerToken",
+        "summary": "Replace a live token secret while preserving its scope and expiration",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "New token secret; old secret invalidated and its stored copy deleted"
+          },
+          "404": {
+            "description": "Unknown, expired or revoked token"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
     },
     "/auth/server-tokens/{id}/reveal": {
-      "post":{"operationId":"revealServerToken","summary":"Show a stored token secret again after the owner re-enters their dashboard password; audited","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}},{"$ref":"#/components/parameters/Origin"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":["current_password"],"properties":{"current_password":{"type":"string"}}}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token secret"},"401":{"description":"Password rejected (current_password_rejected) or session expired"},"404":{"description":"Unknown or revoked token, or no stored copy"}}}
+      "post": {
+        "operationId": "revealServerToken",
+        "summary": "Show a stored token secret again after the owner re-enters their dashboard password; audited",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "current_password"
+                ],
+                "properties": {
+                  "current_password": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Token secret"
+          },
+          "401": {
+            "description": "Password rejected (current_password_rejected) or session expired"
+          },
+          "404": {
+            "description": "Unknown or revoked token, or no stored copy"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
     },
     "/automation/server": {
-      "post":{"operationId":"executeScopedServerRequest","summary":"Run a permitted operation on a token-scoped server","description":"Bearer token only. Cookie and Origin headers are rejected. See SERVER-TOKENS.md for operation fields and permissions. No host/global operations are allowed; job_status is restricted to this token's accepted jobs. Transfers (server_transfer_preflight, transfer_server_content) involve two servers: the token must list both, with files.read and view (preflight) or files.write (transfer); Full access covers all.","security":[{"ServerToken":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["operation"],"properties":{"operation":{"type":"string","enum":["server_capabilities","server_detail","server_logs","server_log_history","server_files","server_action","server_console","server_settings","update_server_settings","set_native_memory","set_native_cpu","set_native_start_on_boot","set_native_browser_listing","change_native_runtime","list_backups","server_backup_download","restore_backup","trash_backup","restore_trashed_backup","set_backup_policy","prune_backups","set_native_extra_ports","server_marketplace_search","server_marketplace_project","install_server_marketplace_content","purge_backup_trash","purge_backup_trash_older_than","deploy_pending_changes","set_server_network_exposure","trash_native_server","server_transfer_preflight","transfer_server_content","job_status"]},"instance_id":{"type":"string"},"job_id":{"type":"string"}}},"examples":{"stop":{"value":{"operation":"server_action","instance_id":"helix:EXACT-UUID","action":"stop"}},"files":{"value":{"operation":"server_files","instance_id":"helix:EXACT-UUID","request":{"action":"list","path":"","limit":50}}}}}}},"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Operation response or job ID; check job completion separately"},"401":{"description":"Invalid, expired or revoked token"},"403":{"description":"Server, operation or permission is outside token scope"},"429":{"description":"Token request rate exceeded"}}}
+      "post": {
+        "operationId": "executeScopedServerRequest",
+        "summary": "Run a permitted operation on a token-scoped server",
+        "description": "Bearer token only. Cookie and Origin headers are rejected. See SERVER-TOKENS.md for operation fields and permissions. No host/global operations are allowed; job_status is restricted to this token's accepted jobs. Transfers (server_transfer_preflight, transfer_server_content) involve two servers: the token must list both, with files.read and view (preflight) or files.write (transfer); Full access covers all.",
+        "security": [
+          {
+            "ServerToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "server_capabilities",
+                      "server_detail",
+                      "server_logs",
+                      "server_log_history",
+                      "server_files",
+                      "server_action",
+                      "server_console",
+                      "server_settings",
+                      "update_server_settings",
+                      "set_native_memory",
+                      "set_native_cpu",
+                      "set_native_start_on_boot",
+                      "set_native_browser_listing",
+                      "change_native_runtime",
+                      "list_backups",
+                      "server_backup_download",
+                      "restore_backup",
+                      "trash_backup",
+                      "restore_trashed_backup",
+                      "set_backup_policy",
+                      "prune_backups",
+                      "set_native_extra_ports",
+                      "server_marketplace_search",
+                      "server_marketplace_project",
+                      "install_server_marketplace_content",
+                      "purge_backup_trash",
+                      "purge_backup_trash_older_than",
+                      "deploy_pending_changes",
+                      "valheim_manage",
+                      "set_server_network_exposure",
+                      "trash_native_server",
+                      "server_transfer_preflight",
+                      "transfer_server_content",
+                      "job_status"
+                    ]
+                  },
+                  "instance_id": {
+                    "type": "string"
+                  },
+                  "job_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "examples": {
+                "stop": {
+                  "value": {
+                    "operation": "server_action",
+                    "instance_id": "helix:EXACT-UUID",
+                    "action": "stop"
+                  }
+                },
+                "files": {
+                  "value": {
+                    "operation": "server_files",
+                    "instance_id": "helix:EXACT-UUID",
+                    "request": {
+                      "action": "list",
+                      "path": "",
+                      "limit": 50
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Operation response or job ID; check job completion separately"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "Server, operation or permission is outside token scope"
+          },
+          "429": {
+            "description": "Token request rate exceeded"
+          }
+        }
+      }
     },
-    "/automation/jobs/{job_id}/wait": {"get": {"operationId": "waitScopedServerJob", "summary": "Wait up to 12 seconds for a token-owned job to finish; returns the job status with finished true or false", "security": [{"ServerToken": []}], "parameters": [{"name": "job_id", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "timeout_seconds", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 0, "maximum": 12, "default": 12}}], "responses": {"200": {"description": "Job status plus finished"}, "403": {"description": "The job was not accepted through this token"}, "default": {"$ref": "#/components/responses/Problem"}}}},
+    "/automation/jobs/{job_id}/wait": {
+      "get": {
+        "operationId": "waitScopedServerJob",
+        "summary": "Wait up to 12 seconds for a token-owned job to finish; returns the job status with finished true or false",
+        "security": [
+          {
+            "ServerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "timeout_seconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 12,
+              "default": 12
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job status plus finished"
+          },
+          "403": {
+            "description": "The job was not accepted through this token"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "job_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
     "/automation/jobs": {
-      "get":{"operationId":"listScopedServerJobs","summary":"List the last 256 jobs accepted through this token","security":[{"ServerToken":[]}],"responses":{"default":{"$ref":"#/components/responses/Problem"},"200":{"description":"Token-owned job IDs and server IDs"},"401":{"description":"Invalid token"}}}
+      "get": {
+        "operationId": "listScopedServerJobs",
+        "summary": "List the last 256 jobs accepted through this token",
+        "security": [
+          {
+            "ServerToken": []
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Token-owned job IDs and server IDs"
+          },
+          "401": {
+            "description": "Invalid token"
+          }
+        }
+      }
     },
     "/discovery": {
       "get": {
@@ -640,7 +1170,17 @@
             "$ref": "#/components/responses/Problem"
           }
         }
-      }
+      },
+      "parameters": [
+        {
+          "name": "job_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
     },
     "/servers/inventory-health": {
       "parameters": [],
@@ -2671,8 +3211,124 @@
         ]
       }
     },
-    "/servers/{instance_id}/deploy": {"parameters": [{"name": "instance_id", "in": "path", "required": true, "schema": {"type": "string"}}], "post": {"operationId": "postServersInstanceIdDeploy", "tags": ["Servers"], "summary": "Install staged file changes as one job: optional backup (live for Minecraft), stop, install, start, wait until ready, optional console check, automatic rollback", "x-helix-capability": "games.manage", "parameters": [{"$ref": "#/components/parameters/Origin"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "properties": {"backup": {"type": "boolean", "default": true}, "start": {"type": "boolean", "default": true, "description": "Start afterwards even if the server was stopped"}, "expect_log": {"type": "string", "maxLength": 200, "description": "Console text that must appear within a minute of the game being ready"}, "revert_on_failure": {"type": "boolean", "default": true}}}}}}, "responses": {"200": {"description": "job_id of the deploy job"}, "default": {"$ref": "#/components/responses/Problem"}}}},
-    "/servers/{instance_id}/backups/trash/purge": {"parameters": [{"name": "instance_id", "in": "path", "required": true, "schema": {"type": "string"}}], "post": {"operationId": "postServersInstanceIdBackupsTrashPurge", "tags": ["Servers"], "summary": "Delete trashed backups deleted more than older_than_days ago; 0 empties the whole trash", "x-helix-capability": "games.backups.manage", "parameters": [{"$ref": "#/components/parameters/Origin"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "required": ["older_than_days"], "properties": {"older_than_days": {"type": "integer", "minimum": 0, "maximum": 3650}}}}}}, "responses": {"200": {"$ref": "#/components/responses/BrokerObject"}, "default": {"$ref": "#/components/responses/Problem"}}}},
+    "/servers/{instance_id}/deploy": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdDeploy",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Install staged file changes as one job: optional backup (live for Minecraft), stop, install, start, wait until ready, optional console check, automatic rollback",
+        "x-helix-capability": "games.manage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "backup": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "start": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Start afterwards even if the server was stopped"
+                  },
+                  "expect_log": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "Console text that must appear within a minute of the game being ready"
+                  },
+                  "revert_on_failure": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "job_id of the deploy job"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/servers/{instance_id}/backups/trash/purge": {
+      "parameters": [
+        {
+          "name": "instance_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postServersInstanceIdBackupsTrashPurge",
+        "tags": [
+          "Servers"
+        ],
+        "summary": "Delete trashed backups deleted more than older_than_days ago; 0 empties the whole trash",
+        "x-helix-capability": "games.backups.manage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "older_than_days"
+                ],
+                "properties": {
+                  "older_than_days": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3650
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BrokerObject"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/servers/{instance_id}/capabilities": {
       "parameters": [
         {
@@ -2939,11 +3595,2004 @@
           }
         }
       }
+    },
+    "/setup/owner": {
+      "post": {
+        "operationId": "postSetupOwner",
+        "tags": [
+          "Health, setup and session"
+        ],
+        "summary": "Creates the first owner. Works once",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "None (one-time bootstrap token)",
+        "description": "Body or query: bootstrapToken, loginName, displayName, password",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/auth/csrf": {
+      "post": {
+        "operationId": "postAuthCsrf",
+        "tags": [
+          "Health, setup and session"
+        ],
+        "summary": "Swaps the CSRF value; returns the new csrfToken",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "description": "Body or query: {}",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/auth/session-expiry": {
+      "put": {
+        "operationId": "putAuthSessionExpiry",
+        "tags": [
+          "Health, setup and session"
+        ],
+        "summary": "false keeps the session until logout or a password change, capped at 400 days. true returns to 30 minutes idle, 8 hours at most",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "users.manage",
+        "description": "Body or query: expires (boolean)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getAuthSessionExpiry",
+        "tags": [
+          "Health, setup and session"
+        ],
+        "summary": "expires, expiresAtUnixMs",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/auth/account": {
+      "post": {
+        "operationId": "postAuthAccount",
+        "tags": [
+          "Health, setup and session"
+        ],
+        "summary": "Changes login name, display name and optionally the password. Changing the password or account invalidates every server API token",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "users.manage + current password",
+        "description": "Body or query: currentPassword, loginName, displayName, optional newPassword",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/host/integration/start-on-boot": {
+      "put": {
+        "operationId": "putHostIntegrationStartOnBoot",
+        "tags": [
+          "Overview, host and power"
+        ],
+        "summary": "Sets the restart policy on the Helix dashboard and gateway containers only",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.settings.write",
+        "description": "Body or query: enabled (boolean)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/host/reboot": {
+      "post": {
+        "operationId": "postHostReboot",
+        "tags": [
+          "Overview, host and power"
+        ],
+        "summary": "Reboots now or schedules a reboot. Refused while players are online or jobs run",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.power",
+        "description": "Body or query: confirmation_hostname (exact hostname), delay_seconds (0 for now, or 10–300), disruption_acknowledged (true)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/host/reboot/{operation_id}": {
+      "parameters": [
+        {
+          "name": "operation_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteHostRebootOperationId",
+        "tags": [
+          "Overview, host and power"
+        ],
+        "summary": "Cancels a scheduled reboot while it can still be cancelled",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.power",
+        "description": "Body or query: No body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/host/reboot/recurring": {
+      "put": {
+        "operationId": "putHostRebootRecurring",
+        "tags": [
+          "Overview, host and power"
+        ],
+        "summary": "Creates or replaces the one recurring reboot schedule. Returns the host timezone and next run",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.power",
+        "description": "Body or query: weekdays (list of monday…sunday), hour, minute, timezone, confirmation_hostname, disruption_acknowledged",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteHostRebootRecurring",
+        "tags": [
+          "Overview, host and power"
+        ],
+        "summary": "Removes the recurring schedule",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.power",
+        "description": "Body or query: confirmation_hostname",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/settings/preferences": {
+      "put": {
+        "operationId": "putSettingsPreferences",
+        "tags": [
+          "Preferences and weather"
+        ],
+        "summary": "Saves preferences. A stale revision is refused instead of overwriting another session's change. Rate limited",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "dashboard.customize",
+        "description": "Body or query: expected_revision (integer), preferences: navigation_order, metrics_refresh_ms, home_widgets, optional home_templates, active_home_id, colors (accent, text, surface), servers_enabled, hidden_pages",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getSettingsPreferences",
+        "tags": [
+          "Preferences and weather"
+        ],
+        "summary": "Saved dashboard preferences and their revision",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "dashboard.customize"
+      }
+    },
+    "/weather": {
+      "get": {
+        "operationId": "getWeather",
+        "tags": [
+          "Preferences and weather"
+        ],
+        "summary": "Current weather and forecast for one place",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "dashboard.customize",
+        "description": "Body or query: Query location (2–120 characters), unit (celsius or fahrenheit)"
+      }
+    },
+    "/files": {
+      "get": {
+        "operationId": "getFiles",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Lists one folder",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.files.read",
+        "description": "Body or query: Query path, optional cursor, limit (default 50, up to 200)"
+      }
+    },
+    "/files/read": {
+      "post": {
+        "operationId": "postFilesRead",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Reads a UTF-8 text file up to 4 MiB",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.files.read",
+        "description": "Body or query: path",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/files/directory": {
+      "post": {
+        "operationId": "postFilesDirectory",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Creates one folder",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.files.manage",
+        "description": "Body or query: parent, name",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/files/file": {
+      "post": {
+        "operationId": "postFilesFile",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Creates one empty file",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.files.manage",
+        "description": "Body or query: parent, name",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/files/write": {
+      "post": {
+        "operationId": "postFilesWrite",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Writes a text file; refused if it changed since that time",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.files.manage",
+        "description": "Body or query: path, content (up to 4 MiB), optional expected_modified_unix_ms",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/files/rename": {
+      "post": {
+        "operationId": "postFilesRename",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Renames one entry inside its storage root",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.files.manage",
+        "description": "Body or query: path, new_name",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/files/trash": {
+      "post": {
+        "operationId": "postFilesTrash",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Moves to the configured recoverable trash",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.files.manage",
+        "description": "Body or query: path",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/files/upload/begin": {
+      "post": {
+        "operationId": "postFilesUploadBegin",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Starts a chunked upload. Folder uploads are 1 byte to 256 MiB; custom server JARs are 16 KiB to 768 MiB",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.files.manage for a folder; games.manage for a custom JAR",
+        "description": "Body or query: target: {\"kind\":\"directory\",\"parent\":\"...\"} or {\"kind\":\"custom_jar\"}, name, expected_size",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/files/upload/chunk": {
+      "post": {
+        "operationId": "postFilesUploadChunk",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Appends the next chunk in order",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "Matches the upload's purpose",
+        "description": "Body or query: upload_id, purpose (storage or custom_jar), offset, data_base64 (up to 2 MiB decoded)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/files/upload/finish": {
+      "post": {
+        "operationId": "postFilesUploadFinish",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Checks the size and publishes the file. Never overwrites",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "Matches the upload's purpose",
+        "description": "Body or query: upload_id, purpose",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/files/upload/abort": {
+      "post": {
+        "operationId": "postFilesUploadAbort",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Discards the unfinished upload",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "Matches the upload's purpose",
+        "description": "Body or query: upload_id, purpose",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/storage/analysis": {
+      "post": {
+        "operationId": "postStorageAnalysis",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Starts a size analysis in the background",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.analyze",
+        "description": "Body or query: path, mode (quick or thorough)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/storage/analysis/{job_id}": {
+      "parameters": [
+        {
+          "name": "job_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteStorageAnalysisJobId",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Asks the analysis to stop",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.analyze",
+        "description": "Body or query: No body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getStorageAnalysisJobId",
+        "tags": [
+          "Storage and files"
+        ],
+        "summary": "Progress and result",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "storage.analyze"
+      }
+    },
+    "/network/firewall/rules": {
+      "post": {
+        "operationId": "postNetworkFirewallRules",
+        "tags": [
+          "Network and firewall"
+        ],
+        "summary": "Adds a named UFW allow rule for one port or a range",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "network.firewall.write",
+        "description": "Body or query: name, description, protocol (tcp or udp), port_start, port_end",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/network/firewall/rules/{rule_id}": {
+      "parameters": [
+        {
+          "name": "rule_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteNetworkFirewallRulesRuleId",
+        "tags": [
+          "Network and firewall"
+        ],
+        "summary": "Deletes a Helix-owned rule, keeping it briefly for undo",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "network.firewall.write",
+        "description": "Body or query: No body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/network/firewall/rules/{rule_id}/restore": {
+      "parameters": [
+        {
+          "name": "rule_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postNetworkFirewallRulesRuleIdRestore",
+        "tags": [
+          "Network and firewall"
+        ],
+        "summary": "Restores a deleted rule before the undo window ends",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "network.firewall.write",
+        "description": "Body or query: No body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/network/firewall/enable": {
+      "post": {
+        "operationId": "postNetworkFirewallEnable",
+        "tags": [
+          "Network and firewall"
+        ],
+        "summary": "Turns on UFW after keeping a listening SSH port open",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "network.firewall.write",
+        "description": "Body or query: ssh_port, confirmation (ENABLE UFW)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/network/amp-router-forwards/release": {
+      "post": {
+        "operationId": "postNetworkAmpRouterForwardsRelease",
+        "tags": [
+          "Network and firewall"
+        ],
+        "summary": "Legacy. Always refuses and tells you to change the router yourself",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "games.manage + network.firewall.write",
+        "description": "Body or query: port, confirmation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/system/packages/refresh": {
+      "post": {
+        "operationId": "postSystemPackagesRefresh",
+        "tags": [
+          "Packages and Helix updates"
+        ],
+        "summary": "Job: refreshes APT package lists",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.packages.write",
+        "description": "Body or query: {}",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/system/packages/apply": {
+      "post": {
+        "operationId": "postSystemPackagesApply",
+        "tags": [
+          "Packages and Helix updates"
+        ],
+        "summary": "Job: installs exactly the selected updates. Refused if it would remove or add packages. Never reboots",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.packages.write",
+        "description": "Body or query: packages (list of name, installed_version, candidate_version), confirmation, disruption_acknowledged",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/system/helix/check": {
+      "post": {
+        "operationId": "postSystemHelixCheck",
+        "tags": [
+          "Packages and Helix updates"
+        ],
+        "summary": "Checks GitHub for a newer Helix release",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.packages.read",
+        "description": "Body or query: {}",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/system/helix/apply": {
+      "post": {
+        "operationId": "postSystemHelixApply",
+        "tags": [
+          "Packages and Helix updates"
+        ],
+        "summary": "Job: updates Helix to that release",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.packages.write",
+        "description": "Body or query: target_tag (vMAJOR.MINOR.PATCH), confirmation (UPDATE HELIX), disruption_acknowledged",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/docker/actions": {
+      "post": {
+        "operationId": "postDockerActions",
+        "tags": [
+          "Docker"
+        ],
+        "summary": "Starts, stops or restarts one container. Helix's own containers are protected",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.settings.write",
+        "description": "Body or query: name, action (start, stop, restart), confirmation (the container name again)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/security/controls": {
+      "post": {
+        "operationId": "postSecurityControls",
+        "tags": [
+          "Security center"
+        ],
+        "summary": "Flips one switchable control",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.settings.write",
+        "description": "Body or query: id, enabled, confirmation (the control's phrase)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/hooks/{hook_id}/install": {
+      "parameters": [
+        {
+          "name": "hook_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postHooksHookIdInstall",
+        "tags": [
+          "Hooks"
+        ],
+        "summary": "Job: installs Tailscale or Jellyfin from its official signed repository",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.settings.write",
+        "description": "Body or query: confirmation, repository_change_acknowledged",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/hooks/{hook_id}/actions": {
+      "parameters": [
+        {
+          "name": "hook_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postHooksHookIdActions",
+        "tags": [
+          "Hooks"
+        ],
+        "summary": "Changes one allowlisted service and checks the result",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.settings.write",
+        "description": "Body or query: action (start, stop, restart, enable, disable)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/terminal/ticket": {
+      "post": {
+        "operationId": "postTerminalTicket",
+        "tags": [
+          "Terminal"
+        ],
+        "summary": "Sets a 30-second, one-use ticket cookie",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "terminal.open + current password",
+        "description": "Body or query: currentPassword, columns (20–400), rows (5–200)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/machines": {
+      "post": {
+        "operationId": "postMachines",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "Registers a machine",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.manage",
+        "description": "Body or query: label, host, port, username, authKind (key, password, system), optional notes, wolMac",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getMachines",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "Registered machines",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.view"
+      }
+    },
+    "/machines/refresh": {
+      "post": {
+        "operationId": "postMachinesRefresh",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "Probes every machine again",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.view",
+        "description": "Body or query: No body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/machines/{machine_id}": {
+      "parameters": [
+        {
+          "name": "machine_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "putMachinesMachineId",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "Changes a machine",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.manage",
+        "description": "Body or query: Same fields as create",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteMachinesMachineId",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "Removes a machine",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.manage",
+        "description": "Body or query: No body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/machines/{machine_id}/probe": {
+      "parameters": [
+        {
+          "name": "machine_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postMachinesMachineIdProbe",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "Checks one machine over SSH",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.view",
+        "description": "Body or query: No body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/machines/{machine_id}/wake": {
+      "parameters": [
+        {
+          "name": "machine_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postMachinesMachineIdWake",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "Sends Wake-on-LAN to its wolMac",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.manage",
+        "description": "Body or query: No body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/machines/{machine_id}/power": {
+      "parameters": [
+        {
+          "name": "machine_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postMachinesMachineIdPower",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "Reboots or powers off the machine over SSH",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.manage",
+        "description": "Body or query: action (reboot or poweroff), confirmation (the machine's label)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/machines/{machine_id}/terminal/ticket": {
+      "parameters": [
+        {
+          "name": "machine_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postMachinesMachineIdTerminalTicket",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "One-use ticket for an SSH terminal",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.manage + current password",
+        "description": "Body or query: currentPassword, columns, rows",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/strands/inspect": {
+      "post": {
+        "operationId": "postStrandsInspect",
+        "tags": [
+          "Strands"
+        ],
+        "summary": "Reviews a package without installing it",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.settings.write",
+        "description": "Body or query: {\"source\":\"upload\",\"filename\":\"...\",\"bytesBase64\":\"...\"} or {\"source\":\"url\",\"url\":\"https://...\"}",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/strands": {
+      "post": {
+        "operationId": "postStrands",
+        "tags": [
+          "Strands"
+        ],
+        "summary": "Installs or replaces a package. It starts disabled",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.settings.write",
+        "description": "Body or query: Same as inspect",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getStrands",
+        "tags": [
+          "Strands"
+        ],
+        "summary": "Installed Strands",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/strands/{strand_id}": {
+      "parameters": [
+        {
+          "name": "strand_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "putStrandsStrandId",
+        "tags": [
+          "Strands"
+        ],
+        "summary": "Turns a Strand on or off",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.settings.write",
+        "description": "Body or query: enabled (boolean)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteStrandsStrandId",
+        "tags": [
+          "Strands"
+        ],
+        "summary": "Removes the package and its storage",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.settings.write",
+        "description": "Body or query: No body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/strands/{strand_id}/host": {
+      "parameters": [
+        {
+          "name": "strand_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "postStrandsStrandIdHost",
+        "tags": [
+          "Strands"
+        ],
+        "summary": "Runs a declared host call (metrics.snapshot, storage.get, storage.set, storage.delete, storage.list, net.fetch) for an enabled Strand",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view, plus what the Strand declared",
+        "description": "Body or query: method, optional params",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      }
+    },
+    "/marketplace/modrinth/image": {
+      "get": {
+        "operationId": "getMarketplaceModrinthImage",
+        "tags": [
+          "Servers: marketplace"
+        ],
+        "summary": "Same-origin proxy for Modrinth artwork",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "games.view; session cookie, no CSRF",
+        "description": "Body or query: Query path"
+      }
+    },
+    "/marketplace/curseforge/image": {
+      "get": {
+        "operationId": "getMarketplaceCurseforgeImage",
+        "tags": [
+          "Servers: marketplace"
+        ],
+        "summary": "Same-origin proxy for CurseForge artwork",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "games.view; session cookie, no CSRF",
+        "description": "Body or query: Query path"
+      }
+    },
+    "/marketplace/curseforge/key": {
+      "put": {
+        "operationId": "putMarketplaceCurseforgeKey",
+        "tags": [
+          "Servers: marketplace"
+        ],
+        "summary": "Saves the key and tests it. probe is ok, cdn_blocked or unreachable; only a rejected key undoes the save",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "games.manage",
+        "description": "Body or query: key (24–256 characters)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteMarketplaceCurseforgeKey",
+        "tags": [
+          "Servers: marketplace"
+        ],
+        "summary": "Removes the key",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "games.manage",
+        "description": "Body or query: No body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getMarketplaceCurseforgeKey",
+        "tags": [
+          "Servers: marketplace"
+        ],
+        "summary": "Whether a CurseForge API key is saved. Never returns the key",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "games.view"
+      }
+    },
+    "/setup/status": {
+      "get": {
+        "operationId": "getSetupStatus",
+        "tags": [
+          "Health, setup and session"
+        ],
+        "summary": "ownerExists, bootstrapAvailable, bootstrapExpiresAtUnixMs",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "tags": [
+          "Overview, host and power"
+        ],
+        "summary": "Dependency health",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/system/overview": {
+      "get": {
+        "operationId": "getSystemOverview",
+        "tags": [
+          "Overview, host and power"
+        ],
+        "summary": "CPU, memory, storage and network snapshot",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/host/inventory": {
+      "get": {
+        "operationId": "getHostInventory",
+        "tags": [
+          "Overview, host and power"
+        ],
+        "summary": "Disks, mounts, interfaces, routes, services, processes, thread count, CPU model, listeners",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/host/integration": {
+      "get": {
+        "operationId": "getHostIntegration",
+        "tags": [
+          "Overview, host and power"
+        ],
+        "summary": "Docker and broker state, Helix container policies, reboot preflight and state",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/host/reboot/preflight": {
+      "get": {
+        "operationId": "getHostRebootPreflight",
+        "tags": [
+          "Overview, host and power"
+        ],
+        "summary": "Active players, running servers, jobs, and anything blocking a reboot",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/network/inventory": {
+      "get": {
+        "operationId": "getNetworkInventory",
+        "tags": [
+          "Network and firewall"
+        ],
+        "summary": "Private addresses, router (UPnP) state, listeners, Docker publications, game ports, UFW state",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "network.firewall.read"
+      }
+    },
+    "/network/globe": {
+      "get": {
+        "operationId": "getNetworkGlobe",
+        "tags": [
+          "Network and firewall"
+        ],
+        "summary": "Country-level view of public connections. No remote addresses",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/system/packages": {
+      "get": {
+        "operationId": "getSystemPackages",
+        "tags": [
+          "Packages and Helix updates"
+        ],
+        "summary": "Installed and candidate versions, sizes, security and restart hints, cache age, Helix update readiness",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.packages.read"
+      }
+    },
+    "/system/packages/jobs/{job_id}": {
+      "parameters": [
+        {
+          "name": "job_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getSystemPackagesJobsJobId",
+        "tags": [
+          "Packages and Helix updates"
+        ],
+        "summary": "Refresh, apply and Helix update job progress and logs",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.packages.read"
+      }
+    },
+    "/docker/inventory": {
+      "get": {
+        "operationId": "getDockerInventory",
+        "tags": [
+          "Docker"
+        ],
+        "summary": "Every container on the host with CPU and memory when reported, plus a Portainer hint",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/docker/homarr": {
+      "get": {
+        "operationId": "getDockerHomarr",
+        "tags": [
+          "Docker"
+        ],
+        "summary": "Imports Homarr shortcuts for the Home page",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "dashboard.customize"
+      }
+    },
+    "/security": {
+      "get": {
+        "operationId": "getSecurity",
+        "tags": [
+          "Security center"
+        ],
+        "summary": "Host and Helix security facts and switches, with explanations",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/hooks": {
+      "get": {
+        "operationId": "getHooks",
+        "tags": [
+          "Hooks"
+        ],
+        "summary": "Configured services, the AMP adapter, and the Docker engine",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/hooks/{hook_id}/install/preflight": {
+      "parameters": [
+        {
+          "name": "hook_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getHooksHookIdInstallPreflight",
+        "tags": [
+          "Hooks"
+        ],
+        "summary": "What an install would do, and anything blocking it",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/hooks/jobs/{job_id}": {
+      "parameters": [
+        {
+          "name": "job_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getHooksJobsJobId",
+        "tags": [
+          "Hooks"
+        ],
+        "summary": "One install job",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/terminal/status": {
+      "get": {
+        "operationId": "getTerminalStatus",
+        "tags": [
+          "Terminal"
+        ],
+        "summary": "Whether the terminal service is ready",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "terminal.open"
+      }
+    },
+    "/terminal/connect": {
+      "get": {
+        "operationId": "getTerminalConnect",
+        "tags": [
+          "Terminal"
+        ],
+        "summary": "WebSocket upgrade, subprotocol helix-terminal-v1, exact same Origin",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "terminal.open; session cookie and ticket cookie, no CSRF"
+      }
+    },
+    "/machines/identity": {
+      "get": {
+        "operationId": "getMachinesIdentity",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "Helix's own SSH key for machines that use key",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.view"
+      }
+    },
+    "/machines/{machine_id}/terminal/connect": {
+      "parameters": [
+        {
+          "name": "machine_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getMachinesMachineIdTerminalConnect",
+        "tags": [
+          "Rack machines"
+        ],
+        "summary": "WebSocket upgrade for the SSH terminal",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "machines.manage; session cookie and ticket cookie, no CSRF"
+      }
+    },
+    "/strands/{strand_id}/package": {
+      "parameters": [
+        {
+          "name": "strand_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getStrandsStrandIdPackage",
+        "tags": [
+          "Strands"
+        ],
+        "summary": "Downloads the stored zip",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view"
+      }
+    },
+    "/games/readiness": {
+      "get": {
+        "operationId": "getGamesReadiness",
+        "tags": [
+          "Servers: inventory and readiness"
+        ],
+        "summary": "Same as manager readiness",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "games.view"
+      }
+    },
+    "/strands/{strand_id}/files/{asset}": {
+      "parameters": [
+        {
+          "name": "strand_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getStrandsStrandIdFiles*asset",
+        "tags": [
+          "Strands"
+        ],
+        "summary": "Serves a sandboxed UI file",
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-helix-capability": "system.view; session cookie, no CSRF"
+      }
     }
   },
   "components": {
     "securitySchemes": {
-      "ServerToken": {"type":"http","scheme":"bearer","description":"Server-scoped token; accepted only by /automation endpoints."},
+      "ServerToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Server-scoped token; accepted only by /automation endpoints."
+      },
       "SessionCookie": {
         "type": "apiKey",
         "in": "cookie",
@@ -3016,52 +5665,140 @@
       "DockerCleanupRunRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["retention_hours"],
+        "required": [
+          "retention_hours"
+        ],
         "properties": {
-          "retention_hours": {"type": "integer", "minimum": 24, "maximum": 8760}
+          "retention_hours": {
+            "type": "integer",
+            "minimum": 24,
+            "maximum": 8760
+          }
         }
       },
       "DockerCleanupScheduleRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["weekdays", "hour", "minute", "timezone", "retention_hours"],
+        "required": [
+          "weekdays",
+          "hour",
+          "minute",
+          "timezone",
+          "retention_hours"
+        ],
         "properties": {
           "weekdays": {
             "type": "array",
             "minItems": 1,
             "maxItems": 7,
             "uniqueItems": true,
-            "items": {"type": "string", "enum": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]}
+            "items": {
+              "type": "string",
+              "enum": [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday"
+              ]
+            }
           },
-          "hour": {"type": "integer", "minimum": 0, "maximum": 23},
-          "minute": {"type": "integer", "minimum": 0, "maximum": 59},
-          "timezone": {"type": "string", "minLength": 1, "maxLength": 128, "description": "Must exactly match the host timezone returned by Helix."},
-          "retention_hours": {"type": "integer", "minimum": 24, "maximum": 8760}
+          "hour": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23
+          },
+          "minute": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 59
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Must exactly match the host timezone returned by Helix."
+          },
+          "retention_hours": {
+            "type": "integer",
+            "minimum": 24,
+            "maximum": 8760
+          }
         }
       },
       "DockerCleanupStatus": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["schema_version", "availability", "docker_installed", "storage", "usage", "reclaimable_bytes", "policy", "schedule", "last_run", "active_job", "collected_at_unix_ms"],
+        "required": [
+          "schema_version",
+          "availability",
+          "docker_installed",
+          "storage",
+          "usage",
+          "reclaimable_bytes",
+          "policy",
+          "schedule",
+          "last_run",
+          "active_job",
+          "collected_at_unix_ms"
+        ],
         "properties": {
-          "schema_version": {"const": 1},
-          "availability": {"type": "string", "enum": ["ready", "unavailable"]},
-          "docker_installed": {"type": "boolean"},
+          "schema_version": {
+            "const": 1
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "unavailable"
+            ]
+          },
+          "docker_installed": {
+            "type": "boolean"
+          },
           "storage": {
             "oneOf": [
-              {"type": "null"},
+              {
+                "type": "null"
+              },
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["data_root", "storage_driver", "mount_point", "source", "total_bytes", "available_bytes", "location_controlled_by"],
+                "required": [
+                  "data_root",
+                  "storage_driver",
+                  "mount_point",
+                  "source",
+                  "total_bytes",
+                  "available_bytes",
+                  "location_controlled_by"
+                ],
                 "properties": {
-                  "data_root": {"type": "string"},
-                  "storage_driver": {"type": "string"},
-                  "mount_point": {"type": "string"},
-                  "source": {"type": "string"},
-                  "total_bytes": {"type": "integer", "minimum": 0},
-                  "available_bytes": {"type": "integer", "minimum": 0},
-                  "location_controlled_by": {"const": "docker_daemon"}
+                  "data_root": {
+                    "type": "string"
+                  },
+                  "storage_driver": {
+                    "type": "string"
+                  },
+                  "mount_point": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "total_bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "available_bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "location_controlled_by": {
+                    "const": "docker_daemon"
+                  }
                 }
               }
             ]
@@ -3072,37 +5809,134 @@
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["kind", "total_count", "active_count", "size_bytes", "reclaimable_bytes"],
+              "required": [
+                "kind",
+                "total_count",
+                "active_count",
+                "size_bytes",
+                "reclaimable_bytes"
+              ],
               "properties": {
-                "kind": {"type": "string", "enum": ["images", "containers", "local_volumes", "build_cache"]},
-                "total_count": {"type": "integer", "minimum": 0},
-                "active_count": {"type": "integer", "minimum": 0},
-                "size_bytes": {"type": "integer", "minimum": 0},
-                "reclaimable_bytes": {"type": "integer", "minimum": 0}
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "images",
+                    "containers",
+                    "local_volumes",
+                    "build_cache"
+                  ]
+                },
+                "total_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "active_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "size_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "reclaimable_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               }
             }
           },
-          "reclaimable_bytes": {"type": "integer", "minimum": 0},
+          "reclaimable_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
           "policy": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["profile", "default_retention_hours", "minimum_retention_hours", "maximum_retention_hours", "removes", "preserves", "automatic_volume_cleanup", "automatic_container_cleanup"],
+            "required": [
+              "profile",
+              "default_retention_hours",
+              "minimum_retention_hours",
+              "maximum_retention_hours",
+              "removes",
+              "preserves",
+              "automatic_volume_cleanup",
+              "automatic_container_cleanup"
+            ],
             "properties": {
-              "profile": {"const": "safe"},
-              "default_retention_hours": {"type": "integer", "minimum": 24, "maximum": 8760},
-              "minimum_retention_hours": {"const": 24},
-              "maximum_retention_hours": {"const": 8760},
-              "removes": {"type": "array", "items": {"type": "string", "enum": ["old_build_cache", "dangling_images", "unused_networks"]}},
-              "preserves": {"type": "array", "items": {"type": "string", "enum": ["running_and_stopped_containers", "named_images", "all_volumes", "active_resources"]}},
-              "automatic_volume_cleanup": {"const": false},
-              "automatic_container_cleanup": {"const": false}
+              "profile": {
+                "const": "safe"
+              },
+              "default_retention_hours": {
+                "type": "integer",
+                "minimum": 24,
+                "maximum": 8760
+              },
+              "minimum_retention_hours": {
+                "const": 24
+              },
+              "maximum_retention_hours": {
+                "const": 8760
+              },
+              "removes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "old_build_cache",
+                    "dangling_images",
+                    "unused_networks"
+                  ]
+                }
+              },
+              "preserves": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "running_and_stopped_containers",
+                    "named_images",
+                    "all_volumes",
+                    "active_resources"
+                  ]
+                }
+              },
+              "automatic_volume_cleanup": {
+                "const": false
+              },
+              "automatic_container_cleanup": {
+                "const": false
+              }
             }
           },
-          "schedule": {"type": "object", "additionalProperties": true, "description": "State is none, unavailable, scheduled, or degraded. Scheduled states include the verified timezone, retention, unit state, and next activation."},
-          "last_run": {"type": ["object", "null"], "additionalProperties": true},
-          "active_job": {"type": ["object", "null"], "additionalProperties": true},
-          "error": {"type": ["string", "null"]},
-          "collected_at_unix_ms": {"type": "integer", "minimum": 0}
+          "schedule": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "State is none, unavailable, scheduled, or degraded. Scheduled states include the verified timezone, retention, unit state, and next activation."
+          },
+          "last_run": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "active_job": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "collected_at_unix_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       },
       "ValheimSettings": {

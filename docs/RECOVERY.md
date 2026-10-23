@@ -14,6 +14,11 @@ data-preserving uninstall for commit `fdbbc0a`. Complete Linux fault, database
 restore, disk-full, power-loss, and fresh-machine recovery evidence is still
 absent.
 
+The `helixctl` commands that exist today are `setup-token`, `status`, `ready`,
+`doctor`, `backup-state`, and `strand`. Recovery commands such as
+`helixctl state recover` that appear below describe planned behavior and are
+not available yet.
+
 State-database recovery, migration rollback across a released production schema,
 operation reconciliation, Vault restore, disk-full handling, and fresh-machine
 restore are not implemented or proven. Other command names below are interface

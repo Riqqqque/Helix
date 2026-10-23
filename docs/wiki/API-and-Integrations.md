@@ -198,6 +198,7 @@ Some responses include `Retry-After` in seconds:
 | `request_capacity_exhausted`, `password_capacity_exhausted`, `host_snapshot_in_progress`, `terminal_capacity_exhausted`, `session_maintenance_in_progress` | 1 |
 | `host_broker_unavailable`, `terminal_unavailable`, `weather_capacity_exhausted` | 2 |
 | `preference_write_rate_limited`, `storage_analysis_rate_limited`, `strand_busy`, `weather_unavailable` | 60 |
+| `token_rate_limited` | 60 |
 | `too_many_attempts` | 900 |
 
 Every response carries an `X-Request-ID` header. Keep it when you report a

@@ -120,7 +120,8 @@ metadata, instance definitions, enabled modules, backup catalog entries,
 policies, schedules, port allocations, stable node IDs, audit records,
 configuration revisions, and operation/job state.
 
-The implemented founding schema is version 4. Version 1 establishes the
+The state database is currently at schema version 11 (`STATE_SCHEMA_VERSION`).
+The founding versions are described here. Version 1 establishes the
 installation identity, local node, migration ledger, and operation ledger.
 Version 2 adds constrained owner/user, role, capability, role-assignment,
 single-use bootstrap, hashed session/CSRF, security-state, and append-only audit

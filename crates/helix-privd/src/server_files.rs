@@ -524,6 +524,15 @@ impl ServerFiles {
                 let expected = {
                     let _index_guard = self.pending.lock().map_err(error)?;
                     let index = read_pending(&store)?;
+                    if let Some(same) = staged_match(
+                        &index,
+                        &path,
+                        size,
+                        &sha256.to_ascii_lowercase(),
+                        expected_revision.as_deref(),
+                    ) {
+                        return Ok(same);
+                    }
                     resolve_expected(&root, &index, &path, expected_revision.as_deref())?
                 };
                 if expected.live.is_some()
@@ -713,8 +722,13 @@ impl ServerFiles {
     ) -> Result<Value, String> {
         let _index_guard = self.pending.lock().map_err(error)?;
         let index = read_pending(store)?;
-        let expected = resolve_expected(root, &index, path, expected_revision)?;
         let sha256 = hex(&Sha256::digest(bytes));
+        if let Some(same) =
+            staged_match(&index, path, bytes.len() as u64, &sha256, expected_revision)
+        {
+            return Ok(same);
+        }
+        let expected = resolve_expected(root, &index, path, expected_revision)?;
         if expected.live.is_some()
             && let Some(existing) = matching_destination(root, path, bytes.len() as u64, &sha256)?
         {
@@ -956,6 +970,41 @@ fn resolve_expected(
     }
     live_absent(root, path)?;
     Ok(Expected { live: None })
+}
+
+/// A retry of a staged upload that already succeeded: same path, size and content,
+/// and a revision that names the same base. Returns the staged change as done.
+fn staged_match(
+    index: &[PendingChange],
+    path: &str,
+    size: u64,
+    sha256: &str,
+    expected: Option<&str>,
+) -> Option<Value> {
+    let staged = index.iter().find(|change| {
+        change.path == path
+            && change.kind == PendingKind::Write
+            && change.size == size
+            && change.sha256.as_deref() == Some(sha256)
+    })?;
+    let token = staged.token();
+    let same_base = match expected {
+        None => staged.base_revision.is_none(),
+        Some(expected) => expected == token || staged.base_revision.as_deref() == Some(expected),
+    };
+    same_base.then(|| {
+        json!({
+            "path": path,
+            "pending": true,
+            "kind": staged.kind,
+            "size": staged.size,
+            "sha256": staged.sha256,
+            "revision": token,
+            "completed": true,
+            "unchanged": true,
+            "applies": "on the next start, restart, or deploy"
+        })
+    })
 }
 
 /// The path does not exist on the live server. Missing parent folders are fine:
@@ -1937,11 +1986,23 @@ mod tests {
                 path: "a.txt".into(),
             })
             .unwrap();
-        // Another staged new file at the same path must name the staged one.
-        assert!(
+        // Repeating the same create is a no-op; different content must name the
+        // staged change.
+        assert_eq!(
             fixture
                 .stage(R::Create {
                     path: "a.txt".into()
+                })
+                .unwrap()["unchanged"],
+            true
+        );
+        assert!(
+            fixture
+                .stage(R::UploadFile {
+                    path: "a.txt".into(),
+                    data_base64: STANDARD.encode(b"x"),
+                    sha256: hex(&Sha256::digest(b"x")),
+                    expected_revision: None,
                 })
                 .unwrap_err()
                 .contains("already staged")
@@ -2087,6 +2148,36 @@ mod tests {
         assert!(fixture.pending().is_empty());
         let applied = fixture.apply();
         assert!(applied.applied.is_empty());
+    }
+
+    #[test]
+    fn repeating_a_staged_upload_returns_the_staged_change() {
+        let fixture = Fixture::new();
+        let bytes = b"plugin".to_vec();
+        let request = || R::UploadFile {
+            path: "plugins/A.jar".into(),
+            data_base64: STANDARD.encode(&bytes),
+            sha256: hex(&Sha256::digest(&bytes)),
+            expected_revision: None,
+        };
+        let first = fixture.stage(request()).unwrap();
+        let again = fixture.stage(request()).unwrap();
+        assert_eq!(again["unchanged"], true);
+        assert_eq!(again["revision"], first["revision"]);
+        assert_eq!(fixture.pending().len(), 1);
+        // Different content at the same path still has to name the staged change.
+        let other = b"other".to_vec();
+        assert!(
+            fixture
+                .stage(R::UploadFile {
+                    path: "plugins/A.jar".into(),
+                    data_base64: STANDARD.encode(&other),
+                    sha256: hex(&Sha256::digest(&other)),
+                    expected_revision: None,
+                })
+                .unwrap_err()
+                .contains("already staged")
+        );
     }
 
     #[test]

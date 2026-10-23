@@ -45,8 +45,9 @@ Start, Restart, and deploys wait until the server is ready. For Hytale that is
 when it prints `Hytale Server Booted!`. If a future Hytale release changes that
 message, Helix treats a server that has stayed up for three minutes as ready.
 
-To stop, Helix sends `/stop` through the console and gives the server up to 45
-seconds to save and exit before Docker stops it.
+To stop, Helix sends `/stop` through the console and gives the server up to 100
+seconds to save and exit before Docker stops it (45 seconds before 1.10.2, which
+could cut off the server's own 90-second shutdown).
 
 ## Letting players join
 

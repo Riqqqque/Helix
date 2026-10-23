@@ -2,13 +2,18 @@
 
 ## Current status
 
-Helix currently manages Docker-backed native Minecraft instances for Paper,
-Purpur, Folia, Leaves, Fabric, and Vanilla. It provides creation, lifecycle actions,
-settings, persistent bounded console history, backups, and software-compatible
-marketplace paths. It can also create a server-safe subset from a listed stable
-server-capable Fabric `.mrpack`; Forge, NeoForge, Quilt, CurseForge, and
-full-pack parity are not part of that path. AMP remains a separate optional
-manager.
+Helix manages Docker-backed native Minecraft servers (Paper, Purpur, Folia,
+Leaves, Pufferfish, Fabric, Quilt, Forge, NeoForge, Vanilla, Pumpkin, or a custom
+JAR) and the other games listed in the
+[Servers and Marketplace](https://github.com/Riqqqque/Helix/wiki/Servers-and-Marketplace)
+wiki page. It provides creation, lifecycle actions, settings, persistent bounded
+console history, live and stopped backups, and software-compatible marketplace
+paths, plus server-safe modpack subsets from Modrinth or CurseForge (with your own
+CurseForge key). Full client-pack parity is not a goal. AMP remains a separate
+optional manager.
+
+For current sizing guidance see
+[Game Hosting and Capacity](https://github.com/Riqqqque/Helix/wiki/Game-Hosting-and-Capacity).
 
 This is a control-plane claim, not a player-count claim. Helix is neither the
 Minecraft tick loop nor a packet proxy. The host CPU, memory, storage, network,

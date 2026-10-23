@@ -70,6 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/Riqqqque/Helix/main/scripts/install
 | `--check` | Diagnose an existing install and exit. Makes no changes |
 | `--uninstall` | Remove the Helix services, binaries, and dashboard containers. Keeps game servers, data, and settings |
 | `--purge` | With `--uninstall`, also delete Helix data, settings, game servers, worlds, and backups after you type `DELETE` |
+| `--allow-downgrade` | Build this release even if a newer Helix is already installed |
 | `-h`, `--help` | Show the built-in help |
 
 ### Environment variable
@@ -242,11 +243,12 @@ reinstalls the units, and starts everything again. It keeps:
 again, and any hand edits to `privd.json` are lost. The AMP credentials line is
 added back automatically when `/etc/helix/amp.json` exists.
 
-> [!WARNING]
+> [!NOTE]
 > After an in-app update, the folder under `/opt/helix/releases/` still holds
-> the version you first installed. Running that copy's `install.sh` without
-> `--version` rebuilds that older version. Use the one-line command, or pass
-> `--version` with the release you want.
+> the version you first installed. Since 1.10.2 the installer refuses to build a
+> release older than the running dashboard unless you pass `--allow-downgrade`,
+> so running an old copy cannot roll Helix back by accident. Use the one-line
+> command to repair with the latest release.
 
 ### Upgrade
 
@@ -276,9 +278,11 @@ system groups. Re-installing picks them up again.
 terminal and the typed word `DELETE`; it refuses to run with `--yes`. This
 cannot be undone.
 
-Schedules you created in the dashboard (`helix-docker-cleanup.timer`,
-`helix-recurring-reboot.timer`) are not part of the uninstall. Delete the
-schedules in Helix before uninstalling, or disable those timers yourself.
+Uninstall also disables and removes the schedules you created in the dashboard
+(`helix-docker-cleanup.timer` and `helix-recurring-reboot.timer`, with their
+services), so they do not keep calling the removed broker. Installers before
+1.10.2 left them behind; disable them with `systemctl disable --now` if you
+uninstalled an older version.
 
 ## Manual and container deployment
 

@@ -91,7 +91,8 @@ The broker must not trust validation performed only by `helixd`.
 `helix-terminald` is an optional, separately deployed real-PTY bridge. It runs
 as one configured non-root Linux account, uses a socket group distinct from the
 root broker, and checks the connecting dashboard UID through Linux
-`SO_PEERCRED`. The API requires a fresh dashboard-password proof and a one-use
+`SO_PEERCRED`. (The root broker itself relies on its socket being mode `0660`
+in the `helix-broker` group and does not check the peer UID.) The API requires a fresh dashboard-password proof and a one-use
 session-bound ticket for every WebSocket. The service has bounded frames and
 sessions, starts an interactive login shell, clears inherited environment
 values, kills the PTY on disconnect, and does not log terminal input/output. It
@@ -299,7 +300,7 @@ Conflicts are surfaced; the UI must not invent a successful state because a butt
 | Critical state | Restrictive permissions; secrets encrypted separately | FULL synchronous SQLite, foreign keys, migrations, integrity checks | Online snapshots, bounded contention, startup recovery |
 | Metrics | Avoid sensitive labels and filenames | Typed samples and schema validation | Failure is isolated; retention and buffers are bounded |
 | Privileged broker | Local socket and peer authentication; no secret output | Typed allowlist, target revalidation, audit trail | Socket activation, timeouts, no dependency for read-only UI |
-| Host terminal | One-use session/password proof; distinct socket group; peer UID | Non-root PTY, bounded frames, no root-broker path | Optional service, two-session cap, disconnect cleanup |
+| Host terminal | One-use session/password proof; distinct socket group; peer UID | Non-root PTY, bounded frames, no root-broker path | Optional service, bounded session count, disconnect cleanup |
 | Managed workloads | Per-instance permissions and secret scoping | Stable IDs, systemd definitions, controlled changes | Independent lifetime, resource limits, crash-loop protection |
 | Workers | Minimum job capability and sanitized logs | Immutable inputs, checksums, staged output | Resource limits, cancellation, resumable/reconciled jobs |
 | Strands | Capability-scoped APIs and namespaced storage | Signed/verified packages and validated messages | Optional host, quotas, crash isolation |

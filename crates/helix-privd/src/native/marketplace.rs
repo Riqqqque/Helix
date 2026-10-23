@@ -244,7 +244,7 @@ impl NativeManager {
         project_id: &str,
         version_id: Option<&str>,
         provider: ModpackProvider,
-        _restart_server: bool,
+        restart_server: bool,
     ) -> Result<Value, String> {
         validate_modrinth_id(project_id, "project")?;
         if let Some(version_id) = version_id {
@@ -295,6 +295,13 @@ impl NativeManager {
         };
 
         let was_running = self.container_running(&manifest.container_name);
+        // With restart_server, a running server is stopped before the files change,
+        // started again, and checked; if it does not come back the old files return.
+        let restart_now = was_running && restart_server;
+        if restart_now && let Err(error) = self.stop_preserving_minecraft_settings(&manifest) {
+            let _ = remove_directory_if_present(&staging);
+            return Err(format!("{error}; nothing was installed"));
+        }
         let mut mutation = ContentMutation::default();
         let commit_result = self.commit_content_tree(
             &manifest,
@@ -308,10 +315,27 @@ impl NativeManager {
         if let Err(error) = commit_result {
             let rollback = rollback_content(&mut mutation);
             let _ = remove_directory_if_present(&staging);
-            return Err(combine_install_failure(error, rollback, Ok(())));
+            let restart = if restart_now {
+                self.restart_if_previously_running(&manifest, true)
+            } else {
+                Ok(())
+            };
+            return Err(combine_install_failure(error, rollback, restart));
         }
 
         let _ = remove_directory_if_present(&staging);
+        if restart_now && let Err(error) = self.restart_if_previously_running(&manifest, true) {
+            let _ = self.stop_preserving_minecraft_settings(&manifest);
+            let rollback = rollback_content(&mut mutation);
+            let restart = self.restart_if_previously_running(&manifest, true);
+            return Err(combine_install_failure(
+                format!(
+                    "the server did not start with the new content: {error}. The previous files were put back"
+                ),
+                rollback,
+                restart,
+            ));
+        }
         Ok(json!({
             "schema_version": 1,
             "instance_id": instance_id,
@@ -333,9 +357,9 @@ impl NativeManager {
             "optional_dependencies_not_installed": resolved.iter().flat_map(|item| item.optional_dependencies.clone()).collect::<Vec<_>>(),
             "backup_id": "",
             "server_was_running": was_running,
-            "restart_required": was_running,
-            "runtime_validation_performed": false,
-            "rollback_on_failed_startup": false,
+            "restart_required": was_running && !restart_now,
+            "runtime_validation_performed": restart_now,
+            "rollback_on_failed_startup": restart_now,
         }))
     }
 

@@ -168,7 +168,7 @@ async fn create(
                     .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
         })
     {
-        return Err(ApiError::AuthorizationDenied);
+        return Err(ApiError::InvalidTokenRequest);
     }
     body.servers.sort();
     body.servers.dedup();
@@ -446,7 +446,7 @@ async fn authenticate_token(
     .await?
     .ok_or(ApiError::AuthenticationRequired)?;
     if !state.attempt_limiter.allow_api_token(&token.id) {
-        return Err(ApiError::AttemptRateLimited);
+        return Err(ApiError::TokenRateLimited);
     }
     Ok(token)
 }

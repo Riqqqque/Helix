@@ -386,8 +386,9 @@ JAR code safe.
 
 Read and execute boundaries stay separate. A managed root of `/` can support
 broad inventory browsing, but it is never inherited as a custom artifact root.
-Dropped JARs land in Helix's private `{state_root}/imports` directory. Extra
-Storage paths still need an explicit `native.custom_artifact_roots` entry.
+Dropped JARs land in Helix's private `{state_root}/imports` directory. When
+`native.custom_artifact_roots` is empty, safe managed Storage folders are used as
+import roots; set it to narrow that list.
 
 The separate “Start with a modpack” flow accepts only opaque Modrinth IDs and
 ordinary server settings from the browser. The broker re-resolves metadata,

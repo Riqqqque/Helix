@@ -94,9 +94,11 @@ JARs), `file_actions`, `max_upload_bytes`, `max_chunk_bytes`,
 describes what the adapter supports. Read it before choosing operations.
 
 > [!NOTE]
-> In 1.10.0 the capabilities response still says
-> `"file_mutations_require_stopped": true`. File changes on a running server
-> are now staged instead (see [Staged changes](#staged-changes-on-a-running-server)).
+> Since 1.10.2 the capabilities response says
+> `"file_mutations_require_stopped": false` and
+> `"file_changes_staged_while_running": true`: file changes on a running server
+> are staged (see [Staged changes](#staged-changes-on-a-running-server)). Older
+> brokers still report `true`.
 
 ### Lifecycle
 
@@ -166,10 +168,12 @@ audit log never stores the command text.
 | `install_server_marketplace_content` | `files.write` | `project_id`, `version_id` (string, or null for the newest compatible release), optional `provider`, optional `restart_server` | A job. Writes checksum-verified JARs into `plugins/` or `mods/` with required dependencies. Result includes `restart_required` |
 
 > [!NOTE]
-> `restart_server` is accepted but has no effect in 1.10.0. Marketplace
-> installs write files straight into the server folder, even while it runs, and
-> do not restart it. Restart it yourself when the result says
-> `restart_required: true`.
+> Without `restart_server`, marketplace installs write the files into the server
+> folder and leave a running server running; restart it yourself when the result
+> says `restart_required: true`. With `"restart_server": true` (1.10.2 and later)
+> a running server is stopped before the files change, started again, and
+> checked; if it does not come back, the previous files are put back and it
+> starts again. The result then says `runtime_validation_performed: true`.
 
 ### Backups
 
@@ -463,11 +467,12 @@ shutdown). The staged version still wins and the other copy is in the trash.
 If any change fails to install, Helix puts back the ones it already installed
 and leaves every change staged.
 
-> [!WARNING]
-> On a running server, repeating a create-new `upload_file` or `upload_begin`
-> after the first one succeeded is refused with *a change is already staged for
-> PATH*, because the first one staged the file. If a response was lost, call
-> `pending_list` and compare `sha256` before you retry.
+> [!NOTE]
+> On a running server, repeating an identical `upload_file` or `upload_begin`
+> (same path, size, and SHA-256) after the first one succeeded returns the
+> staged change with `"unchanged": true` (1.10.2 and later), so a lost response
+> is safe to retry. Different content at the same path still needs the staged
+> change's `pending:` revision.
 
 ### Locks
 
@@ -602,7 +607,7 @@ Errors use the standard shape, `{"code": "...", "message": "..."}`.
 | `403 authorization_denied` | A `Cookie` or `Origin` header was sent; the server is not on the token; the token lacks the permission; the operation is not available to tokens; the job belongs to another token |
 | `400 invalid_json` | Unknown operation or field, a missing required field, or a wrong type |
 | `413 payload_too_large` | The body is over 5 MiB |
-| `429 too_many_attempts` | More than 600 requests in a minute for this token. The response says `Retry-After: 900`, but the window is one minute |
+| `429 token_rate_limited` | More than 600 requests in a minute for this token. `Retry-After: 60` (older versions answered `too_many_attempts` with `Retry-After: 900`) |
 | `503 request_capacity_exhausted` | No automation slot was free. `Retry-After: 1` |
 | `503 host_broker_unavailable` | The host broker is not answering. `Retry-After: 2` |
 | `400 broker_operation_rejected` | Helix accepted the request but the operation was refused. `message` says why |
@@ -641,7 +646,7 @@ server first.
 | Requests per token | 600 per minute |
 | Automation requests in progress | 2 across all tokens; further requests wait for a slot |
 | Job waits in progress | 4 |
-| Request body | 5 MiB (the gateway allows 6 MiB) |
+| Request body | 5 MiB (the gateway allows 12 MiB) |
 | `upload_file` | 3 MiB decoded |
 | Chunked upload | 0 bytes to 8 GiB, chunks up to 1 MiB, 2 active uploads, 10 minutes idle |
 | `read` and `write` | 1 MiB of UTF-8 text |

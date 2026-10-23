@@ -739,7 +739,13 @@ impl NativeManager {
         let data = self.instance_path(&target.id)?;
         let running = self.runtime_running_checked(target)?;
         progress(&format!("Backing up {}", target.name), 40);
-        let backup = self.archive_data(target)?;
+        // A running Minecraft target is flushed and archived with saving paused.
+        let paused = running && pause_world_saves(target);
+        let backup = self.archive_data_with(target, paused);
+        if paused {
+            let _ = resume_world_saves(target);
+        }
+        let backup = backup?;
         progress(&format!("Stopping {}", target.name), 52);
         if let Err(error) = self.stop_runtime_for_files(target) {
             return Err(format!("{error}; nothing on the target changed"));

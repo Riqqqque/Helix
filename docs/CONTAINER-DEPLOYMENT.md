@@ -55,8 +55,9 @@ configured, and installed on the host separately.
   backup roots, custom executable-import roots, Docker binary, optional AMP
   credential file, and durable network-rule state. Broad read-only browsing of
   `/` is never inherited as a custom JAR import root. Dropped JARs use Helix's
-  private `{state_root}/imports` directory. Extra Storage paths still need
-  explicit `native.custom_artifact_roots` entries.
+  private `{state_root}/imports` directory. When
+  `native.custom_artifact_roots` is empty, every safe managed Storage folder is
+  also a custom JAR import root; list folders there to narrow it.
 - The broker service sandbox grants configured content roots explicitly. Hosts
   that enable selected APT updates, UFW mutations, recurring reboot schedules,
   or recurring Docker cleanup
