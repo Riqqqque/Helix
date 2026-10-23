@@ -616,8 +616,14 @@ impl NativeManager {
         if let Some(error) = errors.into_iter().next() {
             return Err(error);
         }
-        let _source_lock = self.begin_instance_operation(&source.id, "transfer")?;
-        let _target_lock = self.begin_instance_operation(&target.id, "transfer")?;
+        // Lock in a fixed order so two opposite transfers cannot wait on each other.
+        let (first, second) = if source.id < target.id {
+            (&source.id, &target.id)
+        } else {
+            (&target.id, &source.id)
+        };
+        let _first_lock = self.begin_queued_operation(first, "a transfer", |_| {})?;
+        let _second_lock = self.begin_queued_operation(second, "a transfer", |_| {})?;
         let source_level = self.level_name(&source);
         let target_level = self.level_name(&target);
         let stage = self

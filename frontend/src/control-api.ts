@@ -436,6 +436,10 @@ export interface NativeServerDetail {
   modpack: NativeInstalledModpack | null;
   hytaleAuth: HytaleAuthPrompt | null;
   extraPorts: ExtraPort[];
+  /** What holds the server right now, such as "backup (started 2 minutes ago)". */
+  busyWith: string | null;
+  /** File changes made while the server ran, waiting for the next start or deploy. */
+  pendingChanges: number;
 }
 
 export interface ServerConfigChanges {
@@ -602,6 +606,19 @@ export interface ServerBackupTrash {
 
 export interface ServerBackupTrashPolicy {
   note: string;
+  /** Days before Helix empties a deleted backup; 0 keeps them until deleted. */
+  purgeAfterDays: number;
+  /** This server's own setting; null follows the host default. */
+  serverSetting: number | null;
+  hostDefaultDays: number;
+}
+
+export interface PendingChange {
+  path: string;
+  kind: 'write' | 'delete';
+  sizeBytes: number;
+  replacesExisting: boolean;
+  stagedAtUnixMs: number;
 }
 
 export interface BackupTrashResult {
@@ -1079,6 +1096,8 @@ function parseNativeServerDetail(value: unknown): NativeServerDetail {
     modpack: parseNativeInstalledModpack(root.modpack),
     hytaleAuth: parseHytaleAuth(root.hytale_auth),
     extraPorts: parseExtraPorts(root.extra_ports),
+    busyWith: typeof root.busy_with === 'string' ? root.busy_with : null,
+    pendingChanges: typeof root.pending_changes === 'number' ? root.pending_changes : 0,
   };
 }
 
@@ -1185,6 +1204,9 @@ export function parseBackupCatalog(value: unknown): ServerBackupCatalog {
     }),
     trashPolicy: {
       note: expectString(policy, 'note', 'backup trash policy'),
+      purgeAfterDays: typeof policy.purge_after_days === 'number' ? policy.purge_after_days : 0,
+      serverSetting: typeof policy.server_setting === 'number' ? policy.server_setting : null,
+      hostDefaultDays: typeof policy.host_default_days === 'number' ? policy.host_default_days : 0,
     },
     policy: parseBackupKeepPolicy(root.policy),
   };
@@ -1644,12 +1666,58 @@ export function setServerBackupPolicy(
   keepCount: number,
   keepDays: number,
   csrfToken: string,
+  trashDays?: number,
 ): Promise<ServerBackupCatalog> {
+  const body: Record<string, number> = { keep_count: keepCount, keep_days: keepDays };
+  if (trashDays !== undefined) body.trash_days = trashDays;
   return requestJson(
     `/api/v1/servers/${encodeURIComponent(id)}/backup-policy`,
     parseBackupCatalog,
-    { method: 'PUT', body: { keep_count: keepCount, keep_days: keepDays }, csrfToken, timeoutMs: 20_000 },
+    { method: 'PUT', body, csrfToken, timeoutMs: 20_000 },
   );
+}
+
+export function parsePendingChanges(value: unknown): PendingChange[] {
+  const root = expectRecord(value, 'staged changes');
+  return array(root, 'changes', 'staged changes', 1_000).map((entry) => {
+    const change = expectRecord(entry, 'staged change');
+    const kind = expectString(change, 'kind', 'staged change');
+    if (kind !== 'write' && kind !== 'delete') throw new Error('Invalid staged change');
+    return {
+      path: expectString(change, 'path', 'staged change'),
+      kind,
+      sizeBytes: number(change, 'size'),
+      replacesExisting: boolean(change, 'replaces_existing'),
+      stagedAtUnixMs: number(change, 'staged_at_unix_ms'),
+    };
+  });
+}
+
+export function getPendingChanges(id: string, csrfToken: string): Promise<PendingChange[]> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/files`, parsePendingChanges, {
+    method: 'POST', body: { action: 'pending_list' }, csrfToken, timeoutMs: 20_000,
+  });
+}
+
+export function discardPendingChanges(id: string, csrfToken: string, path?: string): Promise<void> {
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/files`, () => undefined, {
+    method: 'POST',
+    body: path === undefined ? { action: 'pending_discard' } : { action: 'pending_discard', path },
+    csrfToken,
+    timeoutMs: 20_000,
+  });
+}
+
+export function deployPendingChanges(
+  id: string,
+  options: { backup: boolean; expectLog?: string },
+  csrfToken: string,
+): Promise<JobDispatch> {
+  const body: Record<string, unknown> = { backup: options.backup };
+  if (options.expectLog !== undefined && options.expectLog.trim() !== '') body.expect_log = options.expectLog.trim();
+  return requestJson(`/api/v1/servers/${encodeURIComponent(id)}/deploy`, parseJobDispatch, {
+    method: 'POST', body, csrfToken, timeoutMs: 60_000,
+  });
 }
 
 export function pruneServerBackups(id: string, csrfToken: string): Promise<ServerBackupCatalog> {

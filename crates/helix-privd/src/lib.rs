@@ -298,7 +298,20 @@ pub enum BrokerRequest {
         instance_id: String,
         keep_count: u16,
         keep_days: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trash_days: Option<u16>,
     },
+    PurgeBackupTrashOlderThan {
+        instance_id: String,
+        days: u16,
+    },
+    /// Installs the server's staged file changes as one job.
+    DeployPendingChanges {
+        instance_id: String,
+        #[serde(default)]
+        options: DeployOptions,
+    },
+
     PruneBackups {
         instance_id: String,
     },
@@ -815,6 +828,36 @@ pub enum ServerAction {
     Backup,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeployOptions {
+    /// Back up before installing. On a running Minecraft server this happens
+    /// while players stay online.
+    #[serde(default = "default_true")]
+    pub backup: bool,
+    /// Start the server afterwards even if it was stopped before.
+    #[serde(default = "default_true")]
+    pub start: bool,
+    /// A console line that proves the deploy worked, such as a plugin's enable
+    /// message. Helix waits up to a minute for it after the game is ready.
+    #[serde(default)]
+    pub expect_log: Option<String>,
+    /// Put the previous files back and start again if the server does not come up.
+    #[serde(default = "default_true")]
+    pub revert_on_failure: bool,
+}
+
+impl Default for DeployOptions {
+    fn default() -> Self {
+        Self {
+            backup: true,
+            start: true,
+            expect_log: None,
+            revert_on_failure: true,
+        }
+    }
+}
+
 /// Paths are relative to the selected server, never host filesystem paths.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -882,6 +925,13 @@ pub enum ServerFileRequest {
     UploadAbort {
         upload_id: String,
     },
+    /// Changes made while the server runs, waiting for the next start.
+    PendingList {},
+    /// Drops one staged change, or all of them when `path` is omitted.
+    PendingDiscard {
+        #[serde(default)]
+        path: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -896,6 +946,19 @@ pub enum ServerBackupDownloadRequest {
 }
 
 impl ServerFileRequest {
+    /// Reads never change a server, so they need no lock.
+    pub fn is_read_only(&self) -> bool {
+        matches!(
+            self,
+            Self::List { .. }
+                | Self::Stat { .. }
+                | Self::Read { .. }
+                | Self::Download { .. }
+                | Self::UploadStatus { .. }
+                | Self::PendingList { .. }
+        )
+    }
+
     pub fn requires_stopped(&self) -> bool {
         matches!(
             self,

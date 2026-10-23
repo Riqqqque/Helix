@@ -1,7 +1,7 @@
 use crate::{ApiError, ApiState, auth, broker_value};
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, DefaultBodyLimit, Path, State, rejection::JsonRejection},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State, rejection::JsonRejection},
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -67,6 +67,10 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/auth/server-tokens/{id}/rotate", post(rotate))
         .route("/auth/server-tokens/{id}/reveal", post(reveal))
         .route("/automation/jobs", get(jobs))
+        .route(
+            "/automation/jobs/{job_id}/wait",
+            get(job_wait).layer(tower::limit::ConcurrencyLimitLayer::new(4)),
+        )
         .route(
             "/automation/server",
             post(execute).layer(tower::limit::ConcurrencyLimitLayer::new(2)),
@@ -378,7 +382,8 @@ fn scope(request: &BrokerRequest) -> Option<(&str, &'static str)> {
                 ServerFileRequest::List { .. }
                 | ServerFileRequest::Stat { .. }
                 | ServerFileRequest::Read { .. }
-                | ServerFileRequest::Download { .. } => "files.read",
+                | ServerFileRequest::Download { .. }
+                | ServerFileRequest::PendingList { .. } => "files.read",
                 _ => "files.write",
             },
         ),
@@ -418,7 +423,11 @@ fn scope(request: &BrokerRequest) -> Option<(&str, &'static str)> {
         | RestoreTrashedBackup { instance_id, .. }
         | SetBackupPolicy { instance_id, .. }
         | PruneBackups { instance_id }
-        | PurgeBackupTrash { instance_id, .. } => (instance_id, "backups.write"),
+        | PurgeBackupTrash { instance_id, .. }
+        | PurgeBackupTrashOlderThan { instance_id, .. } => (instance_id, "backups.write"),
+        // A deploy stops and starts the server to install files already staged
+        // with files.write.
+        DeployPendingChanges { instance_id, .. } => (instance_id, "restart"),
         _ => return None,
     })
 }
@@ -452,6 +461,61 @@ async fn jobs(State(state): State<ApiState>, headers: HeaderMap) -> Result<Respo
     Ok(response(
         json!({"jobs":jobs.into_iter().map(|(id,server)| json!({"job_id":id,"server_id":server})).collect::<Vec<_>>()}),
     ))
+}
+
+/// The longest a `job_wait` call holds the request; it must stay inside the
+/// gateway's 15-second read timeout. Call it again to keep waiting.
+const MAX_JOB_WAIT_SECONDS: u64 = 12;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobWaitQuery {
+    timeout_seconds: Option<u64>,
+}
+
+/// Returns a job's status once it finishes, or after the timeout with
+/// `finished: false`, so automation does not have to poll every second.
+async fn job_wait(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(job_id): Path<String>,
+    Query(query): Query<JobWaitQuery>,
+) -> Result<Response, ApiError> {
+    let token = authenticate_token(&state, &headers).await?;
+    let db = Arc::clone(&state.databases);
+    let id = token.id.clone();
+    let owned = auth::run_blocking_state(&state.blocking_tasks, move || {
+        db.state().api_token_jobs(&id)
+    })
+    .await?
+    .into_iter()
+    .any(|(id, server)| id == job_id && token.servers.contains(&server));
+    if !owned {
+        return Err(ApiError::AuthorizationDenied);
+    }
+    let wait = query
+        .timeout_seconds
+        .unwrap_or(MAX_JOB_WAIT_SECONDS)
+        .min(MAX_JOB_WAIT_SECONDS);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(wait);
+    loop {
+        let mut status = broker_value(
+            &state,
+            BrokerRequest::JobStatus {
+                job_id: job_id.clone(),
+            },
+        )
+        .await?;
+        let finished = matches!(
+            status.get("status").and_then(Value::as_str),
+            Some("complete" | "failed")
+        );
+        if finished || tokio::time::Instant::now() >= deadline {
+            status["finished"] = json!(finished);
+            return Ok(response(status));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 }
 
 async fn execute(

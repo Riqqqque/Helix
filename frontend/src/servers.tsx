@@ -34,6 +34,10 @@ import {
   setNativeBrowserListing,
   setServerNetworkExposure,
   setServerBackupPolicy,
+  getPendingChanges,
+  discardPendingChanges,
+  deployPendingChanges,
+  type PendingChange,
   pruneServerBackups,
   purgeTrashedServerBackup,
   trashServerBackup,
@@ -1021,7 +1025,20 @@ export function serverActionDescription(
       ? "Helix will stop the server, back it up, stage and verify the new build, then restart and health-check Minecraft. If validation fails, Helix puts the old build back."
       : "Helix will back up and stage the verified build while keeping this server stopped. Its first later startup is not automatically health-validated or rolled back.";
   }
+  if (server.kind === "minecraft" && server.status === "online" && server.software.toLowerCase() !== "pumpkin")
+    return `Players stay connected: Helix pauses world saving, archives ${server.name}, then turns saving back on. If the console does not answer, Helix stops the server briefly instead.`;
   return `Helix will stop ${server.name} briefly, archive a consistent copy, then bring it back online.`;
+}
+
+/** Memory the servers may use together compared with the machine's memory. */
+export function memoryOvercommit(
+  servers: Array<{ memoryLimitMb: number }>,
+  hostMemoryBytes: number | null,
+): { allocatedMb: number; hostMb: number } | null {
+  if (hostMemoryBytes === null || hostMemoryBytes <= 0) return null;
+  const allocatedMb = servers.reduce((total, server) => total + Math.max(0, server.memoryLimitMb), 0);
+  const hostMb = Math.floor(hostMemoryBytes / (1024 * 1024));
+  return allocatedMb > hostMb ? { allocatedMb, hostMb } : null;
 }
 
 export type BackupMutation = "create" | "restore" | "trash" | "undo";
@@ -2294,6 +2311,11 @@ function ServerActionDialog({
         ? updateDetail.backup_id
         : null;
     const alreadyCurrent = updateDetail?.already_current === true;
+    const pendingError =
+      typeof updateDetail?.pending_error === "string" ? updateDetail.pending_error : null;
+    const appliedCount = Array.isArray(updateDetail?.applied_pending)
+      ? updateDetail.applied_pending.length
+      : 0;
     return (
       <Dialog
         title={
@@ -2333,7 +2355,11 @@ function ServerActionDialog({
                   ? alreadyCurrent
                     ? `${modpack.projectTitle} is already current. No backup or files were changed.`
                     : `${server.name} passed its startup check. The pre-update backup is ready if you need to restore it.`
-                  : `${server.name} is ready.`
+                  : pendingError !== null
+                    ? `${server.name} is ready, but its staged file changes were not installed: ${pendingError}`
+                    : appliedCount > 0
+                      ? `${server.name} is ready with ${appliedCount} staged change${appliedCount === 1 ? "" : "s"} installed.`
+                      : `${server.name} is ready.`
                 : (job.error ?? "Helix could not finish the action.")}
           </span>
           <ProgressBar
@@ -3515,16 +3541,24 @@ function AllocatedMemoryEditor({
   detail,
   csrfToken,
   canManageServers,
+  otherServersMb = 0,
+  hostMemoryBytes = null,
   onSaved,
   onSessionExpired,
 }: {
   detail: NativeServerDetail;
   csrfToken: string;
   canManageServers: boolean;
+  otherServersMb?: number;
+  hostMemoryBytes?: number | null;
   onSaved: () => Promise<void> | void;
   onSessionExpired: () => void;
 }) {
   const [memoryMb, setMemoryMb] = useState(detail.memoryLimitMb);
+  const overcommit = memoryOvercommit(
+    [{ memoryLimitMb: memoryMb }, { memoryLimitMb: otherServersMb }],
+    hostMemoryBytes,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -3584,6 +3618,12 @@ function AllocatedMemoryEditor({
       >
         {busy ? "Saving…" : "Save memory"}
       </button>
+      {overcommit !== null && (
+        <p class="settings-port-note memory-overcommit" role="status">
+          With this setting, servers may use {formatMemoryGiB(overcommit.allocatedMb)} together on a machine with{" "}
+          {formatMemoryGiB(overcommit.hostMb)}. That works only while they are not all busy at once.
+        </p>
+      )}
       <InlineError message={error} />
       {notice !== null && (
         <p class="settings-port-note" role="status">
@@ -4163,6 +4203,242 @@ function EmptyBackupTrashDialog({
   );
 }
 
+function PendingChangesBanner({
+  detail,
+  csrfToken,
+  canManageServers,
+  onDone,
+  onSessionExpired,
+}: {
+  detail: NativeServerDetail;
+  csrfToken: string;
+  canManageServers: boolean;
+  onDone: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [changes, setChanges] = useState<PendingChange[] | null>(null);
+  const [deploying, setDeploying] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const count = detail.pendingChanges;
+  const show = async (): Promise<void> => {
+    setOpen(!open);
+    if (open) return;
+    try {
+      setChanges(await getPendingChanges(detail.id, csrfToken));
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    }
+  };
+  const discard = async (path?: string): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      await discardPendingChanges(detail.id, csrfToken, path);
+      if (path !== undefined && changes !== null) {
+        setChanges(changes.filter((change) => change.path !== path));
+      }
+      await onDone();
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section class="pending-changes" aria-live="polite">
+      <span class="pending-changes__icon">
+        <Icon name="file" size={18} />
+      </span>
+      <div>
+        <strong>
+          {count} file change{count === 1 ? "" : "s"} waiting for a restart
+        </strong>
+        <small>
+          Changes made while the server runs are installed on the next start or
+          restart. Deploy backs up, installs them, and checks that the server
+          comes back.
+        </small>
+        {open && changes !== null && (
+          <ul class="pending-changes__list">
+            {changes.map((change) => (
+              <li key={change.path}>
+                <code>{change.path}</code>
+                <small>
+                  {change.kind === "delete"
+                    ? "delete"
+                    : `${formatBytes(change.sizeBytes)} · ${change.replacesExisting ? "replaces the current file" : "new file"}`}
+                </small>
+                <button
+                  class="icon-button"
+                  type="button"
+                  disabled={!canManageServers || busy}
+                  aria-label={`Discard the staged change to ${change.path}`}
+                  onClick={() => void discard(change.path)}
+                >
+                  <Icon name="close" size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <InlineError message={error} />
+      </div>
+      <div class="pending-changes__actions">
+        <button class="button button--quiet" type="button" onClick={() => void show()}>
+          {open ? "Hide" : "Show"}
+        </button>
+        <button
+          class="button button--quiet"
+          type="button"
+          disabled={!canManageServers || busy}
+          onClick={() => void discard()}
+        >
+          Discard all
+        </button>
+        <button
+          class="button button--primary"
+          type="button"
+          disabled={!canManageServers || busy}
+          title={canManageServers ? undefined : "Requires games.manage permission"}
+          onClick={() => setDeploying(true)}
+        >
+          <Icon name="restart" size={15} />
+          Deploy
+        </button>
+      </div>
+      {deploying && (
+        <DeployChangesDialog
+          detail={detail}
+          csrfToken={csrfToken}
+          onClose={() => setDeploying(false)}
+          onComplete={onDone}
+          onSessionExpired={onSessionExpired}
+        />
+      )}
+    </section>
+  );
+}
+
+function DeployChangesDialog({
+  detail,
+  csrfToken,
+  onClose,
+  onComplete,
+  onSessionExpired,
+}: {
+  detail: NativeServerDetail;
+  csrfToken: string;
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+  onSessionExpired: () => void;
+}) {
+  const [backup, setBackup] = useState(true);
+  const [expectLog, setExpectLog] = useState("");
+  const [job, setJob] = useState<BrokerJob | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const polling = useJobPolling({
+    job,
+    csrfToken,
+    baseDelayMs: 900,
+    onJob: setJob,
+    onComplete,
+    onSessionExpired,
+  });
+  const start = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const dispatch = await deployPendingChanges(detail.id, { backup, expectLog }, csrfToken);
+      if (dispatch.jobId === null) throw new Error("Helix did not start the deploy job.");
+      setJob({
+        id: dispatch.jobId,
+        kind: "server_deploy",
+        status: "queued",
+        stage: "Queued",
+        progressPercent: 0,
+        createdAtUnixMs: Date.now(),
+        updatedAtUnixMs: Date.now(),
+        result: null,
+        error: null,
+      });
+    } catch (requestError) {
+      if (isSessionError(requestError)) onSessionExpired();
+      else setError(describeError(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (job !== null) {
+    const active = job.status === "queued" || job.status === "running";
+    return (
+      <Dialog
+        title={job.status === "failed" ? "Deploy failed" : job.status === "complete" ? "Deployed" : "Deploying"}
+        onClose={() => (!active || polling.paused) && onClose()}
+      >
+        <div class="job-progress">
+          <div class={`job-icon job-icon--${job.status}`}>
+            <Icon name={job.status === "complete" ? "check" : job.status === "failed" ? "warning" : "activity"} size={26} />
+          </div>
+          <strong>{job.stage}</strong>
+          <span>
+            {active
+              ? "This runs in the background; closing the page does not stop it."
+              : job.status === "complete"
+                ? `${detail.name} is running the new files.`
+                : (job.error ?? "Helix could not finish the deploy.")}
+          </span>
+          <ProgressBar value={active ? Math.max(job.progressPercent, 8) : job.progressPercent} tone={job.status === "failed" ? "danger" : "normal"} />
+        </div>
+        <InlineError message={polling.error} />
+        <div class="dialog-actions">
+          <button class="button button--primary" type="button" disabled={active && !polling.paused} onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </Dialog>
+    );
+  }
+  return (
+    <Dialog title={`Deploy to ${detail.name}?`} onClose={() => !busy && onClose()}>
+      <div class="dialog-copy">
+        <p>
+          Helix installs the {detail.pendingChanges} staged change{detail.pendingChanges === 1 ? "" : "s"}, starts the
+          server, and waits until it is ready. If it does not come back, the previous files are put back and the
+          server is started again. Replaced files stay in the Files trash.
+        </p>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" checked={backup} disabled={busy} onChange={(event) => setBackup(event.currentTarget.checked)} />
+        <span>
+          <strong>Back up first</strong>
+          <small>{detail.kind === "minecraft" ? "Players stay online during the backup." : "The server stops for the backup."}</small>
+        </span>
+      </label>
+      <label class="field">
+        <span>
+          Wait for this console line (optional){" "}
+          <InfoTip text="For example a plugin's enable message. The deploy fails, and is rolled back, if it does not appear within a minute of startup." />
+        </span>
+        <input type="text" maxLength={200} value={expectLog} disabled={busy} onInput={(event) => setExpectLog(event.currentTarget.value)} />
+      </label>
+      <InlineError message={error} />
+      <div class="dialog-actions">
+        <button class="button button--quiet" type="button" disabled={busy} onClick={onClose}>
+          Cancel
+        </button>
+        <button class="button button--primary" type="button" disabled={busy} onClick={() => void start()}>
+          {busy ? "Starting…" : "Deploy"}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 function BackupsPanel({
   server,
   csrfToken,
@@ -4191,6 +4467,7 @@ function BackupsPanel({
   );
   const [keepCountDraft, setKeepCountDraft] = useState("0");
   const [keepDaysDraft, setKeepDaysDraft] = useState("0");
+  const [trashDaysDraft, setTrashDaysDraft] = useState("7");
   const [policyBusy, setPolicyBusy] = useState(false);
   const [restore, setRestore] = useState<ServerBackup | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ServerBackup | null>(null);
@@ -4228,6 +4505,7 @@ function BackupsPanel({
       setKeepPolicy(catalog.policy);
       setKeepCountDraft(String(catalog.policy.keepCount));
       setKeepDaysDraft(String(catalog.policy.keepDays));
+      setTrashDaysDraft(String(catalog.trashPolicy.purgeAfterDays));
       setError(null);
     } catch (requestError) {
       if (isSessionError(requestError)) onSessionExpired();
@@ -4259,7 +4537,7 @@ function BackupsPanel({
         <div>
           <h2>
             Backups{" "}
-            <InfoTip text="Helix stops a running server, archives its data folder, then starts it again. Deleted copies stay in protected trash until you restore them or delete them forever. Count and age limits move the oldest extras to trash after a backup." />
+            <InfoTip text="A running Minecraft server is backed up while players stay connected; other games stop briefly. Logs, crash reports, and caches are left out. Count and age limits move the oldest extras to trash, and the trash empties itself after the days you choose." />
           </h2>
           <p>Local archives with the matching Helix server definition.</p>
         </div>
@@ -4292,20 +4570,25 @@ function BackupsPanel({
             if (policyBusy) return;
             const keepCount = Number(keepCountDraft);
             const keepDays = Number(keepDaysDraft);
+            const trashDays = Number(trashDaysDraft);
             if (
               !Number.isInteger(keepCount) ||
               keepCount < 0 ||
               keepCount > 50 ||
               !Number.isInteger(keepDays) ||
               keepDays < 0 ||
-              keepDays > 365
+              keepDays > 365 ||
+              !Number.isInteger(trashDays) ||
+              trashDays < 0 ||
+              trashDays > 365
             ) {
-              setError("Keep count is 0–50. Keep days is 0–365. Zero means no limit.");
+              setError("Keep count is 0–50. Keep days and trash days are 0–365. Zero means no limit.");
               return;
             }
             setPolicyBusy(true);
             setError(null);
-            void setServerBackupPolicy(server.id, keepCount, keepDays, csrfToken)
+            const trashChanged = trashPolicy === null || trashDays !== trashPolicy.purgeAfterDays;
+            void setServerBackupPolicy(server.id, keepCount, keepDays, csrfToken, trashChanged ? trashDays : undefined)
               .then((catalog) => {
                 setBackups(catalog.backups);
                 setTrash(catalog.trash);
@@ -4313,6 +4596,7 @@ function BackupsPanel({
                 setKeepPolicy(catalog.policy);
                 setKeepCountDraft(String(catalog.policy.keepCount));
                 setKeepDaysDraft(String(catalog.policy.keepDays));
+                setTrashDaysDraft(String(catalog.trashPolicy.purgeAfterDays));
               })
               .catch((requestError: unknown) => {
                 if (isSessionError(requestError)) onSessionExpired();
@@ -4357,11 +4641,28 @@ function BackupsPanel({
                 <small>days · 0 never</small>
               </span>
             </label>
+            <label>
+              <span>
+                Empty the trash after{" "}
+                <InfoTip text="Deleted backups are removed for good this many days after they were deleted. Helix checks every hour and after each backup." />
+              </span>
+              <span class="backup-policy__field">
+                <input
+                  type="number"
+                  min="0"
+                  max="365"
+                  value={trashDaysDraft}
+                  disabled={policyBusy}
+                  onInput={(event) => setTrashDaysDraft(event.currentTarget.value)}
+                />
+                <small>days · 0 never</small>
+              </span>
+            </label>
           </div>
           <p>{keepPolicy.note}</p>
           <div class="backup-policy__actions">
             <button class="button button--quiet" type="submit" disabled={policyBusy}>
-              {policyBusy ? "Saving…" : "Save keep rules"}
+              {policyBusy ? "Saving…" : "Save cleanup rules"}
             </button>
             <button
               class="button button--quiet"
@@ -4480,8 +4781,8 @@ function BackupsPanel({
               </h3>
               <p>
                 {trash.length === 0
-                  ? "Deleted backups wait here until you restore them or delete them forever. Helix never empties the trash on its own."
-                  : `${formatBytes(trashBytes)} held by deleted backups. Helix never empties the trash on its own.`}
+                  ? (trashPolicy?.note ?? "Deleted backups wait here until you restore them or delete them forever.")
+                  : `${formatBytes(trashBytes)} held by deleted backups. ${trashPolicy?.note ?? ""}`}
               </p>
             </div>
             {trash.length > 0 && (
@@ -5003,6 +5304,7 @@ function NativeServerPage({
   canManageBackups,
   canManageNetwork,
   hostInventory,
+  hostMemoryBytes = null,
   logicalCores,
   onBack,
   onRefresh,
@@ -5016,6 +5318,7 @@ function NativeServerPage({
   canManageBackups: boolean;
   canManageNetwork: boolean;
   hostInventory: HostInventory | null;
+  hostMemoryBytes?: number | null;
   logicalCores: number;
   onBack: () => void;
   onRefresh: () => Promise<void>;
@@ -5340,6 +5643,21 @@ function NativeServerPage({
         </div>
       </header>
       <InlineError message={error} />
+      {detail.busyWith !== null && (
+        <p class="server-busy-note" role="status">
+          <Icon name="activity" size={15} />
+          Busy: {detail.busyWith}. New actions wait in line until it finishes.
+        </p>
+      )}
+      {detail.pendingChanges > 0 && (
+        <PendingChangesBanner
+          detail={detail}
+          csrfToken={csrfToken}
+          canManageServers={canManageServers}
+          onDone={refresh}
+          onSessionExpired={onSessionExpired}
+        />
+      )}
       {detail.modpack !== null && (
         <section
           class={`modpack-update-banner${
@@ -5695,6 +6013,10 @@ function NativeServerPage({
                   detail={detail}
                   csrfToken={csrfToken}
                   canManageServers={canManageServers}
+                  otherServersMb={servers
+                    .filter((other) => other.id !== detail.id)
+                    .reduce((total, other) => total + Math.max(0, other.memoryLimitMb), 0)}
+                  hostMemoryBytes={hostMemoryBytes}
                   onSaved={refresh}
                   onSessionExpired={onSessionExpired}
                 />
@@ -5835,6 +6157,10 @@ function NativeServerPage({
                   detail={detail}
                   csrfToken={csrfToken}
                   canManageServers={canManageServers}
+                  otherServersMb={servers
+                    .filter((other) => other.id !== detail.id)
+                    .reduce((total, other) => total + Math.max(0, other.memoryLimitMb), 0)}
+                  hostMemoryBytes={hostMemoryBytes}
                   onSaved={refresh}
                   onSessionExpired={onSessionExpired}
                 />
@@ -8304,6 +8630,8 @@ export function ServersPage({
       : (servers.find((server) => server.id === selectedId) ?? null);
   const logicalCores = data.overview.data?.cpu.logicalCores ?? 8;
   const availableMemoryBytes = data.overview.data?.memory.availableBytes ?? null;
+  const hostMemoryBytes = data.overview.data?.memory.totalBytes ?? null;
+  const overcommit = memoryOvercommit(allServers, hostMemoryBytes);
   const loadRemoved = useCallback(async (): Promise<void> => {
     try {
       setRemoved(await getTrashedNativeServers(csrfToken));
@@ -8381,6 +8709,7 @@ export function ServersPage({
             canManageBackups={canManageBackups}
             canManageNetwork={canManageNetwork}
             hostInventory={data.inventory.data}
+            hostMemoryBytes={hostMemoryBytes}
             logicalCores={logicalCores}
             onBack={() => {
               window.location.hash = "#servers";
@@ -8477,6 +8806,16 @@ export function ServersPage({
         }
       />
       <InlineError message={data.servers.error ?? removedError} />
+      {overcommit !== null && (
+        <div class="backup-capability-note memory-overcommit" role="status">
+          <Icon name="warning" size={15} />
+          <span>
+            Servers may use {formatMemoryGiB(overcommit.allocatedMb)} of memory together, but this machine has{" "}
+            {formatMemoryGiB(overcommit.hostMb)}. If several get busy at once, Linux stops one of them to free
+            memory. Lower the largest allocations or keep some servers stopped.
+          </span>
+        </div>
+      )}
       <section class="server-summary">
         <div>
           <span class="status-dot status-dot--good" />

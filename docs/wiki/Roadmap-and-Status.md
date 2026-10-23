@@ -27,6 +27,7 @@ artifacts, accessibility and mobile review, and broad game-version matrices.
 
 | Release | Highlights |
 | --- | --- |
+| 1.10.0 | Backups without stopping Minecraft, faster and smaller backups, the backup trash empties itself, file changes staged while a server runs, one-call deploy with rollback, queued jobs, memory overcommit warning |
 | 1.9.0 | [One-command installer](https://github.com/Riqqqque/Helix/wiki/Getting-Started) for headless servers, tested on fresh Ubuntu 22.04 and 24.04; fresh gateway builds fixed |
 | 1.8.0 | Home layout editor rebuilt: drag anywhere, resize from the corner, tiles keep their size while editing |
 | 1.7.2 | Copy buttons work over plain HTTP on a LAN |

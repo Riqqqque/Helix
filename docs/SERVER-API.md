@@ -81,6 +81,8 @@ No `storage.files.manage` grant or absolute host path is needed.
 | `upload_status` | `upload_id` | Current offset, target and expected size |
 | `upload_finish` | `upload_id` | Verified atomic publication and optional recovery path |
 | `upload_abort` | `upload_id` | Discard uncommitted staged bytes |
+| `pending_list` | none | Changes staged while the server runs, waiting for the next start |
+| `pending_discard` | optional `path` | Drop one staged change, or all of them |
 
 Paths use `/` and stay relative to the selected server. Parent traversal,
 absolute paths, symbolic links, hard-linked files, sockets and devices are
@@ -89,12 +91,47 @@ cannot be renamed or removed. Operations use directory descriptors so replacing
 a path component with a symbolic link does not redirect access to the host.
 Do not concurrently move server directories with external administrator tools.
 
-Create, mkdir, write, move, trash, `upload_file` and upload finish require the
-server to be stopped, verified against its exact container identity. Upload
-staging can run while online; it does not change live server files. Each request
-participates in the native operation lock, so a backup/update/restore cannot
-overlap its file operation. Stop and wait for completion before publishing
-replacement files.
+On a stopped server, create, write, trash, `upload_file` and upload finish
+change the live files immediately. On a running server they are **staged**
+instead: the response has `"pending": true` and a `revision` such as
+`pending:…` that you can pass as `expected_revision` to change the staged file
+again. Nothing the game reads changes until the next start, restart, or deploy,
+which installs every staged change while the server is stopped. Replaced and
+deleted files go to `.helix-trash`, as with direct writes. `move` still needs a
+stopped server. Folders for a new staged file are created right away (empty
+folders do not affect a running game). A direct change to a stopped server
+replaces anything staged for the same path.
+
+Reads take no lock. File changes share the server with each other but wait for a
+backup, restore, update, or lifecycle action; a call that waits more than a few
+seconds fails with the name of the operation holding the server.
+
+Errors name the cause: a missing folder, a full disk, an existing destination,
+a path that is a file instead of a folder, and so on.
+
+## Deploy
+
+`POST /api/v1/servers/{instance_id}/deploy` (or the token operation
+`deploy_pending_changes`) installs the staged changes as one job:
+
+1. Back up (`backup`, default on). A running Minecraft server is backed up while
+   players stay online.
+2. Stop the server, install the staged changes, start it (`start`, default on).
+3. Wait until the game is ready (Minecraft answers a status ping after Paper's
+   `Done` line; other games write their ready marker).
+4. Optionally wait up to a minute for `expect_log`, a console line such as a
+   plugin's enable message.
+
+If the server does not come back, Helix puts the previous files back, starts it
+again, and reports the backup ID (`revert_on_failure`, default on). The result
+lists the installed changes, the backup, `downtime_seconds`, and
+`duration_seconds`. Start and Restart also install staged changes, without the
+automatic rollback.
+
+Jobs for the same server wait in line instead of failing; while waiting, the
+job stage says what it waits for. Job records survive a broker restart; a job
+that was running when the broker stopped is reported as failed with the stage it
+had reached.
 
 Revisions are opaque, not timestamps to invent or parse. Keep the value from
 `stat` or `read`. A stale revision rejects the operation; reload and reconcile.

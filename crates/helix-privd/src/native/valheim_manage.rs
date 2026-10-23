@@ -15,7 +15,7 @@ impl NativeManager {
         if !manifest.is_valheim() {
             return Err("This action requires a Helix Valheim server".into());
         }
-        let _operation = self.begin_instance_operation(&manifest.id, "Valheim management")?;
+        let _operation = self.begin_queued_operation(&manifest.id, "Valheim management", |_| {})?;
         let root = self.instance_path(&manifest.id)?;
         let path = root.join("valheim.json");
         let original = if path.exists() {
@@ -32,6 +32,7 @@ impl NativeManager {
                     let read = self.api_files.execute(
                         &manifest.id,
                         &root,
+                        &self.pending_path(&manifest.id)?,
                         manifest.run_uid,
                         helix_privd::ServerFileRequest::Read {
                             path: ".helix-valheim/mods.json".into(),
@@ -84,7 +85,7 @@ impl NativeManager {
                 self.ensure_valheim_runtime_image(&mut progress)?;
                 let backup = if request.changes_files() {
                     progress("Backing up the server and checking the archive", 10);
-                    Some(backup_id_from_path(&self.backup(&manifest)?))
+                    Some(backup_id_from_path(&self.backup(&manifest)?.path))
                 } else {
                     None
                 };

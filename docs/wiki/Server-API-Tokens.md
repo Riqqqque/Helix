@@ -42,14 +42,14 @@ immediately, so update the tool that uses it at the same time.
 | Full access (`all`) | Do everything below, including later additions |
 | View (`view`) | Read status and details, search the marketplace |
 | Logs (`logs`) | Read console output and log history |
-| Read files (`files.read`) | List, read, and download server files |
-| Write files (`files.write`) | Upload, edit, move, and delete files; install marketplace plugins and mods |
-| Start, Stop, Restart, Kill | The matching lifecycle action only |
+| Read files (`files.read`) | List, read, and download server files; list staged changes |
+| Write files (`files.write`) | Upload, edit, move, and delete files (staged while the server runs); discard staged changes; install marketplace plugins and mods |
+| Start, Stop, Restart, Kill | The matching lifecycle action only; Restart also allows a deploy of staged changes |
 | Console (`console`) | Run console commands |
 | Settings (`settings`) | Change properties, memory, CPU, extra ports, start on boot, server-list visibility |
 | Update (`update`) | Update or repair the server software |
 | Read backups (`backups.read`) | List and download backups |
-| Manage backups (`backups.write`) | Back up, restore, delete, empty trash, and set keep rules |
+| Manage backups (`backups.write`) | Back up, restore, delete, empty trash (all or older than N days), and set keep and trash rules |
 | Network (`network`) | Open or close the server to the internet |
 | Remove server (`remove`) | Move the server to **Removed servers**, where it can be restored |
 

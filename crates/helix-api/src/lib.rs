@@ -423,6 +423,7 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
             "/servers/{instance_id}/files",
             post(server_files).layer(tower::limit::ConcurrencyLimitLayer::new(2)),
         )
+        .route("/servers/{instance_id}/deploy", post(deploy_server_changes))
         .route(
             "/servers/{instance_id}/appearance",
             get(server_appearance)
@@ -481,6 +482,10 @@ pub fn router(state: ApiState, web_root: PathBuf) -> Result<Router, StaticRootEr
         .route(
             "/servers/{instance_id}/backups/trash/{trash_id}",
             delete(purge_trashed_server_backup),
+        )
+        .route(
+            "/servers/{instance_id}/backups/trash/purge",
+            post(purge_old_server_backup_trash),
         )
         .route("/servers/{instance_id}/actions", post(server_action))
         .route(
@@ -1723,6 +1728,14 @@ struct InstallServerMarketplaceContentBody {
 struct BackupPolicyBody {
     keep_count: u16,
     keep_days: u16,
+    #[serde(default)]
+    trash_days: Option<u16>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PurgeTrashBody {
+    older_than_days: u16,
 }
 
 #[derive(Deserialize)]
@@ -3185,6 +3198,25 @@ async fn purge_trashed_server_backup(
     .await
 }
 
+async fn purge_old_server_backup_trash(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<PurgeTrashBody>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.backups.manage").await?;
+    let Json(body) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::PurgeBackupTrashOlderThan {
+            instance_id,
+            days: body.older_than_days,
+        },
+    )
+    .await
+}
+
 async fn set_server_backup_policy(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -3200,6 +3232,7 @@ async fn set_server_backup_policy(
             instance_id,
             keep_count: body.keep_count,
             keep_days: body.keep_days,
+            trash_days: body.trash_days,
         },
     )
     .await
@@ -3259,6 +3292,25 @@ async fn server_files(
         BrokerRequest::ServerFiles {
             instance_id,
             request,
+        },
+    )
+    .await
+}
+
+async fn deploy_server_changes(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    RoutePath(instance_id): RoutePath<String>,
+    body: Result<Json<helix_privd::DeployOptions>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    auth::validate_post_headers(&headers)?;
+    auth::require_capability(&state, &headers, "games.manage").await?;
+    let Json(options) = body.map_err(auth::map_json_rejection)?;
+    broker_json(
+        &state,
+        BrokerRequest::DeployPendingChanges {
+            instance_id,
+            options,
         },
     )
     .await

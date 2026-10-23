@@ -224,21 +224,47 @@ auto-purges. This is not an off-host backup.
 
 ## Backups
 
-**Back up now** stops a running server, archives its data folder, verifies the
-archive, then starts the server again. **Restore** replaces the live data with a
-backup and keeps a safety copy of what it replaced.
+**Back up now** on a running Minecraft server keeps players connected: Helix
+turns off autosave, flushes the world to disk, archives the folder, and turns
+autosave back on. If the console does not answer, or for other games, Helix
+stops the server, archives it, and starts it again. Logs, crash reports, Paper's
+download and remap caches, and the Files trash are left out, because the game
+recreates them. Archives are ordinary `.tar.gz` files compressed on several CPU
+cores, and each one is checked before it is kept. **Restore** replaces the live
+data with a backup and keeps a safety copy of what it replaced.
 
 **Automatic cleanup** sets how many backups to keep (1–50, or 0 to keep all) and
-how old they may get (1–365 days, or 0 for no limit). After each backup, or when
-you choose **Apply rules now**, extras move to the trash, oldest first. The
-backup that just finished is always kept.
+how old they may get (1–365 days, or 0 for no limit), and how long deleted
+backups stay in the trash (default 7 days, or 0 to keep them until you delete
+them). After each backup, or when you choose **Apply rules now**, extras move to
+the trash, oldest first. The backup that just finished is always kept.
 
 Deleting a backup moves it to **Trash**, where **Undo** puts it back and the
 bin deletes it forever. The Trash header shows how many backups it holds and how
 much disk they use, and each entry shows when the backup was originally made.
 Helix warns once the trash passes 20 GiB. **Empty trash** deletes every trashed
-backup for that server after you confirm. Helix never empties the trash on its
-own.
+backup for that server after you confirm. Since 1.10.0 Helix also empties the
+trash on its own: every hour, and after each backup, it deletes backups that
+were deleted longer ago than the server's trash setting. Backups already in the
+trash when you upgrade to 1.10.0 are counted from the upgrade. This replaces the
+1.4.0 behavior, when the trash was only ever emptied by hand. Set the trash days to 0
+to keep the old behavior for a server.
+
+## Deploying file changes
+
+Files uploaded or written through the server API while a server runs are staged
+instead of refused. The server page shows how many changes are waiting, lets you
+review or discard them, and **Deploy** installs them: back up, stop, install,
+start, wait until the server is ready, and optionally wait for a console line.
+If the server does not come back, Helix puts the old files back and starts it
+again. A normal Start or Restart also installs staged changes.
+
+## Memory
+
+The Servers page warns when the servers together may use more memory than the
+machine has, and the memory setting shows the same warning before you save.
+Allocating more than the machine has works only while the servers are not all
+busy at once; otherwise Linux stops one of them to free memory.
 
 Backups live on the same disk as the server. Copy important worlds somewhere
 else too.

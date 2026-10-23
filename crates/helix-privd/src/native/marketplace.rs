@@ -263,7 +263,8 @@ impl NativeManager {
         } else {
             content_profile(manifest.software)?
         };
-        let _operation = self.begin_instance_operation(&manifest.id, "marketplace install")?;
+        let _operation =
+            self.begin_queued_operation(&manifest.id, "a marketplace install", |_| {})?;
         let resolved = match provider {
             ModpackProvider::Curseforge if hytale => {
                 self.resolve_hytale_content_tree(project_id, version_id)?

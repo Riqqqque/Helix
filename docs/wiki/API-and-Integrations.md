@@ -27,8 +27,11 @@ Some broker responses are still open objects, not complete generated-client sche
 
 Native Minecraft (including Pumpkin/custom), V Rising, Valheim and Terraria use
 the same relative file commands. Uploads verify SHA-256 before publication;
-replacement and deletion retain recoverable files. Upload staging can run while
-online, but changes to live server files require a stopped server. Chunked backup
+replacement and deletion retain recoverable files. Changes made while a server
+runs are staged and installed on the next start, restart, or deploy job, which
+backs up, restarts, checks the server, and rolls back if it does not come up.
+`GET /api/v1/automation/jobs/{job_id}/wait` waits for a job instead of polling.
+Chunked backup
 export is also available. Imported AMP servers keep the adapter's actual limits;
 unsupported controls are not advertised as native features.
 

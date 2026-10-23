@@ -41,6 +41,7 @@ pub(crate) mod game_def;
 mod hytale;
 mod marketplace;
 mod modpacks;
+mod operations;
 mod palworld;
 mod project_zomboid;
 mod pumpkin;
@@ -123,7 +124,7 @@ pub struct NativeManager {
     custom_artifact_roots: Vec<PathBuf>,
     custom_import_root: PathBuf,
     uploads: Mutex<HashMap<String, crate::files::StreamingUpload>>,
-    operations: Mutex<HashSet<String>>,
+    operations: operations::OperationRegistry,
     port_policies: Mutex<()>,
     console_archives: Mutex<HashMap<String, Arc<Mutex<ConsoleArchiveWriter>>>>,
     console_stops: Mutex<HashMap<String, Arc<AtomicBool>>>,
@@ -172,6 +173,10 @@ struct InstanceManifest {
     backup_keep_count: u16,
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     backup_keep_days: u16,
+    /// Days a deleted backup stays in the trash before Helix empties it; 0 keeps it
+    /// until someone deletes it. None follows the host default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backup_trash_days: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     modpack: Option<InstalledModpack>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -386,18 +391,7 @@ struct ServerTrashRecord {
     was_running: bool,
 }
 
-struct InstanceOperationGuard<'a> {
-    operations: &'a Mutex<HashSet<String>>,
-    key: String,
-}
-
-impl Drop for InstanceOperationGuard<'_> {
-    fn drop(&mut self) {
-        if let Ok(mut operations) = self.operations.lock() {
-            operations.remove(&self.key);
-        }
-    }
-}
+use operations::InstanceOperationGuard;
 
 #[derive(Clone)]
 struct ConsoleArchiverConfig {
@@ -526,8 +520,11 @@ impl NativeManager {
                     .to_owned(),
             );
         }
-        if !(1..=365).contains(&config.backup_trash_retention_days) {
-            return Err("backup trash retention must be between 1 and 365 days".to_owned());
+        if config.backup_trash_retention_days > 365 {
+            return Err(
+                "backup trash retention must be at most 365 days, or 0 to keep deleted backups"
+                    .to_owned(),
+            );
         }
         for root in [
             &config.state_root,
@@ -617,7 +614,7 @@ impl NativeManager {
             custom_artifact_roots,
             custom_import_root,
             uploads: Mutex::new(HashMap::new()),
-            operations: Mutex::new(HashSet::new()),
+            operations: operations::OperationRegistry::default(),
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
@@ -1286,6 +1283,8 @@ impl NativeManager {
             return Err("type the exact server name to confirm removal".to_owned());
         }
         let _operation = self.begin_instance_operation(&manifest.id, "server removal")?;
+        // Backup folders move too, so the trash sweep must wait.
+        let _catalog = self.begin_catalog_operation(&manifest.id, "server removal")?;
         if self.list_trashed_servers()?["servers"]
             .as_array()
             .is_some_and(|servers| servers.len() >= MAX_SERVER_TRASH_ENTRIES)
@@ -1392,6 +1391,9 @@ impl NativeManager {
             return Err("the removed server recovery record is inconsistent".to_owned());
         }
         let _operation = self.begin_instance_operation(&manifest.id, "server restore")?;
+        // Backup folders move too, so the trash sweep must wait.
+        let _catalog = self.begin_catalog_operation(&manifest.id, "server restore")?;
+        let _ = fs::remove_dir_all(self.pending_path(&manifest.id)?);
         let data_source = self.server_trash_data_path(trash_id)?;
         let data_destination = self.instance_path(&manifest.id)?;
         let manifest_destination = self.manifest_path(&manifest.id)?;
@@ -1482,6 +1484,9 @@ impl NativeManager {
         }
         let _operation =
             self.begin_instance_operation(&manifest.id, "permanent server deletion")?;
+        // Backup folders move too, so the trash sweep must wait.
+        let _catalog = self.begin_catalog_operation(&manifest.id, "permanent server deletion")?;
+        let _ = fs::remove_dir_all(self.pending_path(&manifest.id)?);
         let instance_path = self.instance_path(&manifest.id)?;
         let manifest_path = self.manifest_path(&manifest.id)?;
         if instance_path.exists() || manifest_path.exists() {
@@ -1764,19 +1769,7 @@ impl NativeManager {
             None
         };
         let data_path = self.instance_path(&manifest.id)?;
-        let disk_bytes = run_program(
-            Path::new("/usr/bin/du"),
-            &[
-                "--summarize".to_owned(),
-                "--bytes".to_owned(),
-                "--one-file-system".to_owned(),
-                data_path.to_string_lossy().into_owned(),
-            ],
-            30,
-        )
-        .ok()
-        .and_then(|output| output.split_whitespace().next()?.parse::<u64>().ok())
-        .unwrap_or(0);
+        let disk_bytes = cached_disk_usage(&data_path);
         let inspect = self
             .docker(
                 [
@@ -1862,6 +1855,11 @@ impl NativeManager {
             "data_path": data_path,
             "disk_bytes": disk_bytes,
             "status": detail_status,
+            // True once the game answers players (Minecraft's status ping, or the
+            // runtime's ready marker), which is after Paper prints "Done (…)!".
+            "ready": detail_status == "online",
+            "busy_with": self.busy_with(&manifest.id),
+        "pending_changes": self.pending_path(&manifest.id).ok().and_then(|path| self.api_files.pending_changes(&path).ok()).map_or(0, |changes| changes.len()),
             "players_online": status.as_ref().map_or(0, |value| value.players_online),
             "max_players": status.as_ref().map_or(u64::from(manifest.max_players), |value| value.max_players),
             "cpu_percent": state.cpu_percent,
@@ -1949,7 +1947,6 @@ impl NativeManager {
             return Err("backup ID is invalid".into());
         }
         let manifest = self.load_manifest(native_id(id))?;
-        let _operation = self.begin_instance_operation(&manifest.id, "backup download")?;
         let path = format!("{backup_id}.tar.gz");
         let request = match request {
             helix_privd::ServerBackupDownloadRequest::Stat {} => {
@@ -1969,6 +1966,7 @@ impl NativeManager {
         self.api_files.execute(
             &manifest.id,
             &self.backup_path(&manifest.id)?,
+            &self.pending_path(&manifest.id)?,
             manifest.run_uid,
             request,
         )
@@ -1980,18 +1978,251 @@ impl NativeManager {
         request: helix_privd::ServerFileRequest,
     ) -> Result<Value, String> {
         let manifest = self.load_manifest(native_id(id))?;
-        let _operation = self.begin_instance_operation(&manifest.id, "server files")?;
-        if request.requires_stopped() && self.runtime_running_checked(&manifest)? {
+        let _operation = if request.is_read_only() {
+            None
+        } else {
+            Some(self.begin_shared_operation(&manifest.id, "file changes")?)
+        };
+        let root = self.instance_path(&manifest.id)?;
+        let pending = self.pending_path(&manifest.id)?;
+        if !request.is_read_only() && self.runtime_running_checked(&manifest)? {
+            return self
+                .api_files
+                .stage(&manifest.id, &root, &pending, manifest.run_uid, request);
+        }
+        self.api_files
+            .execute(&manifest.id, &root, &pending, manifest.run_uid, request)
+    }
+
+    /// Installs staged file changes into a stopped server, keeping what they replace
+    /// in the Files trash. Entries that fail stay staged and stop the start.
+    fn install_pending_changes(
+        &self,
+        manifest: &InstanceManifest,
+    ) -> Result<Vec<crate::server_files::AppliedChange>, String> {
+        let root = self.instance_path(&manifest.id)?;
+        let result = self.api_files.apply_pending(
+            &root,
+            &self.pending_path(&manifest.id)?,
+            manifest.run_uid,
+        )?;
+        if result.failed.is_empty() {
+            return Ok(result.applied);
+        }
+        let revert_errors = self.api_files.revert_applied(&root, &result.applied);
+        let failed = result
+            .failed
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{}: {}",
+                    entry["path"].as_str().unwrap_or("?"),
+                    entry["error"].as_str().unwrap_or("failed")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        Err(if revert_errors.is_empty() {
+            format!(
+                "staged changes could not be installed ({failed}). Nothing was changed; the changes are still staged"
+            )
+        } else {
+            format!(
+                "staged changes could not be installed ({failed}), and putting back the others also failed ({}). Check the Files trash",
+                revert_errors.join("; ")
+            )
+        })
+    }
+
+    /// For Start and Restart: a staged change that cannot be installed must not keep
+    /// the server down. It starts on its current files and the reason is reported.
+    fn install_pending_for_start(
+        &self,
+        manifest: &InstanceManifest,
+    ) -> (Vec<crate::server_files::AppliedChange>, Option<String>) {
+        match self.install_pending_changes(manifest) {
+            Ok(applied) => (applied, None),
+            Err(error) => (Vec::new(), Some(error)),
+        }
+    }
+
+    /// One call for a deploy: optional backup (live when possible), stop, install
+    /// the staged changes, start, wait until the game is ready, and optionally
+    /// wait for a console line. If the server does not come back, the previous
+    /// files are put back and it is started again.
+    pub fn deploy_pending_changes(
+        &self,
+        id: &str,
+        options: &helix_privd::DeployOptions,
+        mut progress: impl FnMut(&str, u8),
+    ) -> Result<Value, String> {
+        let started = Instant::now();
+        let manifest = self.load_manifest(native_id(id))?;
+        if let Some(expect) = options.expect_log.as_deref()
+            && (expect.trim().is_empty()
+                || expect.len() > 200
+                || expect.chars().any(char::is_control))
+        {
+            return Err("expect_log must be 1 to 200 characters of console text".to_owned());
+        }
+        let _operation = self.begin_queued_operation(&manifest.id, "a deploy", |blocker| {
+            progress(&format!("Waiting for {blocker}"), 2);
+        })?;
+        self.ensure_console_archiver(&manifest)?;
+        let root = self.instance_path(&manifest.id)?;
+        let staged = self
+            .api_files
+            .pending_changes(&self.pending_path(&manifest.id)?)?;
+        if staged.is_empty() {
             return Err(
-                "stop this server and wait for its stop job before changing files".to_owned(),
+                "nothing is staged for this server; upload or write files first".to_owned(),
             );
         }
-        self.api_files.execute(
-            &manifest.id,
-            &self.instance_path(&manifest.id)?,
-            manifest.run_uid,
-            request,
-        )
+        let was_running = self.runtime_running_checked(&manifest)?;
+        let mut backup = Value::Null;
+        let mut stopped = false;
+        if options.backup {
+            if was_running && pause_world_saves(&manifest) {
+                progress("Backing up while players stay online", 10);
+                let archived = self.archive_data_with(&manifest, true);
+                let resumed = resume_world_saves(&manifest);
+                let path = archived.map_err(|error| {
+                    format!("the backup failed, so nothing was deployed: {error}")
+                })?;
+                resumed.map_err(|error| format!("the backup finished, but Minecraft did not confirm that world saving resumed, so nothing was deployed: {error}"))?;
+                let _ = self.tidy_after_backup(&manifest, &path);
+                backup = json!({"backup_id": backup_id_from_path(&path), "mode": "live"});
+            } else {
+                if was_running {
+                    progress("Stopping the server for a backup", 10);
+                    self.stop_preserving_minecraft_settings(&manifest)?;
+                    stopped = true;
+                }
+                progress("Backing up", 15);
+                let path = match self.archive_data(&manifest) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        if stopped {
+                            let _ = self.restart_if_previously_running(&manifest, true);
+                        }
+                        return Err(format!(
+                            "the backup failed, so nothing was deployed: {error}"
+                        ));
+                    }
+                };
+                let _ = self.tidy_after_backup(&manifest, &path);
+                backup = json!({
+                    "backup_id": backup_id_from_path(&path),
+                    "mode": if was_running { "stopped" } else { "offline" }
+                });
+            }
+        }
+        let downtime_started = Instant::now();
+        if was_running && !stopped {
+            progress("Stopping the server", 40);
+            self.stop_preserving_minecraft_settings(&manifest)?;
+        }
+        progress(&format!("Installing {} staged changes", staged.len()), 55);
+        let applied = match self.install_pending_changes(&manifest) {
+            Ok(applied) => applied,
+            Err(error) => {
+                if was_running {
+                    let _ = self.restart_if_previously_running(&manifest, true);
+                }
+                return Err(error);
+            }
+        };
+        let start_and_check =
+            |progress: &mut dyn FnMut(&str, u8)| -> Result<Option<String>, String> {
+                if !options.start && !was_running {
+                    return Ok(None);
+                }
+                progress("Starting the server", 65);
+                self.clear_ready_marker(&manifest)?;
+                let expected = self.minecraft_settings_snapshot(&manifest)?;
+                let since = (now_unix_ms() / 1_000).saturating_sub(1).to_string();
+                self.docker(["start", manifest.container_name.as_str()], 90)?;
+                progress("Waiting until the game is ready", 75);
+                self.wait_until_ready(&manifest, self.ready_timeout(&manifest), |_| {})?;
+                self.verify_minecraft_settings(&manifest, expected)?;
+                let Some(expect) = options.expect_log.as_deref() else {
+                    return Ok(None);
+                };
+                progress("Checking the console for the expected line", 90);
+                let deadline = Instant::now() + Duration::from_secs(60);
+                loop {
+                    let logs = self
+                        .docker(
+                            [
+                                "logs",
+                                "--since",
+                                since.as_str(),
+                                manifest.container_name.as_str(),
+                            ],
+                            20,
+                        )
+                        .unwrap_or_default();
+                    if let Some(line) = logs.lines().find(|line| line.contains(expect)) {
+                        return Ok(Some(one_line_tail(line, 300)));
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(format!(
+                            "the server started, but \"{expect}\" did not appear in the console within a minute"
+                        ));
+                    }
+                    thread::sleep(Duration::from_secs(2));
+                }
+            };
+        match start_and_check(&mut progress) {
+            Ok(matched) => Ok(json!({
+                "instance_id": format!("helix:{}", manifest.id),
+                "deployed": true,
+                "applied": applied,
+                "backup": backup,
+                "online": options.start || was_running,
+                "expect_log_line": matched,
+                "downtime_seconds": downtime_started.elapsed().as_secs(),
+                "duration_seconds": started.elapsed().as_secs()
+            })),
+            Err(error) if options.revert_on_failure => {
+                progress("The deploy failed; putting the previous files back", 92);
+                let _ = self.stop_preserving_minecraft_settings(&manifest);
+                if self.runtime_running_checked(&manifest).unwrap_or(true) {
+                    let _ = self.terminate_container(&manifest.container_name, false);
+                }
+                let revert_errors = self.api_files.revert_applied(&root, &applied);
+                let restarted = if was_running {
+                    self.restart_if_previously_running(&manifest, true)
+                } else {
+                    Ok(())
+                };
+                let mut message = format!("deploy failed: {error}.");
+                if revert_errors.is_empty() {
+                    message.push_str(" The previous files were put back; the deployed versions are in the Files trash.");
+                } else {
+                    message.push_str(&format!(
+                        " Putting back the previous files failed for {}.",
+                        revert_errors.join("; ")
+                    ));
+                }
+                match restarted {
+                    Ok(()) if was_running => {
+                        message.push_str(" The server is running the previous version again.")
+                    }
+                    Ok(()) => {}
+                    Err(restart) => {
+                        message.push_str(&format!(" Starting it again also failed: {restart}"))
+                    }
+                }
+                if let Some(id) = backup["backup_id"].as_str() {
+                    message.push_str(&format!(" Backup {id} was taken before the deploy."));
+                }
+                Err(message)
+            }
+            Err(error) => Err(format!(
+                "deploy installed the files but failed: {error}. Nothing was put back because revert_on_failure is off"
+            )),
+        }
     }
 
     pub fn server_log_history(
@@ -2109,43 +2340,73 @@ impl NativeManager {
         }))
     }
 
+    /// Exclusive use of a server for a direct API call: waits a few seconds, then
+    /// names the operation that holds it.
     fn begin_instance_operation(
         &self,
         instance_id: &str,
         operation: &str,
     ) -> Result<InstanceOperationGuard<'_>, String> {
         validate_id(instance_id)?;
-        let key = instance_id.to_owned();
-        let mut operations = self
-            .operations
-            .lock()
-            .map_err(|_| "the server operation registry failed".to_owned())?;
-        if !operations.insert(key.clone()) {
-            return Err(format!(
-                "another operation is already in progress for this server; {operation} was not started"
-            ));
-        }
-        drop(operations);
-        Ok(InstanceOperationGuard {
-            operations: &self.operations,
-            key,
-        })
+        self.operations
+            .exclusive(instance_id, operation, operations::DIRECT_WAIT, |_| {})
+    }
+
+    /// Exclusive use of a server for a background job: waits in line, telling the
+    /// job what it is waiting for, instead of failing while another job runs.
+    pub(super) fn begin_queued_operation(
+        &self,
+        instance_id: &str,
+        operation: &str,
+        waiting: impl FnMut(&str),
+    ) -> Result<InstanceOperationGuard<'_>, String> {
+        validate_id(instance_id)?;
+        self.operations
+            .exclusive(instance_id, operation, operations::QUEUED_WAIT, waiting)
+    }
+
+    /// Shared use for file writes: several can run at once, but not during a backup,
+    /// restore, update, or lifecycle action.
+    fn begin_shared_operation(
+        &self,
+        instance_id: &str,
+        operation: &str,
+    ) -> Result<InstanceOperationGuard<'_>, String> {
+        validate_id(instance_id)?;
+        self.operations
+            .shared(instance_id, operation, operations::DIRECT_WAIT)
+    }
+
+    /// The backup catalog (trash, purge, keep rules) has its own lock, so emptying a
+    /// large trash never blocks a deploy, file access, or a server action.
+    fn begin_catalog_operation(
+        &self,
+        instance_id: &str,
+        operation: &str,
+    ) -> Result<InstanceOperationGuard<'_>, String> {
+        validate_id(instance_id)?;
+        self.operations.exclusive(
+            &format!("{instance_id}#backups"),
+            operation,
+            operations::DIRECT_WAIT,
+            |_| {},
+        )
     }
 
     fn begin_creation_operation(&self) -> Result<InstanceOperationGuard<'_>, String> {
-        let key = "__native_creation__".to_owned();
-        let mut operations = self
-            .operations
-            .lock()
-            .map_err(|_| "the server operation registry failed".to_owned())?;
-        if !operations.insert(key.clone()) {
-            return Err("another Helix server is already being created".to_owned());
-        }
-        drop(operations);
-        Ok(InstanceOperationGuard {
-            operations: &self.operations,
-            key,
-        })
+        self.operations
+            .exclusive(
+                "__native_creation__",
+                "server creation",
+                Duration::ZERO,
+                |_| {},
+            )
+            .map_err(|_| "another Helix server is already being created".to_owned())
+    }
+
+    /// The operation currently holding a server, if any.
+    pub(crate) fn busy_with(&self, instance_id: &str) -> Option<String> {
+        self.operations.holder(instance_id)
     }
 
     fn ensure_console_archiver(
@@ -2385,9 +2646,11 @@ impl NativeManager {
             "backup_catalog_limit": MAX_BACKUP_CATALOG_ENTRIES,
             "trash": self.list_backup_trash(&manifest)?,
             "trash_policy": {
-                "purge_after_days": self.backup_trash_retention_days,
-                "automatic_purge_enabled": false,
-                "note": "Deleted backups stay in protected trash until you restore them or delete them forever."
+                "purge_after_days": self.trash_days(&manifest),
+                "server_setting": manifest.backup_trash_days,
+                "host_default_days": self.backup_trash_retention_days,
+                "automatic_purge_enabled": self.trash_days(&manifest) > 0,
+                "note": trash_policy_note(self.trash_days(&manifest))
             },
             "policy": {
                 "keep_count": manifest.backup_keep_count,
@@ -2404,22 +2667,178 @@ impl NativeManager {
         id: &str,
         keep_count: u16,
         keep_days: u16,
+        trash_days: Option<u16>,
     ) -> Result<Value, String> {
         validate_backup_policy(keep_count, keep_days)?;
+        if trash_days.is_some_and(|days| days > 365) {
+            return Err("empty the trash after at most 365 days, or 0 to keep deleted backups until you remove them".to_owned());
+        }
         let mut manifest = self.load_manifest(native_id(id))?;
-        let _operation = self.begin_instance_operation(&manifest.id, "backup policy")?;
+        let _operation = self.begin_catalog_operation(&manifest.id, "backup policy")?;
         manifest.backup_keep_count = keep_count;
         manifest.backup_keep_days = keep_days;
+        if trash_days.is_some() {
+            manifest.backup_trash_days = trash_days;
+        }
         write_manifest(&self.manifest_path(&manifest.id)?, &manifest)?;
         let trashed = self.enforce_backup_retention(&manifest, "")?;
+        let expired = self.purge_expired_backup_trash(&manifest, None)?;
         let mut catalog = self.list_backups_unlocked(&manifest)?;
         catalog["retention_trashed"] = json!(trashed);
+        catalog["trash_emptied"] = expired;
         Ok(catalog)
+    }
+
+    /// Deletes every trashed backup older than `days` (0 means all of them).
+    pub fn purge_backup_trash_older_than(&self, id: &str, days: u16) -> Result<Value, String> {
+        if days > 3650 {
+            return Err("choose at most 3650 days, or 0 to empty the whole trash".to_owned());
+        }
+        let manifest = self.load_manifest(native_id(id))?;
+        let _operation = self.begin_catalog_operation(&manifest.id, "emptying the backup trash")?;
+        let mut result = self.purge_expired_backup_trash(&manifest, Some(days))?;
+        result["instance_id"] = json!(format!("helix:{}", manifest.id));
+        result["older_than_days"] = json!(days);
+        Ok(result)
+    }
+
+    /// When automatic trash expiry first ran on this host. Backups already in the
+    /// trash then are counted from that moment, so upgrading never deletes them
+    /// immediately.
+    fn trash_sweep_since(&self) -> u64 {
+        let path = self.state_root.join("backup-trash-expiry-since");
+        if let Some(value) = fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok())
+        {
+            return value;
+        }
+        let now = now_unix_ms();
+        if let Err(error) = write_private_text(&path, &now.to_string()) {
+            eprintln!("helix-privd: could not record when trash expiry started: {error}");
+        }
+        now
+    }
+
+    /// Days deleted backups stay in this server's trash; 0 means no automatic purge.
+    fn trash_days(&self, manifest: &InstanceManifest) -> u16 {
+        manifest
+            .backup_trash_days
+            .unwrap_or(self.backup_trash_retention_days)
+    }
+
+    /// Removes trash entries past their window. `older_than_days` overrides the
+    /// server setting for an explicit purge. The caller holds the catalog lock.
+    fn purge_expired_backup_trash(
+        &self,
+        manifest: &InstanceManifest,
+        older_than_days: Option<u16>,
+    ) -> Result<Value, String> {
+        let days = older_than_days.unwrap_or_else(|| self.trash_days(manifest));
+        if older_than_days.is_none() && days == 0 {
+            return Ok(json!({"purged": [], "purged_bytes": 0}));
+        }
+        let root = self.backup_trash_path(&manifest.id)?;
+        if !root.is_dir() {
+            return Ok(json!({"purged": [], "purged_bytes": 0}));
+        }
+        let now = now_unix_ms();
+        // An explicit purge counts from deletion; the automatic one also honors
+        // the grace period for entries that predate automatic expiry.
+        let since = if older_than_days.is_some() {
+            0
+        } else {
+            self.trash_sweep_since()
+        };
+        let mut purged = Vec::new();
+        let mut purged_bytes = 0_u64;
+        let mut errors = Vec::new();
+        for entry in
+            fs::read_dir(&root).map_err(|_| "could not read the server backup trash".to_owned())?
+        {
+            let Ok(entry) = entry else { continue };
+            let path = entry.path();
+            let Some(trash_id) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if validate_trash_id(trash_id).is_err()
+                || !fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_dir())
+            {
+                continue;
+            }
+            let Ok(record) = read_backup_trash_record(&path.join("trash.json")) else {
+                continue;
+            };
+            if record.schema_version != 1
+                || record.trash_id != trash_id
+                || record.instance_id != manifest.id
+                || !valid_backup_id(&record.backup_id)
+                || (older_than_days != Some(0) && now < trash_expiry(&record, days, since))
+            {
+                continue;
+            }
+            let size = fs::symlink_metadata(path.join(format!("{}.tar.gz", record.backup_id)))
+                .map_or(0, |metadata| metadata.len());
+            match remove_known_backup_trash_directory(
+                &path,
+                &record.backup_id,
+                record.definition_present,
+            ) {
+                Ok(()) => {
+                    purged_bytes = purged_bytes.saturating_add(size);
+                    purged.push(record.backup_id);
+                }
+                Err(error) => errors.push(format!("{}: {error}", record.backup_id)),
+            }
+        }
+        Ok(json!({
+            "purged": purged,
+            "purged_bytes": purged_bytes,
+            "errors": errors
+        }))
+    }
+
+    /// Empties expired trash for one server without blocking anything else; a busy
+    /// catalog is simply tried again on the next sweep.
+    fn sweep_backup_trash_for(&self, manifest: &InstanceManifest) {
+        let Ok(_catalog) = self.operations.exclusive(
+            &format!("{}#backups", manifest.id),
+            "emptying the backup trash",
+            Duration::ZERO,
+            |_| {},
+        ) else {
+            return;
+        };
+        match self.purge_expired_backup_trash(manifest, None) {
+            Ok(result) => {
+                let count = result["purged"].as_array().map_or(0, Vec::len);
+                if count > 0 {
+                    eprintln!(
+                        "helix-privd: emptied {count} expired backups ({} bytes) from the trash of {}",
+                        result["purged_bytes"], manifest.id
+                    );
+                }
+            }
+            Err(error) => eprintln!(
+                "helix-privd: backup trash sweep for {} failed: {error}",
+                manifest.id
+            ),
+        }
+    }
+
+    /// The hourly sweep across every server.
+    pub fn sweep_backup_trash(&self) {
+        let Ok(manifests) = self.load_manifests() else {
+            return;
+        };
+        for manifest in manifests {
+            self.sweep_backup_trash_for(&manifest);
+        }
     }
 
     pub fn prune_backups(&self, id: &str) -> Result<Value, String> {
         let manifest = self.load_manifest(native_id(id))?;
-        let _operation = self.begin_instance_operation(&manifest.id, "backup prune")?;
+        let _operation = self.begin_catalog_operation(&manifest.id, "backup prune")?;
         let trashed = self.enforce_backup_retention(&manifest, "")?;
         let mut catalog = self.list_backups_unlocked(&manifest)?;
         catalog["retention_trashed"] = json!(trashed);
@@ -2429,7 +2848,7 @@ impl NativeManager {
     pub fn purge_backup_trash(&self, id: &str, trash_id: &str) -> Result<Value, String> {
         validate_trash_id(trash_id)?;
         let manifest = self.load_manifest(native_id(id))?;
-        let _operation = self.begin_instance_operation(&manifest.id, "backup purge")?;
+        let _operation = self.begin_catalog_operation(&manifest.id, "backup purge")?;
         let trash_directory = self.backup_trash_path(&manifest.id)?.join(trash_id);
         require_real_directory(
             &trash_directory,
@@ -2462,7 +2881,7 @@ impl NativeManager {
             return Err("backup ID is invalid".to_owned());
         }
         let manifest = self.load_manifest(native_id(id))?;
-        let _operation = self.begin_instance_operation(&manifest.id, "backup deletion")?;
+        let _operation = self.begin_catalog_operation(&manifest.id, "backup deletion")?;
         self.trash_named_backup(&manifest, backup_id)
     }
 
@@ -2565,9 +2984,8 @@ impl NativeManager {
         fs::set_permissions(&staging, fs::Permissions::from_mode(0o700))
             .map_err(|_| "could not protect staged backup deletion".to_owned())?;
         let trashed_at_unix_ms = now_unix_ms();
-        let purge_eligible_at_unix_ms = trashed_at_unix_ms.saturating_add(
-            u64::from(self.backup_trash_retention_days).saturating_mul(24 * 60 * 60 * 1_000),
-        );
+        let purge_eligible_at_unix_ms =
+            trashed_at_unix_ms.saturating_add(days_ms(self.trash_days(manifest)));
         let record = BackupTrashRecord {
             schema_version: 1,
             trash_id: trash_id.clone(),
@@ -2677,7 +3095,7 @@ impl NativeManager {
     pub fn restore_trashed_backup(&self, id: &str, trash_id: &str) -> Result<Value, String> {
         validate_trash_id(trash_id)?;
         let manifest = self.load_manifest(native_id(id))?;
-        let _operation = self.begin_instance_operation(&manifest.id, "backup undo")?;
+        let _operation = self.begin_catalog_operation(&manifest.id, "backup undo")?;
         let trash_directory = self.backup_trash_path(&manifest.id)?.join(trash_id);
         require_real_directory(
             &trash_directory,
@@ -2794,8 +3212,8 @@ impl NativeManager {
                 "created_at_unix_ms": record.backup_id.parse::<u64>().ok(),
                 "undo_available": true,
                 "undo_expires_at_unix_ms": Value::Null,
-                "purge_eligible_at_unix_ms": record.purge_eligible_at_unix_ms,
-                "automatic_purge_enabled": false,
+                "purge_eligible_at_unix_ms": trash_expiry(&record, self.trash_days(manifest), self.trash_sweep_since()),
+                "automatic_purge_enabled": self.trash_days(manifest) > 0,
                 "size_bytes": metadata.len(),
                 "definition_present": record.definition_present
             }));
@@ -2814,7 +3232,16 @@ impl NativeManager {
             return Err("backup ID is invalid".to_owned());
         }
         let manifest = self.load_manifest(native_id(id))?;
-        let _operation = self.begin_instance_operation(&manifest.id, "backup restore")?;
+        let _operation = self.begin_queued_operation(&manifest.id, "a backup restore", |_| {})?;
+        // Keep the archive from being purged while it is read.
+        let _catalog = self.operations.exclusive(
+            &format!("{}#backups", manifest.id),
+            "a backup restore",
+            operations::QUEUED_WAIT,
+            |_| {},
+        )?;
+        // Changes staged against the files being replaced no longer apply.
+        let _ = fs::remove_dir_all(self.pending_path(&manifest.id)?);
         let backup_root = self.backup_path(&manifest.id)?;
         let archive = backup_root.join(format!("{backup_id}.tar.gz"));
         let definition = backup_root.join(format!("{backup_id}.json"));
@@ -2977,11 +3404,18 @@ impl NativeManager {
         }))
     }
 
-    pub fn server_action(&self, id: &str, action: ServerAction) -> Result<Value, String> {
+    /// Runs a lifecycle action, telling `waiting` the operation it queues behind
+    /// (Some) and when it got the server (None).
+    pub fn server_action_reporting(
+        &self,
+        id: &str,
+        action: ServerAction,
+        mut waiting: impl FnMut(Option<&str>),
+    ) -> Result<Value, String> {
         let manifest = self.load_manifest(id.strip_prefix("helix:").unwrap_or(id))?;
         match action {
             ServerAction::Kill => self.kill_instance(&manifest),
-            exclusive => self.exclusive_server_action(&manifest, exclusive),
+            exclusive => self.exclusive_server_action(&manifest, exclusive, &mut waiting),
         }
     }
 
@@ -2989,12 +3423,26 @@ impl NativeManager {
         &self,
         manifest: &InstanceManifest,
         action: ServerAction,
+        waiting: &mut dyn FnMut(Option<&str>),
     ) -> Result<Value, String> {
-        let _operation = self.begin_instance_operation(&manifest.id, "server action")?;
+        let mut waited = false;
+        let _operation =
+            self.begin_queued_operation(&manifest.id, "a server action", |blocker| {
+                waited = true;
+                waiting(Some(blocker));
+            })?;
+        if waited {
+            waiting(None);
+        }
         self.ensure_console_archiver(manifest)?;
         let was_running = self.runtime_running_checked(manifest)?;
         let detail = match action {
             ServerAction::Start => {
+                let (applied, pending_error) = if was_running {
+                    (Vec::new(), None)
+                } else {
+                    self.install_pending_for_start(manifest)
+                };
                 let expected = self.minecraft_settings_snapshot(manifest)?;
                 if !was_running {
                     self.clear_ready_marker(manifest)?;
@@ -3002,7 +3450,7 @@ impl NativeManager {
                 }
                 self.wait_until_ready(manifest, self.ready_timeout(manifest), |_| {})?;
                 self.verify_minecraft_settings(manifest, expected)?;
-                json!({"online": true, "already_running": was_running})
+                json!({"online": true, "already_running": was_running, "applied_pending": applied, "pending_error": pending_error})
             }
             ServerAction::Stop => {
                 if was_running {
@@ -3015,20 +3463,27 @@ impl NativeManager {
                 if was_running {
                     self.stop_preserving_minecraft_settings(manifest)?;
                 }
+                let (applied, pending_error) = self.install_pending_for_start(manifest);
                 let expected = self.minecraft_settings_snapshot(manifest)?;
                 self.docker(["start", manifest.container_name.as_str()], 90)?;
                 self.wait_until_ready(manifest, self.ready_timeout(manifest), |_| {})?;
                 self.verify_minecraft_settings(manifest, expected)?;
-                json!({"online": true, "previously_running": was_running})
+                json!({"online": true, "previously_running": was_running, "applied_pending": applied, "pending_error": pending_error})
             }
             ServerAction::Backup => {
-                let path = self.backup(manifest)?;
-                let backup_id = backup_id_from_path(&path);
-                let retention = self.enforce_backup_retention(manifest, &backup_id);
+                let outcome = self.backup(manifest)?;
+                let mode = if outcome.live {
+                    "live"
+                } else if was_running {
+                    "stopped"
+                } else {
+                    "offline"
+                };
                 json!({
-                    "backup_id": backup_id,
-                    "retention_trashed": retention.as_ref().ok().cloned().unwrap_or_default(),
-                    "retention_error": retention.err()
+                    "backup_id": backup_id_from_path(&outcome.path),
+                    "mode": mode,
+                    "retention_trashed": outcome.retention.as_ref().ok().cloned().unwrap_or_default(),
+                    "retention_error": outcome.retention.err()
                 })
             }
             ServerAction::Update => {
@@ -3465,6 +3920,7 @@ impl NativeManager {
                 unix_args,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                backup_trash_days: None,
                 modpack: None,
                 extra_ports: kept_extra_ports.clone(),
             };
@@ -3636,6 +4092,7 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                backup_trash_days: None,
                 modpack: None,
                 extra_ports: Vec::new(),
             };
@@ -3809,6 +4266,7 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                backup_trash_days: None,
                 modpack: None,
                 extra_ports: Vec::new(),
             };
@@ -3955,6 +4413,7 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                backup_trash_days: None,
                 modpack: None,
                 extra_ports: Vec::new(),
             };
@@ -4098,6 +4557,7 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                backup_trash_days: None,
                 modpack: None,
                 extra_ports: Vec::new(),
             };
@@ -4256,6 +4716,7 @@ impl NativeManager {
                 unix_args: None,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                backup_trash_days: None,
                 modpack: None,
                 extra_ports: Vec::new(),
             };
@@ -6632,36 +7093,70 @@ impl NativeManager {
         }
     }
 
-    fn backup(&self, manifest: &InstanceManifest) -> Result<PathBuf, String> {
+    fn backup(&self, manifest: &InstanceManifest) -> Result<BackupOutcome, String> {
         let running = self.runtime_running_checked(manifest)?;
-        if running {
-            self.stop_preserving_minecraft_settings(manifest)?;
-        }
-        let archive_result = self.archive_data(manifest);
-        let restart_result = if running {
-            self.clear_ready_marker(manifest).and_then(|()| {
-                self.docker(["start", manifest.container_name.as_str()], 90)
-                    .and_then(|_| {
-                        self.wait_until_ready(manifest, self.ready_timeout(manifest), |_| {})
-                    })
-            })
+        let (archive_result, restart_result, live) = if running && pause_world_saves(manifest) {
+            // Players stay connected: world saving is paused and flushed, the folder is
+            // archived as it is, and saving always resumes afterwards.
+            let archive_result = self.archive_data_with(manifest, true);
+            let resume = resume_world_saves(manifest);
+            (archive_result, resume, true)
         } else {
-            Ok(())
+            if running {
+                self.stop_preserving_minecraft_settings(manifest)?;
+            }
+            let archive_result = self.archive_data(manifest);
+            let restart_result = if running {
+                self.clear_ready_marker(manifest).and_then(|()| {
+                    self.docker(["start", manifest.container_name.as_str()], 90)
+                        .and_then(|_| {
+                            self.wait_until_ready(manifest, self.ready_timeout(manifest), |_| {})
+                        })
+                })
+            } else {
+                Ok(())
+            };
+            (archive_result, restart_result, false)
         };
         match (archive_result, restart_result) {
             (Ok(path), Ok(())) => {
-                let protect = backup_id_from_path(&path);
-                if let Err(error) = self.enforce_backup_retention(manifest, &protect) {
-                    eprintln!("backup retention failed: {error}");
-                }
-                Ok(path)
+                let retention = self.tidy_after_backup(manifest, &path);
+                Ok(BackupOutcome {
+                    path,
+                    live,
+                    retention,
+                })
             }
             (Err(error), Ok(())) => Err(error),
+            (Ok(path), Err(error)) if live => Err(format!(
+                "backup {} completed, but Minecraft did not confirm that world saving resumed: {error}",
+                backup_id_from_path(&path)
+            )),
             (Ok(_), Err(error)) => Err(format!("backup completed, but restart failed: {error}")),
+            (Err(backup), Err(restart)) if live => Err(format!(
+                "backup failed: {backup}; Minecraft also did not confirm that world saving resumed: {restart}"
+            )),
             (Err(backup), Err(restart)) => Err(format!(
                 "backup failed: {backup}; restart also failed: {restart}"
             )),
         }
+    }
+
+    /// Applies the keep rules, protecting the new backup, and empties expired trash.
+    fn tidy_after_backup(
+        &self,
+        manifest: &InstanceManifest,
+        path: &Path,
+    ) -> Result<Vec<String>, String> {
+        let protect = backup_id_from_path(path);
+        let retention = self
+            .begin_catalog_operation(&manifest.id, "backup keep rules")
+            .and_then(|_catalog| self.enforce_backup_retention(manifest, &protect));
+        if let Err(error) = &retention {
+            eprintln!("backup retention failed: {error}");
+        }
+        self.sweep_backup_trash_for(manifest);
+        retention
     }
 
     fn restart_if_previously_running(
@@ -6678,6 +7173,17 @@ impl NativeManager {
     }
 
     fn archive_data(&self, manifest: &InstanceManifest) -> Result<PathBuf, String> {
+        self.archive_data_with(manifest, false)
+    }
+
+    /// Writes `<timestamp>.tar.gz` plus its manifest. `live` means the server is
+    /// running with world saving paused, so files that change while being read
+    /// (logs, plugin data) are accepted instead of failing the backup.
+    fn archive_data_with(
+        &self,
+        manifest: &InstanceManifest,
+        live: bool,
+    ) -> Result<PathBuf, String> {
         let destination_root = self.backup_path(&manifest.id)?;
         fs::create_dir_all(&destination_root)
             .map_err(|_| "could not create the backup directory".to_owned())?;
@@ -6687,24 +7193,44 @@ impl NativeManager {
         let destination = destination_root.join(format!("{timestamp}.tar.gz"));
         let partial = destination.with_extension("tar.gz.partial");
         let data_path = self.instance_path(&manifest.id)?;
-        if let Err(error) = run_program(
+        let compressor = parallel_gzip();
+        let args = backup_tar_arguments(manifest, &partial, &data_path, compressor.as_deref());
+        let output = run_program_output_bounded(
             Path::new("/usr/bin/tar"),
-            &[
-                "--numeric-owner".to_owned(),
-                "--one-file-system".to_owned(),
-                "-czf".to_owned(),
-                partial.to_string_lossy().into_owned(),
-                "-C".to_owned(),
-                data_path.to_string_lossy().into_owned(),
-                ".".to_owned(),
-            ],
+            &args,
             30 * 60,
-        ) {
+            MAX_NATIVE_COMMAND_OUTPUT_BYTES,
+            &[],
+        );
+        let archived = match output {
+            Ok(output) if output.status.success() => Ok(()),
+            // GNU tar exits 1 when a file changed while it was read; the archive is
+            // still complete and is checked below.
+            Ok(output) if live && output.status.code() == Some(1) => Ok(()),
+            Ok(output) if output.status.code() == Some(124) => {
+                Err("the backup timed out".to_owned())
+            }
+            Ok(output) => {
+                let detail = one_line_tail(&String::from_utf8_lossy(&output.stderr), 700);
+                Err(if detail.is_empty() {
+                    "the backup archive could not be written".to_owned()
+                } else {
+                    detail
+                })
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = archived {
             let _ = fs::remove_file(&partial);
             return Err(error);
         }
+        let checker = if compressor.is_some() {
+            PIGZ
+        } else {
+            "/usr/bin/gzip"
+        };
         if let Err(error) = run_program(
-            Path::new("/usr/bin/gzip"),
+            Path::new(checker),
             &["--test".to_owned(), partial.to_string_lossy().into_owned()],
             30 * 60,
         ) {
@@ -7233,6 +7759,12 @@ impl NativeManager {
         Ok(self.instance_root.join(id))
     }
 
+    /// Where file changes made while the server runs wait, outside its folder.
+    fn pending_path(&self, id: &str) -> Result<PathBuf, String> {
+        validate_id(id)?;
+        Ok(self.state_root.join("pending").join(id))
+    }
+
     fn backup_path(&self, id: &str) -> Result<PathBuf, String> {
         validate_id(id)?;
         Ok(self.backup_root.join(id))
@@ -7750,7 +8282,7 @@ const fn default_console_history_files() -> u16 {
 }
 
 const fn default_backup_trash_retention_days() -> u16 {
-    30
+    7
 }
 
 fn console_segment_path(root: &Path, sequence: u64) -> PathBuf {
@@ -9668,6 +10200,95 @@ fn remove_known_backup_trash_directory(
     sync_directory(parent)
 }
 
+/// Folder size for the server page. `du` walks the whole world, so the result is
+/// reused for a minute instead of being recomputed on every refresh.
+fn cached_disk_usage(path: &Path) -> u64 {
+    static CACHE: std::sync::OnceLock<Mutex<HashMap<PathBuf, (Instant, u64)>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((measured, bytes)) = cache.lock().ok().and_then(|cache| cache.get(path).copied())
+        && measured.elapsed() < Duration::from_secs(60)
+    {
+        return bytes;
+    }
+    let bytes = run_program(
+        Path::new("/usr/bin/du"),
+        &[
+            "--summarize".to_owned(),
+            "--bytes".to_owned(),
+            "--one-file-system".to_owned(),
+            path.to_string_lossy().into_owned(),
+        ],
+        30,
+    )
+    .ok()
+    .and_then(|output| output.split_whitespace().next()?.parse::<u64>().ok())
+    .unwrap_or(0);
+    if let Ok(mut cache) = cache.lock() {
+        cache.retain(|_, (measured, _)| measured.elapsed() < Duration::from_secs(600));
+        cache.insert(path.to_path_buf(), (Instant::now(), bytes));
+    }
+    bytes
+}
+
+const PIGZ: &str = "/usr/bin/pigz";
+
+/// Folders the game recreates on its own, left out of Minecraft backups so they
+/// stay small and fast: logs, crash reports, Paper's download and remap caches,
+/// and the Files trash.
+const MINECRAFT_BACKUP_EXCLUDES: [&str; 5] = [
+    "./logs",
+    "./crash-reports",
+    "./cache",
+    "./plugins/.paper-remapped",
+    "./.helix-trash",
+];
+
+/// The pigz command for parallel gzip, leaving half the cores for the games. The
+/// output is ordinary gzip, so existing tools can still read every backup.
+fn parallel_gzip() -> Option<String> {
+    if !Path::new(PIGZ).is_file() {
+        return None;
+    }
+    let cores = thread::available_parallelism().map_or(2, std::num::NonZeroUsize::get);
+    Some(format!("{PIGZ} -p {}", (cores / 2).clamp(1, 8)))
+}
+
+fn backup_tar_arguments(
+    manifest: &InstanceManifest,
+    partial: &Path,
+    data_path: &Path,
+    compressor: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![
+        "--numeric-owner".to_owned(),
+        "--one-file-system".to_owned(),
+        "--anchored".to_owned(),
+    ];
+    if manifest.is_minecraft() {
+        args.extend(
+            MINECRAFT_BACKUP_EXCLUDES
+                .iter()
+                .map(|path| format!("--exclude={path}")),
+        );
+    } else {
+        args.push("--exclude=./.helix-trash".to_owned());
+    }
+    if let Some(compressor) = compressor {
+        args.push(format!("--use-compress-program={compressor}"));
+        args.push("-cf".to_owned());
+    } else {
+        args.push("-czf".to_owned());
+    }
+    args.extend([
+        partial.to_string_lossy().into_owned(),
+        "-C".to_owned(),
+        data_path.to_string_lossy().into_owned(),
+        ".".to_owned(),
+    ]);
+    args
+}
+
 fn backup_id_from_path(path: &Path) -> String {
     path.file_name()
         .and_then(|value| value.to_str())
@@ -10347,6 +10968,31 @@ fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
+const fn days_ms(days: u16) -> u64 {
+    (days as u64).saturating_mul(24 * 60 * 60 * 1_000)
+}
+
+/// When a trashed backup may be emptied under the current setting. The setting is
+/// applied to existing entries too, so shortening it takes effect right away.
+fn trash_expiry(record: &BackupTrashRecord, days: u16, since: u64) -> u64 {
+    if days == 0 {
+        return u64::MAX;
+    }
+    record
+        .trashed_at_unix_ms
+        .max(since)
+        .saturating_add(days_ms(days))
+}
+
+fn trash_policy_note(days: u16) -> String {
+    match days {
+        0 => "Deleted backups stay in the trash until you restore them or delete them forever."
+            .to_owned(),
+        1 => "Helix empties deleted backups from the trash after 1 day.".to_owned(),
+        days => format!("Helix empties deleted backups from the trash after {days} days."),
+    }
+}
+
 fn validate_backup_policy(keep_count: u16, keep_days: u16) -> Result<(), String> {
     if keep_count > 50 {
         return Err("keep at most 50 backups, or 0 for no count limit".to_owned());
@@ -10405,6 +11051,53 @@ fn wait_for_minecraft_shutdown(
         };
         thread::sleep(remaining.min(Duration::from_secs(1)));
     }
+}
+
+pub(crate) struct BackupOutcome {
+    pub(crate) path: PathBuf,
+    /// The server kept running while it was archived.
+    pub(crate) live: bool,
+    pub(crate) retention: Result<Vec<String>, String>,
+}
+
+/// Turns off autosave and flushes the world to disk so a running Minecraft server
+/// can be archived without stopping. False means the console could not confirm
+/// it, and the caller falls back to stopping the server.
+fn pause_world_saves(manifest: &InstanceManifest) -> bool {
+    if !manifest.is_minecraft() || manifest.is_pumpkin() || manifest.rcon_password.is_empty() {
+        return false;
+    }
+    if rcon_command(manifest.rcon_port, &manifest.rcon_password, "save-off").is_err() {
+        return false;
+    }
+    let flushed = rcon_command_timed(
+        manifest.rcon_port,
+        &manifest.rcon_password,
+        "save-all flush",
+        Duration::from_secs(3),
+        Duration::from_secs(120),
+    );
+    if flushed.is_err() {
+        let _ = resume_world_saves(manifest);
+        return false;
+    }
+    true
+}
+
+/// Turns autosave back on after a live backup, retrying briefly because a busy
+/// server can miss one console request.
+fn resume_world_saves(manifest: &InstanceManifest) -> Result<(), String> {
+    let mut last = String::new();
+    for attempt in 0..5 {
+        if attempt > 0 {
+            thread::sleep(Duration::from_secs(2));
+        }
+        match rcon_command(manifest.rcon_port, &manifest.rcon_password, "save-on") {
+            Ok(_) => return Ok(()),
+            Err(error) => last = error,
+        }
+    }
+    Err(format!("{last}. Run save-on in the console"))
 }
 
 fn rcon_command(port: u16, password: &str, command: &str) -> Result<String, String> {
@@ -11087,6 +11780,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 0,
             backup_keep_days: 0,
+            backup_trash_days: None,
             modpack: None,
             extra_ports: Vec::new(),
         };
@@ -11222,15 +11916,12 @@ mod tests {
             let _operation = manager
                 .begin_instance_operation(&manifest.id, "fixture backup")
                 .unwrap();
+            // Reads need no lock; the server page names what holds the server.
             assert!(
                 manager
-                    .api_files(
-                        &id,
-                        helix_privd::ServerFileRequest::Read {
-                            path: "example.txt".into()
-                        }
-                    )
-                    .is_err()
+                    .busy_with(&manifest.id)
+                    .unwrap()
+                    .starts_with("fixture backup")
             );
         }
     }
@@ -11323,7 +12014,7 @@ mod tests {
             },
             backup_trash_retention_days: 30,
             custom_artifact_roots: vec![fs::canonicalize(&managed).unwrap()],
-            operations: Mutex::new(HashSet::new()),
+            operations: operations::OperationRegistry::default(),
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
@@ -12020,20 +12711,6 @@ mod tests {
     }
 
     #[test]
-    fn instance_operations_reject_overlap_and_release_on_drop() {
-        let operations = Mutex::new(HashSet::new());
-        let key = "instance-operation-key".to_owned();
-        operations.lock().unwrap().insert(key.clone());
-        let guard = InstanceOperationGuard {
-            operations: &operations,
-            key: key.clone(),
-        };
-        assert!(operations.lock().unwrap().contains(&key));
-        drop(guard);
-        assert!(!operations.lock().unwrap().contains(&key));
-    }
-
-    #[test]
     fn creation_rollback_removes_an_ambiguously_committed_exact_container() {
         let temporary = tempfile::tempdir().unwrap();
         let state_root = temporary.path().join("state");
@@ -12068,7 +12745,7 @@ mod tests {
             },
             backup_trash_retention_days: 30,
             custom_artifact_roots: Vec::new(),
-            operations: Mutex::new(HashSet::new()),
+            operations: operations::OperationRegistry::default(),
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
@@ -12130,7 +12807,7 @@ mod tests {
             },
             backup_trash_retention_days: 30,
             custom_artifact_roots: Vec::new(),
-            operations: Mutex::new(HashSet::new()),
+            operations: operations::OperationRegistry::default(),
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
@@ -12168,6 +12845,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 0,
             backup_keep_days: 0,
+            backup_trash_days: None,
             modpack: None,
             extra_ports: Vec::new(),
         };
@@ -12270,7 +12948,7 @@ mod tests {
             },
             backup_trash_retention_days: 30,
             custom_artifact_roots: Vec::new(),
-            operations: Mutex::new(HashSet::new()),
+            operations: operations::OperationRegistry::default(),
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
@@ -12307,6 +12985,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 2,
             backup_keep_days: 0,
+            backup_trash_days: None,
             modpack: None,
             extra_ports: Vec::new(),
         };
@@ -12347,10 +13026,118 @@ mod tests {
         manifest.backup_keep_count = 0;
         write_manifest(&state_root.join(format!("{id}.json")), &manifest).unwrap();
         let policy = manager
-            .set_backup_policy(&format!("helix:{id}"), 1, 0)
+            .set_backup_policy(&format!("helix:{id}"), 1, 0, None)
             .unwrap();
         assert_eq!(policy["policy"]["keep_count"], 1);
         assert_eq!(policy["backups"].as_array().unwrap().len(), 1);
+        assert_eq!(policy["trash_policy"]["purge_after_days"], 30);
+        assert_eq!(policy["trash"].as_array().unwrap().len(), 2);
+
+        // A per-server window replaces the host default; fresh entries stay.
+        let policy = manager
+            .set_backup_policy(&format!("helix:{id}"), 1, 0, Some(5))
+            .unwrap();
+        assert_eq!(policy["trash_policy"]["purge_after_days"], 5);
+        assert_eq!(policy["trash_policy"]["automatic_purge_enabled"], true);
+        assert_eq!(policy["trash"].as_array().unwrap().len(), 2);
+        assert!(
+            manager
+                .set_backup_policy(&format!("helix:{id}"), 1, 0, Some(366))
+                .is_err()
+        );
+        let manifest = manager.load_manifest(id).unwrap();
+        manager.sweep_backup_trash_for(&manifest);
+        let kept = manager.list_backups(&format!("helix:{id}")).unwrap();
+        assert_eq!(kept["trash"].as_array().unwrap().len(), 2);
+
+        // Older-than keeps recent entries; zero empties everything.
+        let none = manager
+            .purge_backup_trash_older_than(&format!("helix:{id}"), 1)
+            .unwrap();
+        assert!(none["purged"].as_array().unwrap().is_empty());
+        let all = manager
+            .purge_backup_trash_older_than(&format!("helix:{id}"), 0)
+            .unwrap();
+        assert_eq!(all["purged"].as_array().unwrap().len(), 2);
+        assert!(all["purged_bytes"].as_u64().unwrap() > 0);
+        let emptied = manager.list_backups(&format!("helix:{id}")).unwrap();
+        assert!(emptied["trash"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn backup_arguments_leave_out_regenerable_folders() {
+        let manifest: InstanceManifest = serde_json::from_value(json!({
+            "schema_version": MANIFEST_VERSION,
+            "id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "name": "Args",
+            "instance_name": "args",
+            "container_name": "helix-game-args",
+            "software": "paper",
+            "minecraft_version": "1.21.8",
+            "build": "1",
+            "java_version": 21,
+            "runtime_image": "eclipse-temurin@sha256:test",
+            "artifact_url": "https://example.invalid/server.jar",
+            "artifact_sha256": "a".repeat(64),
+            "memory_mb": 4096,
+            "max_players": 20,
+            "game_port": 25565,
+            "rcon_port": 30000,
+            "rcon_password": "secret",
+            "start_on_boot": false,
+            "run_uid": 20000,
+            "created_at_unix_ms": 1
+        }))
+        .unwrap();
+        let args = backup_tar_arguments(
+            &manifest,
+            Path::new("/b/1.tar.gz.partial"),
+            Path::new("/d"),
+            Some("/usr/bin/pigz -p 4"),
+        );
+        for exclude in ["./logs", "./crash-reports", "./cache", "./.helix-trash"] {
+            assert!(args.contains(&format!("--exclude={exclude}")), "{exclude}");
+        }
+        assert!(args.contains(&"--anchored".to_owned()));
+        assert!(args.contains(&"--use-compress-program=/usr/bin/pigz -p 4".to_owned()));
+        assert_eq!(
+            &args[args.len() - 5..],
+            ["-cf", "/b/1.tar.gz.partial", "-C", "/d", "."]
+        );
+        let plain = backup_tar_arguments(&manifest, Path::new("/b/p"), Path::new("/d"), None);
+        assert!(plain.contains(&"-czf".to_owned()));
+        // The world, plugins and libraries are always kept.
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.contains("world") || arg.contains("libraries"))
+        );
+    }
+
+    #[test]
+    fn trash_expiry_follows_the_current_window() {
+        let record = BackupTrashRecord {
+            schema_version: 1,
+            trash_id: "t".to_owned(),
+            instance_id: "i".to_owned(),
+            backup_id: "1".to_owned(),
+            trashed_at_unix_ms: 1_000,
+            purge_eligible_at_unix_ms: 0,
+            definition_present: true,
+        };
+        assert_eq!(trash_expiry(&record, 0, 0), u64::MAX);
+        assert_eq!(
+            trash_expiry(&record, 7, 0),
+            1_000 + 7 * 24 * 60 * 60 * 1_000
+        );
+        // Entries older than automatic expiry get the full window from its start.
+        assert_eq!(
+            trash_expiry(&record, 7, 5_000),
+            5_000 + 7 * 24 * 60 * 60 * 1_000
+        );
+        assert_eq!(default_backup_trash_retention_days(), 7);
+        assert!(trash_policy_note(0).contains("until you restore"));
+        assert!(trash_policy_note(7).contains("after 7 days"));
     }
 
     #[test]
@@ -12375,7 +13162,7 @@ mod tests {
             },
             backup_trash_retention_days: 30,
             custom_artifact_roots: Vec::new(),
-            operations: Mutex::new(HashSet::new()),
+            operations: operations::OperationRegistry::default(),
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
@@ -12413,6 +13200,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 0,
             backup_keep_days: 0,
+            backup_trash_days: None,
             modpack: None,
             extra_ports: Vec::new(),
         };

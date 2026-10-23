@@ -225,10 +225,12 @@ struct BrokerContext {
     hub: Option<Arc<Hub>>,
     power_gate: Mutex<()>,
     jobs: Mutex<HashMap<String, JobRecord>>,
+    /// Where job records are kept so they survive a broker restart.
+    jobs_path: Option<PathBuf>,
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct JobRecord {
     id: String,
     kind: String,
@@ -246,7 +248,7 @@ struct JobRecord {
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum JobState {
     Queued,
@@ -748,9 +750,17 @@ impl BrokerContext {
                 instance_id,
                 keep_count,
                 keep_days,
-            } => self
+                trash_days,
+            } => self.native_manager(&instance_id).and_then(|native| {
+                native.set_backup_policy(&instance_id, keep_count, keep_days, trash_days)
+            }),
+            BrokerRequest::DeployPendingChanges {
+                instance_id,
+                options,
+            } => self.start_deploy_job(instance_id, options),
+            BrokerRequest::PurgeBackupTrashOlderThan { instance_id, days } => self
                 .native_manager(&instance_id)
-                .and_then(|native| native.set_backup_policy(&instance_id, keep_count, keep_days)),
+                .and_then(|native| native.purge_backup_trash_older_than(&instance_id, days)),
             BrokerRequest::PruneBackups { instance_id } => self
                 .native_manager(&instance_id)
                 .and_then(|native| native.prune_backups(&instance_id)),
@@ -2047,22 +2057,27 @@ impl BrokerContext {
         if thread::Builder::new()
             .name(format!("server-job-{}", &job_id[..8]))
             .spawn(move || {
+                let stage = match action {
+                    helix_privd::ServerAction::Start => "Starting Minecraft",
+                    helix_privd::ServerAction::Stop => "Stopping Minecraft cleanly",
+                    helix_privd::ServerAction::Restart => "Restarting and checking Minecraft",
+                    helix_privd::ServerAction::Kill => "Killing the container now",
+                    helix_privd::ServerAction::Update => "Backing up and checking for an update",
+                    helix_privd::ServerAction::Backup => "Creating a consistent backup",
+                };
                 context.update_job(&worker_job_id, |job| {
                     job.status = JobState::Running;
-                    job.stage = match action {
-                        helix_privd::ServerAction::Start => "Starting Minecraft",
-                        helix_privd::ServerAction::Stop => "Stopping Minecraft cleanly",
-                        helix_privd::ServerAction::Restart => "Restarting and checking Minecraft",
-                        helix_privd::ServerAction::Kill => "Killing the container now",
-                        helix_privd::ServerAction::Update => {
-                            "Backing up and checking for an update"
-                        }
-                        helix_privd::ServerAction::Backup => "Creating a consistent backup",
-                    }
-                    .to_owned();
+                    job.stage = stage.to_owned();
                     job.progress_percent = 10;
                 });
-                let result = native.server_action(&instance_id, action);
+                let result = native.server_action_reporting(&instance_id, action, |blocker| {
+                    context.update_job(&worker_job_id, |job| {
+                        job.stage = blocker.map_or_else(
+                            || stage.to_owned(),
+                            |blocker| format!("Waiting for {blocker}"),
+                        );
+                    });
+                });
                 let completion_stage = server_action_completion_stage(action, &result);
                 context.finish_job(&worker_job_id, result, completion_stage);
             })
@@ -3305,16 +3320,29 @@ impl BrokerContext {
             .jobs
             .lock()
             .map_err(|_| "job registry failed".to_owned())?;
-        if let Some(resource_key) = resource_key
-            && let Some(active) = jobs.values().find(|job| {
-                job.resource_key.as_deref() == Some(resource_key)
-                    && matches!(job.status, JobState::Queued | JobState::Running)
-            })
+        let active_for = |job: &&JobRecord| {
+            job.resource_key.as_deref() == resource_key
+                && matches!(job.status, JobState::Queued | JobState::Running)
+        };
+        if reuse_key.is_some()
+            && let Some(same) = jobs
+                .values()
+                .filter(active_for)
+                .find(|job| job.reuse_key.as_deref() == reuse_key)
         {
-            if reuse_key.is_some() && active.reuse_key.as_deref() == reuse_key {
-                return Ok((active.id.clone(), true));
+            return Ok((same.id.clone(), true));
+        }
+        if let Some(resource_key) = resource_key
+            && let Some(active) = jobs.values().find(active_for)
+        {
+            // Server jobs queue on the server's operation lock and say what they
+            // wait for; other resources still allow one job at a time.
+            if !resource_key.starts_with("server:") {
+                return Err(format!(
+                    "{} is already running; try again when it finishes",
+                    active.kind.replace('_', " ")
+                ));
             }
-            return Err("another operation is already in progress for this resource".to_owned());
         }
         if jobs.len() >= MAX_JOBS {
             let oldest_terminal = jobs
@@ -3344,7 +3372,24 @@ impl BrokerContext {
                 reuse_key: reuse_key.map(str::to_owned),
             },
         );
+        self.persist_jobs(&jobs);
         Ok((job_id, false))
+    }
+
+    fn persist_jobs(&self, jobs: &HashMap<String, JobRecord>) {
+        let Some(path) = self.jobs_path.as_deref() else {
+            return;
+        };
+        let Ok(content) = serde_json::to_vec(&jobs.values().collect::<Vec<_>>()) else {
+            return;
+        };
+        let partial = path.with_extension("json.partial");
+        let written = fs::write(&partial, content)
+            .and_then(|()| fs::set_permissions(&partial, fs::Permissions::from_mode(0o600)))
+            .and_then(|()| fs::rename(&partial, path));
+        if let Err(error) = written {
+            eprintln!("helix-privd: could not save job records: {error}");
+        }
     }
 
     fn finish_job(&self, job_id: &str, result: Result<Value, String>, success_stage: &str) {
@@ -3383,8 +3428,92 @@ impl BrokerContext {
         {
             update(job);
             job.updated_at_unix_ms = now_unix_ms();
+            self.persist_jobs(&jobs);
         }
     }
+
+    fn start_deploy_job(
+        self: &Arc<Self>,
+        instance_id: String,
+        options: helix_privd::DeployOptions,
+    ) -> Result<Value, String> {
+        let native = Arc::clone(
+            self.native
+                .as_ref()
+                .ok_or_else(|| "the Helix server manager is not configured".to_owned())?,
+        );
+        if !instance_id.starts_with("helix:") {
+            return Err("deploys are available only for Helix-owned servers".to_owned());
+        }
+        let resource_key = format!("server:{instance_id}");
+        let (job_id, reused) =
+            self.queue_job("server_deploy", Some(&resource_key), Some("deploy"))?;
+        if reused {
+            return Ok(json!({"job_id": job_id, "reused": true}));
+        }
+        let context = Arc::clone(self);
+        let worker_job_id = job_id.clone();
+        if thread::Builder::new()
+            .name(format!("deploy-job-{}", &job_id[..8]))
+            .spawn(move || {
+                context.update_job(&worker_job_id, |job| {
+                    job.status = JobState::Running;
+                    job.stage = "Preparing the deploy".to_owned();
+                    job.progress_percent = 1;
+                });
+                let result =
+                    native.deploy_pending_changes(&instance_id, &options, |stage, percent| {
+                        context.update_job(&worker_job_id, |job| {
+                            job.stage = stage.to_owned();
+                            job.progress_percent = percent;
+                        });
+                    });
+                context.finish_job(&worker_job_id, result, "Deployed and online");
+            })
+            .is_err()
+        {
+            self.finish_job(
+                &job_id,
+                Err("could not start the deploy job".to_owned()),
+                "",
+            );
+            return Err("could not start the deploy job".to_owned());
+        }
+        Ok(json!({"job_id": job_id, "reused": false}))
+    }
+}
+
+/// Reads saved job records. Jobs that were running when the broker stopped are
+/// marked failed, because their thread is gone.
+#[cfg(target_os = "linux")]
+fn load_jobs(path: Option<&Path>) -> HashMap<String, JobRecord> {
+    let Some(path) = path else {
+        return HashMap::new();
+    };
+    let Ok(content) = fs::read(path) else {
+        return HashMap::new();
+    };
+    let Ok(records) = serde_json::from_slice::<Vec<JobRecord>>(&content) else {
+        eprintln!("helix-privd: saved job records were unreadable and were ignored");
+        return HashMap::new();
+    };
+    let now = now_unix_ms();
+    records
+        .into_iter()
+        .filter(|job| Uuid::parse_str(&job.id).is_ok())
+        .take(MAX_JOBS)
+        .map(|mut job| {
+            if matches!(job.status, JobState::Queued | JobState::Running) {
+                let stage = std::mem::replace(&mut job.stage, "Failed".to_owned());
+                job.status = JobState::Failed;
+                job.error = Some(format!(
+                    "Helix restarted while this job was at \"{stage}\". Check the server before trying again"
+                ));
+                job.updated_at_unix_ms = now;
+            }
+            (job.id.clone(), job)
+        })
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -3743,6 +3872,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .native
         .as_ref()
         .map(|native| native.state_root.clone());
+    let jobs_path = native_state_root
+        .as_ref()
+        .map(|root| root.join("jobs.json"));
+    let jobs = load_jobs(jobs_path.as_deref());
     let native = config
         .native
         .map(|mut native| {
@@ -3790,8 +3923,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         hook_installer,
         hub,
         power_gate: Mutex::new(()),
-        jobs: Mutex::new(HashMap::new()),
+        jobs: Mutex::new(jobs),
+        jobs_path,
     });
+
+    if let Some(native) = context.native.clone() {
+        // Empty expired backup trash shortly after startup, then hourly.
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(120));
+            loop {
+                native.sweep_backup_trash();
+                thread::sleep(Duration::from_secs(60 * 60));
+            }
+        });
+    }
 
     let listener = UnixListener::bind(&config.socket)?;
     fs::set_permissions(&config.socket, fs::Permissions::from_mode(0o660))?;
@@ -4024,7 +4169,46 @@ mod tests {
             hub: None,
             power_gate: Mutex::new(()),
             jobs: Mutex::new(HashMap::new()),
+            jobs_path: None,
         }
+    }
+
+    #[test]
+    fn saved_jobs_survive_a_restart_and_running_ones_are_marked_failed() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("jobs.json");
+        let running = Uuid::new_v4().to_string();
+        let done = Uuid::new_v4().to_string();
+        let record = |id: &str, status: &str, stage: &str| {
+            json!({
+                "id": id, "kind": "server_deploy", "status": status, "stage": stage,
+                "progress_percent": 50, "created_at_unix_ms": 1, "updated_at_unix_ms": 2,
+                "result": null, "error": null
+            })
+        };
+        fs::write(
+            &path,
+            serde_json::to_vec(&json!([
+                record(&running, "running", "Installing 2 staged changes"),
+                record(&done, "complete", "Deployed and online"),
+                record("not-a-uuid", "complete", "x")
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        let jobs = load_jobs(Some(&path));
+        assert_eq!(jobs.len(), 2);
+        let interrupted = &jobs[&running];
+        assert_eq!(interrupted.status, JobState::Failed);
+        assert!(
+            interrupted
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("Installing 2 staged changes")
+        );
+        assert_eq!(jobs[&done].status, JobState::Complete);
+        assert!(load_jobs(Some(&temporary.path().join("missing.json"))).is_empty());
     }
 
     #[test]
@@ -4082,16 +4266,18 @@ mod tests {
             .unwrap();
         assert!(reused);
         assert_eq!(first, second);
-        assert!(
-            context
-                .queue_job(
-                    "server_stop",
-                    Some("server:helix:test"),
-                    Some("action:stop")
-                )
-                .is_err()
-        );
+        // A different job for the same server waits in line instead of failing.
+        let (queued, reused) = context
+            .queue_job(
+                "server_stop",
+                Some("server:helix:test"),
+                Some("action:stop"),
+            )
+            .unwrap();
+        assert!(!reused);
+        assert_ne!(first, queued);
         context.finish_job(&first, Ok(json!({"online": true})), "Online");
+        context.finish_job(&queued, Ok(json!({"online": false})), "Stopped");
         let (third, reused) = context
             .queue_job(
                 "server_stop",
@@ -4100,7 +4286,15 @@ mod tests {
             )
             .unwrap();
         assert!(!reused);
-        assert_ne!(first, third);
+        assert_ne!(queued, third);
+        // Host-wide resources still run one job at a time and name it.
+        context
+            .queue_job("system_package_apply", Some("system:packages"), None)
+            .unwrap();
+        let refused = context
+            .queue_job("helix_release_apply", Some("system:packages"), None)
+            .unwrap_err();
+        assert!(refused.contains("system package apply"), "{refused}");
     }
 
     #[test]

@@ -75,7 +75,7 @@ impl NativeManager {
         F: FnMut(&str, u8),
     {
         let id = id.strip_prefix("helix:").unwrap_or(id);
-        let _operation = self.begin_instance_operation(id, "runtime change")?;
+        let _operation = self.begin_queued_operation(id, "a software change", |_| {})?;
         let manifest = self.load_manifest(id)?;
         if spec.confirmation_name != manifest.name
             || spec.expected_version != manifest.minecraft_version

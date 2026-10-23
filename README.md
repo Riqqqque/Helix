@@ -258,7 +258,7 @@ Useful starting points:
 
 ## License
 
-Helix is versioned as `1.9.0` and licensed under the
+Helix is versioned as `1.10.0` and licensed under the
 [GNU Affero General Public License v3.0 or later](LICENSE).
 
 Public source availability does not mean production support, stable

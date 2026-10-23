@@ -533,6 +533,7 @@ impl NativeManager {
                 unix_args,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                backup_trash_days: None,
                 modpack: Some(installed_modpack),
                 extra_ports: Vec::new(),
             };
@@ -873,6 +874,7 @@ impl NativeManager {
                 unix_args,
                 backup_keep_count: 0,
                 backup_keep_days: 0,
+                backup_trash_days: None,
                 modpack: Some(installed_modpack),
                 extra_ports: Vec::new(),
             };
@@ -3581,7 +3583,7 @@ mod tests {
             custom_artifact_roots: Vec::new(),
             custom_import_root,
             uploads: Mutex::new(HashMap::new()),
-            operations: Mutex::new(HashSet::new()),
+            operations: crate::native::operations::OperationRegistry::default(),
             port_policies: Mutex::new(()),
             console_archives: Mutex::new(HashMap::new()),
             console_stops: Mutex::new(HashMap::new()),
@@ -3628,6 +3630,7 @@ mod tests {
             unix_args: None,
             backup_keep_count: 0,
             backup_keep_days: 0,
+            backup_trash_days: None,
             modpack: Some(installed),
             extra_ports: Vec::new(),
         };

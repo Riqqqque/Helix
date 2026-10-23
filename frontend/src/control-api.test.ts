@@ -13,6 +13,8 @@ import {
   parseHostInventory,
   parseMinecraftSettingsSaveResult,
   parseServers,
+  parseBackupCatalog,
+  parsePendingChanges,
   restoreTrashedServerBackup,
   runServerAction,
   setNativeMemory,
@@ -28,6 +30,33 @@ import {
 import { purgeTrashedNativeServer } from './native-server-trash-api';
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('staged changes and the trash window', () => {
+  it('parses staged changes and rejects unknown kinds', () => {
+    expect(parsePendingChanges({
+      changes: [{ path: 'plugins/A.jar', kind: 'write', size: 10, replaces_existing: true, staged_at_unix_ms: 5, revision: 'pending:x' }],
+      count: 1,
+      total_bytes: 10,
+    })).toEqual([{ path: 'plugins/A.jar', kind: 'write', sizeBytes: 10, replacesExisting: true, stagedAtUnixMs: 5 }]);
+    expect(() => parsePendingChanges({ changes: [{ path: 'a', kind: 'move', size: 0, replaces_existing: false, staged_at_unix_ms: 1 }] })).toThrow();
+  });
+
+  it('reads the trash window, falling back for older brokers', () => {
+    const base = { instance_id: 'helix:a', backups: [], trash: [], policy: null };
+    const current = parseBackupCatalog({
+      ...base,
+      trash_policy: { note: 'Helix empties deleted backups from the trash after 7 days.', purge_after_days: 7, server_setting: null, host_default_days: 7 },
+    });
+    expect(current.trashPolicy).toEqual({
+      note: 'Helix empties deleted backups from the trash after 7 days.',
+      purgeAfterDays: 7,
+      serverSetting: null,
+      hostDefaultDays: 7,
+    });
+    const older = parseBackupCatalog({ ...base, trash_policy: { note: 'Kept until deleted.' } });
+    expect(older.trashPolicy.purgeAfterDays).toBe(0);
+  });
+});
 
 describe('file manager API', () => {
   const listing = {

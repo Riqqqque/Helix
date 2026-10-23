@@ -3647,6 +3647,89 @@ textarea:focus {
   align-items: center;
   gap: 7px;
 }
+.pending-changes {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 11px;
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
+  border-bottom: 0;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.pending-changes__icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--sidebar));
+  color: var(--accent);
+}
+.pending-changes > div:not(.pending-changes__actions) {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.pending-changes strong {
+  font-size: 11px;
+}
+.pending-changes small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+.pending-changes__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.pending-changes__list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.pending-changes__list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+.pending-changes__list code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.server-busy-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 7px 14px;
+  border: 1px solid var(--line-strong);
+  border-bottom: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+}
+.memory-overcommit {
+  margin-bottom: 12px;
+}
+@media (max-width: 720px) {
+  .pending-changes {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .pending-changes__actions {
+    grid-column: 1 / -1;
+  }
+}
 .advanced-actions {
   display: flex;
   align-items: center;

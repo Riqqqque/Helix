@@ -4,6 +4,65 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.10.0 - 2026-10-22
+
+### Added
+
+- Running Minecraft servers are backed up without stopping: Helix turns off
+  autosave, flushes the world, archives the folder while players stay
+  connected, and always turns autosave back on. If the console does not answer,
+  it falls back to stop, back up, start. Backup results report `mode`
+  (`live`, `stopped`, or `offline`).
+- File changes made through the server API while a server runs are staged
+  instead of refused, and installed on the next start or restart. New
+  `pending_list` and `pending_discard` file actions, and the server page shows
+  waiting changes with **Deploy** and **Discard**. Staged files are kept in
+  Helix's own state folder, out of the game's reach, and nothing in the live
+  server folder changes until they are installed. If a staged change cannot be
+  installed, Start and Restart still start the server and report why.
+- One-call deploy (`POST /servers/{id}/deploy`, token operation
+  `deploy_pending_changes`): back up, stop, install the staged changes, start,
+  wait until the game is ready, optionally wait for a console line, and put the
+  previous files back and start again if the server does not come up.
+- `GET /api/v1/automation/jobs/{job_id}/wait` returns as soon as a token's job
+  finishes, or after 12 seconds.
+- `POST /servers/{id}/backups/trash/purge` and the token operation
+  `purge_backup_trash_older_than` delete trashed backups older than N days
+  (0 empties the trash).
+- A warning on the Servers page and in the memory setting when the servers
+  together may use more memory than the machine has.
+- The server page says what a busy server is doing.
+
+### Changed
+
+- **The backup trash now empties itself.** Deleted backups are removed for good
+  7 days after deletion by default (per-server setting, 0 = never). Helix checks
+  every hour and after each backup. This replaces the 1.4.0 promise that Helix
+  never empties the trash on its own; set the trash days to 0 to keep that.
+  Backups that were already in the trash when you upgrade get the full window
+  from the upgrade, so nothing is deleted right away. The host default
+  `backup_trash_retention_days` may now also be 0.
+- Backups compress on several cores with pigz (half the CPU cores, at most 8)
+  when it is installed. Archives stay ordinary `.tar.gz` files that `gzip`
+  reads, and are still checked before they are kept.
+- Minecraft backups leave out `logs/`, `crash-reports/`, `cache/`,
+  `plugins/.paper-remapped/`, and the Files trash. Paper downloads `cache/`
+  again on the first start after a restore.
+- File reads no longer wait for other work on the server, file writes can run
+  side by side, and emptying a large backup trash no longer blocks deploys,
+  server actions, or file access.
+- Server jobs (actions, updates, restores, installs, transfers) wait in line
+  behind each other instead of failing with "another operation is already in
+  progress", and the job stage names what they are waiting for. Direct calls
+  that cannot wait say which operation holds the server and since when.
+- Job records survive a broker restart. A job that was running when the broker
+  stopped is reported as failed with the stage it had reached.
+- File errors say what went wrong (missing folder, full disk, existing
+  destination, a file where a folder was expected) instead of one generic
+  message.
+- The server page reuses its disk-usage measurement for a minute instead of
+  walking the whole world folder on every refresh.
+
 ## 1.9.0 - 2026-10-04
 
 ### Added

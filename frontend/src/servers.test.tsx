@@ -8,6 +8,7 @@ import {
   canRunBackupMutation,
   importedServerPanelUrl,
   joinErrorOffersPortChange,
+  memoryOvercommit,
   parseAmpPortClaim,
   recommendedModpackMemoryMb,
   minecraftCreateSoftwareOptions,
@@ -233,6 +234,16 @@ describe('Servers route', () => {
     expect(canRunBackupMutation('trash', true, false)).toBe(false);
   });
 
+  it('warns only when servers may use more memory than the machine has', () => {
+    const gib = 1024 * 1024 * 1024;
+    expect(memoryOvercommit([{ memoryLimitMb: 14_336 }, { memoryLimitMb: 16_384 }], 31 * gib)).toBeNull();
+    expect(memoryOvercommit([{ memoryLimitMb: 14_336 }, { memoryLimitMb: 32_768 }], 31 * gib)).toEqual({
+      allocatedMb: 47_104,
+      hostMb: 31 * 1024,
+    });
+    expect(memoryOvercommit([{ memoryLimitMb: 99_999 }], null)).toBeNull();
+  });
+
   it('describes AMP lifecycle and native update safety without overclaiming', () => {
     const ampServer: ManagedServer = { ...nativeServer, manager: 'amp_import', executionBackend: 'external' };
     expect(serverActionDescription(ampServer, 'start')).toContain('ask AMP to start');
@@ -245,6 +256,8 @@ describe('Servers route', () => {
     expect(serverActionDescription(nativeServer, 'kill')).toContain('SIGKILL');
     expect(serverActionDescription(nativeServer, 'kill')).toContain('when Stop is stuck');
     expect(serverActionDescription(ampServer, 'kill')).toContain('cannot force-kill AMP');
+    expect(serverActionDescription(nativeServer, 'backup')).toContain('Players stay connected');
+    expect(serverActionDescription({ ...nativeServer, status: 'offline' }, 'backup')).toContain('stop Survival briefly');
     const vrising: ManagedServer = { ...nativeServer, kind: 'vrising' };
     expect(serverActionDescription(vrising, 'restart')).toContain('ready marker');
     expect(serverActionDescription(vrising, 'restart')).not.toContain('Minecraft health check');

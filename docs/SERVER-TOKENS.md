@@ -37,8 +37,8 @@ routes. This is not an OAuth authorization server.
 ```
 
 The same [relative file commands](SERVER-API.md) and safety checks apply.
-Stop the selected server before publishing changes. Transfer chunks can be
-staged while it runs; finishing a write needs a stopped server. Native game
+File changes made while the server runs are staged and installed on the next
+start, restart, or `deploy_pending_changes`; see SERVER-API.md. Native game
 support is unchanged; imported managers retain their actual adapter limits.
 
 | Permission | Allowed operations |
@@ -46,14 +46,14 @@ support is unchanged; imported managers retain their actual adapter limits.
 | `all` (Full access) | Every permission below, including ones added later, on the token's servers |
 | `view` | `server_capabilities`, `server_detail`, `server_marketplace_search`, `server_marketplace_project` |
 | `logs` | `server_logs`, `server_log_history` |
-| `files.read` | `server_files`: list, stat, read, download |
-| `files.write` | `server_files`: create, write, mkdir, move, trash, all upload steps; `install_server_marketplace_content` |
-| `start`, `stop`, `restart`, `kill` | Matching `server_action` only |
+| `files.read` | `server_files`: list, stat, read, download, pending_list |
+| `files.write` | `server_files`: create, write, mkdir, move, trash, all upload steps, pending_discard; `install_server_marketplace_content` |
+| `start`, `stop`, `restart`, `kill` | Matching `server_action` only; `restart` also allows `deploy_pending_changes` |
 | `console` | `server_console` |
 | `settings` | `server_settings`, `update_server_settings`, `set_native_memory`, `set_native_cpu`, `set_native_extra_ports`, `set_native_start_on_boot`, `set_native_browser_listing` |
 | `update` | `change_native_runtime`, server_action update |
 | `backups.read` | `list_backups`, `server_backup_download` |
-| `backups.write` | server_action backup, `restore_backup`, `trash_backup`, `restore_trashed_backup`, `set_backup_policy`, `prune_backups`, `purge_backup_trash` |
+| `backups.write` | server_action backup, `restore_backup`, `trash_backup`, `restore_trashed_backup`, `set_backup_policy`, `prune_backups`, `purge_backup_trash`, `purge_backup_trash_older_than` |
 | `network` | `set_server_network_exposure` (open or close the game port to the internet) |
 | `remove` | `trash_native_server` (moves the server to Removed servers; restorable) |
 
@@ -105,7 +105,10 @@ plugin servers, mods only between the same loader, and worlds or datapacks never
 move onto an older Minecraft version.
 
 `GET /api/v1/automation/jobs` lists the last 256 jobs accepted through that token.
-Poll with `{"operation":"job_status","job_id":"..."}`. A token cannot query
+Poll with `{"operation":"job_status","job_id":"..."}`, or call
+`GET /api/v1/automation/jobs/{job_id}/wait?timeout_seconds=12`, which returns as
+soon as the job finishes (`"finished": true`) or after up to 12 seconds
+(`"finished": false`; call it again). A token cannot query
 another token's jobs. A successful submission is not proof of job completion.
 On timeout, inspect jobs and server state; never blindly replay a mutation.
 Job mappings persist across dashboard restarts. Small file uploads are one
