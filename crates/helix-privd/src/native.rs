@@ -3909,7 +3909,7 @@ impl NativeManager {
             };
             let unix_args = if artifact.install_server {
                 progress("Running the official loader installer", 52);
-                Some(self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?)
+                self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?
             } else {
                 None
             };
@@ -5315,15 +5315,9 @@ impl NativeManager {
             ),
             &["meta.fabricmc.net"],
         )?;
-        let loader_is_stable = loaders.as_array().is_some_and(|entries| {
-            entries.iter().any(|entry| {
-                entry.pointer("/loader/version").and_then(Value::as_str) == Some(loader_version)
-                    && entry.pointer("/loader/stable").and_then(Value::as_bool) == Some(true)
-            })
-        });
-        if !loader_is_stable {
+        if !fabric_loader_published(&loaders, loader_version) {
             return Err(format!(
-                "Fabric Loader {loader_version} is not a stable server loader for Minecraft {minecraft_version}"
+                "Fabric has not published Loader {loader_version} for Minecraft {minecraft_version}"
             ));
         }
         let installers = self.fetch_json(
@@ -5401,16 +5395,16 @@ impl NativeManager {
             &["files.minecraftforge.net"],
         )?;
         let mut versions = forge_promo_versions(&promotions);
-        versions.retain(|version| minecraft_at_least(version, 17));
+        versions.retain(|version| minecraft_at_least(version, 12));
         Ok(bounded_version_list(versions))
     }
 
     fn resolve_forge(&self, requested_version: &str) -> Result<Artifact, String> {
         let versions = self.forge_published_versions()?;
         let version = resolve_requested_version(requested_version, &versions)?;
-        if !minecraft_at_least(&version, 17) {
+        if !minecraft_at_least(&version, 12) {
             return Err(
-                "Helix installs Forge through the official installer for Minecraft 1.17 and newer"
+                "Helix creates Forge servers for Minecraft 1.12 and newer; older Forge modpacks install from their pack"
                     .to_owned(),
             );
         }
@@ -5425,9 +5419,7 @@ impl NativeManager {
             .and_then(Value::as_u64)
             .and_then(|value| u16::try_from(value).ok())
             .unwrap_or_else(|| fallback_java_version(&version));
-        let url = format!(
-            "https://maven.minecraftforge.net/net/minecraftforge/forge/{version}-{forge_build}/forge-{version}-{forge_build}-installer.jar"
-        );
+        let url = forge_installer_url(&version, &forge_build);
         require_https_host(&url, &["maven.minecraftforge.net"])?;
         Ok(Artifact {
             software: MinecraftSoftware::Forge,
@@ -5566,21 +5558,13 @@ impl NativeManager {
     ) -> Result<Artifact, String> {
         validate_version(minecraft_version)?;
         validate_version(forge_build)?;
-        if !minecraft_at_least(minecraft_version, 17) {
-            return Err(
-                "Helix installs Forge through the official installer for Minecraft 1.17 and newer"
-                    .to_owned(),
-            );
-        }
         let (_, version_data) = self.minecraft_version_metadata(minecraft_version)?;
         let java_version = version_data
             .pointer("/javaVersion/majorVersion")
             .and_then(Value::as_u64)
             .and_then(|value| u16::try_from(value).ok())
             .unwrap_or_else(|| fallback_java_version(minecraft_version));
-        let url = format!(
-            "https://maven.minecraftforge.net/net/minecraftforge/forge/{minecraft_version}-{forge_build}/forge-{minecraft_version}-{forge_build}-installer.jar"
-        );
+        let url = forge_installer_url(minecraft_version, forge_build);
         require_https_host(&url, &["maven.minecraftforge.net"])?;
         Ok(Artifact {
             software: MinecraftSoftware::Forge,
@@ -5607,9 +5591,7 @@ impl NativeManager {
             .and_then(Value::as_u64)
             .and_then(|value| u16::try_from(value).ok())
             .unwrap_or_else(|| fallback_java_version(minecraft_version));
-        let url = format!(
-            "https://maven.neoforged.net/releases/net/neoforged/neoforge/{loader}/neoforge-{loader}-installer.jar"
-        );
+        let url = neoforge_installer_url(minecraft_version, loader);
         require_https_host(&url, &["maven.neoforged.net"])?;
         Ok(Artifact {
             software: MinecraftSoftware::NeoForge,
@@ -6193,7 +6175,7 @@ impl NativeManager {
         data_path: &Path,
         run_uid: u32,
         runtime_image: &str,
-    ) -> Result<String, String> {
+    ) -> Result<Option<String>, String> {
         let installer = data_path.join("server.jar");
         if !installer.is_file() {
             return Err("the loader installer was not downloaded".to_owned());
@@ -6230,13 +6212,20 @@ impl NativeManager {
                 format!("the loader installer failed: {detail}")
             }
         })?;
-        find_unix_args(data_path)
-            .ok_or_else(|| {
-                format!(
-                    "{} installer finished without writing unix_args.txt; Helix cannot launch that loader version",
-                    software_name(artifact.software)
-                )
-            })
+        if let Some(arguments) = find_unix_args(data_path) {
+            return Ok(Some(arguments));
+        }
+        // Forge before 1.17 writes a runnable forge-<version>.jar instead of
+        // unix_args.txt; it replaces the installer as server.jar.
+        if let Some(launcher) = find_forge_launcher(data_path) {
+            fs::rename(&launcher, &installer)
+                .map_err(|_| "could not put the installed Forge server in place".to_owned())?;
+            return Ok(None);
+        }
+        Err(format!(
+            "{} installer finished without writing unix_args.txt or a server JAR; Helix cannot launch that loader version",
+            software_name(artifact.software)
+        ))
     }
 
     fn import_local_artifact(&self, source: &Path, destination: &Path) -> Result<String, String> {
@@ -9497,6 +9486,80 @@ fn pufferfish_artifact_url(value: &Value, version: &str) -> Result<(String, Stri
         ),
         build,
     ))
+}
+
+/// Whether Fabric's metadata for a Minecraft version lists this exact loader.
+/// The per-loader endpoint answers with one object, the list endpoint with an
+/// array; both are accepted. Stability is not required: Fabric marks only the
+/// newest loader stable, and a modpack pins the one it was built with.
+fn fabric_loader_published(value: &Value, loader_version: &str) -> bool {
+    let matches = |entry: &Value| {
+        entry.pointer("/loader/version").and_then(Value::as_str) == Some(loader_version)
+    };
+    match value {
+        Value::Array(entries) => entries.iter().any(matches),
+        Value::Object(_) => matches(value),
+        _ => false,
+    }
+}
+
+/// Forge's installer URL. Builds for Minecraft 1.9 and older carry the
+/// Minecraft version again as a suffix in their Maven version.
+fn forge_installer_url(minecraft_version: &str, forge_build: &str) -> String {
+    let legacy = matches!(numeric_version_parts(minecraft_version).as_slice(), [1, minor, ..] if *minor <= 9);
+    let maven = if legacy && !forge_build.ends_with(minecraft_version) {
+        format!("{minecraft_version}-{forge_build}-{minecraft_version}")
+    } else {
+        format!("{minecraft_version}-{forge_build}")
+    };
+    format!(
+        "https://maven.minecraftforge.net/net/minecraftforge/forge/{maven}/forge-{maven}-installer.jar"
+    )
+}
+
+/// NeoForge's installer URL. NeoForge for Minecraft 1.20.1 was published under
+/// the old `forge` artifact with Minecraft-prefixed versions.
+fn neoforge_installer_url(minecraft_version: &str, loader: &str) -> String {
+    if minecraft_version == "1.20.1" {
+        let version = if loader.starts_with("1.20.1-") {
+            loader.to_owned()
+        } else {
+            format!("1.20.1-{loader}")
+        };
+        return format!(
+            "https://maven.neoforged.net/releases/net/neoforged/forge/{version}/forge-{version}-installer.jar"
+        );
+    }
+    format!(
+        "https://maven.neoforged.net/releases/net/neoforged/neoforge/{loader}/neoforge-{loader}-installer.jar"
+    )
+}
+
+/// The runnable server JAR that Forge's installer writes for Minecraft 1.16.5
+/// and older, such as `forge-1.12.2-14.23.5.2860.jar` or an older `-universal.jar`.
+fn find_forge_launcher(root: &Path) -> Option<PathBuf> {
+    let mut candidates = fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_owned();
+            let lower = name.to_ascii_lowercase();
+            let launcher = (lower.starts_with("forge-") || lower.starts_with("minecraftforge-"))
+                && lower.ends_with(".jar")
+                && !lower.contains("installer");
+            let regular =
+                fs::symlink_metadata(entry.path()).is_ok_and(|metadata| metadata.is_file());
+            (launcher && regular).then_some(name)
+        })
+        .collect::<Vec<_>>();
+    // A universal JAR is the launcher when both kinds exist (older 1.12.2 builds).
+    candidates.sort_by_key(|name| {
+        (
+            !name.to_ascii_lowercase().contains("universal"),
+            name.clone(),
+        )
+    });
+    candidates.first().map(|name| root.join(name))
 }
 
 fn find_unix_args(root: &Path) -> Option<String> {
@@ -13277,6 +13340,63 @@ mod tests {
                 .iter()
                 .any(|arg| arg.contains("world") || arg.contains("libraries"))
         );
+    }
+
+    #[test]
+    fn modpack_loaders_resolve_for_old_and_unstable_versions() {
+        let one = json!({"loader": {"version": "0.19.5", "stable": false}});
+        assert!(fabric_loader_published(&one, "0.19.5"));
+        assert!(!fabric_loader_published(&one, "0.19.4"));
+        let list = json!([{"loader": {"version": "0.20.1", "stable": true}}, {"loader": {"version": "0.19.5", "stable": false}}]);
+        assert!(fabric_loader_published(&list, "0.19.5"));
+        assert!(!fabric_loader_published(&json!(null), "0.19.5"));
+
+        assert_eq!(
+            forge_installer_url("1.12.2", "14.23.5.2860"),
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/1.12.2-14.23.5.2860/forge-1.12.2-14.23.5.2860-installer.jar"
+        );
+        assert_eq!(
+            forge_installer_url("1.7.10", "10.13.4.1614"),
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/forge-1.7.10-10.13.4.1614-1.7.10-installer.jar"
+        );
+        assert_eq!(
+            neoforge_installer_url("1.20.1", "47.1.106"),
+            "https://maven.neoforged.net/releases/net/neoforged/forge/1.20.1-47.1.106/forge-1.20.1-47.1.106-installer.jar"
+        );
+        assert_eq!(
+            neoforge_installer_url("1.21.1", "21.1.77"),
+            "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.77/neoforge-21.1.77-installer.jar"
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("forge-1.12.2-14.23.5.2860-installer.jar"),
+            b"i",
+        )
+        .unwrap();
+        fs::write(root.path().join("forge-1.12.2-14.23.5.2860.jar"), b"l").unwrap();
+        fs::write(root.path().join("minecraft_server.1.12.2.jar"), b"m").unwrap();
+        assert_eq!(
+            find_forge_launcher(root.path())
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "forge-1.12.2-14.23.5.2860.jar"
+        );
+        fs::write(
+            root.path().join("forge-1.12.2-14.23.5.2768-universal.jar"),
+            b"u",
+        )
+        .unwrap();
+        assert_eq!(
+            find_forge_launcher(root.path())
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "forge-1.12.2-14.23.5.2768-universal.jar"
+        );
+        let empty = tempfile::tempdir().unwrap();
+        assert!(find_forge_launcher(empty.path()).is_none());
     }
 
     #[test]

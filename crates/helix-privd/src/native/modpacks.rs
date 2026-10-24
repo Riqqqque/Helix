@@ -487,7 +487,7 @@ impl NativeManager {
             let runtime_image = self.resolve_runtime_image(artifact.java_version)?;
             let unix_args = if artifact.install_server {
                 progress("Running the official loader installer", 72);
-                Some(self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?)
+                self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?
             } else {
                 None
             };
@@ -824,7 +824,7 @@ impl NativeManager {
             let runtime_image = self.resolve_runtime_image(artifact.java_version)?;
             let unix_args = if artifact.install_server {
                 progress("Running the official loader installer", 72);
-                Some(self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?)
+                self.run_loader_installer(&artifact, &data_path, run_uid, &runtime_image)?
             } else {
                 None
             };
@@ -1516,12 +1516,7 @@ impl NativeManager {
             .map_err(|_| "could not remove the verified Modrinth source archive".to_owned())?;
         let runtime_image = self.resolve_runtime_image(artifact.java_version)?;
         let unix_args = if artifact.install_server {
-            Some(self.run_loader_installer(
-                &artifact,
-                staging_path,
-                manifest.run_uid,
-                &runtime_image,
-            )?)
+            self.run_loader_installer(&artifact, staging_path, manifest.run_uid, &runtime_image)?
         } else {
             None
         };
@@ -1654,12 +1649,7 @@ impl NativeManager {
             .map_err(|_| "could not remove the verified CurseForge source archive".to_owned())?;
         let runtime_image = self.resolve_runtime_image(artifact.java_version)?;
         let unix_args = if artifact.install_server {
-            Some(self.run_loader_installer(
-                &artifact,
-                staging_path,
-                manifest.run_uid,
-                &runtime_image,
-            )?)
+            self.run_loader_installer(&artifact, staging_path, manifest.run_uid, &runtime_image)?
         } else {
             None
         };

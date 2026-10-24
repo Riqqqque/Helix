@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "Helix server integration API",
-    "version": "1.11.0",
+    "version": "1.11.1",
     "description": "Private-LAN server management API. Session cookie AND CSRF proof are required together; mutations and file commands require exact Origin. Account capabilities are not per-server credentials. All server routes are listed; broker response objects are not yet all fully typed. Consult per-server capabilities before acting. Do not automatically replay mutations or treat a job ID as completion."
   },
   "servers": [

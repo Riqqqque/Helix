@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>One private dashboard for a Linux host, its storage, and your game servers.</strong><br>
-  Version 1.11.0 · <a href="https://github.com/Riqqqque/Helix/releases/latest">Latest release</a> ·
+  Version 1.11.1 · <a href="https://github.com/Riqqqque/Helix/releases/latest">Latest release</a> ·
   <a href="https://github.com/Riqqqque/Helix">Repository</a>
 </p>
 

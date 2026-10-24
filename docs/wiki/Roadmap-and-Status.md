@@ -27,6 +27,7 @@ artifacts, accessibility and mobile review, and broad game-version matrices.
 
 | Release | Highlights |
 | --- | --- |
+| 1.11.1 | Every Fabric loader a pack pins installs, Forge modpacks before 1.17, NeoForge 1.20.1 |
 | 1.11.0 | Your own copyable address per server, colored console, typed memory sizes, containers sized for many players, Minecraft up to 64 GiB |
 | 1.10.2 | Marketplace installs can restart and verify the server, the installer refuses accidental downgrades, OpenAPI covers every route, security updates |
 | 1.10.1 | `job_wait` works through the gateway, the installer adds pigz, the Python client waits and deploys, the wiki is rewritten |

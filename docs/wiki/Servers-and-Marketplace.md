@@ -62,8 +62,11 @@ releases for that software, including **Latest stable**. Paper, Folia, and Leave
 leave out experimental versions that create would refuse. You also choose the
 player limit, private or public player access, and accept the Minecraft EULA.
 
-- Forge uses the official installer for Minecraft 1.17 and newer and launches
-  with its generated `unix_args`. The installer runs as the server's own user.
+- Forge uses the official installer. New Forge servers can be created for
+  Minecraft 1.12 and newer; Forge modpacks install for any version Forge
+  publishes an installer for, back to 1.7.10. From 1.17 Helix launches with the
+  installer's generated `unix_args`; before that, with the Forge server JAR the
+  installer writes. The installer runs as the server's own user.
 - Purpur and Pufferfish come from their publishers over HTTPS without a pinned
   checksum.
 - **Use your own JAR** accepts a dropped `.jar`, the Upload picker, or an absolute
@@ -453,7 +456,9 @@ CurseForge pack. A modpack is never dropped onto an existing world.
   server pack, Helix uses it, checks its catalog length and SHA-1, and validates
   the whole ZIP before extracting. Without one, choose a release that has server
   files; Helix does not copy a client's mod list onto a server.
-- Both pin the matching loader and start an isolated server. A large first boot
+- Both pin the exact loader version the pack was built with (Fabric, Quilt,
+  Forge, or NeoForge), even when the loader's publisher no longer marks that
+  version as the newest stable one, and start an isolated server. A large first boot
   can take several minutes; Helix waits up to 20 minutes and shows the latest
   startup output if the game port never opens.
 

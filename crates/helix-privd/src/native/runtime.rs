@@ -110,7 +110,12 @@ impl NativeManager {
                     algorithm: HashAlgorithm::Sha256,
                     value: manifest.artifact_sha256.clone(),
                 }),
-                install_server: manifest.unix_args.is_some(),
+                // Forge before 1.17 launches its own JAR instead of unix_args.
+                install_server: manifest.unix_args.is_some()
+                    || matches!(
+                        manifest.software,
+                        MinecraftSoftware::Forge | MinecraftSoftware::NeoForge
+                    ),
             }
         };
         validate_version_change(&manifest.minecraft_version, &artifact.version)?;
@@ -171,12 +176,12 @@ impl NativeManager {
             updated.artifact_sha256 = digest;
             if artifact.install_server {
                 progress("Installing loader libraries in staging", 35);
-                updated.unix_args = Some(self.run_loader_installer(
+                updated.unix_args = self.run_loader_installer(
                     &artifact,
                     &stage,
                     manifest.run_uid,
                     &updated.runtime_image,
-                )?);
+                )?;
             }
             let data = self.instance_path(&manifest.id)?;
             let running = self.runtime_running_checked(manifest)?;

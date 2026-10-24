@@ -4,6 +4,23 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.11.1 - 2026-10-23
+
+### Fixed
+
+- Fabric modpacks failed with "Fabric Loader … is not a stable server loader".
+  Fabric marks only its newest loader as stable, and Helix also misread Fabric's
+  answer for an exact loader version, so pinned loaders were refused. Helix now
+  installs the exact loader the pack names whenever Fabric has published it for
+  that Minecraft version.
+- Forge modpacks for Minecraft older than 1.17 (1.16.5, 1.12.2, 1.7.10, and so
+  on) were refused. Helix now runs their official installer and launches the
+  Forge server JAR it writes, and new Forge servers can be created from
+  Minecraft 1.12.
+- NeoForge modpacks for Minecraft 1.20.1 download from NeoForge's 1.20.1 Maven
+  path, so they install.
+- Runtime repair keeps working for Forge servers that launch from their own JAR.
+
 ## 1.11.0 - 2026-10-23
 
 ### Added
