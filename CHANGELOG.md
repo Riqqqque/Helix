@@ -4,6 +4,19 @@ This file records user-visible and operator-visible changes. Numbered GitHub
 releases pin a source archive with SHA-256 checksums. That is a private-LAN
 release, not a public-internet support promise.
 
+## 1.11.2 - 2026-10-23
+
+### Fixed
+
+- Stopping or restarting a Minecraft server that was still starting failed with
+  "Minecraft could not confirm a world save" because its console was not open
+  yet. Helix now stops it anyway with Minecraft's normal shutdown signal (never a
+  kill), and Minecraft saves the world itself on that signal. The console save
+  request is still sent first whenever the console answers.
+- The **Start after the host boots** description now says what Docker does: a
+  server running when the host restarts comes back, and one you stopped stays
+  stopped.
+
 ## 1.11.1 - 2026-10-23
 
 ### Fixed

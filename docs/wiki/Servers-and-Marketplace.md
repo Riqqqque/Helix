@@ -199,8 +199,10 @@ it had reached.
 Stopping:
 
 - **Java Minecraft:** Helix first asks for `save-all flush` and waits up to 30
-  seconds for the world save. If the console cannot confirm it, the server is not
-  stopped. Then Helix stops the container with no forced-kill deadline and waits
+  seconds for the world save. If the console cannot answer (for example while
+  the server is still starting), Helix goes ahead: the stop is Minecraft's
+  normal shutdown signal, and Minecraft saves the world itself when it gets it.
+  Then Helix stops the container with no forced-kill deadline and waits
   up to about three minutes. If the server is still shutting down, the job says so
   and nothing is killed; use **Kill** only as a last resort.
 - **Pumpkin:** the same clean container stop, without the `save-all flush` step.
@@ -270,8 +272,11 @@ busy at once. When they are, Linux stops one of them to free memory. See
 ### Start after the host boots
 
 **Start after the host boots** is on by default when you create a server. On, the
-container uses Docker's `unless-stopped` restart policy, so it comes back after
-Linux or Docker restarts. Off, it stays stopped until you press Start. Changing
+container uses Docker's `unless-stopped` restart policy: if it is running when
+Linux or Docker restarts, it comes back by itself. A server you stopped stays
+stopped, so stopping a server is enough to keep it off across a reboot. Off, it
+stays stopped after a restart until you press Start. The toggle works whether
+the server is running or stopped. Changing
 it does not start or stop the server now. You can change it on Overview or in
 **Settings → Helix data**. This is separate from **Settings → Host integration**,
 which covers the Helix dashboard and gateway containers.

@@ -3637,17 +3637,22 @@ impl NativeManager {
             .instance_path(&manifest.id)?
             .join(manifest.settings_name());
         let saved = read_small_regular_file(&path, MAX_PROPERTIES_BYTES, "server settings")?;
-        if !manifest.is_pumpkin() {
-            rcon_command_timed(
+        if !manifest.is_pumpkin()
+            && let Err(error) = rcon_command_timed(
                 manifest.rcon_port,
                 &manifest.rcon_password,
                 "save-all flush",
                 Duration::from_secs(3),
                 Duration::from_secs(30),
             )
-            .map_err(|error| format!(
-                "Minecraft could not confirm a world save: {error}. The server was not stopped. Check the console or let startup finish before retrying."
-            ))?;
+        {
+            // The console is not open yet while a server starts, or it is busy.
+            // The stop below is Minecraft's normal shutdown signal (never a kill),
+            // and Minecraft saves the world itself when it receives it.
+            eprintln!(
+                "helix-privd: {}: world save not confirmed over the console ({error}); stopping normally",
+                manifest.id
+            );
         }
         // Docker must mark this as a manual stop so unless-stopped does not
         // relaunch it. An unlimited grace period prevents an automatic SIGKILL.

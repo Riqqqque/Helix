@@ -2,7 +2,7 @@
   <img src="https://raw.githubusercontent.com/Riqqqque/Helix/main/docs/assets/helix-mark.png" width="52" height="52" alt="Helix">
 </p>
 
-**[Helix](https://github.com/Riqqqque/Helix/wiki)** · 1.11.1
+**[Helix](https://github.com/Riqqqque/Helix/wiki)** · 1.11.2
 
 **Get started**
 
